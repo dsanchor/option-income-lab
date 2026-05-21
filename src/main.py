@@ -78,14 +78,14 @@ class OptionsAgentScheduler:
         # Merge config.yaml defaults into CosmosDB (first-run seed + new keys)
         settings_defaults = {
             k: v for k, v in self.config.config.items()
-            if k not in ('azure', 'cosmosdb')
+            if k not in ('ai', 'azure', 'gemini', 'cosmosdb')
         }
         merged_settings = self.cosmos.merge_defaults(settings_defaults)
         
         # Update Config object with merged settings from CosmosDB (CosmosDB takes precedence)
         if merged_settings:
             for key, value in merged_settings.items():
-                if key not in ('azure', 'cosmosdb'):
+                if key not in ('ai', 'azure', 'gemini', 'cosmosdb'):
                     self.config.config[key] = value
 
         from .telegram_notifier import TelegramNotifier
@@ -93,9 +93,8 @@ class OptionsAgentScheduler:
 
         print("Initializing Agent Framework Runner...")
         self.runner = AgentRunner(
-            project_endpoint=self.config.azure_endpoint,
+            llm=self.config.llm_config(),
             model=self.config.model_deployment,
-            api_key=self.config.api_key,
             telegram_notifier=telegram_notifier,
         )
         

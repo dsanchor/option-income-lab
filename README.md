@@ -17,7 +17,7 @@ The result: a DGI portfolio that generates income from **dividends AND option pr
 
 ---
 
-DGI-focused income acceleration platform — uses **Cash Secured Puts (CSP)** to acquire top dividend growth stocks at a discount, and **Covered Calls (CC)** to generate additional income on held DGI positions. A built-in **DGI Screener** identifies the best dividend growth candidates from a configurable stock universe (default: S&P 500), ranking them by a composite quality score combining fundamental strength and technical timing. Options trading analysis is powered by Microsoft Agent Framework with Yahoo Finance data fetching via **yfinance** — direct API access for fundamentals, technicals, dividends, analyst data, and full options chains (23+ expirations with computed Greeks). No browser, no scraping, no authentication required. All data — watchlists, positions, activities, reports, alerts, and DGI screener results — is stored in **Azure CosmosDB** (NoSQL) with a symbol-centric partition model.
+DGI-focused income acceleration platform — uses **Cash Secured Puts (CSP)** to acquire top dividend growth stocks at a discount, and **Covered Calls (CC)** to generate additional income on held DGI positions. A built-in **DGI Screener** identifies the best dividend growth candidates from a configurable stock universe (default: S&P 500), ranking them by a composite quality score combining fundamental strength and technical timing. Options trading analysis is powered by Microsoft Agent Framework (Azure OpenAI or Google Gemini) with Yahoo Finance data fetching via **yfinance** — direct API access for fundamentals, technicals, dividends, analyst data, and full options chains (23+ expirations with computed Greeks). No browser, no scraping, no authentication required. All data — watchlists, positions, activities, reports, alerts, and DGI screener results — is stored in **Azure CosmosDB** (NoSQL) with a symbol-centric partition model.
 
 ## Architecture
 
@@ -368,7 +368,7 @@ All data is stored in Azure CosmosDB across four containers:
 | `dgi_top` | Current top DGI entries — composite score, category, metrics | Static (replaced each run) |
 | `dgi_snapshot` | Daily snapshots for historical tracking of screener results | ~1/day per symbol |
 
-On first run, configuration from `config.yaml` is seeded into the `settings` container (except `azure` and `cosmosdb` sections which remain file-only). On subsequent runs, new keys from `config.yaml` are added to CosmosDB, but existing values are never overwritten, allowing the Settings UI to persist changes. The Settings UI reads and writes directly to CosmosDB, making configuration changes immediately available to all components (scheduler, telegram notifier, web UI) without restart. If CosmosDB is unavailable, `config.yaml` serves as the fallback.
+On first run, configuration from `config.yaml` is seeded into the `settings` container (except `ai`, `azure`, `gemini`, and `cosmosdb` sections which remain file-only). On subsequent runs, new keys from `config.yaml` are added to CosmosDB, but existing values are never overwritten, allowing the Settings UI to persist changes. The Settings UI reads and writes directly to CosmosDB, making configuration changes immediately available to all components (scheduler, telegram notifier, web UI) without restart. If CosmosDB is unavailable, `config.yaml` serves as the fallback.
 
 Telemetry stats are displayed on the Settings page and auto-expire after 30 days.
 
@@ -493,14 +493,14 @@ summary_agent:
 1. The summarization agent runs on the configured schedule
 2. It queries CosmosDB for all tracked symbols with recent activities
 3. For each symbol, it retrieves the N most recent activities and any related alerts
-4. The agent uses Azure OpenAI to generate a concise summary of recent decisions and trends
+4. The configured LLM provider (Azure OpenAI or Google Gemini) generates a concise summary of recent decisions and trends
 5. A Telegram message is sent with the summary (if Telegram is enabled)
 6. The message includes per-symbol activity digests and portfolio-wide insights
 
 ### Requirements
 
 - **Telegram Notifications** must be enabled (see `/settings`)
-- **Azure OpenAI** credentials configured
+- **LLM credentials** configured for your chosen provider (`azure` or `gemini` — see [AI provider](#ai-provider-azure-or-gemini))
 - Valid **CosmosDB** connection
 
 If Telegram is disabled, the summary is still generated but not sent.
@@ -522,7 +522,7 @@ Each report covers:
 ### How It Works
 
 1. User clicks "Generate Report" on the symbol detail page
-2. The Report Agent uses the same `AgentRunner → ChatAgent → AzureOpenAIChatClient` pattern as other agents
+2. The Report Agent uses the same `AgentRunner → Agent → OpenAIChatCompletionClient` pattern as other agents
 3. Market data is loaded via the [Data Cache](#data-cache) for fast context assembly
 4. The LLM generates a structured report from the system prompt (`src/tv_report_instructions.py`)
 5. The report is stored in CosmosDB as a `doc_type="report"` document and displayed on a dedicated page (`/symbols/{symbol}/report`)
@@ -658,11 +658,12 @@ The DGI Screener runs an 11-step pipeline:
 
 ```
 stock-options-manager/
-├── config.yaml                           # All configuration (CosmosDB, scheduling, context limits)
+├── config.yaml                           # Configuration (AI provider, CosmosDB, scheduling, context limits)
 ├── src/
 │   ├── __init__.py
 │   ├── main.py                           # Entry point — scheduler with immediate + periodic runs
 │   ├── config.py                         # YAML config loader with env var substitution and validation
+│   ├── llm.py                            # LLM provider factory (Azure OpenAI / Google Gemini)
 │   ├── cosmos_db.py                      # CosmosDB service layer — all database operations
 │   ├── context.py                        # Context injection adapter — formats CosmosDB data for prompts
 │   ├── agent_runner.py                   # Core execution engine — yfinance pre-fetch + per-symbol loop
@@ -726,7 +727,7 @@ stock-options-manager/
 - **Symbol Report** (`/symbols/{symbol}/report`) — Dedicated report display page showing the latest generated report for a symbol (technical analysis, dividends, options chain, risk assessment, and recommendations).
 - **Symbol Chat** (`/symbols/{symbol}/chat`) — Per-symbol chat page with a context selection screen before starting the conversation. Pre-loads market data via the yfinance provider for faster responses. Supports open call and open put analysis contexts.
 - **Fetch Preview** (`/symbols/{symbol}/fetch-preview`) — Debug page showing raw market data for each resource (overview, technicals, forecast, options chain) with fetch timing and size.
-- **Chat** (`/chat`) — Dual-mode chat experience powered by Azure OpenAI:
+- **Chat** (`/chat`) — Dual-mode chat experience powered by your configured LLM provider (Azure or Gemini):
   - **Portfolio Chat** — Analyze tracked symbols using CosmosDB data (watchlists, positions, recent activities). Click "Portfolio Chat" to ask questions about your tracked symbols.
   - **Quick Analysis** — Analyze any symbol (tracked or not) by fetching live Yahoo Finance data without saving to the database. Click "Quick Analysis", select a market (NASDAQ/NYSE/AMEX/OTC), and get instant analysis without committing to tracking.
   - Mode selector on the chat page lets you switch between modes at any time.
@@ -739,10 +740,11 @@ stock-options-manager/
 
 ### Prerequisites
 
-1. **Python 3.12+**
-2. **Azure AI Foundry Project** with access to a model deployment (e.g. `gpt-5.1`, `gpt-5.4-mini`)
-3. **Azure OpenAI API Key** - Get your API key from Azure Portal
-4. **Azure CosmosDB Account** - See [Azure CosmosDB Setup](#azure-cosmosdb-setup) below
+1. **Python 3.12+** (matches the Docker image)
+2. **LLM provider** — choose one:
+   - **Azure** (default): Azure AI Foundry project + API key (e.g. `gpt-5.1`, `gpt-5.4-mini`)
+   - **Gemini**: [Google AI API key](https://aistudio.google.com/apikey) (e.g. `gemini-2.0-flash`, `gemini-2.5-pro`)
+3. **Azure CosmosDB Account** — See [Azure CosmosDB Setup](#azure-cosmosdb-setup) below
 
 ### Setup
 
@@ -755,7 +757,7 @@ pip install -r requirements.txt
 ```
 
 This installs:
-- `agent-framework-core` + `agent-framework-openai` - Microsoft Agent Framework core SDK and Azure OpenAI integration
+- `agent-framework-core` + `agent-framework-openai` - Microsoft Agent Framework core SDK (Azure OpenAI and OpenAI-compatible APIs such as Gemini)
 - `yfinance` - Yahoo Finance data provider (overview, technicals, forecast, dividends, options chains)
 - `py-vollib` - Black-Scholes Greeks computation for options chain data
 - `pandas-ta` - Technical analysis indicators (RSI, MACD, moving averages, etc.)
@@ -766,22 +768,33 @@ This installs:
 
 #### 2. Configure Environment Variables
 
-Set your Azure AI Project and CosmosDB credentials:
+Create a `.env` file in the project root (loaded automatically on startup) or export variables in your shell.
+
+**CosmosDB** (required for all setups):
 
 ```bash
-# Azure AI / OpenAI
-export AZURE_AI_PROJECT_ENDPOINT="https://your-project.services.ai.azure.com"
-export MODEL_DEPLOYMENT="gpt-5.1"  # or "gpt-5.4-mini"
-export AZURE_OPENAI_API_KEY="your-api-key-here"
-
-# CosmosDB (from provisioning script output or Azure Portal)
 export COSMOSDB_ENDPOINT="https://your-account.documents.azure.com:443/"
 export COSMOSDB_KEY="your-primary-key"
-
-# No API key needed for market data — yfinance fetches all data (overview, technicals,
-# forecast, dividends, and options chains) directly from Yahoo Finance. No browser,
-# no scraping, no authentication required.
 ```
+
+**Azure** (when `AI_PROVIDER` is unset or `azure`):
+
+```bash
+export AI_PROVIDER=azure
+export AZURE_AI_PROJECT_ENDPOINT="https://your-project.services.ai.azure.com"
+export MODEL_DEPLOYMENT="gpt-5.1"          # default model for all agent roles
+export AZURE_OPENAI_API_KEY="your-api-key-here"
+```
+
+**Gemini** (when `AI_PROVIDER=gemini`):
+
+```bash
+export AI_PROVIDER=gemini
+export GOOGLE_API_KEY="your-google-api-key"
+export MODEL_DEPLOYMENT="gemini-2.0-flash"  # default model for all agent roles
+```
+
+Market data needs no API key — yfinance fetches overview, technicals, forecast, dividends, and options chains from Yahoo Finance.
 
 #### 3. (Optional) Set Up Telegram Notifications
 
@@ -820,13 +833,40 @@ The exchange prefix is stored for reference (e.g., `NYSE` + `MO`).
 
 #### 6. Adjust Configuration (Optional)
 
-Edit `config.yaml` to customize:
+Edit `config.yaml` to customize. Model names and per-role overrides live under `ai` and apply to **both** Azure and Gemini.
+
+#### AI provider (Azure or Gemini)
+
+| Setting | Purpose |
+|---|---|
+| `ai.provider` | `azure` or `gemini` (from `${AI_PROVIDER}`; empty = `azure`) |
+| `ai.model_deployment` | Default model for all agents (from `${MODEL_DEPLOYMENT}`) |
+| `ai.models` | Optional per-role overrides (`chat`, `symbol_chat`, `supervisor`, `monitor_assessment`, etc.) — each falls back to `model_deployment` |
+
+Provider-specific credentials only:
+
+| Provider | Config section | Env vars |
+|---|---|---|
+| Azure | `azure` | `AZURE_AI_PROJECT_ENDPOINT`, `AZURE_OPENAI_API_KEY` |
+| Gemini | `gemini` | `GOOGLE_API_KEY` |
+
+Example `config.yaml` (Gemini):
 
 ```yaml
+ai:
+  provider: "${AI_PROVIDER}"       # azure | gemini
+  model_deployment: "${MODEL_DEPLOYMENT}"
+  models:
+    chat: "gemini-2.0-flash"
+    symbol_chat: "gemini-2.0-flash"
+    supervisor: "gemini-2.0-flash"
+
 azure:
   project_endpoint: "${AZURE_AI_PROJECT_ENDPOINT}"
-  model_deployment: "${MODEL_DEPLOYMENT}"  # From env variable (e.g. gpt-5.1, gpt-5.4-mini)
   api_key: "${AZURE_OPENAI_API_KEY}"
+
+gemini:
+  api_key: "${GOOGLE_API_KEY}"
 
 cosmosdb:
   endpoint: "${COSMOSDB_ENDPOINT}"
@@ -886,11 +926,14 @@ Build the image:
 docker build -t option-income-lab .
 ```
 
-Run with CosmosDB credentials:
+Run with CosmosDB + your LLM provider credentials.
+
+**Azure example:**
 
 ```bash
 docker run -d --name option-income-lab \
   -p 8000:8000 \
+  -e AI_PROVIDER=azure \
   -e AZURE_AI_PROJECT_ENDPOINT="https://your-project.services.ai.azure.com" \
   -e MODEL_DEPLOYMENT="gpt-5.1" \
   -e AZURE_OPENAI_API_KEY="your-api-key-here" \
@@ -899,13 +942,28 @@ docker run -d --name option-income-lab \
   option-income-lab
 ```
 
-| Variable | Purpose |
-|---|---|
-| `AZURE_AI_PROJECT_ENDPOINT` | Azure AI Foundry project endpoint |
-| `MODEL_DEPLOYMENT` | Model name (e.g. `gpt-5.1`, `gpt-5.4-mini`) |
-| `AZURE_OPENAI_API_KEY` | Azure OpenAI API key for authentication |
-| `COSMOSDB_ENDPOINT` | CosmosDB account endpoint |
-| `COSMOSDB_KEY` | CosmosDB primary key |
+**Gemini example:**
+
+```bash
+docker run -d --name option-income-lab \
+  -p 8000:8000 \
+  -e AI_PROVIDER=gemini \
+  -e GOOGLE_API_KEY="your-google-api-key" \
+  -e MODEL_DEPLOYMENT="gemini-2.0-flash" \
+  -e COSMOSDB_ENDPOINT="https://your-account.documents.azure.com:443/" \
+  -e COSMOSDB_KEY="your-primary-key" \
+  option-income-lab
+```
+
+| Variable | Required when | Purpose |
+|---|---|---|
+| `COSMOSDB_ENDPOINT` | Always | CosmosDB account endpoint |
+| `COSMOSDB_KEY` | Always | CosmosDB primary key |
+| `AI_PROVIDER` | Optional | `azure` (default) or `gemini` |
+| `MODEL_DEPLOYMENT` | Always | Default model name for all agent roles |
+| `AZURE_AI_PROJECT_ENDPOINT` | Azure | Azure AI Foundry project endpoint |
+| `AZURE_OPENAI_API_KEY` | Azure | Azure OpenAI API key |
+| `GOOGLE_API_KEY` | Gemini | Google AI API key |
 
 View logs:
 
@@ -918,6 +976,7 @@ Pass flags (e.g. web-only mode):
 ```bash
 docker run -d --name option-income-lab-web \
   -p 8000:8000 \
+  -e AI_PROVIDER=azure \
   -e AZURE_AI_PROJECT_ENDPOINT="..." \
   -e MODEL_DEPLOYMENT="gpt-5.1" \
   -e AZURE_OPENAI_API_KEY="your-api-key-here" \
@@ -933,7 +992,7 @@ docker run -d --name option-income-lab-web \
 ### Prerequisites
 
 - [Azure CLI](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli) installed and logged in (`az login`)
-- Azure AI Foundry project with a model deployment already exists
+- LLM credentials configured (Azure AI Foundry **or** Google Gemini API key)
 - Container image built (e.g., via GitHub Actions)
 
 ### 1. Set Variables
@@ -954,9 +1013,11 @@ CONTAINER_APP="${CONTAINER_APP:-ca-option-income-lab}"
 IMAGE="${IMAGE:-ghcr.io/dsanchor/option-income-lab:latest}"
 
 # ── Credentials (fill these in) ─────────────────────────────────────────────
-AZURE_AI_PROJECT_ENDPOINT="${AZURE_AI_PROJECT_ENDPOINT:-your-project-endpoint}"
+AI_PROVIDER="${AI_PROVIDER:-azure}"          # azure | gemini
 MODEL_DEPLOYMENT="${MODEL_DEPLOYMENT:-gpt-5.1}"
+AZURE_AI_PROJECT_ENDPOINT="${AZURE_AI_PROJECT_ENDPOINT:-your-project-endpoint}"
 AZURE_OPENAI_API_KEY="${AZURE_OPENAI_API_KEY:-your-api-key-here}"
+GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"         # required when AI_PROVIDER=gemini
 ```
 
 ### 2. Create Resource Group
@@ -1108,9 +1169,11 @@ az containerapp create \
   --cpu 1 \
   --memory 2Gi \
   --env-vars \
-    AZURE_AI_PROJECT_ENDPOINT="$AZURE_AI_PROJECT_ENDPOINT" \
+    AI_PROVIDER="$AI_PROVIDER" \
     MODEL_DEPLOYMENT="$MODEL_DEPLOYMENT" \
+    AZURE_AI_PROJECT_ENDPOINT="$AZURE_AI_PROJECT_ENDPOINT" \
     AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" \
+    GOOGLE_API_KEY="$GOOGLE_API_KEY" \
     COSMOSDB_ENDPOINT="$COSMOSDB_ENDPOINT" \
     COSMOSDB_KEY="$COSMOSDB_KEY" \
   -o none
@@ -1151,18 +1214,28 @@ az containerapp update \
 
 ## Environment Variables
 
-| Variable | Required | Description |
+| Variable | Required when | Description |
 |---|---|---|
-| `AZURE_AI_PROJECT_ENDPOINT` | Yes | Azure AI Foundry project endpoint |
-| `MODEL_DEPLOYMENT` | Yes | Model deployment name (e.g., `gpt-5.1`, `gpt-5.4-mini`) |
-| `AZURE_OPENAI_API_KEY` | Yes | Azure OpenAI API key |
-| `COSMOSDB_ENDPOINT` | Yes | CosmosDB account endpoint (e.g., `https://account.documents.azure.com:443/`) |
-| `COSMOSDB_KEY` | Yes | CosmosDB primary key |
+| `COSMOSDB_ENDPOINT` | Always | CosmosDB account endpoint (e.g., `https://account.documents.azure.com:443/`) |
+| `COSMOSDB_KEY` | Always | CosmosDB primary key |
+| `AI_PROVIDER` | Optional | `azure` (default) or `gemini` |
+| `MODEL_DEPLOYMENT` | Always | Default model for all agent roles (Azure deployment name or Gemini model ID) |
+| `AZURE_AI_PROJECT_ENDPOINT` | Azure | Azure AI Foundry project endpoint |
+| `AZURE_OPENAI_API_KEY` | Azure | Azure OpenAI API key |
+| `GOOGLE_API_KEY` | Gemini | Google AI API key from [AI Studio](https://aistudio.google.com/apikey) |
+| `TELEGRAM_BOT_TOKEN` | Optional | Telegram bot token (if notifications enabled) |
+| `TELEGRAM_CHAT_ID` | Optional | Telegram chat ID (if notifications enabled) |
 
 ## Troubleshooting
 
+### "Missing required config: azure.project_endpoint" (using Gemini)
+Set `AI_PROVIDER=gemini` in `.env` (or `ai.provider: gemini` in `config.yaml`). Azure credentials are not required when using Gemini. Ensure `GOOGLE_API_KEY` is set.
+
 ### "Environment variable AZURE_AI_PROJECT_ENDPOINT not set"
-Make sure you've exported the environment variable with your Azure AI Foundry project endpoint.
+You are using the Azure provider (`AI_PROVIDER` unset or `azure`). Export `AZURE_AI_PROJECT_ENDPOINT` and `AZURE_OPENAI_API_KEY`, or switch to Gemini with `AI_PROVIDER=gemini` and `GOOGLE_API_KEY`.
+
+### "gemini API key not configured"
+Set `GOOGLE_API_KEY` in `.env` when `AI_PROVIDER=gemini`.
 
 ### CosmosDB Connection Errors
 - Verify `COSMOSDB_ENDPOINT` and `COSMOSDB_KEY` are set correctly
@@ -1173,8 +1246,9 @@ Make sure you've exported the environment variable with your Azure AI Foundry pr
 - If market data fetching fails, check network connectivity and Yahoo Finance availability
 - yfinance requires no authentication — if you get 429 errors, the built-in rate limiter should handle it
 
-### Authentication Errors
-Ensure your `AZURE_OPENAI_API_KEY` environment variable is set correctly. You can get your API key from the Azure Portal under your Azure OpenAI resource.
+### LLM / Authentication Errors
+- **Azure:** Ensure `AZURE_OPENAI_API_KEY` and `AZURE_AI_PROJECT_ENDPOINT` are set. Get the API key from the Azure Portal under your Azure OpenAI resource.
+- **Gemini:** Ensure `GOOGLE_API_KEY` is set and `MODEL_DEPLOYMENT` uses a valid Gemini model ID (e.g. `gemini-2.0-flash`). Gemini uses Google's OpenAI-compatible API endpoint.
 
 ### Module Import Errors
 Make sure you installed the correct SDK packages: `pip install agent-framework-core agent-framework-openai` (NOT `azure-ai-agents`)
@@ -1194,8 +1268,9 @@ All instructions assume pre-fetched market data — the LLM receives data as tex
 This project uses the **Microsoft Agent Framework** (`agent-framework` package from https://github.com/microsoft/agent-framework).
 
 Key components:
-- `agent_framework.ChatAgent` - Main chat agent class
-- `agent_framework.integrations.azure.openai.AzureAIAgentClient` - Azure OpenAI integration
+- `agent_framework.Agent` - Agent runner class used by schedulers and analysis pipelines
+- `agent_framework.openai.OpenAIChatCompletionClient` - Chat client for Azure OpenAI and OpenAI-compatible APIs (Gemini via `base_url`)
+- `src/llm.py` - Provider factory (`azure` / `gemini`) shared by agents and web chat endpoints
 
 Market data is fetched via `yfinance` Python library — overview, technicals, forecast, dividends, and options chains are all retrieved through Yahoo Finance's API. All fetching is driven from Python (`yfinance_data_provider.py`), not by the LLM. The LLM receives pre-fetched data as text and performs analysis only — no tools are given to the agent.
 

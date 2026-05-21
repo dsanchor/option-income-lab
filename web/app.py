@@ -60,6 +60,18 @@ def _resolve_env(s: str) -> str:
     return re.sub(r'\$\{([^}]+)\}', _repl, s)
 
 
+def _llm_settings_response():
+    """Load Config and return (config_obj, error_response_or_none)."""
+    from src.config import Config
+    from src.llm import validate_llm_config
+
+    config_obj = Config()
+    err = validate_llm_config(config_obj.llm_config())
+    if err:
+        return config_obj, JSONResponse({"error": err}, status_code=500)
+    return config_obj, None
+
+
 def _load_settings_from_cosmos(cosmos) -> Optional[dict]:
     """Load settings from CosmosDB. Returns None if unavailable."""
     if cosmos is None:
@@ -204,14 +216,14 @@ async def init_cosmos(app_instance):
             # Merge config.yaml defaults into CosmosDB (first-run seed + new keys)
             settings_defaults = {
                 k: v for k, v in config.items()
-                if k not in ('azure', 'cosmosdb')
+                if k not in ('ai', 'azure', 'gemini', 'cosmosdb')
             }
             # Resolve env vars in defaults before storing
             from src.config import Config
             resolved_config = Config()
             resolved_defaults = {
                 k: v for k, v in resolved_config.config.items()
-                if k not in ('azure', 'cosmosdb')
+                if k not in ('ai', 'azure', 'gemini', 'cosmosdb')
             }
             cosmos.merge_defaults(resolved_defaults)
         else:
@@ -1122,33 +1134,17 @@ async def symbol_report_api(request: Request, symbol: str):
         return JSONResponse({"error": f"Symbol {symbol} not found"},
                             status_code=404)
 
-    # Build an AgentRunner on demand (no scheduler dependency)
-    config = _load_config()
-    azure_cfg = config.get("azure", {})
-    endpoint = _resolve_env(azure_cfg.get("project_endpoint", ""))
-    model = _resolve_env(azure_cfg.get("model_deployment", "gpt-4o"))
-    api_key = _resolve_env(azure_cfg.get("api_key", ""))
-
-    if not endpoint:
-        return JSONResponse({"error": "Azure endpoint not configured"},
-                            status_code=500)
-    if not api_key:
-        return JSONResponse({"error": "Azure API key not configured"},
-                            status_code=500)
-
-    if endpoint.endswith("/api"):
-        endpoint = endpoint[:-4]
+    config_obj, err_resp = _llm_settings_response()
+    if err_resp:
+        return err_resp
 
     try:
         from src.agent_runner import AgentRunner
         from src.report_agent import run_report_analysis
-        from src.config import Config
 
-        config_obj = Config()
         runner = AgentRunner(
-            project_endpoint=endpoint,
-            model=model,
-            api_key=api_key,
+            llm=config_obj.llm_config(),
+            model=config_obj.model_deployment,
         )
 
         result = await run_report_analysis(
@@ -1206,33 +1202,17 @@ async def symbol_technical_analysis_api(request: Request, symbol: str):
         return JSONResponse({"error": f"Symbol {symbol} not found"},
                             status_code=404)
 
-    # Build an AgentRunner on demand
-    config = _load_config()
-    azure_cfg = config.get("azure", {})
-    endpoint = _resolve_env(azure_cfg.get("project_endpoint", ""))
-    model = _resolve_env(azure_cfg.get("model_deployment", "gpt-4o"))
-    api_key = _resolve_env(azure_cfg.get("api_key", ""))
-
-    if not endpoint:
-        return JSONResponse({"error": "Azure endpoint not configured"},
-                            status_code=500)
-    if not api_key:
-        return JSONResponse({"error": "Azure API key not configured"},
-                            status_code=500)
-
-    if endpoint.endswith("/api"):
-        endpoint = endpoint[:-4]
+    config_obj, err_resp = _llm_settings_response()
+    if err_resp:
+        return err_resp
 
     try:
         from src.agent_runner import AgentRunner
         from src.technical_analysis_agent import run_technical_analysis
-        from src.config import Config
 
-        config_obj = Config()
         runner = AgentRunner(
-            project_endpoint=endpoint,
-            model=model,
-            api_key=api_key,
+            llm=config_obj.llm_config(),
+            model=config_obj.model_deployment,
         )
 
         result = await run_technical_analysis(
@@ -2824,49 +2804,27 @@ async def chat_api(request: Request):
             status_code=400
         )
 
-    config = _load_config()
-    azure_cfg = config.get("azure", {})
-    endpoint = _resolve_env(azure_cfg.get("project_endpoint", ""))
-    api_key = _resolve_env(azure_cfg.get("api_key", ""))
+    config_obj, err_resp = _llm_settings_response()
+    if err_resp:
+        return err_resp
 
-    # Resolve per-function model override via Config
-    try:
-        from src.config import Config as _Config
-        model = _Config().model_for('chat')
-    except Exception:
-        model = _resolve_env(azure_cfg.get("model_deployment", "gpt-4o"))
-
-    if not endpoint:
-        return JSONResponse({"error": "Azure endpoint not configured"},
-                            status_code=500)
-    if not api_key:
-        return JSONResponse({"error": "Azure API key not configured"},
-                            status_code=500)
-
-    if endpoint.endswith("/api"):
-        endpoint = endpoint[:-4]
+    model = config_obj.model_for('chat')
 
     try:
-        from openai import AzureOpenAI
+        from src.llm import create_sync_chat_client, chat_completion
 
-        client = AzureOpenAI(
-            azure_endpoint=endpoint,
-            api_key=api_key,
-            api_version="2024-12-01-preview",
-        )
-
+        client = create_sync_chat_client(config_obj.llm_config())
         api_messages = [{"role": "system", "content": system_prompt}]
         for m in messages:
             api_messages.append({"role": m["role"], "content": m["content"]})
 
-        response = client.chat.completions.create(
+        reply = chat_completion(
+            client,
             model=model,
             messages=api_messages,
             temperature=0.7,
             max_completion_tokens=2048,
         )
-
-        reply = response.choices[0].message.content
         return JSONResponse({"reply": reply})
 
     except Exception as e:
@@ -3088,50 +3046,27 @@ async def symbol_chat_api(request: Request, symbol: str):
 
     system_prompt = _build_symbol_system_prompt(symbol, exchange, context_text)
 
-    # --- Call Azure OpenAI ---
-    config = _load_config()
-    azure_cfg = config.get("azure", {})
-    endpoint = _resolve_env(azure_cfg.get("project_endpoint", ""))
-    api_key = _resolve_env(azure_cfg.get("api_key", ""))
+    config_obj, err_resp = _llm_settings_response()
+    if err_resp:
+        return err_resp
 
-    # Resolve per-function model override via Config
-    try:
-        from src.config import Config as _Config
-        model = _Config().model_for('symbol_chat')
-    except Exception:
-        model = _resolve_env(azure_cfg.get("model_deployment", "gpt-4o"))
-
-    if not endpoint:
-        return JSONResponse({"error": "Azure endpoint not configured"},
-                            status_code=500)
-    if not api_key:
-        return JSONResponse({"error": "Azure API key not configured"},
-                            status_code=500)
-
-    if endpoint.endswith("/api"):
-        endpoint = endpoint[:-4]
+    model = config_obj.model_for('symbol_chat')
 
     try:
-        from openai import AzureOpenAI
+        from src.llm import create_sync_chat_client, chat_completion
 
-        client = AzureOpenAI(
-            azure_endpoint=endpoint,
-            api_key=api_key,
-            api_version="2024-12-01-preview",
-        )
-
+        client = create_sync_chat_client(config_obj.llm_config())
         api_messages = [{"role": "system", "content": system_prompt}]
         for m in messages:
             api_messages.append({"role": m["role"], "content": m["content"]})
 
-        response = client.chat.completions.create(
+        reply = chat_completion(
+            client,
             model=model,
             messages=api_messages,
             temperature=0.7,
             max_completion_tokens=2048,
         )
-
-        reply = response.choices[0].message.content
         return JSONResponse({"reply": reply})
 
     except Exception as e:

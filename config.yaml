@@ -1,8 +1,7 @@
-azure:
-  project_endpoint: "${AZURE_AI_PROJECT_ENDPOINT}"
-  model_deployment: "${MODEL_DEPLOYMENT}" # options: "gpt-5.1", "gpt-5.4-mini"
-  api_key: "${AZURE_OPENAI_API_KEY}"
-  models:  # optional per-function overrides — each falls back to model_deployment if not set
+ai:
+  provider: "${AI_PROVIDER}"  # azure | gemini (empty = azure)
+  model_deployment: "${MODEL_DEPLOYMENT}"  # default model for all roles
+  models:  # optional per-function overrides — each falls back to model_deployment
     monitor_assessment: "gpt-5.4"
     monitor_roll: "gpt-5.4"
     supervisor: "gpt-5.4-mini"
@@ -12,6 +11,13 @@ azure:
     report: "gpt-5.4-mini"
     chat: "gpt-5.4-mini"
     symbol_chat: "gpt-5.4-mini"
+
+azure:
+  project_endpoint: "${AZURE_AI_PROJECT_ENDPOINT}"
+  api_key: "${AZURE_OPENAI_API_KEY}"
+
+gemini:
+  api_key: "${GOOGLE_API_KEY}"
 
 cosmosdb:
   endpoint: "${COSMOSDB_ENDPOINT}"

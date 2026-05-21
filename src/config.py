@@ -4,11 +4,19 @@ import yaml
 import pytz
 from typing import Any, Dict
 
+from .llm import LlmConfig
+
 
 class Config:
     """Configuration loader with environment variable substitution."""
 
     def __init__(self, config_path: str = "config.yaml"):
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass
+
         with open(config_path, 'r') as f:
             raw_config = yaml.safe_load(f)
 
@@ -35,9 +43,6 @@ class Config:
     def _validate(self) -> None:
         """Validate required configuration fields."""
         required_fields = [
-            ('azure', 'project_endpoint'),
-            ('azure', 'model_deployment'),
-            ('azure', 'api_key'),
             ('cosmosdb', 'endpoint'),
             ('cosmosdb', 'key'),
             ('scheduler', 'cron'),
@@ -56,24 +61,77 @@ class Config:
                     f"Missing required config: {'.'.join(path + [field])}"
                 )
 
-    # ── Azure ──────────────────────────────────────────────────────────
+        if not self.model_deployment:
+            raise ValueError(
+                "Missing required config: ai.model_deployment "
+                "(or legacy azure.model_deployment)"
+            )
+
+        provider = self._resolve_ai_provider(self.config.get('ai') or {})
+        if provider not in ('azure', 'gemini'):
+            raise ValueError(
+                f"Invalid ai.provider: {provider!r} (use azure or gemini)"
+            )
+        if provider == 'azure':
+            for field in ('project_endpoint', 'api_key'):
+                if not self.config.get('azure', {}).get(field):
+                    raise ValueError(f"Missing required config: azure.{field}")
+        elif not self.config.get('gemini', {}).get('api_key'):
+            raise ValueError("Missing required config: gemini.api_key")
+
+    @staticmethod
+    def _resolve_ai_provider(ai: Dict[str, Any]) -> str:
+        """Resolve ai.provider from config value or AI_PROVIDER env (default: azure)."""
+        raw = (ai.get('provider') or '').strip().lower()
+        if raw in ('azure', 'gemini'):
+            return raw
+        env = (os.environ.get('AI_PROVIDER') or '').strip().lower()
+        if env in ('azure', 'gemini'):
+            return env
+        return 'azure'
+
+    def _ai_section(self) -> Dict[str, Any]:
+        """Shared model settings; merges legacy azure.model_deployment/models if needed."""
+        ai = dict(self.config.get('ai') or {})
+        azure = self.config.get('azure', {})
+        if not ai.get('model_deployment'):
+            ai['model_deployment'] = azure.get('model_deployment', '')
+        if not ai.get('models'):
+            ai['models'] = azure.get('models', {}) or {}
+        ai['provider'] = self._resolve_ai_provider(ai)
+        return ai
+
+    # ── AI (Azure + Gemini) ────────────────────────────────────────────
+
+    @property
+    def ai_provider(self) -> str:
+        return self._ai_section()['provider']
 
     @property
     def azure_endpoint(self) -> str:
-        return self.config['azure']['project_endpoint']
+        return self.config.get('azure', {}).get('project_endpoint', '')
 
     @property
     def model_deployment(self) -> str:
-        return self.config['azure']['model_deployment']
+        return self._ai_section().get('model_deployment', '')
 
     @property
     def api_key(self) -> str:
-        return self.config['azure']['api_key']
+        if self.ai_provider == 'gemini':
+            return self.config.get('gemini', {}).get('api_key', '')
+        return self.config.get('azure', {}).get('api_key', '')
 
     def model_for(self, role: str) -> str:
-        """Return model deployment for a specific role, falling back to default."""
-        models = self.config.get('azure', {}).get('models', {})
+        """Return model for a specific role, falling back to model_deployment."""
+        models = self._ai_section().get('models', {})
         return models.get(role) or self.model_deployment
+
+    def llm_config(self) -> LlmConfig:
+        return LlmConfig(
+            provider=self.ai_provider,
+            api_key=self.api_key,
+            endpoint=self.azure_endpoint if self.ai_provider == 'azure' else None,
+        )
 
     # ── CosmosDB ───────────────────────────────────────────────────────
 
