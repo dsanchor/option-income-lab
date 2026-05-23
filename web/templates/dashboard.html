@@ -51,6 +51,10 @@
                     <th>Moneyness</th>
                     <th>Risk</th>
                     <th class="num">Delta</th>
+                    {% elif agent.key == "buy_tracker" %}
+                    <th>Entry Zone</th>
+                    <th>Horizon</th>
+                    <th>Triggers</th>
                     {% else %}
                     <th class="num">Strike</th>
                     <th>Expiry</th>
@@ -96,9 +100,19 @@
                     </td>
                     <td class="num metric-value">{{ "%.2f" | format(row.delta) if row.delta is not none else "—" }}</td>
                     {% else %}
+                    {% if agent.key == "buy_tracker" %}
+                    <td>{{ row.entry_zone if row.entry_zone else "—" }}</td>
+                    <td>{{ row.target_horizon if row.target_horizon else "—" }}</td>
+                    <td><div class="flags-wrap">
+                        {% for trigger in (row.technical_triggers or [])[:3] %}
+                        <span class="flag">{{ trigger }}</span>
+                        {% endfor %}</div>
+                    </td>
+                    {% else %}
                     <td class="num metric-value">{{ row.strike if row.strike else "—" }}</td>
                     <td>{{ row.expiration if row.expiration else "—" }}</td>
                     <td class="num metric-value">{{ "$%.2f" | format(row.premium) if row.premium else "—" }}</td>
+                    {% endif %}
                     {% endif %}
                     <td><div class="flags-wrap">
                         {% for flag in (row.risk_flags or []) %}

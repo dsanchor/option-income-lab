@@ -43,6 +43,13 @@
             </span>
             <span style="display:flex; align-items:center; gap:0.4rem;">
                 <label class="switch">
+                    <input type="checkbox" id="toggle-bt" {% if symbol_doc.watchlist.buy_tracker %}checked{% endif %}>
+                    <span class="slider"></span>
+                </label>
+                <span>Buy Tracker</span>
+            </span>
+            <span style="display:flex; align-items:center; gap:0.4rem;">
+                <label class="switch">
                     <input type="checkbox" id="toggle-notifications" {% if symbol_doc.telegram_notifications_enabled is not defined or symbol_doc.telegram_notifications_enabled %}checked{% endif %}>
                     <span class="slider"></span>
                 </label>
@@ -488,13 +495,15 @@
     var SYMBOL = '{{ symbol_doc.symbol }}';
 
     // Alert attach data (embedded by backend)
-    var WATCHLIST = {
+    var WATCHLIST_STATE = {
         covered_call: {{ symbol_doc.watchlist.covered_call | tojson }},
-        cash_secured_put: {{ symbol_doc.watchlist.cash_secured_put | tojson }}
+        cash_secured_put: {{ symbol_doc.watchlist.cash_secured_put | tojson }},
+        buy_tracker: {{ symbol_doc.watchlist.buy_tracker | tojson }}
     };
     var LATEST_SELL_ALERTS = {
         covered_call: {{ latest_sell_alerts.covered_call | tojson }},
-        cash_secured_put: {{ latest_sell_alerts.cash_secured_put | tojson }}
+        cash_secured_put: {{ latest_sell_alerts.cash_secured_put | tojson }},
+        buy_tracker: {{ latest_sell_alerts.buy_tracker | tojson }}
     };
     var AGENT_TYPE_MAP = { call: 'covered_call', put: 'cash_secured_put' };
 
@@ -505,7 +514,7 @@
         var chk = document.getElementById('chkAlertPrefill');
         var label = document.getElementById('alertPrefillLabel');
         var alert = agentType ? LATEST_SELL_ALERTS[agentType] : null;
-        var watching = agentType ? WATCHLIST[agentType] : false;
+        var watching = agentType ? WATCHLIST_STATE[agentType] : false;
 
         if (watching && alert && alert.activity_id) {
             var dateStr = (alert.timestamp || '').substring(0, 10);
@@ -591,14 +600,22 @@
         });
     });
 
-    // Toggle CC / CSP watchlist flags
-    ['toggle-cc', 'toggle-csp'].forEach(function(id) {
+    // Toggle CC / CSP / Buy Tracker watchlist flags
+    ['toggle-cc', 'toggle-csp', 'toggle-bt'].forEach(function(id) {
         var el = document.getElementById(id);
         if (!el) return;
         el.addEventListener('change', async function() {
-            var field = id === 'toggle-cc' ? 'covered_call' : 'cash_secured_put';
+            var field;
+            if (id === 'toggle-cc') {
+                field = 'covered_call';
+            } else if (id === 'toggle-csp') {
+                field = 'cash_secured_put';
+            } else if (id === 'toggle-bt') {
+                field = 'buy_tracker';
+            }
             var payload = {};
             payload[field] = this.checked;
+            WATCHLIST_STATE[field] = this.checked;
             try {
                 var res = await fetch('/api/symbols/' + SYMBOL, {
                     method: 'PUT',
@@ -607,9 +624,11 @@
                 });
                 if (!res.ok) {
                     this.checked = !this.checked;
+                    WATCHLIST_STATE[field] = this.checked;
                 }
             } catch(e) {
                 this.checked = !this.checked;
+                WATCHLIST_STATE[field] = this.checked;
             }
         });
     });
@@ -810,7 +829,7 @@
         var checkbox = form.querySelector('.roll-alert-checkbox');
         var label = form.querySelector('.roll-alert-label');
         var alert = agentType ? LATEST_SELL_ALERTS[agentType] : null;
-        var watching = agentType ? WATCHLIST[agentType] : false;
+        var watching = agentType ? WATCHLIST_STATE[agentType] : false;
 
         if (watching && alert && alert.activity_id) {
             var dateStr = (alert.timestamp || '').substring(0, 10);

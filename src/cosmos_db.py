@@ -72,7 +72,8 @@ class CosmosDBService:
     def create_symbol(self, symbol: str, exchange: str,
                       display_name: str = "",
                       covered_call: bool = False,
-                      cash_secured_put: bool = False) -> dict:
+                      cash_secured_put: bool = False,
+                      buy_tracker: bool = False) -> dict:
         """Create a new symbol config document."""
         now = datetime.utcnow().isoformat() + "Z"
         doc = {
@@ -84,6 +85,7 @@ class CosmosDBService:
             "watchlist": {
                 "covered_call": covered_call,
                 "cash_secured_put": cash_secured_put,
+                "buy_tracker": buy_tracker,
             },
             "telegram_notifications_enabled": True,
             "positions": [],
@@ -112,7 +114,8 @@ class CosmosDBService:
 
     def update_watchlist(self, symbol: str,
                          covered_call: Optional[bool] = None,
-                         cash_secured_put: Optional[bool] = None) -> dict:
+                         cash_secured_put: Optional[bool] = None,
+                         buy_tracker: Optional[bool] = None) -> dict:
         """Update watchlist flags for a symbol."""
         doc = self.get_symbol(symbol)
         if doc is None:
@@ -121,6 +124,8 @@ class CosmosDBService:
             doc["watchlist"]["covered_call"] = covered_call
         if cash_secured_put is not None:
             doc["watchlist"]["cash_secured_put"] = cash_secured_put
+        if buy_tracker is not None:
+            doc["watchlist"]["buy_tracker"] = buy_tracker
         doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
         return self.container.replace_item(item=doc["id"], body=doc)
 
@@ -164,6 +169,17 @@ class CosmosDBService:
         query = (
             "SELECT * FROM c WHERE c.doc_type = 'symbol_config' "
             "AND c.watchlist.cash_secured_put = true"
+        )
+        return list(self.container.query_items(
+            query=query,
+            enable_cross_partition_query=True,
+        ))
+
+    def get_buy_tracker_symbols(self) -> list[dict]:
+        """Get all symbols enabled for buy tracker watching."""
+        query = (
+            "SELECT * FROM c WHERE c.doc_type = 'symbol_config' "
+            "AND c.watchlist.buy_tracker = true"
         )
         return list(self.container.query_items(
             query=query,
@@ -440,7 +456,7 @@ class CosmosDBService:
         Args:
             symbol: Ticker symbol (partition key).
             agent_type: One of "covered_call", "cash_secured_put",
-                "open_call_monitor", "open_put_monitor".
+                "buy_tracker", "open_call_monitor", "open_put_monitor".
             activity_data: Full activity dict from agent output.
             timestamp: Override timestamp (ISO format). Defaults to now.
             ttl_seconds: Optional TTL in seconds for automatic expiry.
@@ -710,7 +726,8 @@ class CosmosDBService:
         
         Fetches up to `limit_per_symbol` activities for EACH active agent_type within
         each symbol. This ensures all agent types (covered_call, cash_secured_put,
-        open_call_monitor, open_put_monitor) are represented in the summary data,
+        buy_tracker, open_call_monitor, open_put_monitor) are represented in the
+        summary data,
         even when one type has more recent activity than others.
         
         Args:
@@ -728,7 +745,7 @@ class CosmosDBService:
         ))
         
         # Known agent types to query
-        agent_types = ["covered_call", "cash_secured_put", "open_call_monitor", "open_put_monitor"]
+        agent_types = ["covered_call", "cash_secured_put", "buy_tracker", "open_call_monitor", "open_put_monitor"]
         
         result = {}
         for sym_doc in symbols:

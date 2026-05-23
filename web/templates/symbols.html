@@ -37,6 +37,7 @@
                     <th>Display Name</th>
                     <th>Call Watchlist</th>
                     <th>Put Watchlist</th>
+                    <th>Buy Tracker</th>
                     <th>Notifications</th>
                     <th class="num">Active Positions</th>
                     <th>Actions</th>
@@ -59,6 +60,13 @@
                         <label class="switch">
                             <input type="checkbox" class="toggle-csp" data-symbol="{{ sym.symbol }}"
                                    {% if sym.watchlist.cash_secured_put %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                    </td>
+                    <td>
+                        <label class="switch">
+                            <input type="checkbox" class="toggle-bt" data-symbol="{{ sym.symbol }}"
+                                   {% if sym.watchlist.buy_tracker %}checked{% endif %}>
                             <span class="slider"></span>
                         </label>
                     </td>
@@ -129,7 +137,7 @@
     });
 
     // Toggle watchlist flags and notifications
-    document.querySelectorAll('.toggle-cc, .toggle-csp, .toggle-notifications').forEach(function(toggle) {
+    document.querySelectorAll('.toggle-cc, .toggle-csp, .toggle-bt, .toggle-notifications').forEach(function(toggle) {
         toggle.addEventListener('change', async function() {
             var sym = this.dataset.symbol;
             var field;
@@ -137,6 +145,8 @@
                 field = 'covered_call';
             } else if (this.classList.contains('toggle-csp')) {
                 field = 'cash_secured_put';
+            } else if (this.classList.contains('toggle-bt')) {
+                field = 'buy_tracker';
             } else {
                 field = 'telegram_notifications_enabled';
             }

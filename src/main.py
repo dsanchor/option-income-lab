@@ -13,6 +13,7 @@ from .cosmos_db import CosmosDBService
 from .context import ContextProvider
 from .covered_call_agent import run_covered_call_analysis
 from .cash_secured_put_agent import run_cash_secured_put_analysis
+from .buy_tracker_agent import run_buy_tracker_analysis
 from .open_call_monitor_agent import run_open_call_monitor
 from .open_put_monitor_agent import run_open_put_monitor
 from .dgi_screener import run_dgi_screener
@@ -166,6 +167,9 @@ class OptionsAgentScheduler:
             
             # Run cash secured put agent
             await run_cash_secured_put_analysis(config, runner, cosmos, ctx)
+
+            # Run buy tracker agent
+            await run_buy_tracker_analysis(config, runner, cosmos, ctx)
 
             # Run open position monitors
             await run_open_call_monitor(config, runner, cosmos, ctx)

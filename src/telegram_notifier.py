@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 AGENT_LABELS = {
     "covered_call": "Covered Call",
     "cash_secured_put": "Cash-Secured Put",
+    "buy_tracker": "Buy Tracker",
     "open_call_monitor": "Open Call Monitor",
     "open_put_monitor": "Open Put Monitor",
 }
@@ -130,7 +131,7 @@ class TelegramNotifier:
             if is_roll:
                 text = self._format_roll_alert(symbol, label, alert_data)
             else:
-                text = self._format_sell_alert(symbol, label, alert_data)
+                text = self._format_watchlist_alert(symbol, label, alert_data)
             return self._send(creds[0], creds[1], text)
         except Exception:
             logger.warning("Failed to build Telegram alert for %s", symbol, exc_info=True)
@@ -139,25 +140,29 @@ class TelegramNotifier:
     # ── message formatting ────────────────────────────────────────────
 
     @staticmethod
-    def _format_sell_alert(symbol: str, agent_label: str, data: Dict) -> str:
-        strike = data.get("strike", "N/A")
-        expiration = data.get("expiration", "N/A")
+    def _format_watchlist_alert(symbol: str, agent_label: str, data: Dict) -> str:
+        activity = str(data.get("activity", "ALERT")).upper()
+        strike = data.get("strike")
+        expiration = data.get("expiration")
         confidence = data.get("confidence", "N/A")
         risk_rating = data.get("risk_rating")
         premium = data.get("premium")
         underlying_price = data.get("underlying_price")
+        entry_zone = data.get("entry_zone")
 
         lines = [
-            f"\U0001f6a8 <b>SELL Alert: {symbol}</b>",
+            f"\U0001f6a8 <b>{activity} Alert: {symbol}</b>",
             f"Agent: {agent_label}",
         ]
         if underlying_price is not None:
             lines.append(f"Underlying: ${underlying_price}")
-        lines.extend([
-            f"Strike: ${strike}",
-            f"Expiration: {expiration}",
-            f"Confidence: {confidence}",
-        ])
+        if strike is not None:
+            lines.append(f"Strike: ${strike}")
+        if expiration:
+            lines.append(f"Expiration: {expiration}")
+        if entry_zone:
+            lines.append(f"Entry Zone: {entry_zone}")
+        lines.append(f"Confidence: {confidence}")
         if premium is not None:
             lines.append(f"Premium: ${premium}")
         if risk_rating is not None:

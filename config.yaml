@@ -8,6 +8,7 @@ azure:
     supervisor: "gpt-5.4-mini"
     alpha: "gpt-5.4-mini"
     analysis: "gpt-5.4"
+    buy_tracker: "gpt-5.4"
     summary: "gpt-5.4-mini"
     report: "gpt-5.4-mini"
     chat: "gpt-5.4-mini"

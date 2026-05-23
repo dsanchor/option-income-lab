@@ -30,6 +30,7 @@ AGENT_TYPES = {
     "open_put_monitor": {"label": "Open Put Monitor", "is_position_monitor": True},
     "covered_call": {"label": "Following · Covered Call", "is_position_monitor": False},
     "cash_secured_put": {"label": "Following · Cash-Secured Put", "is_position_monitor": False},
+    "buy_tracker": {"label": "Following · Buy Tracker", "is_position_monitor": False},
 }
 
 # ---------------------------------------------------------------------------
@@ -280,6 +281,7 @@ async def api_create_symbol(request: Request):
             display_name = f"{exchange}:{symbol}"
         covered_call = bool(body.get("covered_call", False))
         cash_secured_put = bool(body.get("cash_secured_put", False))
+        buy_tracker = bool(body.get("buy_tracker", False))
 
         if not symbol or not exchange:
             return JSONResponse({"error": "symbol and exchange are required"},
@@ -291,7 +293,7 @@ async def api_create_symbol(request: Request):
                                 status_code=409)
 
         doc = cosmos.create_symbol(symbol, exchange, display_name,
-                                   covered_call, cash_secured_put)
+                                   covered_call, cash_secured_put, buy_tracker)
         return JSONResponse(_clean_doc(doc), status_code=201)
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
@@ -330,6 +332,8 @@ async def api_update_symbol(request: Request, symbol: str):
             doc["watchlist"]["covered_call"] = bool(body["covered_call"])
         if "cash_secured_put" in body:
             doc["watchlist"]["cash_secured_put"] = bool(body["cash_secured_put"])
+        if "buy_tracker" in body:
+            doc.setdefault("watchlist", {})["buy_tracker"] = bool(body["buy_tracker"])
         if "exchange" in body:
             doc["exchange"] = body["exchange"].strip().upper()
         if "telegram_notifications_enabled" in body:
@@ -750,7 +754,9 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
                 wl = sym_cfg.get("watchlist", {})
                 if ((agent_key == "covered_call" and wl.get("covered_call"))
                         or (agent_key == "cash_secured_put"
-                            and wl.get("cash_secured_put"))):
+                            and wl.get("cash_secured_put"))
+                        or (agent_key == "buy_tracker"
+                            and wl.get("buy_tracker"))):
                     groups.setdefault(sym, [])
                     display_map.setdefault(
                         sym, sym_cfg.get("display_name", sym))
@@ -849,23 +855,31 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
                 )
             else:
                 dec = latest_by_key.get(key, {})
-                row["strike"] = dec.get("strike")
-                row["expiration"] = dec.get("expiration")
-                row["premium"] = dec.get("premium")
-                # Gap: percentage difference between price and recommended strike
-                up = row.get("underlying_price")
-                rec_strike = dec.get("strike")
-                try:
-                    rec_strike_f = float(rec_strike) if rec_strike else None
-                except (ValueError, TypeError):
-                    rec_strike_f = None
-                if rec_strike_f and up is not None:
-                    row["strike_pct"] = ((up - rec_strike_f) / rec_strike_f) * 100
-                else:
+                if agent_key == "buy_tracker":
+                    row["entry_zone"] = dec.get("entry_zone")
+                    row["target_horizon"] = dec.get("target_horizon")
+                    row["technical_triggers"] = dec.get(
+                        "technical_triggers", [])
                     row["strike_pct"] = None
-                row["option_type"] = (
-                    "call" if agent_key == "covered_call" else "put"
-                )
+                    row["option_type"] = "put"
+                else:
+                    row["strike"] = dec.get("strike")
+                    row["expiration"] = dec.get("expiration")
+                    row["premium"] = dec.get("premium")
+                    # Gap: percentage difference between price and recommended strike
+                    up = row.get("underlying_price")
+                    rec_strike = dec.get("strike")
+                    try:
+                        rec_strike_f = float(rec_strike) if rec_strike else None
+                    except (ValueError, TypeError):
+                        rec_strike_f = None
+                    if rec_strike_f and up is not None:
+                        row["strike_pct"] = ((up - rec_strike_f) / rec_strike_f) * 100
+                    else:
+                        row["strike_pct"] = None
+                    row["option_type"] = (
+                        "call" if agent_key == "covered_call" else "put"
+                    )
             rows.append(row)
 
         total_counts = _count_by_range(agent_alerts)
@@ -1044,10 +1058,11 @@ async def symbol_detail_page(request: Request, symbol: str):
         alerts.extend(alts)
     alerts.sort(key=lambda s: s.get("timestamp", ""), reverse=True)
 
-    # Latest SELL alert per watchlist agent type (for position pre-fill)
+    # Latest alert per watchlist agent type (for position pre-fill where relevant)
     latest_sell_alerts: Dict[str, Dict | None] = {
         "covered_call": None,
         "cash_secured_put": None,
+        "buy_tracker": None,
     }
     for alt in alerts:
         at = alt.get("agent_type")
@@ -2312,6 +2327,7 @@ async def telegram_test(request: Request):
 AGENT_FUNCTIONS = {
     "covered_call": "run_covered_call_analysis",
     "cash_secured_put": "run_cash_secured_put_analysis",
+    "buy_tracker": "run_buy_tracker_analysis",
     "open_call_monitor": "run_open_call_monitor",
     "open_put_monitor": "run_open_put_monitor",
 }
@@ -2321,12 +2337,14 @@ def _run_agent_in_background(agent_type: str, scheduler, symbol: str = None):
     import asyncio
     from src.covered_call_agent import run_covered_call_analysis
     from src.cash_secured_put_agent import run_cash_secured_put_analysis
+    from src.buy_tracker_agent import run_buy_tracker_analysis
     from src.open_call_monitor_agent import run_open_call_monitor
     from src.open_put_monitor_agent import run_open_put_monitor
 
     funcs = {
         "covered_call": run_covered_call_analysis,
         "cash_secured_put": run_cash_secured_put_analysis,
+        "buy_tracker": run_buy_tracker_analysis,
         "open_call_monitor": run_open_call_monitor,
         "open_put_monitor": run_open_put_monitor,
     }
@@ -2416,29 +2434,31 @@ async def trigger_agent(request: Request, agent_type: str):
 
 
 # ---------------------------------------------------------------------------
-# Full analysis — sequential execution of all 4 agents
+# Full analysis — sequential execution of all agent types
 # ---------------------------------------------------------------------------
 
 _FULL_ANALYSIS_AGENT_ORDER = [
-    "covered_call", "cash_secured_put", "open_call_monitor", "open_put_monitor"
+    "covered_call", "cash_secured_put", "buy_tracker", "open_call_monitor", "open_put_monitor"
 ]
 
 
 def _default_full_analysis_status() -> dict:
-    return {"running": False, "current": None, "completed": [], "total": 4, "errors": []}
+    return {"running": False, "current": None, "completed": [], "total": 5, "errors": []}
 
 
 def _run_all_agents_sequentially(scheduler, status: dict):
-    """Run all 4 agent types sequentially in a single thread."""
+    """Run all watchlist and monitor agent types sequentially in a single thread."""
     import asyncio
     from src.covered_call_agent import run_covered_call_analysis
     from src.cash_secured_put_agent import run_cash_secured_put_analysis
+    from src.buy_tracker_agent import run_buy_tracker_analysis
     from src.open_call_monitor_agent import run_open_call_monitor
     from src.open_put_monitor_agent import run_open_put_monitor
 
     funcs = {
         "covered_call": run_covered_call_analysis,
         "cash_secured_put": run_cash_secured_put_analysis,
+        "buy_tracker": run_buy_tracker_analysis,
         "open_call_monitor": run_open_call_monitor,
         "open_put_monitor": run_open_put_monitor,
     }

@@ -803,3 +803,6 @@ Implemented clean cut replacement of all TradingView data fetching with yfinance
 - Removing unused function definitions is better than leaving them as no-op stubs—makes intent clear and reduces cognitive load
 - Provider-agnostic terminology in plumbing allows future data source swaps without code churn
 - Call site removal is as important as function deletion—grep after deletion to verify no orphaned references
+- Buy tracker follows the existing watchlist-agent pipeline: `src/buy_tracker_agent.py` mirrors the CSP runner and plugs into `AgentRunner.run_symbol_agent()` with a dedicated `buy_tracker` agent type.
+- Buy tracker wiring spans `src/cosmos_db.py`, `src/main.py`, `web/app.py`, `web/templates/symbol_detail.html`, and `web/templates/symbols.html`; the watchlist flag must exist in CosmosDB, scheduler triggers, API payloads, and both symbol management UIs together.
+- `src/buy_tracker_instructions.py` constrains the new agent to `BUY` or `WAIT` outputs only, so backend alert plumbing and badge/rendering need BUY-aware handling rather than SELL-only assumptions.

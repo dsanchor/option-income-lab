@@ -317,7 +317,8 @@ tbody td:last-child, thead th:last-child { text-align: right; width: 1%; white-s
     text-transform: uppercase;
     letter-spacing: 0.03em;
 }
-/* Activity badges — non-WAIT actions get light orange */
+/* Activity badges — BUY stays teal, action alerts stay orange */
+.badge-buy { background: rgba(0,168,126,0.2); color: var(--accent-green); }
 .badge-sell, .badge-close,
 .badge-roll, .badge-roll_up, .badge-roll_down, .badge-roll_out,
 .badge-roll_up_and_out, .badge-roll_down_and_out { background: rgba(236,126,0,0.2); color: var(--accent-orange); }

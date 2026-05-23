@@ -277,6 +277,15 @@ class AgentRunner:
                     f"Strike ${strike} exp {exp} | IV {iv}% (Rank {iv_rank}) | "
                     f"Premium ${premium} ({premium_pct}%)"
                 )
+            elif activity == "BUY":
+                price = json_data.get("underlying_price", "?")
+                entry_zone = json_data.get("entry_zone", "?")
+                confidence = json_data.get("confidence", "?")
+                reason_short = (json_data.get("reason") or "")[:80]
+                summary = (
+                    f"SUMMARY: {ticker} | BUY {agent_type} | Price ${price} | "
+                    f"Entry {entry_zone} | Confidence {confidence} | {reason_short}"
+                )
             else:
                 iv = json_data.get("iv", "?")
                 iv_rank = json_data.get("iv_rank", "?")
@@ -290,11 +299,18 @@ class AgentRunner:
 
         # Fallback: legacy pipe-delimited line
         for line in response_text.split('\n'):
-            if ticker in line and ('SELL' in line.upper() or 'WAIT' in line.upper()):
+            upper_line = line.upper()
+            if ticker in line and ('SELL' in upper_line or 'BUY' in upper_line or 'WAIT' in upper_line):
                 return line.strip(), None
 
         # Last resort: synthesise a summary
-        activity = "SELL" if "SELL" in response_text.upper() and "CLEAR SELL ALERT" in response_text.upper() else "WAIT"
+        upper_text = response_text.upper()
+        if "BUY" in upper_text:
+            activity = "BUY"
+        elif "SELL" in upper_text and "CLEAR SELL ALERT" in upper_text:
+            activity = "SELL"
+        else:
+            activity = "WAIT"
         reason = response_text[:100].replace('\n', ' ').strip()
         return f"{ticker} | ACTIVITY: {activity} | Reason: {reason}", None
 
@@ -1107,7 +1123,8 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
             prolonged_wait = False
 
             if is_alert:
-                print(f"⚠️ SELL ALERT logged for {symbol}")
+                alert_activity = activity_payload.get("activity", "ALERT")
+                print(f"⚠️ {alert_activity} ALERT logged for {symbol}")
                 # Both supervisor + alpha run in parallel
                 supervisor_view, alpha_view = await asyncio.gather(
                     self._run_supervisor_review(

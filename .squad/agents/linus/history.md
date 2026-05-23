@@ -1872,3 +1872,9 @@ Renamed all 14 instruction files to drop the misleading `tv_` prefix (leftover f
 - The probe already runs with a 5-minute cache (`_CACHE_TTL_SECONDS = 300`), so no new background work needed — just import and call.
 - Changes: `web/app.py` (import + pass `market_open` to template context), `web/templates/dashboard.html` (new card in `.summary-row`), `web/static/style.css` (`.summary-card-market`, `.market-dot` styles).
 - Reused existing CSS variables `--accent-green` and `--text-muted` for the open/closed colors to stay consistent with the design system.
+
+### Buy Tracker Instruction Contract (2026-05)
+- The buy tracker feature is a stock-only accumulation agent: pure technical analysis, no options chain, and it must never emit `SELL`.
+- To stay compatible with existing parsing, the safest instruction contract is the same CSP/CC response pattern: one fenced JSON block followed by a `SUMMARY:` line.
+- The actionable schema for buy tracking should center on `BUY`/`WAIT`, `entry_price`, `target_price`, `stop_loss`, `technical_signals`, `risk_flags`, and a detailed technical `reasoning` field.
+- Conservative threshold: require at least 3 aligned bullish signals before `BUY`, with support-based entries and pivot-resistance targets.

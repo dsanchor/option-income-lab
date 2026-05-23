@@ -121,7 +121,8 @@
                 <td class="mono">${{ "%.2f" | format(metrics.current_price | default(0)) }}</td>
                 <td class="actions-cell">
                     <button class="btn-trigger-row btn-dgi-analyze" data-symbol="{{ entry.symbol }}" title="Analyze {{ entry.symbol }} in Quick Analysis chat">▶</button>
-                    <button class="btn-trigger-row btn-dgi-add" data-symbol="{{ entry.symbol }}" data-exchange="{{ entry.exchange | default('NYSE') }}" title="Add {{ entry.symbol }} to watchlist with CSP enabled">➕</button>
+                    <button class="btn-trigger-row btn-dgi-add" data-symbol="{{ entry.symbol }}" data-exchange="{{ entry.exchange | default('NYSE') }}" data-mode="csp" title="Add {{ entry.symbol }} with CSP enabled">CSP</button>
+                    <button class="btn-trigger-row btn-dgi-add" data-symbol="{{ entry.symbol }}" data-exchange="{{ entry.exchange | default('NYSE') }}" data-mode="buy" title="Add {{ entry.symbol }} with Buy Tracker enabled">TBuy</button>
                 </td>
             </tr>
             {% endfor %}
@@ -342,36 +343,54 @@
         });
     });
 
-    /* ── Add to watchlist with CSP enabled ── */
+    /* ── Add to watchlist with CSP or Buy Tracker enabled ── */
     document.querySelectorAll('.btn-dgi-add').forEach(function(btn) {
         btn.addEventListener('click', function(e) {
             e.stopPropagation();
             var symbol = btn.dataset.symbol;
             var exchange = btn.dataset.exchange || 'NYSE';
+            var mode = btn.dataset.mode; // 'csp' or 'buy'
             var orig = btn.textContent;
             btn.textContent = '⏳';
             btn.disabled = true;
             btn.classList.add('running');
 
+            var payload = { symbol: symbol, exchange: exchange };
+            if (mode === 'csp') {
+                payload.cash_secured_put = true;
+            } else {
+                payload.buy_tracker = true;
+            }
+            var label = mode === 'csp' ? 'CSP' : 'Buy Tracker';
+
             fetch('/api/symbols', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ symbol: symbol, exchange: exchange, cash_secured_put: true })
+                body: JSON.stringify(payload)
             })
             .then(function(res) {
                 if (res.status === 409) {
-                    btn.textContent = '✓';
-                    btn.title = symbol + ' already in watchlist';
-                    btn.classList.remove('running');
-                    btn.classList.add('done');
-                    return;
+                    // Symbol exists — try to enable the flag via PUT
+                    var updatePayload = {};
+                    if (mode === 'csp') updatePayload.cash_secured_put = true;
+                    else updatePayload.buy_tracker = true;
+                    return fetch('/api/symbols/' + symbol, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(updatePayload)
+                    }).then(function(r2) {
+                        btn.textContent = '✓';
+                        btn.title = symbol + ' — ' + label + ' enabled';
+                        btn.classList.remove('running');
+                        btn.classList.add('done');
+                    });
                 }
                 return res.json().then(function(data) {
                     if (res.ok) {
                         btn.textContent = '✓';
                         btn.classList.remove('running');
                         btn.classList.add('done');
-                        btn.title = symbol + ' added with CSP enabled';
+                        btn.title = symbol + ' added with ' + label + ' enabled';
                     } else {
                         btn.textContent = '✗';
                         btn.classList.remove('running');

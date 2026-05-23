@@ -57,7 +57,7 @@ async def run_report_analysis(
     }
 
     # 2. Recent activities AND alerts per agent type (last 3 each)
-    for agent_type in ("covered_call", "cash_secured_put",
+    for agent_type in ("covered_call", "cash_secured_put", "buy_tracker",
                        "open_call_monitor", "open_put_monitor"):
         try:
             activities = cosmos.get_recent_activities(

@@ -68,7 +68,7 @@
                 </tr>
             </thead>
             <tbody>
-                {% for agent_type in ['covered_call', 'cash_secured_put', 'open_call_monitor', 'open_put_monitor'] %}
+                {% for agent_type in ['covered_call', 'cash_secured_put', 'buy_tracker', 'open_call_monitor', 'open_put_monitor'] %}
                 {% if agent_type in telemetry_stats['agent_run'] %}
                 {% set ag = telemetry_stats['agent_run'][agent_type] %}
                 <tr>
