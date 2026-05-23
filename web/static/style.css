@@ -137,25 +137,14 @@ h1, h2, h3, h4, h5, h6 {
 /* ── Dashboard banner ── */
 .dashboard-banner {
     margin-bottom: 1.5rem;
-    background: linear-gradient(135deg, rgba(73,79,223,0.18), rgba(0,168,126,0.12));
-    border: 1px solid rgba(73,79,223,0.35);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
     border-radius: var(--radius-card);
     overflow: hidden;
 }
-.dashboard-banner-header {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 0.9rem 1.25rem 0.6rem;
-    font-size: 0.82rem;
-    color: var(--text-muted);
-}
-.dashboard-banner-subtitle {
-    white-space: nowrap;
-}
 .dashboard-banner-marquee {
     overflow: hidden;
-    padding: 0 0 1rem;
+    padding: 0.85rem 0;
 }
 .dashboard-banner-track {
     display: flex;
@@ -183,7 +172,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 .dashboard-banner-item.priority-5,
 .dashboard-banner-item.priority-4 {
-    border-color: rgba(236,126,0,0.45);
+    border-color: var(--accent-blue);
 }
 .banner-item-emoji {
     font-size: 1rem;
@@ -202,12 +191,8 @@ h1, h2, h3, h4, h5, h6 {
     to { transform: translateX(-50%); }
 }
 @media (max-width: 768px) {
-    .dashboard-banner-header {
-        flex-direction: column;
-        gap: 0.35rem;
-    }
-    .dashboard-banner-subtitle {
-        white-space: normal;
+    .dashboard-banner-marquee {
+        padding: 0.65rem 0;
     }
 }
 
