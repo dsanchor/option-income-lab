@@ -980,9 +980,17 @@ Provide your alpha advisor analysis in the JSON format specified above."""
             )
             return None
 
-    def _build_market_data_block(self, data: dict, symbol: str, exchange: str) -> str:
-        """Build the market data text block for supervisor/alpha context."""
-        return f"""--- OVERVIEW PAGE ({exchange}:{symbol}) ---
+    def _build_market_data_block(self, data: dict, symbol: str, exchange: str,
+                                options_chain_text: str = None) -> str:
+        """Build the market data text block for supervisor/alpha context.
+
+        Parameters
+        ----------
+        options_chain_text : str, optional
+            Pre-filtered options chain text to include. When provided, the alpha
+            agent can reference specific strikes/premiums for alternatives.
+        """
+        block = f"""--- OVERVIEW PAGE ({exchange}:{symbol}) ---
 {data.get('overview', '')}
 
 --- TECHNICALS PAGE ({exchange}:{symbol}) ---
@@ -993,6 +1001,43 @@ Provide your alpha advisor analysis in the JSON format specified above."""
 
 --- DIVIDENDS PAGE ({exchange}:{symbol}) ---
 {data.get('dividends', '')}"""
+        if options_chain_text:
+            block += f"""
+
+--- OPTIONS CHAIN (filtered subset for alternatives) ---
+{options_chain_text}"""
+        return block
+
+    def _build_alpha_options_chain(self, data: dict, agent_type: str) -> str:
+        """Build a filtered options chain text for the alpha agent.
+
+        For CC/open_call: calls only, delta-filtered.
+        For CSP/open_put: puts only, delta-filtered.
+        For buy_tracker: returns empty string (no options).
+        """
+        if agent_type == "buy_tracker":
+            return ""
+        raw_chain = data.get('options_chain', '')
+        if not raw_chain:
+            return ""
+        try:
+            structured = json.loads(raw_chain) if isinstance(raw_chain, str) else raw_chain
+        except (json.JSONDecodeError, TypeError):
+            return ""
+        if not structured.get("calls") and not structured.get("puts"):
+            return ""
+        # Determine option type
+        if agent_type in ("covered_call", "open_call"):
+            option_type = "call"
+        elif agent_type in ("cash_secured_put", "open_put"):
+            option_type = "put"
+        else:
+            return ""
+        structured = filter_options_chain_by_type(structured, option_type)
+        structured = filter_options_chain_by_delta(structured)
+        if not structured.get("calls") and not structured.get("puts"):
+            return ""
+        return OPTIONS_CHAIN_SCHEMA_DESCRIPTION + "\n" + json.dumps(structured, indent=2)
 
     async def run_symbol_agent(
         self,
@@ -1123,7 +1168,9 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
             )
             
             # ── Supervisor always runs; Alpha only on alerts / prolonged waits ──
+            alpha_chain_text = self._build_alpha_options_chain(data, agent_type)
             market_data = self._build_market_data_block(data, symbol, exchange)
+            alpha_market_data = self._build_market_data_block(data, symbol, exchange, options_chain_text=alpha_chain_text)
             prolonged_wait = False
 
             if is_alert:
@@ -1140,7 +1187,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                     ),
                     self._run_alpha_review(
                         activity_payload=activity_payload,
-                        market_data=market_data,
+                        market_data=alpha_market_data,
                         previous_context=previous_context,
                         agent_type=agent_type,
                         model=alpha_model,
@@ -1161,7 +1208,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                         ),
                         self._run_alpha_review(
                             activity_payload=activity_payload,
-                            market_data=market_data,
+                            market_data=alpha_market_data,
                             previous_context=previous_context,
                             agent_type=agent_type,
                             model=alpha_model,
@@ -1831,6 +1878,8 @@ Output your activity in the required JSON format. Use the timestamp above in you
 
                 # ── Supervisor always runs; Alpha only on alerts / prolonged waits ──
                 market_data = self._build_market_data_block(data, symbol, exchange)
+                alpha_chain_text = self._build_alpha_options_chain(data, agent_type)
+                alpha_market_data = self._build_market_data_block(data, symbol, exchange, options_chain_text=alpha_chain_text)
                 # Both supervisor + alpha run in parallel
                 supervisor_view, alpha_view = await asyncio.gather(
                     self._run_supervisor_review(
@@ -1842,7 +1891,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                     ),
                     self._run_alpha_review(
                         activity_payload=activity_payload,
-                        market_data=market_data,
+                        market_data=alpha_market_data,
                         previous_context=previous_context,
                         agent_type=agent_type,
                         model=alpha_model,
@@ -1904,6 +1953,8 @@ Output your activity in the required JSON format. Use the timestamp above in you
             else:
                 # ── Supervisor always runs; Alpha only on prolonged waits ──
                 market_data = self._build_market_data_block(data, symbol, exchange)
+                alpha_chain_text = self._build_alpha_options_chain(data, agent_type)
+                alpha_market_data = self._build_market_data_block(data, symbol, exchange, options_chain_text=alpha_chain_text)
                 prolonged_wait = self._detect_prolonged_wait(cosmos, symbol, agent_type, position_id=position_id)
 
                 if prolonged_wait:
@@ -1919,7 +1970,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         ),
                         self._run_alpha_review(
                             activity_payload=activity_payload,
-                            market_data=market_data,
+                            market_data=alpha_market_data,
                             previous_context=previous_context,
                             agent_type=agent_type,
                             model=alpha_model,
