@@ -12,6 +12,7 @@ from agent_framework import Agent
 from agent_framework.openai import OpenAIChatCompletionClient
 
 from .cosmos_db import CosmosDBService
+from .llm import LlmConfig, create_async_chat_client
 from .context import ContextProvider
 from .options_chain_filters import (
     filter_options_chain_by_type,
@@ -61,36 +62,39 @@ class AgentRunner:
     PROLONGED_WAIT_THRESHOLD = 5
     SUPERVISOR_COOLDOWN = 3  # WAITs between repeated supervisor/alpha reviews
     
-    def __init__(self, project_endpoint: str, model: str, api_key: str,
-                 telegram_notifier=None):
+    def __init__(self, llm: LlmConfig, model: str, telegram_notifier=None,
+                 project_endpoint: str = None, api_key: str = None):
         """Initialize the agent runner.
-        
+
         Args:
-            project_endpoint: Azure AI Foundry project endpoint URL
-            model: Default model deployment name
-            api_key: Azure OpenAI API key
+            llm: Provider credentials (azure or gemini)
+            model: Default model name / deployment
             telegram_notifier: Optional TelegramNotifier for alert notifications
+            project_endpoint: Deprecated — use llm= (Azure backward compat)
+            api_key: Deprecated — use llm=
         """
-        self._endpoint = project_endpoint
-        self._api_key = api_key
+        if project_endpoint is not None and api_key is not None:
+            llm = LlmConfig(provider='azure', api_key=api_key, endpoint=project_endpoint)
+        self._llm = llm
         self._default_model = model
-        self._clients: Dict[str, OpenAIChatCompletionClient] = {}
+        self._clients: Dict[str, object] = {}
         self.telegram_notifier = telegram_notifier
 
     def _get_client(self, model: str = None) -> OpenAIChatCompletionClient:
-        """Return a cached OpenAIChatCompletionClient for the given deployment name."""
+        """Return a cached chat client for the given model name."""
         deployment = model or self._default_model
         if deployment not in self._clients:
-            logger.info("Creating OpenAIChatCompletionClient for deployment=%s", deployment)
-            self._clients[deployment] = OpenAIChatCompletionClient(
-                model=deployment,
-                azure_endpoint=self._endpoint,
-                api_key=self._api_key,
+            logger.info(
+                "Creating OpenAIChatCompletionClient provider=%s model=%s",
+                self._llm.provider, deployment,
+            )
+            self._clients[deployment] = create_async_chat_client(
+                deployment, self._llm,
             )
         return self._clients[deployment]
 
     @property
-    def client(self) -> OpenAIChatCompletionClient:
+    def client(self):
         """Backward-compatible accessor — returns the default model client."""
         return self._get_client()
     
