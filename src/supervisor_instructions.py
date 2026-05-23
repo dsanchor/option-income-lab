@@ -353,6 +353,13 @@ _AGENT_CONTEXT: dict[str, str] = {
         "strength, premium adequacy, earnings proximity, delta "
         "0.20–0.35 target range."
     ),
+    "buy_tracker": (
+        "The primary agent is a **Buy Tracker (Direct Stock Purchase)**. "
+        "It monitors stocks for direct BUY opportunities using pure "
+        "technical analysis — NO options involved. Key factors: trend "
+        "direction, moving averages, RSI, MACD, volume, support/resistance "
+        "levels, entry zones. Only produces BUY or WAIT signals."
+    ),
 }
 
 
@@ -367,6 +374,7 @@ _VALID_DECISIONS: dict[str, set[str]] = {
                  "ROLL_DOWN_AND_OUT", "CLOSE"},
     "covered_call": {"SELL", "NOT_NOW", "WAIT"},
     "cash_secured_put": {"SELL", "NOT_NOW", "WAIT"},
+    "buy_tracker": {"BUY", "WAIT"},
 }
 
 

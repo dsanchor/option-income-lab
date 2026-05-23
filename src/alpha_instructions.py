@@ -329,6 +329,14 @@ _AGENT_CONTEXT: dict[str, str] = {
         "Higher-conviction alternatives explore higher deltas (0.30–0.45), "
         "closer strikes to current price, or shorter DTE."
     ),
+    "buy_tracker": (
+        "The primary agent is a **Buy Tracker (Direct Stock Purchase)**. "
+        "It monitors stocks for direct BUY opportunities using pure "
+        "technical analysis — NO options. The conservative agent waits "
+        "for textbook setups. Higher-conviction alternatives might suggest "
+        "more aggressive entries on partial confirmations, scaling-in "
+        "strategies, or tighter entry zones."
+    ),
 }
 
 
@@ -343,6 +351,7 @@ _VALID_DECISIONS: dict[str, set[str]] = {
                  "ROLL_DOWN_AND_OUT", "CLOSE"},
     "covered_call": {"SELL", "NOT_NOW", "WAIT"},
     "cash_secured_put": {"SELL", "NOT_NOW", "WAIT"},
+    "buy_tracker": {"BUY", "WAIT"},
 }
 
 
