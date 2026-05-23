@@ -645,6 +645,31 @@ class CosmosDBService:
         ))
         return results[0] if results else None
 
+    def get_banner(self) -> dict | None:
+        """Get the current dashboard banner document."""
+        try:
+            return self.container.read_item(
+                item="dashboard_banner",
+                partition_key="_system",
+            )
+        except CosmosResourceNotFoundError:
+            return None
+
+    def save_banner(self, items: list[dict], model: str | None = None) -> dict:
+        """Upsert the current dashboard banner document."""
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        doc = {
+            "id": "dashboard_banner",
+            "symbol": "_system",
+            "doc_type": "banner",
+            "timestamp": now,
+            "updated_at": now,
+            "items": items,
+        }
+        if model:
+            doc["model"] = model
+        return self.container.upsert_item(doc)
+
     # ── Dashboard Queries ──────────────────────────────────────────────
 
     def get_all_alerts(self, agent_type: str | None = None,

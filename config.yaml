@@ -9,6 +9,7 @@ ai:
     analysis: "gpt-5.4"
     buy_tracker: "gpt-5.4-mini"
     summary: "gpt-5.4-mini"
+    banner: "gpt-5.4-mini"
     report: "gpt-5.4-mini"
     chat: "gpt-5.4-mini"
     symbol_chat: "gpt-5.4-mini"
@@ -46,6 +47,12 @@ summary_agent:
   enabled: true
   cron: "0 8 * * *"  # 8 AM daily (America/New_York timezone)
   activity_count: 3  # Latest N activities per symbol
+
+banner_agent:
+  enabled: true
+  cron: "0 5 * * *"  # 5 AM daily
+  model: "gpt-5.4-mini"
+  max_items: 10
 
 options_chain_scheduler:
   enabled: true

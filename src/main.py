@@ -17,6 +17,7 @@ from .buy_tracker_agent import run_buy_tracker_analysis
 from .open_call_monitor_agent import run_open_call_monitor
 from .open_put_monitor_agent import run_open_put_monitor
 from .dgi_screener import run_dgi_screener
+from .banner_agent import run_banner_agent
 
 
 class OptionsAgentScheduler:
@@ -32,6 +33,7 @@ class OptionsAgentScheduler:
         self._summary_cron_changed = False
         self._options_chain_cron_changed = False
         self._dgi_screener_cron_changed = False
+        self._banner_cron_changed = False
         self._last_config_reload = None
         self._config_reload_interval = 60  # seconds
     
@@ -62,6 +64,13 @@ class OptionsAgentScheduler:
         dgi_config['cron'] = new_cron
         self.config.config['dgi_screener'] = dgi_config
         self._dgi_screener_cron_changed = True
+
+    def reschedule_banner(self, new_cron: str):
+        """Update banner agent cron expression. The run loop will pick it up on next iteration."""
+        banner_config = self.config.config.get('banner_agent', {})
+        banner_config['cron'] = new_cron
+        self.config.config['banner_agent'] = banner_config
+        self._banner_cron_changed = True
     
     def setup(self):
         """Initialize configuration, CosmosDB, and agent runner."""
@@ -140,6 +149,21 @@ class OptionsAgentScheduler:
         if dgi_enabled:
             print(f"  Cron: {dgi_cron}")
             print(f"  Timezone: {self.config.timezone}")
+        else:
+            print(f"  Status: Disabled in config")
+
+        banner_config = self.config.config.get('banner_agent', {})
+        banner_enabled = banner_config.get('enabled', True)
+        banner_cron = banner_config.get('cron', '0 5 * * *')
+        banner_max_items = banner_config.get('max_items', 10)
+
+        print(f"\nDashboard Banner Configuration:")
+        print(f"  Enabled: {banner_enabled}")
+        if banner_enabled:
+            print(f"  Cron: {banner_cron}")
+            print(f"  Timezone: {self.config.timezone}")
+            print(f"  Model: {self.config.model_for('banner')}")
+            print(f"  Max items: {banner_max_items}")
         else:
             print(f"  Status: Disabled in config")
     
@@ -274,6 +298,30 @@ class OptionsAgentScheduler:
                   f"{result.get('top_n', 0)} in top list")
         except Exception as e:
             print(f"ERROR during DGI screener: {e}")
+
+    def run_banner_agent_job(self):
+        """Execute banner agent (bridges async to sync for scheduler)."""
+        asyncio.run(self._run_banner_agent_async())
+
+    async def _run_banner_agent_async(self):
+        """Run dashboard banner agent if enabled in config."""
+        banner_config = self.config.config.get('banner_agent', {})
+        if not banner_config.get('enabled', True):
+            print("⏭️  Dashboard banner agent disabled in config")
+            return
+
+        tz = pytz.timezone(self.config.timezone)
+        now_tz = datetime.now(tz)
+        print(f"\n{'*'*70}")
+        print(f"📰 Dashboard Banner Agent - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"{'*'*70}\n")
+
+        try:
+            result = await run_banner_agent(self.config, self.cosmos)
+            print(f"Banner agent complete: {len(result.get('items', []))} items from "
+                  f"{result.get('symbols_analyzed', 0)} symbols")
+        except Exception as e:
+            print(f"ERROR during dashboard banner generation: {e}")
     
     def signal_handler(self, sig, frame):
         """Handle graceful shutdown on Ctrl+C."""
@@ -295,6 +343,7 @@ class OptionsAgentScheduler:
             main_cron_changed = False
             summary_cron_changed = False
             options_chain_cron_changed = False
+            banner_cron_changed = False
             timezone_changed = False
             
             # Check scheduler settings
@@ -370,6 +419,23 @@ class OptionsAgentScheduler:
                 for key in ['enabled']:
                     if key in dgi_settings:
                         self.config.config['dgi_screener'][key] = dgi_settings[key]
+
+            banner_settings = cosmos_settings.get('banner_agent', {})
+            new_banner_cron = banner_settings.get('cron')
+            current_banner_cron = self.config.config.get('banner_agent', {}).get('cron', '0 5 * * *')
+
+            if new_banner_cron and new_banner_cron != current_banner_cron:
+                if 'banner_agent' not in self.config.config:
+                    self.config.config['banner_agent'] = {}
+                self.config.config['banner_agent']['cron'] = new_banner_cron
+                banner_cron_changed = True
+
+            if banner_settings:
+                if 'banner_agent' not in self.config.config:
+                    self.config.config['banner_agent'] = {}
+                for key in ['enabled', 'max_items']:
+                    if key in banner_settings:
+                        self.config.config['banner_agent'][key] = banner_settings[key]
             
             # Set flags for the main loop to pick up
             if main_cron_changed:
@@ -390,6 +456,10 @@ class OptionsAgentScheduler:
             if dgi_cron_changed:
                 self._dgi_screener_cron_changed = True
                 print(f"✓ Config reloaded from CosmosDB: DGI screener cron changed to {new_dgi_cron}")
+
+            if banner_cron_changed:
+                self._banner_cron_changed = True
+                print(f"✓ Config reloaded from CosmosDB: banner agent cron changed to {new_banner_cron}")
                 
         except Exception as e:
             # Don't crash the scheduler on config reload errors
@@ -435,6 +505,13 @@ class OptionsAgentScheduler:
         dgi_cron_expr = dgi_config.get('cron', '0 6 * * 1-5')
         dgi_next_run = None
         dgi_cron = None
+
+        # Initialize dashboard banner cron (if enabled)
+        banner_config = self.config.config.get('banner_agent', {})
+        banner_enabled = banner_config.get('enabled', True)
+        banner_cron_expr = banner_config.get('cron', '0 5 * * *')
+        banner_next_run = None
+        banner_cron = None
         
         if summary_enabled:
             try:
@@ -462,6 +539,15 @@ class OptionsAgentScheduler:
                 print(f"⚠️  Invalid DGI screener cron expression '{dgi_cron_expr}': {e}")
                 print(f"⚠️  DGI screener scheduling disabled")
                 dgi_enabled = False
+
+        if banner_enabled:
+            try:
+                banner_cron = croniter(banner_cron_expr, now_tz)
+                banner_next_run = banner_cron.get_next(datetime)
+            except (ValueError, KeyError) as e:
+                print(f"⚠️  Invalid banner agent cron expression '{banner_cron_expr}': {e}")
+                print(f"⚠️  Dashboard banner scheduling disabled")
+                banner_enabled = False
         
         # Display initial schedule
         print(f"\nMonitor Agents        - Next run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
@@ -477,6 +563,10 @@ class OptionsAgentScheduler:
             print(f"DGI Screener          - Next run: {dgi_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         else:
             print(f"DGI Screener          - Disabled")
+        if banner_enabled and banner_next_run:
+            print(f"Dashboard Banner      - Next run: {banner_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        else:
+            print(f"Dashboard Banner      - Disabled")
         
         # Track when we last reloaded config
         self._last_config_reload = time.time()
@@ -552,6 +642,23 @@ class OptionsAgentScheduler:
                     print(f"⚠️  Invalid DGI screener cron expression '{dgi_cron_expr}': {e}")
                     dgi_enabled = False
 
+            # Check if dashboard banner cron was updated from the web UI
+            if self._banner_cron_changed:
+                self._banner_cron_changed = False
+                banner_config = self.config.config.get('banner_agent', {})
+                banner_cron_expr = banner_config.get('cron', '0 5 * * *')
+                try:
+                    tz = pytz.timezone(self.config.timezone)
+                    now_tz = datetime.now(tz)
+                    banner_cron = croniter(banner_cron_expr, now_tz)
+                    banner_next_run = banner_cron.get_next(datetime)
+                    banner_enabled = banner_config.get('enabled', True)
+                    print(f"Dashboard banner cron rescheduled to: {banner_cron_expr}")
+                    print(f"Next scheduled run: {banner_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
+                except (ValueError, KeyError) as e:
+                    print(f"⚠️  Invalid banner agent cron expression '{banner_cron_expr}': {e}")
+                    banner_enabled = False
+
             now_tz = datetime.now(tz)
             
             # Check main scheduler
@@ -578,6 +685,12 @@ class OptionsAgentScheduler:
                 self.run_dgi_screener_job()
                 dgi_next_run = dgi_cron.get_next(datetime)
                 print(f"DGI Screener          - Next run: {dgi_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
+
+            # Check dashboard banner scheduler
+            if banner_enabled and banner_next_run and now_tz >= banner_next_run:
+                self.run_banner_agent_job()
+                banner_next_run = banner_cron.get_next(datetime)
+                print(f"Dashboard Banner      - Next run: {banner_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
             
             time.sleep(1)
         

@@ -925,6 +925,7 @@ async def dashboard(request: Request):
         "agent_tables": [],
         "grand_totals": {"today": 0, "week": 0, "month": 0, "total": 0},
         "symbol_count": 0, "position_count": 0, "activity": [],
+        "banner_items": [],
         "agent_types": AGENT_TYPES,
         "market_open": market_open,
     }
@@ -937,6 +938,7 @@ async def dashboard(request: Request):
         all_symbols = cosmos.list_symbols()
         all_alerts = cosmos.get_all_alerts(limit=500)
         all_activities = cosmos.get_all_activities(limit=200)
+        banner_doc = cosmos.get_banner()
     except Exception as e:
         empty_ctx["error"] = f"CosmosDB query failed: {e}"
         return templates.TemplateResponse("dashboard.html", empty_ctx)
@@ -988,6 +990,7 @@ async def dashboard(request: Request):
         "symbol_count": symbol_count,
         "position_count": position_count,
         "activity": activity,
+        "banner_items": (banner_doc or {}).get("items", []),
         "agent_types": AGENT_TYPES,
         "market_open": market_open,
     })

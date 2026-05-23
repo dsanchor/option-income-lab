@@ -134,6 +134,83 @@ h1, h2, h3, h4, h5, h6 {
 
 .header-controls { display: flex; align-items: center; gap: 1rem; margin-top: 0.5rem; }
 
+/* ── Dashboard banner ── */
+.dashboard-banner {
+    margin-bottom: 1.5rem;
+    background: linear-gradient(135deg, rgba(73,79,223,0.18), rgba(0,168,126,0.12));
+    border: 1px solid rgba(73,79,223,0.35);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+}
+.dashboard-banner-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.9rem 1.25rem 0.6rem;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+.dashboard-banner-subtitle {
+    white-space: nowrap;
+}
+.dashboard-banner-marquee {
+    overflow: hidden;
+    padding: 0 0 1rem;
+}
+.dashboard-banner-track {
+    display: flex;
+    width: max-content;
+    animation: banner-scroll 36s linear infinite;
+}
+.dashboard-banner:hover .dashboard-banner-track {
+    animation-play-state: paused;
+}
+.dashboard-banner-group {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0 0.75rem;
+}
+.dashboard-banner-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: max-content;
+    padding: 0.72rem 0.9rem;
+    background: rgba(25,28,31,0.82);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: var(--radius-pill);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+}
+.dashboard-banner-item.priority-5,
+.dashboard-banner-item.priority-4 {
+    border-color: rgba(236,126,0,0.45);
+}
+.banner-item-emoji {
+    font-size: 1rem;
+}
+.banner-item-symbol {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--accent-blue);
+}
+.banner-item-text {
+    font-size: 0.88rem;
+    color: var(--text);
+}
+@keyframes banner-scroll {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+}
+@media (max-width: 768px) {
+    .dashboard-banner-header {
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+    .dashboard-banner-subtitle {
+        white-space: normal;
+    }
+}
+
 /* ── Summary cards ── */
 .summary-row {
     display: grid;

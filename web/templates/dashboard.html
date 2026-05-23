@@ -10,6 +10,30 @@
 <div class="alert alert-error">⚠️ {{ error }}</div>
 {% endif %}
 
+{% if banner_items %}
+<div class="dashboard-banner">
+    <div class="dashboard-banner-header">
+        <span>📰 Daily Market Intel</span>
+        <span class="dashboard-banner-subtitle">Actionable signals from the latest run</span>
+    </div>
+    <div class="dashboard-banner-marquee">
+        <div class="dashboard-banner-track">
+            {% for _ in range(2) %}
+            <div class="dashboard-banner-group">
+                {% for item in banner_items %}
+                <div class="dashboard-banner-item priority-{{ item.priority }}" title="{{ item.category }} · {{ item.symbol }}">
+                    <span class="banner-item-emoji">{{ item.emoji }}</span>
+                    <span class="banner-item-symbol">{{ item.symbol }}</span>
+                    <span class="banner-item-text">{{ item.text }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <!-- Summary cards -->
 <div class="summary-row">
     <div class="summary-card">
