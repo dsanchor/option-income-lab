@@ -1795,6 +1795,12 @@ async def settings_config_page(request: Request):
     dgi_cron = dgi_cfg.get("cron", "0 6 * * 1-5")
     dgi_top_n = dgi_cfg.get("top_n", 40)
     
+    # Banner agent settings
+    banner_cfg = config.get("banner_agent", {})
+    banner_enabled = banner_cfg.get("enabled", True)
+    banner_cron = banner_cfg.get("cron", "0 5 * * *")
+    banner_max_items = banner_cfg.get("max_items", 10)
+    
     # Resolve env vars for display
     if telegram_bot_token.startswith("${"):
         telegram_bot_token = _resolve_env(telegram_bot_token)
@@ -1889,6 +1895,28 @@ async def settings_config_page(request: Request):
         except Exception:
             dgi_next_run = "Invalid cron"
     
+    # Calculate scheduler times for Banner Agent
+    banner_last_run = ""
+    banner_next_run = ""
+    
+    if cosmos:
+        try:
+            banner_doc = cosmos.get_banner()
+            if banner_doc and banner_doc.get("generated_at"):
+                last_dt = datetime.fromisoformat(str(banner_doc["generated_at"]).replace("Z", "+00:00"))
+                banner_last_run = _format_time_dual_tz(last_dt, timezone)
+        except Exception:
+            pass
+    
+    if banner_cron:
+        try:
+            now_tz = datetime.now(tz)
+            cron = croniter(banner_cron, now_tz)
+            next_run_dt = cron.get_next(datetime)
+            banner_next_run = _format_time_dual_tz(next_run_dt, timezone)
+        except Exception:
+            banner_next_run = "Invalid cron"
+    
     return templates.TemplateResponse("settings_config.html", {
         "request": request,
         "cron_expr": cron_expr,
@@ -1913,6 +1941,11 @@ async def settings_config_page(request: Request):
         "dgi_symbols": dgi_cfg.get("symbols", ""),
         "dgi_last_run": dgi_last_run,
         "dgi_next_run": dgi_next_run,
+        "banner_enabled": banner_enabled,
+        "banner_cron": banner_cron,
+        "banner_max_items": banner_max_items,
+        "banner_last_run": banner_last_run,
+        "banner_next_run": banner_next_run,
     })
 
 
@@ -2085,6 +2118,41 @@ async def settings_config_save(request: Request):
         except (ValueError, KeyError):
             pass
 
+    # Banner agent settings
+    banner_enabled = form.get("banner_enabled") == "true"
+    banner_cron = str(form.get("banner_cron", "0 5 * * *")).strip()
+    banner_max_items_str = str(form.get("banner_max_items", "10")).strip()
+    try:
+        banner_max_items = int(banner_max_items_str)
+        banner_max_items = max(3, min(20, banner_max_items))
+    except ValueError:
+        banner_max_items = 10
+    
+    if banner_cron:
+        try:
+            croniter(banner_cron)
+            if cosmos:
+                cosmos_settings = _load_settings_from_cosmos(cosmos) or {}
+                cosmos_settings.setdefault("banner_agent", {})
+                cosmos_settings["banner_agent"]["enabled"] = banner_enabled
+                cosmos_settings["banner_agent"]["cron"] = banner_cron
+                cosmos_settings["banner_agent"]["max_items"] = banner_max_items
+                _save_settings_to_cosmos(cosmos, cosmos_settings)
+            
+            config = _load_config()
+            config.setdefault("banner_agent", {})
+            config["banner_agent"]["enabled"] = banner_enabled
+            config["banner_agent"]["cron"] = banner_cron
+            config["banner_agent"]["max_items"] = banner_max_items
+            _write_config(config)
+            saved.append("Banner agent")
+            
+            scheduler = getattr(request.app.state, "scheduler", None)
+            if scheduler is not None:
+                scheduler.reschedule_banner(banner_cron)
+        except (ValueError, KeyError):
+            pass
+
     # Re-read for display
     cosmos_settings = _load_settings_from_cosmos(cosmos)
     if cosmos_settings:
@@ -2120,6 +2188,12 @@ async def settings_config_save(request: Request):
     dgi_cr = dgi_cfg.get("cron", "0 6 * * 1-5")
     dgi_tn = dgi_cfg.get("top_n", 40)
 
+    # Banner agent settings
+    banner_cfg = config.get("banner_agent", {})
+    ban_enabled = banner_cfg.get("enabled", True)
+    ban_cron = banner_cfg.get("cron", "0 5 * * *")
+    ban_max_items = banner_cfg.get("max_items", 10)
+
     return templates.TemplateResponse("settings_config.html", {
         "request": request,
         "cron_expr": cron_expr,
@@ -2137,6 +2211,9 @@ async def settings_config_save(request: Request):
         "dgi_cron": dgi_cr,
         "dgi_top_n": dgi_tn,
         "dgi_symbols": dgi_cfg.get("symbols", ""),
+        "banner_enabled": ban_enabled,
+        "banner_cron": ban_cron,
+        "banner_max_items": ban_max_items,
     })
 
 
@@ -2390,6 +2467,92 @@ async def trigger_dgi_screener_status(request: Request):
     state_ref = getattr(request.app.state, "_dgi_screener_status", None)
     running = state_ref.get("running", False) if state_ref else False
     return JSONResponse({"running": running})
+
+
+# ---------------------------------------------------------------------------
+# Summary Agent — manual trigger
+# ---------------------------------------------------------------------------
+
+def _run_summary_agent_in_background(scheduler, state_ref):
+    """Run the summary agent in a background thread."""
+    import asyncio
+    try:
+        asyncio.run(scheduler._run_summary_agent_async())
+    except Exception as e:
+        logger.error("Summary agent trigger error: %s", e, exc_info=True)
+    finally:
+        state_ref["running"] = False
+
+
+@app.post("/api/trigger/summary_agent")
+async def trigger_summary_agent(request: Request):
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None or scheduler.config is None:
+        return JSONResponse(
+            {"error": "Scheduler not running — cannot trigger summary agent"},
+            status_code=503)
+
+    state_ref = getattr(request.app.state, "_summary_agent_status", None)
+    if state_ref is None:
+        state_ref = {"running": False}
+        request.app.state._summary_agent_status = state_ref
+
+    if state_ref.get("running"):
+        return JSONResponse(
+            {"error": "Summary agent already running"},
+            status_code=409)
+
+    state_ref["running"] = True
+    thread = threading.Thread(
+        target=_run_summary_agent_in_background,
+        args=(scheduler, state_ref),
+        daemon=True,
+    )
+    thread.start()
+    return JSONResponse({"status": "triggered", "agent_type": "summary_agent"})
+
+
+# ---------------------------------------------------------------------------
+# Banner Agent — manual trigger
+# ---------------------------------------------------------------------------
+
+def _run_banner_agent_in_background(scheduler, state_ref):
+    """Run the banner agent in a background thread."""
+    import asyncio
+    try:
+        asyncio.run(scheduler._run_banner_agent_async())
+    except Exception as e:
+        logger.error("Banner agent trigger error: %s", e, exc_info=True)
+    finally:
+        state_ref["running"] = False
+
+
+@app.post("/api/trigger/banner_agent")
+async def trigger_banner_agent(request: Request):
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None or scheduler.config is None:
+        return JSONResponse(
+            {"error": "Scheduler not running — cannot trigger banner agent"},
+            status_code=503)
+
+    state_ref = getattr(request.app.state, "_banner_agent_status", None)
+    if state_ref is None:
+        state_ref = {"running": False}
+        request.app.state._banner_agent_status = state_ref
+
+    if state_ref.get("running"):
+        return JSONResponse(
+            {"error": "Banner agent already running"},
+            status_code=409)
+
+    state_ref["running"] = True
+    thread = threading.Thread(
+        target=_run_banner_agent_in_background,
+        args=(scheduler, state_ref),
+        daemon=True,
+    )
+    thread.start()
+    return JSONResponse({"status": "triggered", "agent_type": "banner_agent"})
 
 
 @app.post("/api/trigger/{agent_type}")
