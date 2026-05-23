@@ -498,12 +498,12 @@
     var WATCHLIST_STATE = {
         covered_call: {{ symbol_doc.watchlist.covered_call | tojson }},
         cash_secured_put: {{ symbol_doc.watchlist.cash_secured_put | tojson }},
-        buy_tracker: {{ symbol_doc.watchlist.buy_tracker | tojson }}
+        buy_tracker: {{ symbol_doc.watchlist.buy_tracker | default(false) | tojson }}
     };
     var LATEST_SELL_ALERTS = {
         covered_call: {{ latest_sell_alerts.covered_call | tojson }},
         cash_secured_put: {{ latest_sell_alerts.cash_secured_put | tojson }},
-        buy_tracker: {{ latest_sell_alerts.buy_tracker | tojson }}
+        buy_tracker: {{ latest_sell_alerts.buy_tracker | default(none) | tojson }}
     };
     var AGENT_TYPE_MAP = { call: 'covered_call', put: 'cash_secured_put' };
 
