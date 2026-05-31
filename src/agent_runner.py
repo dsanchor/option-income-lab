@@ -281,14 +281,14 @@ class AgentRunner:
                     f"Strike ${strike} exp {exp} | IV {iv}% (Rank {iv_rank}) | "
                     f"Premium ${premium} ({premium_pct}%)"
                 )
-            elif activity == "BUY":
+            elif activity in ("BUY", "STRONG_BUY"):
                 price = json_data.get("underlying_price", "?")
                 entry_zone = json_data.get("entry_zone", "?")
-                confidence = json_data.get("confidence", "?")
+                score = json_data.get("score", "?")
                 reason_short = (json_data.get("reason") or "")[:80]
                 summary = (
-                    f"SUMMARY: {ticker} | BUY {agent_type} | Price ${price} | "
-                    f"Entry {entry_zone} | Confidence {confidence} | {reason_short}"
+                    f"SUMMARY: {ticker} | {activity} {agent_type} | Price ${price} | "
+                    f"Score {score} | Entry {entry_zone} | {reason_short}"
                 )
             else:
                 iv = json_data.get("iv", "?")
@@ -309,7 +309,9 @@ class AgentRunner:
 
         # Last resort: synthesise a summary
         upper_text = response_text.upper()
-        if "BUY" in upper_text:
+        if "STRONG_BUY" in upper_text:
+            activity = "STRONG_BUY"
+        elif "BUY" in upper_text:
             activity = "BUY"
         elif "SELL" in upper_text and "CLEAR SELL ALERT" in upper_text:
             activity = "SELL"
