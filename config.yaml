@@ -51,7 +51,6 @@ summary_agent:
 banner_agent:
   enabled: true
   cron: "0 5 * * *"  # 5 AM daily
-  model: "gpt-5.4-mini"
   max_items: 10
 
 options_chain_scheduler:
