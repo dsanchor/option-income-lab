@@ -376,11 +376,13 @@ tbody td:last-child, thead th:last-child { text-align: right; width: 1%; white-s
 }
 /* Activity badges — BUY stays teal, action alerts stay orange */
 .badge-buy { background: rgba(0,168,126,0.2); color: var(--accent-green); }
+.badge-strong_buy { background: rgba(0,168,126,0.35); color: #00a87e; font-weight: 700; }
 .badge-sell, .badge-close,
 .badge-roll, .badge-roll_up, .badge-roll_down, .badge-roll_out,
 .badge-roll_up_and_out, .badge-roll_down_and_out { background: rgba(236,126,0,0.2); color: var(--accent-orange); }
-/* WAIT/HOLD stay teal */
+/* WAIT/HOLD stay teal for monitors; buy_tracker WAITs get orange via agent-scoped rule */
 .badge-wait, .badge-hold { background: rgba(0,168,126,0.2); color: var(--accent-green); }
+[data-agent-type="buy_tracker"] .badge-wait { background: rgba(236,126,0,0.2); color: var(--accent-orange); }
 /* Info (N/A) stays blue */
 .badge-info { background: rgba(73,79,223,0.2); color: var(--accent-blue); }
 .badge-waiting { background: rgba(236,126,0,0.15); color: var(--accent-orange); font-size: 0.75rem; }
