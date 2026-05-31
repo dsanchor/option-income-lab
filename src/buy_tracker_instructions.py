@@ -22,67 +22,73 @@ Use overview, technicals, forecast, and dividends. Ignore any options-chain cont
 
 ---
 
-## SCORING SYSTEM — Quantitative Rules
+## SCORING SYSTEM — Quantitative Rules (DGI-Optimized)
+
+These rules are designed for **Dividend Growth Investing** stocks — quality companies with long dividend histories. The philosophy is: **accumulate on weakness, not strength.** Pullbacks in quality DGI names are opportunities, not dangers.
 
 Evaluate each dimension below. Each dimension scores 0 or 1 point. Sum all points to determine the activity.
 
-### Dimension 1: Trend Alignment (0 or 1)
+### Dimension 1: Value Entry / Pullback (0 or 1)
 Score **1** if ANY of the following:
-- Price > SMA50 AND SMA50 > SMA200 (golden cross structure / uptrend)
-- Price < SMA50 BUT price > SMA200 AND price is within 3% below SMA50 (pullback in uptrend)
-- Price recently crossed above SMA50 (within last 5 sessions based on technicals data)
-- MA summary from technicals is "Buy" or "Strong Buy"
-
-Score **0** if:
-- Price < SMA200 AND SMA50 < SMA200 (death cross / downtrend)
-- MA summary is "Strong Sell"
-
-### Dimension 2: Momentum Confirmation (0 or 1)
-Score **1** if AT LEAST 2 of these are true:
-- RSI is between 30 and 60 (not overbought, recovering or neutral)
-- MACD line > MACD signal (bullish crossover active) OR MACD histogram is positive/improving
-- Stochastic %K > %D AND both < 80 (bullish momentum, not overbought)
-- ADX > 20 with +DI > -DI (trending with bullish direction)
-- Oscillator summary from technicals is "Buy" or "Strong Buy"
-
-Score **0** if:
-- RSI > 75 (overbought)
-- MACD histogram is negative AND declining
-- Oscillator summary is "Strong Sell"
-
-### Dimension 3: Support Proximity (0 or 1)
-Score **1** if ANY of the following:
+- Price has pulled back ≥5% from 52-week or recent high (discount to recent levels)
+- Price is within 3% of SMA50 or below SMA50 (testing/below moving average = cheaper entry)
 - Price is within 3% above a pivot support level (S1, S2, or S3)
-- Price is within 2% of SMA50 or SMA200 (testing moving average support)
-- Price has pulled back ≥5% from recent high (mean-reversion opportunity)
-- RSI < 40 (approaching oversold territory — value entry)
+- RSI < 45 (not overbought — favorable entry timing for accumulation)
+- Current dividend yield is above the stock's typical range (price has dropped enough to push yield up)
 
 Score **0** if:
-- Price is >8% above all pivot support levels AND >5% above SMA50 (extended)
-- RSI > 70 AND price > R1 pivot (overbought + extended above resistance)
+- Price is >8% above SMA50 AND >12% above SMA200 (extremely extended — terrible DCA timing)
+- RSI > 70 AND price at 52-week highs (overbought at highs — wait for pullback)
 
-### Dimension 4: Forecast / Context (0 or 1)
+### Dimension 2: Trend Not Broken (0 or 1)
 Score **1** if ANY of the following:
-- Analyst consensus is "Buy" or "Strong Buy"
-- Target price is ≥10% above current price
-- No earnings within 7 days (clean calendar)
-- Dividend yield ≥2% (income floor provides fundamental support)
+- Price > SMA200 (long-term uptrend intact — pullbacks within this are ideal)
+- SMA50 > SMA200 (golden cross structure, even if price dipped below SMA50 temporarily)
+- Price < SMA200 BUT within 5% below it (testing major support — DGI accumulation zone)
+- MA summary is NOT "Strong Sell"
 
-Score **0** if:
-- Analyst consensus is "Strong Sell"
-- Target price is ≥10% BELOW current price
-- Earnings within 3 days (high uncertainty, avoid timing around earnings)
+Score **0** ONLY if ALL of these are true simultaneously:
+- Price < SMA200 by more than 10% (deep breakdown)
+- SMA50 < SMA200 (death cross confirmed)
+- MA summary is "Strong Sell"
+- NOTE: A simple death cross alone does NOT score 0 for DGI stocks. Quality dividend growers recover — a death cross is actually an accumulation opportunity if fundamentals are intact.
 
-### Dimension 5: Volume / Volatility Context (0 or 1)
+### Dimension 3: Momentum Not Extreme (0 or 1)
 Score **1** if ANY of the following:
-- Recent volume is above average (confirms price action)
-- ATR is not at extreme highs (stable enough for position building)
-- Beta ≤ 1.5 (manageable risk for accumulation)
-- Price is not gapping (orderly price action)
+- RSI is between 20 and 65 (wide range — for DGI we buy on weakness, not momentum)
+- RSI < 30 (OVERSOLD = excellent DGI entry — this is a BUY signal, not a danger)
+- MACD histogram is improving (turning less negative or going positive)
+- Stochastic %K < 50 (not overbought territory)
+- Oscillator summary is "Sell" or "Neutral" (for DGI: others selling = you accumulating cheaper)
+
+Score **0** ONLY if:
+- RSI > 75 (severely overbought — poor timing even for DGI)
+- AND Oscillator summary is "Strong Buy" (everyone already bought — you're late)
+
+### Dimension 4: Income & Fundamentals (0 or 1)
+Score **1** if ANY of the following:
+- Dividend yield ≥ 2.0%
+- Payout ratio < 75% (sustainable dividend with growth room)
+- Analyst consensus is "Buy" or "Strong Buy" or "Hold" (not bearish)
+- Target price is ≥5% above current price (upside exists)
+- No earnings within 5 days (clean near-term calendar)
 
 Score **0** if:
-- Price is in free-fall (multiple consecutive large red candles implied by technicals)
-- Extremely high volatility with no stabilization signal
+- Analyst consensus is "Strong Sell" AND target price is >15% below current
+- Earnings within 2 days (too much binary risk for any entry)
+- Dividend was recently cut or suspended (detected from dividend data showing $0 or sharp decline)
+
+### Dimension 5: Calendar & Risk Context (0 or 1)
+Score **1** if ANY of the following:
+- No earnings within 7 days
+- Ex-dividend date is approaching (within 30 days) — accumulate before ex-div to capture dividend
+- Beta ≤ 1.5 (manageable volatility for position building)
+- Price action is orderly (no gaps, no extreme daily moves)
+- Market Fear & Greed is not at extreme greed (>85) — avoid buying at euphoria peaks
+
+Score **0** if:
+- Earnings within 2 days AND stock is volatile (beta > 1.3)
+- Price is gapping down on high volume with no stabilization (potential fundamental issue, not just a pullback)
 
 ---
 
@@ -98,17 +104,22 @@ Score **0** if:
 | 0/5   | `WAIT` | Bearish or deteriorating. Stay away. |
 
 **MANDATORY:** You MUST show the score breakdown in your `reason` field. Example:
-"Score 4/5 (Trend:1, Momentum:1, Support:1, Forecast:1, Volume:0). Price reclaimed SMA50 with MACD crossover, pullback to S1 support, analysts bullish. Volume below average holds back full conviction."
+"Score 4/5 (Value:1, Trend:1, Momentum:1, Income:1, Calendar:0). 7% pullback from high with RSI at 38, price at SMA50 support, yield 3.1% well-covered, but earnings in 4 days holds back full score."
 
 ---
 
 ## WAIT TRIGGERS — Any ONE of these forces WAIT regardless of score:
 
-1. **Earnings within 3 days** — Too much binary risk for timing an entry
-2. **RSI > 80** — Severely overbought, entry timing is terrible
-3. **Price >10% above SMA50 AND >15% above SMA200** — Extremely extended
-4. **Death cross confirmed** (SMA50 just crossed below SMA200 within last 10 sessions) — Trend reversal in progress
-5. **Oscillator AND MA summaries both "Strong Sell"** — All technicals aligned bearish
+1. **Earnings within 2 days** — Too much binary risk for timing an entry
+2. **RSI > 80** — Severely overbought, terrible DCA timing even for quality stocks
+3. **Price >10% above SMA50 AND >15% above SMA200** — Extremely extended, wait for pullback
+4. **Dividend cut/suspension detected** — Fundamental thesis broken, reassess before accumulating
+5. **All three bearish**: Oscillator "Strong Sell" AND MA "Strong Sell" AND price >10% below SMA200 — Potential fundamental deterioration, not just a pullback
+
+**NOT a WAIT trigger for DGI stocks:**
+- Death cross alone (SMA50 < SMA200) — Quality dividend growers recover. This is often an accumulation opportunity.
+- RSI < 30 — For DGI, oversold is a gift, not a danger.
+- Price below SMA50 — Pullbacks to/below SMA50 in quality names are exactly where you WANT to DCA.
 
 ---
 
@@ -130,9 +141,9 @@ For `STRONG_BUY`:
   "activity": "STRONG_BUY",
   "confidence": "high",
   "score": "5/5",
-  "score_breakdown": {"trend": 1, "momentum": 1, "support": 1, "forecast": 1, "volume": 1},
+  "score_breakdown": {"value_entry": 1, "trend": 1, "momentum": 1, "income": 1, "calendar": 1},
   "underlying_price": 123.45,
-  "reason": "Score 5/5 (Trend:1, Momentum:1, Support:1, Forecast:1, Volume:1). Full explanation.",
+  "reason": "Score 5/5 (Value:1, Trend:1, Momentum:1, Income:1, Calendar:1). Full explanation.",
   "entry_zone": "$121.00-$124.00",
   "waiting_for": "",
   "risk_flags": [],
