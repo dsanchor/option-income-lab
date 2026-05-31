@@ -307,7 +307,7 @@ The agent synthesizes all gathered data into a comprehensive analysis:
 - **Resistance Levels**: Set strikes near or above resistance
   - If price at $100 with resistance at $105, consider $105 or $110 strike
 - **Trend Analysis**:
-  - Strong uptrend (price > 20-day MA > 50-day MA): Caution, may want higher strike
+  - Strong uptrend (price > 20-day MA > 50-day MA): Normal — use higher strike above resistance to participate in gains
   - Range-bound (oscillating between support/resistance): IDEAL for covered calls
   - Downtrend: Covered calls help offset losses but evaluate position hold rationale
 - **Support Levels**: Ensure recent support is holding
@@ -387,15 +387,16 @@ The agent synthesizes all gathered data into a comprehensive analysis:
 
 ### WAIT Alert Triggers (ANY triggers wait):
 
-1. **IV Too Low**: IV Rank < 40 AND IV Percentile < 50
+1. **IV Too Low**: IV Rank < 30 AND IV Percentile < 40
 2. **Earnings Risk**: Earnings Gate returned BLOCKED (earnings <7 days away, or option expiration spans earnings without sufficient buffer — see MANDATORY EARNINGS GATE above)
-3. **Technical Breakout**: Price breaking above resistance with volume
-4. **Strong Uptrend**: Price > 20MA > 50MA with both MAs rising
-5. **Catalyst Pending**: FDA approval, merger closing, product launch within DTE
-6. **Insider Activity**: Significant insider buying in last 7 days
-7. **Poor Premium**: Premium < 0.8% of stock price for 30-45 DTE
-8. **Trend Spike**: Google Trends showing >50% surge in interest
-9. ⛔ **No Eligible Expiration ≤ 45 DTE**: If no expiration with DTE ≤ 45 passes all criteria (earnings gate, Greeks, premium threshold), output WAIT. NEVER extend to >45 DTE to find a qualifying expiration.
+3. **Explosive Breakout**: Price gapping above resistance with >2x average volume (NOT a normal uptrend — only an explosive gap/breakout triggers WAIT)
+4. **Catalyst Pending**: FDA approval, merger closing, product launch within DTE
+5. **Insider Activity**: Significant insider buying in last 7 days
+6. **Poor Premium**: Premium < 0.6% of stock price for 30-45 DTE
+7. **Trend Spike**: Google Trends showing >50% surge in interest
+8. ⛔ **No Eligible Expiration ≤ 45 DTE**: If no expiration with DTE ≤ 45 passes all criteria (earnings gate, Greeks, premium threshold), output WAIT. NEVER extend to >45 DTE to find a qualifying expiration.
+
+**NOTE on uptrends:** A steady uptrend (price > 20MA > 50MA) is NOT a reason to WAIT. Covered calls are designed to work in uptrends — simply select a higher strike (above resistance) to participate in gains. Only an explosive breakout (gap + extreme volume) warrants WAIT.
 
 ### Strike Selection Guidelines:
 
@@ -420,7 +421,7 @@ When SELL criteria are met, select strike using:
    - **Bullish** (want stock to appreciate): Sell $190 or $195 call (delta 0.25 or 0.18, gives upside room)
    - **Neutral** (expect flat/slight decline): Sell $185 call (delta 0.30, moderate income)
    - **Bearish** (expect decline): Don't sell calls; wait or sell lower strike with caution
-4. **Verify premium**: Use the 'bid' field from the options chain as your premium. Ensure bid ≥ 1.0% of stock price for 30-45 DTE
+4. **Verify premium**: Use the 'bid' field from the options chain as your premium. Ensure bid ≥ 0.8% of stock price for 30-45 DTE
 5. **Confirm resistance**: Ensure strike is AT or ABOVE resistance level (never below for call selling)
 
 ## INTERPRETING PREVIOUS ACTIVITY LOG
@@ -467,8 +468,8 @@ Every output MUST include a `risk_rating` (integer 0-10) and a `risk_rating_brea
 
 ### Dimension 1: Volatility Risk (0-2)
 - **0**: IV Rank ≥ 60, IV > HV by ≥5pts, stable IV environment
-- **1**: IV Rank 45-59, or IV ≈ HV, or IV recently spiked/crushed
-- **2**: IV Rank < 45, or IV < HV, or post-crush low-premium environment
+- **1**: IV Rank 30-59, or IV ≈ HV, or IV recently spiked/crushed
+- **2**: IV Rank < 30, or IV < HV significantly, or post-crush low-premium environment
 
 ### Dimension 2: Assignment Risk (0-2)
 - **0**: Delta ≤ 0.22, strike well above resistance, deep OTM
@@ -700,7 +701,7 @@ SUMMARY: TSLA | WAIT | IV 45% (Rank 70) but earnings in 5 days — imminent | Ri
 A **CLEAR SELL ALERT** should be flagged (for the sell alert log) when ALL of the following are met:
 
 1. **Exceptional Premium**: 
-   - Premium ≥ 2.0% of stock price for 30-45 DTE (double the standard threshold)
+   - Premium ≥ 1.5% of stock price for 30-45 DTE (well above the 0.6% minimum threshold)
    - OR annualized return potential ≥ 24% if repeated monthly
 
 2. **High Confidence Setup**:

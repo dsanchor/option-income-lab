@@ -343,6 +343,9 @@ ROLL_OUT (same strike, later expiration) buys time but does NOT change the strik
 - Strike fine but running out of time → ROLL_OUT is appropriate
 - Strike is fundamentally wrong (deep ITM/OTM) → ROLL_UP, ROLL_DOWN, or the compound variants
 
+**⚠️ ROLL_UP vs ROLL_UP_AND_OUT — Default to the compound variant:**
+Use plain `ROLL_UP` (same expiration) ONLY when there is significant DTE remaining (≥15 days) AND a higher strike at the same expiration offers adequate premium. In practice, moving to a higher strike almost always requires also extending the expiration to collect enough credit to justify the roll. **Default to `ROLL_UP_AND_OUT` whenever you recommend a higher strike** — Phase 2 can always keep the same expiration if premium is adequate, but starting with the compound intent prevents Phase 2 from being locked into an expiration with no viable candidates.
+
 ### Profit Optimization Gate (ROLL_DOWN for more premium)
 
 When the current call is deep OTM and nearly worthless, you may recommend ROLL_DOWN to a lower strike to collect meaningful new premium — but ONLY when the mandatory conditions are met AND a super-majority of flexible conditions pass.

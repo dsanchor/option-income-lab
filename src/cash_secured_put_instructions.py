@@ -474,14 +474,13 @@ The agent synthesizes all gathered data into a comprehensive analysis:
    - You would NOT want to own the stock at strike price
 
 2. **IV Too Low**: 
-   - IV Rank < 40 AND IV Percentile < 40
-   - Premium < 1.2% of strike price
+   - IV Rank < 30 AND IV Percentile < 30
+   - Premium < 0.9% of strike price
 
 3. **Technical Warning**:
-   - Strike price ABOVE identified support (high assignment risk)
    - Price in free-fall with accelerating downside momentum
    - Breaking major support levels with high volume
-   - No clear support level nearby
+   - No clear support level nearby AND stock is NOT a dividend aristocrat (10+ years growth, yield >2.5%)
 
 4. **Catalyst Risk**:
    - Earnings Gate returned BLOCKED (earnings <7 days away, or option expiration spans earnings without sufficient buffer — see MANDATORY EARNINGS GATE above)
@@ -494,7 +493,7 @@ The agent synthesizes all gathered data into a comprehensive analysis:
    - Analyst downgrades clustering
 
 6. **Poor Risk/Reward**:
-   - Premium < 1.2% of strike price
+   - Premium < 0.9% of strike price
    - Strike price not attractive as an entry point
    - Better opportunities available in other stocks
 
@@ -503,6 +502,8 @@ The agent synthesizes all gathered data into a comprehensive analysis:
    - Sector-wide collapse without clear stabilization
 
 8. ⛔ **No Eligible Expiration ≤ 45 DTE**: If no expiration with DTE ≤ 45 passes all criteria (earnings gate, Greeks, premium threshold, support levels), output WAIT. NEVER extend to >45 DTE to find a qualifying expiration.
+
+**NOTE on DGI-quality stocks:** For dividend aristocrats (10+ consecutive years of dividend growth, yield >2.5%), the dividend floor provides fundamental support. You do NOT need textbook-perfect technical support levels to justify a CSP — the stock's income quality and history of recovering IS the support. Evaluate these stocks more on fundamentals + premium adequacy than on chart patterns.
 
 ### Strike Selection Guidelines:
 
@@ -536,7 +537,7 @@ When SELL criteria are met, select strike using:
    - **High conviction** (enthusiastically want stock): Sell $95 put (delta -0.25, 3% margin below S1)
    - **Moderate conviction**: Sell $92 put (delta -0.20, at S2 support level)
    - **Low conviction/uncertainty**: Sell $90 put (delta -0.18, clearly OTM, safer)
-4. **Verify premium**: Use the 'bid' field from the options chain as your premium. Ensure bid ≥ 1.5% of strike price
+4. **Verify premium**: Use the 'bid' field from the options chain as your premium. Ensure bid ≥ 1.2% of strike price
 5. **Confirm support**: Ensure strike is AT or BELOW support level (never above)
 
 ## INTERPRETING PREVIOUS ACTIVITY LOG
@@ -598,8 +599,8 @@ Every output MUST include a `risk_rating` (integer 0-10) and a `risk_rating_brea
 
 ### Dimension 3: Volatility Risk (0-2)
 - **0**: IV Rank ≥ 60, premium ≥ 2% of strike, elevated vs historical — excellent premium capture
-- **1**: IV Rank 45-59, premium 1.2-2% of strike, adequate but not ideal
-- **2**: IV Rank < 45, premium < 1.2%, IV crushed or insufficient for acceptable return
+- **1**: IV Rank 45-59, premium 0.9-2% of strike, adequate but not ideal
+- **2**: IV Rank < 30, premium < 0.9%, IV crushed or insufficient for acceptable return
 
 ### Dimension 4: Calendar Risk (0-2)
 - **0**: Earnings Gate = IDEAL (post-earnings) or OPEN_NORMALLY, no catalysts, clean calendar
@@ -951,8 +952,8 @@ SUMMARY: AMD | WAIT | IV 48% (Rank 58) but support breaking | Risk 7/10 | Waitin
 A **CLEAR SELL ALERT** should be flagged (for the sell alert log) when ALL of the following are met:
 
 1. **Exceptional Premium**:
-   - Premium ≥ 2.5% of strike price for 30-45 DTE
-   - OR annualized return potential ≥ 30% if repeated monthly
+   - Premium ≥ 2.0% of strike price for 30-45 DTE (well above the 0.9% minimum threshold)
+   - OR annualized return potential ≥ 24% if repeated monthly
 
 2. **High Conviction Fundamentals**:
    - Strong financial health (profitable, growing, manageable debt)
