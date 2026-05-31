@@ -139,6 +139,13 @@ class TelegramNotifier:
 
     # ── message formatting ────────────────────────────────────────────
 
+    # Emoji mapping for buy tracker activities (colored alerts)
+    _BUY_TRACKER_EMOJIS = {
+        "STRONG_BUY": "\U0001f7e2",  # 🟢 green circle (strong)
+        "BUY": "\U0001f7e9",          # 🟩 green square (lighter feel)
+        "WAIT": "\U0001f7e0",         # 🟠 orange
+    }
+
     @staticmethod
     def _format_watchlist_alert(symbol: str, agent_label: str, data: Dict) -> str:
         activity = str(data.get("activity", "ALERT")).upper()
@@ -150,12 +157,22 @@ class TelegramNotifier:
         underlying_price = data.get("underlying_price")
         entry_zone = data.get("entry_zone")
 
+        # Buy tracker uses colored emojis per activity level
+        if agent_label == "Buy Tracker":
+            emoji = TelegramNotifier._BUY_TRACKER_EMOJIS.get(activity, "\U0001f6a8")
+        else:
+            emoji = "\U0001f6a8"  # 🚨 default for SELL alerts
+
         lines = [
-            f"\U0001f6a8 <b>{activity} Alert: {symbol}</b>",
+            f"{emoji} <b>{activity} Alert: {symbol}</b>",
             f"Agent: {agent_label}",
         ]
         if underlying_price is not None:
             lines.append(f"Underlying: ${underlying_price}")
+        # Buy tracker: show score instead of strike/expiration
+        score = data.get("score")
+        if score is not None:
+            lines.append(f"Score: {score}/5")
         if strike is not None:
             lines.append(f"Strike: ${strike}")
         if expiration:
