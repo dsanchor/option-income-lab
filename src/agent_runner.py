@@ -5,7 +5,7 @@ import os
 import re
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from agent_framework import Agent
@@ -26,7 +26,8 @@ from .supervisor_instructions import get_supervisor_instructions, SUPERVISOR_OUT
 from .alpha_instructions import get_alpha_instructions, ALPHA_OUTPUT_SCHEMA
 
 # Canonical timestamp format — used for ALL activity and alert log entries.
-TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+# ISO 8601 with UTC indicator to avoid timezone ambiguity.
+TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 # Valid action values for Phase 1 → Phase 2 handoff and Phase 2 output.
 # Bare "ROLL" is NEVER valid — a direction is always required.
@@ -1072,7 +1073,7 @@ Provide your alpha advisor analysis in the JSON format specified above."""
         print(f"\n--- Analyzing {symbol} ---")
         logger.info("Starting pre-fetch + agent.run() for symbol=%s", symbol)
 
-        analysis_ts = datetime.now().strftime(TIMESTAMP_FORMAT)
+        analysis_ts = datetime.now(timezone.utc).strftime(TIMESTAMP_FORMAT)
         run_start = time.time()
 
         try:
@@ -1108,7 +1109,7 @@ Provide your alpha advisor analysis in the JSON format specified above."""
 Previous activities for {symbol}:
 {previous_context}
 
-Current timestamp: {analysis_ts}
+Current UTC timestamp: {analysis_ts}
 All market data has been pre-fetched above. Do NOT use any browser tools — analyze the data provided and output your activity in the required JSON format. Use the timestamp above in your JSON output; do NOT generate your own."""
 
             agent = Agent(
@@ -1435,7 +1436,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
 Previous monitor activities for {symbol}:
 {previous_context}
 
-Current timestamp: {analysis_ts}
+Current UTC timestamp: {analysis_ts}
 Analyze the position risk and output your response in the required JSON format. Use the timestamp above in your JSON output; do NOT generate your own."""
 
         agent = Agent(
@@ -1496,7 +1497,7 @@ ROLL CANDIDATES:
 Based on the assessment and candidates above, select the best roll candidate and produce the final activity JSON.
 Pick a candidate by its row number. Use the pre-computed values (net credit, DTE, etc.) directly — do NOT recalculate.
 
-Current timestamp: {analysis_ts}
+Current UTC timestamp: {analysis_ts}
 Output your activity in the required JSON format. Use the timestamp above in your JSON output; do NOT generate your own."""
 
         agent = Agent(
@@ -1575,7 +1576,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
             symbol, strike, expiration,
         )
 
-        analysis_ts = datetime.now().strftime(TIMESTAMP_FORMAT)
+        analysis_ts = datetime.now(timezone.utc).strftime(TIMESTAMP_FORMAT)
         run_start = time.time()
 
         try:
@@ -2327,7 +2328,7 @@ Every symbol listed in the portfolio overview MUST appear in the corresponding s
         """
         from .report_instructions import TV_REPORT_INSTRUCTIONS
 
-        analysis_ts = datetime.now().strftime(TIMESTAMP_FORMAT)
+        analysis_ts = datetime.now(timezone.utc).strftime(TIMESTAMP_FORMAT)
 
         logger.info("Starting report agent for %s", symbol)
         print(f"\n--- Generating report for {symbol} ---")
@@ -2342,7 +2343,7 @@ Every symbol listed in the portfolio overview MUST appear in the corresponding s
 
 === END OF DATA ===
 
-Current timestamp: {analysis_ts}
+Current UTC timestamp: {analysis_ts}
 All market data has been pre-fetched above. Do NOT use any browser tools — analyze the data provided and generate your report."""
 
         agent = Agent(
@@ -2408,7 +2409,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
         """
         from .technical_analysis_instructions import TECHNICAL_ANALYSIS_INSTRUCTIONS
 
-        analysis_ts = datetime.now().strftime(TIMESTAMP_FORMAT)
+        analysis_ts = datetime.now(timezone.utc).strftime(TIMESTAMP_FORMAT)
 
         logger.info("Starting technical analysis agent for %s", symbol)
         print(f"\n--- Generating technical analysis for {symbol} ---")
@@ -2423,7 +2424,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
 
 === END OF DATA ===
 
-Current timestamp: {analysis_ts}
+Current UTC timestamp: {analysis_ts}
 All market data has been pre-fetched above. Please analyze this data and generate your analysis."""
 
         agent = Agent(
