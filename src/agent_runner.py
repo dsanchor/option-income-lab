@@ -1029,10 +1029,10 @@ Provide your alpha advisor analysis in the JSON format specified above."""
             return ""
         if not structured.get("calls") and not structured.get("puts"):
             return ""
-        # Determine option type
-        if agent_type in ("covered_call", "open_call"):
+        # Determine option type (monitor variants map to their base type)
+        if agent_type in ("covered_call", "open_call", "open_call_monitor"):
             option_type = "call"
-        elif agent_type in ("cash_secured_put", "open_put"):
+        elif agent_type in ("cash_secured_put", "open_put", "open_put_monitor"):
             option_type = "put"
         else:
             return ""
