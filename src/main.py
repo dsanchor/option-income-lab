@@ -2,10 +2,28 @@ import sys
 import time
 import signal
 import asyncio
+import asyncio.base_subprocess
 from datetime import datetime
 import pytz
 
 from croniter import croniter
+
+# ── Python 3.12 workaround ───────────────────────────────────────────────────
+# httpx/aiohttp spawn subprocess transports for DNS resolution. When the event
+# loop closes, GC finalizes them triggering "RuntimeError: Event loop is closed"
+# in BaseSubprocessTransport.__del__. This is harmless but noisy — suppress it.
+_original_subprocess_del = asyncio.base_subprocess.BaseSubprocessTransport.__del__
+
+
+def _patched_subprocess_del(self):
+    try:
+        _original_subprocess_del(self)
+    except RuntimeError:
+        pass
+
+
+asyncio.base_subprocess.BaseSubprocessTransport.__del__ = _patched_subprocess_del
+# ─────────────────────────────────────────────────────────────────────────────
 
 from .config import Config
 from .agent_runner import AgentRunner
