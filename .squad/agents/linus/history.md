@@ -9,6 +9,11 @@
 
 ## Learnings
 
+### Buy Tracker DGI Alignment (2026-06-03)
+- `src/buy_tracker_instructions.py` now frames the buy tracker as a patient DGI accumulation agent: `BUY` means a small DCA add, `STRONG_BUY` means a larger accumulation entry, and `WAIT` is the expected default when the setup is not in a truly attractive range.
+- The required JSON examples were aligned to the five real scoring dimensions (`value_entry`, `trend`, `momentum`, `income`, `calendar`) and `target_horizon` was explicitly removed because the buy tracker is for long-term hold-forever stock accumulation, not a timed trade.
+- To keep downstream review agents compatible with the primary buy tracker, `src/supervisor_instructions.py` and `src/alpha_instructions.py` must treat `STRONG_BUY` as a valid `buy_tracker` decision.
+
 ### Prolonged WAIT Cooldown Deadlock Fix (2026-05-14)
 - The `_detect_prolonged_wait()` method in `src/agent_runner.py` checks if enough consecutive WAITs have occurred to trigger Alpha for deeper review. A cooldown prevents re-triggering Alpha too soon after a previous alpha review.
 - **Bug:** Cooldown loop checked `supervisor_view` to find last Alpha review, but supervisor runs unconditionally on every activity, so ALL records have `supervisor_view` set. Loop always broke on first record → `waits_since_last_review` always 0 → cooldown always returned `False` → Alpha could never trigger.
