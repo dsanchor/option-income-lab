@@ -73,7 +73,6 @@
                     <th class="num">Delta</th>
                     {% elif agent.key == "buy_tracker" %}
                     <th>Entry Zone</th>
-                    <th>Horizon</th>
                     <th>Triggers</th>
                     {% else %}
                     <th class="num">Strike</th>
@@ -122,7 +121,6 @@
                     {% else %}
                     {% if agent.key == "buy_tracker" %}
                     <td>{{ row.entry_zone if row.entry_zone else "—" }}</td>
-                    <td>{{ row.target_horizon if row.target_horizon else "—" }}</td>
                     <td><div class="flags-wrap">
                         {% for trigger in (row.technical_triggers or [])[:3] %}
                         <span class="flag">{{ trigger }}</span>

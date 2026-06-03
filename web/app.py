@@ -869,7 +869,6 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
                 dec = latest_by_key.get(key, {})
                 if agent_key == "buy_tracker":
                     row["entry_zone"] = dec.get("entry_zone")
-                    row["target_horizon"] = dec.get("target_horizon")
                     row["technical_triggers"] = dec.get(
                         "technical_triggers", [])
                     row["strike_pct"] = None
