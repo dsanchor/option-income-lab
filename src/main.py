@@ -3,6 +3,7 @@ import time
 import signal
 import asyncio
 import asyncio.base_subprocess
+import gc
 from datetime import datetime
 import pytz
 
@@ -36,6 +37,32 @@ from .open_call_monitor_agent import run_open_call_monitor
 from .open_put_monitor_agent import run_open_put_monitor
 from .dgi_screener import run_dgi_screener
 from .banner_agent import run_banner_agent
+
+
+def _run_async(coro):
+    """Run a coroutine with proper cleanup to avoid 'Event loop is closed' errors.
+
+    Python 3.12 triggers RuntimeError in BaseSubprocessTransport finalizers when
+    the GC collects HTTP-client transports after asyncio.run() closes the loop.
+    This helper forces GC while the loop is still open.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        try:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
+        finally:
+            gc.collect()
+            asyncio.set_event_loop(None)
+            loop.close()
 
 
 class OptionsAgentScheduler:
@@ -187,7 +214,7 @@ class OptionsAgentScheduler:
     
     def run_all_agents(self):
         """Execute all agents (bridges async to sync for scheduler)."""
-        asyncio.run(self._run_all_agents_async())
+        _run_async(self._run_all_agents_async())
     
     async def _run_all_agents_async(self):
         """Execute all agents asynchronously."""
@@ -227,7 +254,7 @@ class OptionsAgentScheduler:
     
     def run_summary_agent_job(self):
         """Execute summary agent (bridges async to sync for scheduler)."""
-        asyncio.run(self._run_summary_agent_async())
+        _run_async(self._run_summary_agent_async())
     
     async def _run_summary_agent_async(self):
         """Run summary agent if enabled in config."""
@@ -252,7 +279,7 @@ class OptionsAgentScheduler:
     
     def run_options_chain_fetch_job(self):
         """Execute options chain fetch job (bridges async to sync for scheduler)."""
-        asyncio.run(self._run_options_chain_fetch_async())
+        _run_async(self._run_options_chain_fetch_async())
     
     async def _run_options_chain_fetch_async(self):
         """Fetch all market data for all symbols via yfinance (pre-warm cache)."""
@@ -294,7 +321,7 @@ class OptionsAgentScheduler:
     
     def run_dgi_screener_job(self):
         """Execute DGI screener (bridges async to sync for scheduler)."""
-        asyncio.run(self._run_dgi_screener_async())
+        _run_async(self._run_dgi_screener_async())
     
     async def _run_dgi_screener_async(self):
         """Run DGI screener if enabled in config."""
@@ -319,7 +346,7 @@ class OptionsAgentScheduler:
 
     def run_banner_agent_job(self):
         """Execute banner agent (bridges async to sync for scheduler)."""
-        asyncio.run(self._run_banner_agent_async())
+        _run_async(self._run_banner_agent_async())
 
     async def _run_banner_agent_async(self):
         """Run dashboard banner agent if enabled in config."""
