@@ -681,6 +681,22 @@ async def api_delete_position(request: Request, symbol: str, position_id: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/api/symbols/{symbol}/positions/{position_id}/snapshots")
+async def api_position_snapshots(request: Request, symbol: str, position_id: str,
+                                 limit: int = Query(default=100, le=500)):
+    """Return time-series snapshots for a position (for charting)."""
+    try:
+        cosmos = _get_cosmos(request)
+        snapshots = cosmos.get_position_snapshots(symbol.upper(), position_id,
+                                                  limit=limit)
+        snapshots.reverse()
+        return JSONResponse({"snapshots": snapshots})
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ===========================================================================
 # REST API — Data Views
 # ===========================================================================

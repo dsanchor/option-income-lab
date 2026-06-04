@@ -445,6 +445,65 @@ class CosmosDBService:
         )
         return len(activities), sig_count
 
+    # ── Position Snapshots ────────────────────────────────────────────
+
+    def write_position_snapshot(self, symbol: str, position_id: str,
+                                snapshot_data: dict) -> None:
+        """Write a position snapshot document (best-effort, never raises)."""
+        if not position_id:
+            logger.warning(
+                "Skipping position snapshot for %s: missing position_id",
+                symbol,
+            )
+            return
+
+        ts = snapshot_data.get("timestamp") or datetime.utcnow().strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        ts_compact = ts.replace("-", "").replace(":", "").replace("T", "_")[:15]
+        doc_id = f"{symbol}_snapshot_{position_id}_{ts_compact}"
+
+        doc = {
+            "id": doc_id,
+            "symbol": symbol,
+            "doc_type": "position_snapshot",
+            "position_id": position_id,
+            "timestamp": ts,
+            "ttl": 7776000,
+            **snapshot_data,
+        }
+        doc["id"] = doc_id
+        doc["symbol"] = symbol
+        doc["doc_type"] = "position_snapshot"
+        doc["position_id"] = position_id
+        doc["timestamp"] = ts
+        doc["ttl"] = 7776000
+
+        try:
+            self.container.create_item(doc)
+        except Exception as exc:
+            logger.warning(
+                "Position snapshot write failed for %s/%s: %s",
+                symbol, position_id, exc,
+            )
+
+    def get_position_snapshots(self, symbol: str, position_id: str,
+                               limit: int = 100) -> list:
+        """Get recent position snapshots for a single position, newest first."""
+        query = (
+            "SELECT TOP @limit * FROM c "
+            "WHERE c.doc_type = 'position_snapshot' AND c.position_id = @position_id "
+            "ORDER BY c.timestamp DESC"
+        )
+        return list(self.container.query_items(
+            query=query,
+            parameters=[
+                {"name": "@position_id", "value": position_id},
+                {"name": "@limit", "value": limit},
+            ],
+            partition_key=symbol,
+        ))
+
     # ── Activity / Alert Write ─────────────────────────────────────────
 
     def write_activity(self, symbol: str, agent_type: str,

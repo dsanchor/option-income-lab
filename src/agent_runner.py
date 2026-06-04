@@ -1521,6 +1521,62 @@ Output your activity in the required JSON format. Use the timestamp above in you
         json_data = self._try_extract_json(response_text)
         return response_text, json_data
 
+    @staticmethod
+    def _build_position_snapshot_data(
+        data: dict,
+        strike: float,
+        position_type: str,
+        timestamp: str,
+    ) -> Optional[Dict]:
+        """Extract the point-in-time metrics persisted for open positions."""
+        def _parse_payload(raw_value) -> dict:
+            if isinstance(raw_value, dict):
+                return raw_value
+            if isinstance(raw_value, str):
+                try:
+                    return json.loads(raw_value)
+                except (json.JSONDecodeError, TypeError):
+                    return {}
+            return {}
+
+        def _to_float(value) -> Optional[float]:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        overview = _parse_payload(data.get("overview"))
+        technicals = _parse_payload(data.get("technicals"))
+        fundamentals = overview.get("fundamentals") or {}
+        current_price_field = fundamentals.get("current_price") or {}
+        current_price = current_price_field.get("value") if isinstance(current_price_field, dict) else current_price_field
+        current_price = _to_float(current_price)
+        if current_price is None:
+            current_price = _to_float(technicals.get("price"))
+        strike_value = _to_float(strike)
+        if current_price is None or strike_value is None:
+            return None
+
+        indicators = ((technicals.get("oscillators") or {}).get("indicators") or {})
+        rsi_14 = _to_float((indicators.get("RSI") or {}).get("value"))
+        macd_level = _to_float((indicators.get("MACD.macd") or {}).get("value"))
+        gap_absolute = (
+            current_price - strike_value
+            if position_type == "call"
+            else strike_value - current_price
+        )
+        gap_percent = (gap_absolute / strike_value * 100.0) if strike_value else None
+
+        return {
+            "timestamp": timestamp,
+            "underlying_price": round(current_price, 4),
+            "strike": strike_value,
+            "gap_absolute": round(gap_absolute, 4),
+            "gap_percent": round(gap_percent, 4) if gap_percent is not None else None,
+            "rsi_14": rsi_14,
+            "macd_level": macd_level,
+        }
+
     # ------------------------------------------------------------------
     # Position Monitor — 2-phase orchestrator
     # ------------------------------------------------------------------
@@ -1587,6 +1643,11 @@ Output your activity in the required JSON format. Use the timestamp above in you
             )
 
             data = await fetcher.fetch_all(symbol, force_refresh=True)
+            snapshot_data = self._build_position_snapshot_data(
+                data, float(strike), position_type, analysis_ts,
+            )
+            if snapshot_data is not None and position_id:
+                cosmos.write_position_snapshot(symbol, position_id, snapshot_data)
 
             # Pre-compute the structured filtered chain (for Phase 2)
             try:

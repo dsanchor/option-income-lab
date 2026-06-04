@@ -282,6 +282,24 @@
                                 </div>
                             </div>
 
+                            {% if pos.status == 'active' %}
+                            <div class="position-snapshot-chart"
+                                 data-symbol="{{ symbol_doc.symbol }}"
+                                 data-position-id="{{ pos.position_id }}"
+                                 style="margin-top:1rem; padding-top:0.75rem; border-top:1px dashed var(--border, #2d2d35);">
+                                <div style="display:flex; justify-content:space-between; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:0.75rem;">
+                                    <h4 style="margin:0; color:var(--text, #ffffff);">📈 Monitoring History</h4>
+                                    <span style="font-size:0.8rem; color:var(--text-muted, #8d969e);">Gap %, RSI, MACD</span>
+                                </div>
+                                <div class="position-snapshot-loading" style="display:none; color:var(--text-muted, #8d969e); font-size:0.9rem;">Loading monitoring data…</div>
+                                <div class="position-snapshot-empty" style="display:none; color:var(--text-muted, #8d969e); font-size:0.9rem;">No monitoring data yet</div>
+                                <div class="position-snapshot-error" style="display:none; color:#e5534b; font-size:0.9rem;"></div>
+                                <div class="position-snapshot-canvas-wrap" style="display:none; position:relative; height:190px;">
+                                    <canvas class="position-snapshot-canvas" aria-label="Position monitoring chart"></canvas>
+                                </div>
+                            </div>
+                            {% endif %}
+
                             {% if pos.closing_source %}
                             <div style="margin-top:1rem; padding-top:0.75rem; border-top:1px dashed var(--border, #2d2d35);">
                                 <h4 style="margin:0 0 0.75rem; color:var(--text, #ffffff);">📉 Closed by alert</h4>
@@ -507,6 +525,202 @@
     };
     var AGENT_TYPE_MAP = { call: 'covered_call', put: 'cash_secured_put' };
 
+    function setSnapshotChartState(container, state, message) {
+        var loading = container.querySelector('.position-snapshot-loading');
+        var empty = container.querySelector('.position-snapshot-empty');
+        var error = container.querySelector('.position-snapshot-error');
+        var wrap = container.querySelector('.position-snapshot-canvas-wrap');
+
+        loading.style.display = state === 'loading' ? 'block' : 'none';
+        empty.style.display = state === 'empty' ? 'block' : 'none';
+        error.style.display = state === 'error' ? 'block' : 'none';
+        wrap.style.display = state === 'ready' ? 'block' : 'none';
+        if (state === 'error') {
+            error.textContent = message || 'Unable to load monitoring data.';
+        }
+    }
+
+    function snapshotPoint(snapshot, key) {
+        if (!snapshot || !snapshot.timestamp) return null;
+        var timestamp = snapshot.timestamp;
+        if (timestamp.indexOf('T') === -1 && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(timestamp)) {
+            timestamp = timestamp.replace(' ', 'T') + 'Z';
+        }
+        return { x: timestamp, y: snapshot[key] };
+    }
+
+    async function loadPositionSnapshotChart(container) {
+        if (!container) return;
+
+        var canvas = container.querySelector('.position-snapshot-canvas');
+        if (!canvas || canvas._snapshotChart || container.dataset.loading === 'true') {
+            return;
+        }
+        if (typeof Chart === 'undefined') {
+            setSnapshotChartState(container, 'error', 'Chart library unavailable.');
+            return;
+        }
+
+        container.dataset.loading = 'true';
+        setSnapshotChartState(container, 'loading');
+
+        try {
+            var res = await fetch(
+                '/api/symbols/' + encodeURIComponent(container.dataset.symbol) +
+                '/positions/' + encodeURIComponent(container.dataset.positionId) +
+                '/snapshots'
+            );
+            var data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.error || 'Failed to load snapshots.');
+            }
+
+            var snapshots = Array.isArray(data.snapshots) ? data.snapshots : [];
+            if (!snapshots.length) {
+                setSnapshotChartState(container, 'empty');
+                return;
+            }
+
+            var gapData = snapshots.map(function(snapshot) {
+                return snapshotPoint(snapshot, 'gap_percent');
+            }).filter(Boolean);
+            var rsiData = snapshots.map(function(snapshot) {
+                return snapshotPoint(snapshot, 'rsi_14');
+            }).filter(Boolean);
+            var macdData = snapshots.map(function(snapshot) {
+                return snapshotPoint(snapshot, 'macd_level');
+            }).filter(Boolean);
+
+            canvas._snapshotChart = new Chart(canvas.getContext('2d'), {
+                type: 'line',
+                data: {
+                    datasets: [
+                        {
+                            label: 'Gap %',
+                            data: gapData,
+                            borderColor: '#494fdf',
+                            backgroundColor: 'rgba(73, 79, 223, 0.15)',
+                            yAxisID: 'yLeft',
+                            tension: 0.25,
+                            borderWidth: 2,
+                            pointRadius: 1.5,
+                            pointHoverRadius: 4,
+                            spanGaps: true
+                        },
+                        {
+                            label: 'RSI',
+                            data: rsiData,
+                            borderColor: '#f0883e',
+                            backgroundColor: 'rgba(240, 136, 62, 0.15)',
+                            yAxisID: 'yRight',
+                            tension: 0.25,
+                            borderWidth: 2,
+                            pointRadius: 1.25,
+                            pointHoverRadius: 4,
+                            spanGaps: true
+                        },
+                        {
+                            label: 'MACD',
+                            data: macdData,
+                            borderColor: '#3fb950',
+                            backgroundColor: 'rgba(63, 185, 80, 0.15)',
+                            yAxisID: 'yRight',
+                            tension: 0.25,
+                            borderWidth: 2,
+                            pointRadius: 1.25,
+                            pointHoverRadius: 4,
+                            spanGaps: true
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    parsing: false,
+                    spanGaps: true,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false
+                    },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: '#8d969e',
+                                usePointStyle: true,
+                                boxWidth: 8,
+                                boxHeight: 8
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(22, 27, 34, 0.96)',
+                            borderColor: 'rgba(255,255,255,0.08)',
+                            borderWidth: 1,
+                            titleColor: '#ffffff',
+                            bodyColor: '#c9d1d9'
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'hour',
+                                displayFormats: {
+                                    hour: 'MMM d HH:mm'
+                                }
+                            },
+                            ticks: {
+                                color: '#8d969e',
+                                maxTicksLimit: 8
+                            },
+                            grid: {
+                                color: 'rgba(255,255,255,0.05)'
+                            }
+                        },
+                        yLeft: {
+                            position: 'left',
+                            ticks: {
+                                color: '#8d969e',
+                                callback: function(value) {
+                                    return value + '%';
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(255,255,255,0.05)'
+                            },
+                            title: {
+                                display: true,
+                                text: 'Gap %',
+                                color: '#8d969e'
+                            }
+                        },
+                        yRight: {
+                            position: 'right',
+                            ticks: {
+                                color: '#8d969e'
+                            },
+                            grid: {
+                                drawOnChartArea: false,
+                                color: 'rgba(255,255,255,0.05)'
+                            },
+                            title: {
+                                display: true,
+                                text: 'RSI / MACD',
+                                color: '#8d969e'
+                            }
+                        }
+                    }
+                }
+            });
+
+            setSnapshotChartState(container, 'ready');
+        } catch (err) {
+            setSnapshotChartState(container, 'error', err.message);
+        } finally {
+            container.dataset.loading = 'false';
+        }
+    }
+
     function updateAlertAttachCheckbox() {
         var posType = document.getElementById('posType').value;
         var agentType = AGENT_TYPE_MAP[posType];
@@ -665,6 +879,7 @@
             if (detailRow.style.display === 'none') {
                 detailRow.style.display = 'table-row';
                 if (chevron) chevron.textContent = '▾';
+                loadPositionSnapshotChart(detailRow.querySelector('.position-snapshot-chart'));
             } else {
                 detailRow.style.display = 'none';
                 if (chevron) chevron.textContent = '▸';
@@ -812,6 +1027,7 @@
             if (detailRow) {
                 detailRow.style.display = 'table-row';
                 if (chevron) chevron.textContent = '▾';
+                loadPositionSnapshotChart(detailRow.querySelector('.position-snapshot-chart'));
             }
             var form = document.querySelector('[data-roll-form-idx="' + idx + '"]');
             if (form) {
