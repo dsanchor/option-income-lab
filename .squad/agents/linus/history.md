@@ -9,6 +9,12 @@
 
 ## Learnings
 
+### Position Snapshot Capture (2026-06-04)
+- `src/agent_runner.py` now captures a point-in-time snapshot for every position-monitor run immediately after `fetch_all()`, before the Phase 1 assessment runs.
+- Snapshot extraction reads the underlying price from `overview.fundamentals.current_price.value` with a fallback to `technicals.price`, and reads RSI/MACD from `technicals.oscillators.indicators` (`RSI`, `MACD.macd`).
+- `src/cosmos_db.py` persists snapshots in the shared `symbols` container as `doc_type="position_snapshot"` documents with 90-day TTL, queryable by `position_id` descending by timestamp.
+- There was a sign-convention ambiguity in the request text; implementation followed the explicitly requested formulas and example schema (`call: current-strike`, `put: strike-current`) so stored history matches the documented payload.
+
 ### Buy Tracker DGI Alignment (2026-06-03)
 - `src/buy_tracker_instructions.py` now frames the buy tracker as a patient DGI accumulation agent: `BUY` means a small DCA add, `STRONG_BUY` means a larger accumulation entry, and `WAIT` is the expected default when the setup is not in a truly attractive range.
 - The required JSON examples were aligned to the five real scoring dimensions (`value_entry`, `trend`, `momentum`, `income`, `calendar`) and `target_horizon` was explicitly removed because the buy tracker is for long-term hold-forever stock accumulation, not a timed trade.
@@ -1883,3 +1889,6 @@ Renamed all 14 instruction files to drop the misleading `tv_` prefix (leftover f
 - To stay compatible with existing parsing, the safest instruction contract is the same CSP/CC response pattern: one fenced JSON block followed by a `SUMMARY:` line.
 - The actionable schema for buy tracking should center on `BUY`/`WAIT`, `entry_price`, `target_price`, `stop_loss`, `technical_signals`, `risk_flags`, and a detailed technical `reasoning` field.
 - Conservative threshold: require at least 3 aligned bullish signals before `BUY`, with support-based entries and pivot-resistance targets.
+
+### Position Snapshot Chart Frontend (2026-06-04)
+Rusty implemented the frontend chart in `symbol_detail.html` that lazy-loads position snapshot history when a position detail drawer expands. The chart consumes snapshots via the dedicated API endpoint `/api/symbols/{symbol}/positions/{position_id}/snapshots`, rendering gap %, RSI, and MACD using Chart.js with dual axes. This completes the end-to-end pipeline from your backend persistence layer to the user-facing visualization.

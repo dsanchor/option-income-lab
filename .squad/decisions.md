@@ -3246,3 +3246,32 @@ Implement an in-memory merge strategy in `src/yfinance_data_provider.py`:
 - Decision 30: Market Hours Detection (signals when cache should be applied)
 - Decision: Hybrid Options Chain (context for TV fallback)
 
+
+---
+
+## Rusty — Snapshot Chart Decision
+
+**Date:** 2026-06-04  
+**Author:** Rusty (Agent Dev)  
+**Status:** Implemented
+
+### Decision
+Use a lazy-loaded position snapshot chart in `symbol_detail.html` backed by a dedicated per-position API endpoint that returns snapshots in chronological order.
+
+### Why
+- Active position drawers can stay lightweight on initial page render.
+- Chart.js time scale preserves irregular intraday spacing from monitoring snapshots.
+- Reversing backend data once at the API boundary keeps chart code simple and consistent.
+
+### Implementation Notes
+- Endpoint: `GET /api/symbols/{symbol}/positions/{position_id}/snapshots?limit=...`
+- Fetch only on first expand for each position row.
+- Datasets: Gap % on left axis, RSI + MACD on right axis.
+
+### Files Changed
+- `web/app.py` — Added snapshot API endpoint
+- `web/templates/symbol_detail.html` — Integrated Chart.js with lazy expand trigger
+- `web/templates/base.html` — Added Chart.js CDN reference
+
+### Integration
+The snapshot chart consumes data from Linus's `position_snapshots` CosmosDB container via the API boundary, following the documented position snapshot schema and retention model.

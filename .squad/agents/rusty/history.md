@@ -263,6 +263,14 @@ if preferences.get('activities', True):
 **Why this matters:**
 Different chat scenarios need different context. Quick technical questions don't need full position history. Position management questions don't need all TradingView data. User control reduces token usage and improves response relevance. LocalStorage persistence means users set it once per workflow preference.
 
+### Position Snapshot Chart Pattern (2026-07-09)
+**Context:** Active positions now expose irregular monitor snapshots in the symbol detail drawer.
+
+**Implementation pattern:**
+- Add a narrow position-level API route that returns snapshots oldest-first for chart rendering.
+- Lazy-load chart data only when a position detail row opens; do not fetch all rows on page load.
+- Use Chart.js time scale with raw timestamps so intraday spacing reflects true monitor cadence, even when some days have multiple points and others have none.
+
 ### Unified Activities List with Alert Filter (2026-04-02)
 **Status:** ✅ Completed  
 **Files:**

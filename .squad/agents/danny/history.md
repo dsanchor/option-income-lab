@@ -494,3 +494,17 @@ tradingview:
 
 ### Status
 ✅ Plan approved. Ready for implementation.
+
+### 2026-06-04: Position Snapshot Time-Series Design (PROPOSED)
+
+**Context:** Requested design for storing lightweight historical metrics on each open-position monitor run so the position detail page can render a compact evolution chart.
+
+**Architecture Decisions Made:**
+- Recommended a new CosmosDB container `position_snapshots` instead of reusing `symbols`, because this feature is position-scoped and needs partition key `/position_id`.
+- Recommended container-level TTL of 180 days so retention stays cheap without adding prune jobs.
+- Defined one snapshot document per monitor run with directional + absolute gap-to-strike fields, RSI (14), MACD level, and denormalized position metadata.
+- Placed the write immediately after `fetch_all()` in `run_position_monitor()` so snapshots persist even if later agent phases fail.
+- Required best-effort persistence only, following the existing telemetry pattern.
+
+**Decision doc:** `.squad/decisions/inbox/danny-position-snapshots.md`
+**Status:** Proposed — ready for implementation
