@@ -491,7 +491,7 @@ class CosmosDBService:
                                limit: int = 100) -> list:
         """Get recent position snapshots for a single position, newest first."""
         query = (
-            "SELECT TOP @limit * FROM c "
+            f"SELECT TOP {int(limit)} * FROM c "
             "WHERE c.doc_type = 'position_snapshot' AND c.position_id = @position_id "
             "ORDER BY c.timestamp DESC"
         )
@@ -499,7 +499,6 @@ class CosmosDBService:
             query=query,
             parameters=[
                 {"name": "@position_id", "value": position_id},
-                {"name": "@limit", "value": limit},
             ],
             partition_key=symbol,
         ))
