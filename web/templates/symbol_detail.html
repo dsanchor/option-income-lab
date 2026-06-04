@@ -624,7 +624,7 @@
                             data: macdData,
                             borderColor: '#3fb950',
                             backgroundColor: 'rgba(63, 185, 80, 0.15)',
-                            yAxisID: 'yRight',
+                            yAxisID: 'yMacd',
                             tension: 0.25,
                             borderWidth: 2,
                             pointRadius: 1.25,
@@ -705,8 +705,15 @@
                             },
                             title: {
                                 display: true,
-                                text: 'RSI / MACD',
+                                text: 'RSI',
                                 color: '#8d969e'
+                            }
+                        },
+                        yMacd: {
+                            position: 'right',
+                            display: false,
+                            grid: {
+                                drawOnChartArea: false
                             }
                         }
                     }
