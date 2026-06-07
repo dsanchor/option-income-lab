@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # Trend helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _compute_trend(series: List[Optional[float]], window: int = 5) -> Tuple[str, dict]:
+def _compute_trend(series: List[Optional[float]], window: int = 21) -> Tuple[str, dict]:
     """Determine if a numeric series is improving, worsening, or flat.
 
     Uses linear slope of last `window` non-None values plus first-to-last delta.
