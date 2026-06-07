@@ -97,10 +97,22 @@
 
     {% if symbol_doc.positions %}
     <div class="table-wrap" style="overflow-x: auto;">
-        <table id="positionsTable" style="min-width:100%; width:max-content; table-layout: auto;">
+        <table id="positionsTable" style="width:100%; table-layout:fixed;">
+            <colgroup>
+                <col style="width:2rem;">
+                <col style="width:5rem;">
+                <col style="width:5.5rem;">
+                <col style="width:7rem;">
+                <col style="width:5.5rem;">
+                <col style="width:6rem;">
+                <col style="width:5rem;">
+                <col style="width:6.5rem;">
+                <col>
+                <col style="width:7rem;">
+            </colgroup>
             <thead>
                 <tr>
-                    <th style="width:2rem;"></th>
+                    <th></th>
                     <th>Type</th>
                     <th>Strike</th>
                     <th>Expiration</th>
@@ -131,7 +143,7 @@
                     </td>
                     <td><span class="badge badge-{{ 'wait' if pos.status == 'active' else 'info' }}">{{ pos.status }}</span></td>
                     <td class="mono">{{ pos.opened_at[:10] if pos.opened_at else "—" }}</td>
-                    <td class="pos-notes-cell" data-pos-id="{{ pos.position_id }}">
+                    <td class="pos-notes-cell" data-pos-id="{{ pos.position_id }}" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
                         <span class="notes-display" title="Click to edit">{{ pos.notes or "—" }}</span>
                         <div class="notes-edit" style="display:none;">
                             <textarea class="input-field notes-input" rows="2" style="width:100%; min-width:140px; resize:vertical; font-size:0.85rem;">{{ pos.notes or "" }}</textarea>
