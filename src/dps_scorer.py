@@ -346,22 +346,22 @@ def score_short_put(
     else:
         score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (no penalty)"})
 
-    # Theta benefit (daily decay relative to mid-price of contract)
+    # Theta benefit: expected total decay by expiration as % of premium
     contract_mid = abs(greeks.get("mid") or 0)
-    if contract_mid > 0 and theta > 0:
-        theta_pct = (theta / contract_mid) * 100
-        if theta_pct > 2.0:
+    if contract_mid > 0 and theta > 0 and dte > 0:
+        total_decay_pct = (theta * dte / contract_mid) * 100
+        if total_decay_pct > 3.0:
             theta_pts = 8
-            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day of premium — strong)"
-        elif theta_pct > 1.0:
+            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (strong)"
+        elif total_decay_pct > 1.5:
             theta_pts = 5
-            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day — good)"
-        elif theta_pct > 0.5:
+            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (good)"
+        elif total_decay_pct > 0.5:
             theta_pts = 3
-            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day — moderate)"
+            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (moderate)"
         else:
             theta_pts = 0
-            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day — low)"
+            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (low)"
     else:
         theta_pts = 0
         theta_reason = f"Θ {theta:.4f} (no premium reference)"
@@ -648,22 +648,22 @@ def score_short_call(
     else:
         score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (no penalty)"})
 
-    # Theta benefit (daily decay relative to mid-price of contract)
+    # Theta benefit: expected total decay by expiration as % of premium
     contract_mid = abs(greeks.get("mid") or 0)
-    if contract_mid > 0 and theta > 0:
-        theta_pct = (theta / contract_mid) * 100
-        if theta_pct > 2.0:
+    if contract_mid > 0 and theta > 0 and dte > 0:
+        total_decay_pct = (theta * dte / contract_mid) * 100
+        if total_decay_pct > 3.0:
             theta_pts = 8
-            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day of premium — strong)"
-        elif theta_pct > 1.0:
+            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (strong)"
+        elif total_decay_pct > 1.5:
             theta_pts = 5
-            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day — good)"
-        elif theta_pct > 0.5:
+            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (good)"
+        elif total_decay_pct > 0.5:
             theta_pts = 3
-            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day — moderate)"
+            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (moderate)"
         else:
             theta_pts = 0
-            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day — low)"
+            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (low)"
     else:
         theta_pts = 0
         theta_reason = f"Θ {theta:.4f} (no premium reference)"
