@@ -847,6 +847,24 @@
             html += '</div></details>';
         }
 
+        // Trend analysis details
+        if (result.trend_analysis) {
+            var ta = result.trend_analysis;
+            html += '<details style="margin-top:0.4rem;"><summary style="font-size:0.78rem; color:var(--text-muted, #8d969e); cursor:pointer;">Trend analysis (' + ta.snapshots_count + ' snapshots)</summary>';
+            html += '<div style="margin-top:0.4rem; font-size:0.78rem; color:var(--text-muted, #c9d1d9);">';
+            ['rsi', 'macd', 'adx'].forEach(function(key) {
+                var t = ta[key];
+                if (!t) return;
+                var label = key.toUpperCase();
+                var arrow = t.change_pct > 0 ? '↑' : (t.change_pct < 0 ? '↓' : '→');
+                html += '<div style="margin-bottom:0.3rem;"><strong>' + label + ':</strong> ';
+                html += t.series.join(' → ');
+                html += ' <span style="opacity:0.7;">(' + arrow + ' ' + (t.change_pct > 0 ? '+' : '') + t.change_pct + '%, ' + t.points_used + ' pts)</span>';
+                html += '</div>';
+            });
+            html += '</div></details>';
+        }
+
         container.innerHTML = html;
         container.style.display = 'block';
     }

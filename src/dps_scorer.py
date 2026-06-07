@@ -16,34 +16,55 @@ logger = logging.getLogger(__name__)
 # Trend helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _compute_trend(series: List[Optional[float]], window: int = 5) -> str:
+def _compute_trend(series: List[Optional[float]], window: int = 5) -> Tuple[str, dict]:
     """Determine if a numeric series is improving, worsening, or flat.
 
-    Uses linear slope of last `window` non-None values.
-    Returns: "improving", "worsening", or "flat".
+    Uses linear slope of last `window` non-None values plus first-to-last delta.
+    Returns: (direction, details) where direction is "improving"/"worsening"/"flat"
+    and details contains diagnostic info.
     """
     valid = [v for v in series if v is not None]
+    details = {"points_used": len(valid), "series": valid[-window:] if valid else []}
+
     if len(valid) < 3:
-        return "flat"
+        details["reason"] = "insufficient data"
+        return "flat", details
+
     segment = valid[-window:]
-    if len(segment) < 3:
-        return "flat"
+    details["series"] = [round(v, 2) for v in segment]
+    details["first"] = round(segment[0], 2)
+    details["last"] = round(segment[-1], 2)
+
     n = len(segment)
     x_mean = (n - 1) / 2.0
     y_mean = sum(segment) / n
     num = sum((i - x_mean) * (segment[i] - y_mean) for i in range(n))
     den = sum((i - x_mean) ** 2 for i in range(n))
     if den == 0:
-        return "flat"
+        details["reason"] = "zero variance"
+        return "flat", details
+
     slope = num / den
-    # Normalize slope relative to value magnitude
-    magnitude = abs(y_mean) if y_mean != 0 else 1.0
-    rel_slope = slope / magnitude
-    if rel_slope > 0.02:
-        return "improving"
-    elif rel_slope < -0.02:
-        return "worsening"
-    return "flat"
+    # Normalize slope relative to value range in segment
+    val_range = max(segment) - min(segment)
+    magnitude = val_range if val_range > 0 else (abs(y_mean) if y_mean != 0 else 1.0)
+    rel_slope = slope / magnitude if magnitude != 0 else 0
+
+    # Also check absolute change from first to last
+    abs_change = segment[-1] - segment[0]
+    pct_change = (abs_change / abs(segment[0]) * 100) if segment[0] != 0 else 0
+
+    details["slope"] = round(slope, 4)
+    details["rel_slope"] = round(rel_slope, 4)
+    details["change"] = round(abs_change, 2)
+    details["change_pct"] = round(pct_change, 2)
+
+    # Use lower threshold (1%) on range-normalized slope, OR notable pct change
+    if rel_slope > 0.08 or pct_change > 3.0:
+        return "improving", details
+    elif rel_slope < -0.08 or pct_change < -3.0:
+        return "worsening", details
+    return "flat", details
 
 
 def _compute_dte(expiration: str) -> int:
@@ -183,9 +204,9 @@ def score_short_put(
     adx = series["adx"][-1] if series["adx"] and series["adx"][-1] is not None else 15.0
 
     # Trends
-    rsi_trend = _compute_trend(series["rsi"])
-    macd_trend = _compute_trend(series["macd"])
-    adx_trend = _compute_trend(series["adx"])
+    rsi_trend, rsi_trend_details = _compute_trend(series["rsi"])
+    macd_trend, macd_trend_details = _compute_trend(series["macd"])
+    adx_trend, adx_trend_details = _compute_trend(series["adx"])
     iv_series = [greeks.get("iv")]  # Only current point available from chain
     iv_trend = "flat"
 
@@ -362,6 +383,12 @@ def score_short_put(
             "underlying_price": underlying_price,
             "strike": strike,
         },
+        "trend_analysis": {
+            "rsi": rsi_trend_details,
+            "macd": macd_trend_details,
+            "adx": adx_trend_details,
+            "snapshots_count": len(snapshots),
+        },
     }
 
 
@@ -406,9 +433,9 @@ def score_short_call(
     adx = series["adx"][-1] if series["adx"] and series["adx"][-1] is not None else 15.0
 
     # Trends
-    rsi_trend = _compute_trend(series["rsi"])
-    macd_trend = _compute_trend(series["macd"])
-    adx_trend = _compute_trend(series["adx"])
+    rsi_trend, rsi_trend_details = _compute_trend(series["rsi"])
+    macd_trend, macd_trend_details = _compute_trend(series["macd"])
+    adx_trend, adx_trend_details = _compute_trend(series["adx"])
     iv_trend = "flat"
 
     # GAP (for call: positive = OTM)
@@ -585,6 +612,12 @@ def score_short_call(
             "gap_percent": round(otm_gap, 2),
             "underlying_price": underlying_price,
             "strike": strike,
+        },
+        "trend_analysis": {
+            "rsi": rsi_trend_details,
+            "macd": macd_trend_details,
+            "adx": adx_trend_details,
+            "snapshots_count": len(snapshots),
         },
     }
 
