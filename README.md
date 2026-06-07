@@ -121,6 +121,50 @@ After filtering, a pre-computed **candidates table** with roll economics (buybac
 - **ROLL_UP_AND_OUT** / **ROLL_DOWN_AND_OUT** — Combined strike + expiration adjustment
 - **CLOSE** — Buy back without re-selling (exit the position entirely)
 
+### Position Snapshots & Time Series
+
+Each position monitor run captures a **snapshot** of the position's key indicators, stored in CosmosDB for historical tracking. Snapshots power both the chart visualization and the DPS scorer.
+
+**Captured indicators per snapshot:**
+- **Gap %** — distance from underlying price to strike (positive = OTM, negative = ITM)
+- **RSI (14)** — daily relative strength index
+- **MACD** — MACD line value (daily)
+- **ADX** — average directional index (trend strength)
+- Underlying price, timestamp
+
+**Chart visualization:** The symbol detail page renders an interactive Chart.js time series with all indicators on dual y-axes (Gap% on left, RSI/MACD/ADX on right). Features include tooltip with all values, weekend filtering (hidden by default), and color-coded lines per indicator.
+
+### Deterministic Position Scorer (DPS)
+
+The DPS provides **on-demand, rule-based analysis** of open positions without using an LLM. It combines live options chain Greeks with historical snapshot trends to produce a deterministic HOLD/WATCH/ROLL recommendation.
+
+**How it works:**
+1. Fetches live options chain via yfinance for the position's strike/expiration
+2. Extracts Greeks (delta, gamma, theta, IV) and contract mid-price
+3. Reads historical snapshots for RSI, MACD, and ADX trend analysis (last 5 non-null points)
+4. Applies a scoring algorithm (0–100 scale, base 50) with contributions from:
+
+| Factor | Range | Notes |
+|--------|-------|-------|
+| Delta | ±15 | OTM favorable, ATM penalized |
+| GAP | -20 to +10 | Gradual 7-level scale based on % distance to strike |
+| RSI level + trend | ±20 | Direction interpretation inverted for puts vs calls |
+| MACD trend | ±12 | Improving/worsening relative to position type |
+| ADX | -12 to +10 | Rising ADX = stronger trend = bad for short options |
+| DTE | ±8 | Penalty when ≤21 days to expiration |
+| Gamma | -10 | Penalty when high gamma + near ATM |
+| Theta | 0 to +8 | Based on `theta × DTE / mid` (% of premium expected to decay) |
+| IV level | 0 to +8 | High IV favorable for short options (more premium collected) |
+
+**Decision thresholds:**
+- Score ≥ 70 → **HOLD** (position is safe)
+- Score 50–69 → **WATCH** (monitor closely)
+- Score < 50 → **ROLL** (consider adjusting)
+
+**Override rules:** Force ROLL when delta is extreme + ADX rising + MACD worsening. Allow HOLD when delta is high but RSI + MACD + ADX all improving.
+
+**UI:** A "📊 DPS Analysis" button on each position panel triggers the analysis. Results show the recommendation, score, risk zone, key drivers, and an expandable score breakdown table with per-factor point contributions.
+
 ### Risk Rating (Sell-Side Agents)
 
 Every sell-side agent output (Covered Call and Cash Secured Put) includes a **risk rating** on a 0–10 scale, quantifying how risky the recommended action is.
