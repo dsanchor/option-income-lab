@@ -267,9 +267,13 @@ def score_short_put(
         gap_pts = -5
         gap_reason = f"Gap {gap_percent:.1f}% 0–1% OTM (near ATM)"
         rule_hits.append("gap_near_atm")
+    elif otm_gap > -1.0:
+        gap_pts = -5
+        gap_reason = f"Gap {gap_percent:.1f}% barely ITM (0–1%)"
+        rule_hits.append("gap_itm_slight")
     elif otm_gap > -2.0:
         gap_pts = -10
-        gap_reason = f"Gap {gap_percent:.1f}% slightly ITM (0–2%)"
+        gap_reason = f"Gap {gap_percent:.1f}% slightly ITM (1–2%)"
         rule_hits.append("gap_itm_slight")
     elif otm_gap > -5.0:
         gap_pts = -15
@@ -594,9 +598,13 @@ def score_short_call(
         gap_pts = -5
         gap_reason = f"Gap {otm_gap:.1f}% in 0–1% (near ATM)"
         rule_hits.append("gap_near_atm")
+    elif otm_gap > -1.0:
+        gap_pts = -5
+        gap_reason = f"Gap {otm_gap:.1f}% barely ITM (0–1%)"
+        rule_hits.append("gap_itm_slight")
     elif otm_gap > -2.0:
         gap_pts = -10
-        gap_reason = f"Gap {otm_gap:.1f}% slightly ITM (0–2%)"
+        gap_reason = f"Gap {otm_gap:.1f}% slightly ITM (1–2%)"
         rule_hits.append("gap_itm_slight")
     elif otm_gap > -5.0:
         gap_pts = -15
