@@ -697,6 +697,77 @@ async def api_position_snapshots(request: Request, symbol: str, position_id: str
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.post("/api/symbols/{symbol}/positions/{position_id}/dps-analysis")
+async def api_dps_analysis(request: Request, symbol: str, position_id: str):
+    """Run deterministic position scoring (DPS) for an open position."""
+    try:
+        cosmos = _get_cosmos(request)
+        symbol = symbol.upper()
+
+        # Find the position
+        sym_doc = cosmos.get_symbol(symbol)
+        if not sym_doc:
+            return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
+
+        position = None
+        for pos in sym_doc.get("positions", []):
+            if pos.get("position_id") == position_id:
+                position = pos
+                break
+        if position is None:
+            return JSONResponse({"error": f"Position {position_id} not found"}, status_code=404)
+
+        strike = float(position["strike"])
+        expiration = position["expiration"]
+        option_type = position.get("type", "call")
+
+        # Get snapshots (oldest first)
+        snapshots = cosmos.get_position_snapshots(symbol, position_id, limit=20)
+        snapshots.reverse()
+
+        # Fetch live options chain
+        yf_provider = getattr(request.app.state, "yf_provider", None)
+        if yf_provider is None:
+            return JSONResponse({"error": "Data provider unavailable"}, status_code=503)
+
+        data = await yf_provider.fetch_all(symbol, force_refresh=True)
+        chain_json = data.get("options_chain", "{}")
+
+        # Get current price from the data
+        import json as _json
+        overview = data.get("overview", "{}")
+        if isinstance(overview, str):
+            try:
+                overview = _json.loads(overview)
+            except (ValueError, TypeError):
+                overview = {}
+        fundamentals = overview.get("fundamentals", {})
+        price_field = fundamentals.get("current_price", {})
+        underlying_price = price_field.get("value") if isinstance(price_field, dict) else price_field
+        if underlying_price is not None:
+            underlying_price = float(underlying_price)
+
+        # Run DPS
+        from src.dps_scorer import run_dps_analysis
+        result = run_dps_analysis(
+            symbol=symbol,
+            strike=strike,
+            expiration=expiration,
+            option_type=option_type,
+            chain_json=chain_json,
+            snapshots=snapshots,
+            underlying_price=underlying_price,
+        )
+
+        return JSONResponse(result)
+
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        logger.exception("DPS analysis failed for %s/%s", symbol, position_id)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ===========================================================================
 # REST API — Data Views
 # ===========================================================================

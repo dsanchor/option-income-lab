@@ -302,6 +302,16 @@
                                 <div class="position-snapshot-canvas-wrap" style="display:none; position:relative; height:190px;">
                                     <canvas class="position-snapshot-canvas" aria-label="Position monitoring chart"></canvas>
                                 </div>
+                                <!-- DPS Analysis button & results -->
+                                <div class="dps-analysis-section" style="margin-top:0.75rem;">
+                                    <button class="dps-analyze-btn"
+                                            data-symbol="{{ symbol_doc.symbol }}"
+                                            data-position-id="{{ pos.position_id }}"
+                                            style="background:var(--accent, #494fdf); color:#fff; border:none; padding:0.4rem 0.9rem; border-radius:4px; font-size:0.82rem; cursor:pointer;">
+                                        📊 DPS Analysis
+                                    </button>
+                                    <div class="dps-result" style="display:none; margin-top:0.75rem; padding:0.75rem; border-radius:6px; background:var(--surface-alt, rgba(255,255,255,0.03)); border:1px solid var(--border, #2d2d35);"></div>
+                                </div>
                             </div>
                             {% endif %}
 
@@ -784,6 +794,93 @@
             container.dataset.loading = 'false';
         }
     }
+
+    // ── DPS Analysis ──────────────────────────────────────────────────────
+    function renderDpsResult(container, result) {
+        if (result.error) {
+            container.innerHTML = '<span style="color:#e5534b;">⚠️ ' + result.error + '</span>';
+            container.style.display = 'block';
+            return;
+        }
+
+        var statusColors = { HOLD: '#3fb950', WATCH: '#f0883e', ROLL: '#f85149' };
+        var statusColor = statusColors[result.status] || '#8d969e';
+        var riskColors = { SAFE: '#3fb950', MONITOR: '#f0883e', ATM_CRITICAL: '#f85149' };
+        var riskColor = riskColors[result.risk_zone] || '#8d969e';
+
+        var html = '<div style="display:flex; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem;">';
+        html += '<span style="font-size:1.4rem; font-weight:700; color:' + statusColor + ';">' + result.status + '</span>';
+        html += '<span style="font-size:1.1rem; font-weight:600; color:var(--text, #fff);">Score: ' + result.score + '/100</span>';
+        html += '<span style="font-size:0.82rem; padding:0.2rem 0.5rem; border-radius:3px; background:' + riskColor + '22; color:' + riskColor + '; border:1px solid ' + riskColor + '44;">' + result.risk_zone + '</span>';
+        html += '</div>';
+
+        html += '<p style="margin:0.3rem 0 0.6rem; color:var(--text-muted, #8d969e); font-size:0.85rem; font-style:italic;">' + result.summary + '</p>';
+
+        // Key drivers
+        if (result.key_drivers && result.key_drivers.length) {
+            html += '<div style="margin-bottom:0.5rem;"><strong style="color:var(--text, #fff); font-size:0.82rem;">Key Drivers:</strong><ul style="margin:0.25rem 0 0 1rem; padding:0; list-style:disc;">';
+            result.key_drivers.forEach(function(d) {
+                html += '<li style="color:var(--text-muted, #c9d1d9); font-size:0.82rem; margin-bottom:0.15rem;">' + d + '</li>';
+            });
+            html += '</ul></div>';
+        }
+
+        // Next focus
+        if (result.next_focus) {
+            html += '<p style="margin:0.4rem 0 0; font-size:0.82rem; color:var(--text-muted, #8d969e);">🎯 <strong>Next focus:</strong> ' + result.next_focus + '</p>';
+        }
+
+        // Inputs summary (collapsible)
+        if (result.inputs) {
+            var inp = result.inputs;
+            html += '<details style="margin-top:0.5rem;"><summary style="font-size:0.78rem; color:var(--text-muted, #8d969e); cursor:pointer;">Input parameters</summary>';
+            html += '<div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap:0.3rem; margin-top:0.4rem; font-size:0.78rem; color:var(--text-muted, #c9d1d9);">';
+            html += '<span>Δ ' + inp.delta + '</span>';
+            html += '<span>Γ ' + inp.gamma + '</span>';
+            html += '<span>Θ ' + inp.theta + '</span>';
+            html += '<span>IV ' + (inp.iv * 100).toFixed(1) + '%</span>';
+            html += '<span>DTE ' + inp.dte + '</span>';
+            html += '<span>RSI ' + inp.rsi + ' (' + inp.rsi_trend + ')</span>';
+            html += '<span>MACD ' + inp.macd + ' (' + inp.macd_trend + ')</span>';
+            html += '<span>ADX ' + inp.adx + ' (' + inp.adx_trend + ')</span>';
+            html += '<span>Gap ' + inp.gap_percent + '%</span>';
+            html += '</div></details>';
+        }
+
+        container.innerHTML = html;
+        container.style.display = 'block';
+    }
+
+    document.addEventListener('click', async function(e) {
+        var btn = e.target.closest('.dps-analyze-btn');
+        if (!btn) return;
+
+        var section = btn.closest('.dps-analysis-section');
+        var resultDiv = section.querySelector('.dps-result');
+        var symbol = btn.dataset.symbol;
+        var positionId = btn.dataset.positionId;
+
+        btn.disabled = true;
+        btn.textContent = '⏳ Analyzing...';
+        resultDiv.style.display = 'none';
+
+        try {
+            var res = await fetch(
+                '/api/symbols/' + encodeURIComponent(symbol) +
+                '/positions/' + encodeURIComponent(positionId) +
+                '/dps-analysis',
+                { method: 'POST' }
+            );
+            var data = await res.json();
+            renderDpsResult(resultDiv, data);
+        } catch (err) {
+            resultDiv.innerHTML = '<span style="color:#e5534b;">⚠️ ' + err.message + '</span>';
+            resultDiv.style.display = 'block';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '📊 DPS Analysis';
+        }
+    });
 
     function updateAlertAttachCheckbox() {
         var posType = document.getElementById('posType').value;
