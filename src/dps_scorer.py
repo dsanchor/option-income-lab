@@ -208,9 +208,11 @@ def score_short_put(
     macd_trend, macd_trend_details = _compute_trend(series["macd"])
     adx_trend, adx_trend_details = _compute_trend(series["adx"])
 
-    # GAP
-    gap_absolute = strike - underlying_price  # positive = OTM for put
+    # GAP (snapshot convention: negative = OTM for put)
+    gap_absolute = strike - underlying_price
     gap_percent = (gap_absolute / strike * 100.0) if strike else 0.0
+    # For scoring: positive = OTM (same as CALL scorer approach)
+    otm_gap = -gap_percent
 
     # Risk zone
     if delta < 0.30:
@@ -239,25 +241,25 @@ def score_short_put(
         key_drivers.append(f"Delta {delta:.2f} ATM critical")
         rule_hits.append("delta_critical")
 
-    # GAP (gradual scale)
-    if gap_percent > 5.0:
+    # GAP (gradual scale — using otm_gap where positive = OTM)
+    if otm_gap > 5.0:
         gap_pts = 10
-        gap_reason = f"Gap {gap_percent:.1f}% > 5% (comfortably OTM)"
-    elif gap_percent > 3.0:
+        gap_reason = f"Gap {gap_percent:.1f}% > 5% OTM (comfortably safe)"
+    elif otm_gap > 3.0:
         gap_pts = 5
-        gap_reason = f"Gap {gap_percent:.1f}% in 3–5% (safe)"
-    elif gap_percent > 1.0:
+        gap_reason = f"Gap {gap_percent:.1f}% 3–5% OTM (safe)"
+    elif otm_gap > 1.0:
         gap_pts = 0
-        gap_reason = f"Gap {gap_percent:.1f}% in 1–3% (neutral)"
-    elif gap_percent > 0:
+        gap_reason = f"Gap {gap_percent:.1f}% 1–3% OTM (neutral)"
+    elif otm_gap > 0:
         gap_pts = -5
-        gap_reason = f"Gap {gap_percent:.1f}% in 0–1% (near ATM)"
+        gap_reason = f"Gap {gap_percent:.1f}% 0–1% OTM (near ATM)"
         rule_hits.append("gap_near_atm")
-    elif gap_percent > -2.0:
+    elif otm_gap > -2.0:
         gap_pts = -10
         gap_reason = f"Gap {gap_percent:.1f}% slightly ITM (0–2%)"
         rule_hits.append("gap_itm_slight")
-    elif gap_percent > -5.0:
+    elif otm_gap > -5.0:
         gap_pts = -15
         gap_reason = f"Gap {gap_percent:.1f}% ITM (2–5%)"
         rule_hits.append("gap_itm")
