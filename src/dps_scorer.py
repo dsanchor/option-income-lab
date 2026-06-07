@@ -447,6 +447,9 @@ def score_short_put(
                                 "reason": f"RSI {rsi:.0f} oversold + improving near ITM — bounce likely"})
         key_drivers.append("RSI oversold near ITM (bounce signal)")
         rule_hits.append("combo_rsi_gap_bounce")
+    else:
+        score_breakdown.append({"factor": "Combo: RSI+GAP", "points": 0,
+                                "reason": "Not triggered"})
 
     # #2 IV + DTE: High IV + short DTE = accelerated decay (exponential theta)
     if iv > 0.35 and dte <= 14 and delta < 0.45:
@@ -456,6 +459,9 @@ def score_short_put(
                                 "reason": f"IV {iv*100:.0f}% elevated + DTE {dte} short — accelerated decay"})
         key_drivers.append(f"IV {iv*100:.0f}% + DTE {dte} (decay acceleration)")
         rule_hits.append("combo_iv_dte_decay")
+    else:
+        score_breakdown.append({"factor": "Combo: IV+DTE", "points": 0,
+                                "reason": "Not triggered"})
 
     # #3 MACD + RSI concordance: Both trends agree → signal confirmed
     if macd_trend == rsi_trend and macd_trend != "flat":
@@ -475,6 +481,9 @@ def score_short_put(
             score_breakdown.append({"factor": "Combo: MACD+RSI", "points": combo_pts,
                                     "reason": f"MACD+RSI both worsening — confirmed deterioration"})
             rule_hits.append("combo_concordance_negative")
+    else:
+        score_breakdown.append({"factor": "Combo: MACD+RSI", "points": 0,
+                                "reason": "Not triggered"})
 
     # #4 Delta + ADX unfavorable: Compound assignment risk
     if delta >= 0.45 and adx > 25 and adx_trend == "improving" and not trend_favorable:
@@ -483,6 +492,9 @@ def score_short_put(
         score_breakdown.append({"factor": "Combo: Delta+ADX", "points": combo_pts,
                                 "reason": f"Δ {delta:.2f} ATM + ADX {adx:.0f} rising unfavorable — compound risk"})
         rule_hits.append("combo_delta_adx_compound")
+    else:
+        score_breakdown.append({"factor": "Combo: Delta+ADX", "points": 0,
+                                "reason": "Not triggered"})
 
     # #5 Theta + Delta: High decay partially offsets ATM risk
     if theta_pts >= 5 and delta >= 0.35 and delta < 0.50:
@@ -490,6 +502,9 @@ def score_short_put(
         score += combo_pts
         score_breakdown.append({"factor": "Combo: Theta+Delta", "points": combo_pts,
                                 "reason": f"Θ decay strong enough to offset near-ATM risk"})
+    else:
+        score_breakdown.append({"factor": "Combo: Theta+Delta", "points": 0,
+                                "reason": "Not triggered"})
 
     # Clamp
     score = max(0, min(100, score))
@@ -839,6 +854,9 @@ def score_short_call(
                                 "reason": f"RSI {rsi:.0f} overbought + weakening near ITM — pullback likely"})
         key_drivers.append("RSI overbought near ITM (pullback signal)")
         rule_hits.append("combo_rsi_gap_pullback")
+    else:
+        score_breakdown.append({"factor": "Combo: RSI+GAP", "points": 0,
+                                "reason": "Not triggered"})
 
     # #2 IV + DTE: High IV + short DTE = accelerated decay (exponential theta)
     if iv > 0.35 and dte <= 14 and delta < 0.45:
@@ -848,6 +866,9 @@ def score_short_call(
                                 "reason": f"IV {iv*100:.0f}% elevated + DTE {dte} short — accelerated decay"})
         key_drivers.append(f"IV {iv*100:.0f}% + DTE {dte} (decay acceleration)")
         rule_hits.append("combo_iv_dte_decay")
+    else:
+        score_breakdown.append({"factor": "Combo: IV+DTE", "points": 0,
+                                "reason": "Not triggered"})
 
     # #3 MACD + RSI concordance: Both trends agree → signal confirmed
     if macd_trend == rsi_trend and macd_trend != "flat":
@@ -867,6 +888,9 @@ def score_short_call(
             score_breakdown.append({"factor": "Combo: MACD+RSI", "points": combo_pts,
                                     "reason": f"MACD+RSI both strengthening — confirmed rally"})
             rule_hits.append("combo_concordance_negative")
+    else:
+        score_breakdown.append({"factor": "Combo: MACD+RSI", "points": 0,
+                                "reason": "Not triggered"})
 
     # #4 Delta + ADX unfavorable: Compound assignment risk
     if delta >= 0.45 and adx > 25 and adx_trend == "improving" and not trend_favorable:
@@ -875,6 +899,9 @@ def score_short_call(
         score_breakdown.append({"factor": "Combo: Delta+ADX", "points": combo_pts,
                                 "reason": f"Δ {delta:.2f} ATM + ADX {adx:.0f} rising unfavorable — compound risk"})
         rule_hits.append("combo_delta_adx_compound")
+    else:
+        score_breakdown.append({"factor": "Combo: Delta+ADX", "points": 0,
+                                "reason": "Not triggered"})
 
     # #5 Theta + Delta: High decay partially offsets ATM risk
     if theta_pts >= 5 and delta >= 0.35 and delta < 0.50:
@@ -882,6 +909,9 @@ def score_short_call(
         score += combo_pts
         score_breakdown.append({"factor": "Combo: Theta+Delta", "points": combo_pts,
                                 "reason": f"Θ decay strong enough to offset near-ATM risk"})
+    else:
+        score_breakdown.append({"factor": "Combo: Theta+Delta", "points": 0,
+                                "reason": "Not triggered"})
 
     # Clamp
     score = max(0, min(100, score))
