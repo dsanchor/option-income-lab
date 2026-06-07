@@ -59,11 +59,23 @@ def _compute_trend(series: List[Optional[float]], window: int = 21) -> Tuple[str
     details["change"] = round(abs_change, 2)
     details["change_pct"] = round(pct_change, 2)
 
-    # Use lower threshold (1%) on range-normalized slope, OR notable pct change
-    if rel_slope > 0.08 or pct_change > 3.0:
-        return "improving", details
-    elif rel_slope < -0.08 or pct_change < -3.0:
-        return "worsening", details
+    # Determine direction and strength
+    abs_rel = abs(rel_slope)
+    abs_pct = abs(pct_change)
+
+    if abs_rel > 0.08 or abs_pct > 3.0:
+        # Strength levels
+        if abs_rel > 0.30 or abs_pct > 15.0:
+            strength = "strong"
+        elif abs_rel > 0.15 or abs_pct > 8.0:
+            strength = "moderate"
+        else:
+            strength = "weak"
+        details["strength"] = strength
+        direction = "improving" if (rel_slope > 0 or pct_change > 3.0) else "worsening"
+        return direction, details
+
+    details["strength"] = None
     return "flat", details
 
 
@@ -286,33 +298,42 @@ def score_short_put(
         score -= 5
         score_breakdown.append({"factor": "RSI level", "points": -5, "reason": f"RSI {rsi:.1f} > 60"})
 
-    # RSI trend
+    # RSI trend (graduated by strength)
+    rsi_strength = rsi_trend_details.get("strength")
+    rsi_pct = rsi_trend_details.get('change_pct', 0)
     if rsi_trend == "improving":
-        score += 8
-        score_breakdown.append({"factor": "RSI trend", "points": 8, "reason": f"RSI improving ({rsi_trend_details.get('change_pct', 0):+.1f}%)"})
-        key_drivers.append("RSI trend improving")
+        rsi_pts = {"strong": 12, "moderate": 8, "weak": 4}.get(rsi_strength, 4)
+        score += rsi_pts
+        score_breakdown.append({"factor": "RSI trend", "points": rsi_pts, "reason": f"RSI improving ({rsi_pct:+.1f}%, {rsi_strength})"})
+        key_drivers.append(f"RSI improving ({rsi_strength})")
     elif rsi_trend == "worsening":
-        score -= 8
-        score_breakdown.append({"factor": "RSI trend", "points": -8, "reason": f"RSI worsening ({rsi_trend_details.get('change_pct', 0):+.1f}%)"})
-        key_drivers.append("RSI trend worsening")
+        rsi_pts = {"strong": -12, "moderate": -8, "weak": -4}.get(rsi_strength, -4)
+        score += rsi_pts
+        score_breakdown.append({"factor": "RSI trend", "points": rsi_pts, "reason": f"RSI worsening ({rsi_pct:+.1f}%, {rsi_strength})"})
+        key_drivers.append(f"RSI worsening ({rsi_strength})")
         rule_hits.append("rsi_worsening")
     else:
         score_breakdown.append({"factor": "RSI trend", "points": 0, "reason": "RSI flat"})
 
-    # MACD (improving = less negative = favorable for put)
+    # MACD trend (graduated by strength)
+    macd_strength = macd_trend_details.get("strength")
+    macd_pct = macd_trend_details.get('change_pct', 0)
     if macd_trend == "improving":
-        score += 12
-        score_breakdown.append({"factor": "MACD trend", "points": 12, "reason": f"MACD improving ({macd_trend_details.get('change_pct', 0):+.1f}%)"})
-        key_drivers.append("MACD improving")
+        macd_pts = {"strong": 15, "moderate": 10, "weak": 5}.get(macd_strength, 5)
+        score += macd_pts
+        score_breakdown.append({"factor": "MACD trend", "points": macd_pts, "reason": f"MACD improving ({macd_pct:+.1f}%, {macd_strength})"})
+        key_drivers.append(f"MACD improving ({macd_strength})")
     elif macd_trend == "worsening":
-        score -= 12
-        score_breakdown.append({"factor": "MACD trend", "points": -12, "reason": f"MACD worsening ({macd_trend_details.get('change_pct', 0):+.1f}%)"})
-        key_drivers.append("MACD worsening")
+        macd_pts = {"strong": -15, "moderate": -10, "weak": -5}.get(macd_strength, -5)
+        score += macd_pts
+        score_breakdown.append({"factor": "MACD trend", "points": macd_pts, "reason": f"MACD worsening ({macd_pct:+.1f}%, {macd_strength})"})
+        key_drivers.append(f"MACD worsening ({macd_strength})")
         rule_hits.append("macd_worsening")
     else:
         score_breakdown.append({"factor": "MACD trend", "points": 0, "reason": "MACD flat"})
 
-    # ADX
+    # ADX (graduated)
+    adx_strength = adx_trend_details.get("strength")
     if adx < 20:
         score += 10
         score_breakdown.append({"factor": "ADX", "points": 10, "reason": f"ADX {adx:.1f} < 20 (no trend)"})
@@ -321,13 +342,15 @@ def score_short_put(
         score += 5
         score_breakdown.append({"factor": "ADX", "points": 5, "reason": f"ADX {adx:.1f} in 20–25"})
     elif adx_trend == "worsening":  # ADX falling = trend weakening = good
-        score += 3
-        score_breakdown.append({"factor": "ADX", "points": 3, "reason": f"ADX {adx:.1f} > 25 but falling"})
-        key_drivers.append(f"ADX {adx:.1f} but falling")
-    else:  # ADX > 25 and rising
-        score -= 12
-        score_breakdown.append({"factor": "ADX", "points": -12, "reason": f"ADX {adx:.1f} > 25 and rising"})
-        key_drivers.append(f"ADX {adx:.1f} rising (strong trend)")
+        adx_pts = {"strong": 6, "moderate": 4, "weak": 2}.get(adx_strength, 3)
+        score += adx_pts
+        score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 but falling ({adx_strength})"})
+        key_drivers.append(f"ADX {adx:.1f} falling ({adx_strength})")
+    else:  # ADX > 25 and rising or flat
+        adx_pts = {"strong": -15, "moderate": -12, "weak": -8}.get(adx_strength, -10)
+        score += adx_pts
+        score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength or 'flat'})"})
+        key_drivers.append(f"ADX {adx:.1f} rising ({adx_strength or 'flat'} trend)")
         rule_hits.append("adx_rising")
 
     # DTE (contextual: depends on moneyness)
@@ -602,33 +625,42 @@ def score_short_call(
         score -= 5
         score_breakdown.append({"factor": "RSI level", "points": -5, "reason": f"RSI {rsi:.1f} < 40"})
 
-    # RSI trend (for calls: weakening RSI = favorable)
+    # RSI trend (for calls: weakening RSI = favorable — graduated)
+    rsi_strength = rsi_trend_details.get("strength")
+    rsi_pct = rsi_trend_details.get('change_pct', 0)
     if rsi_trend == "worsening":  # RSI falling = good for short call
-        score += 8
-        score_breakdown.append({"factor": "RSI trend", "points": 8, "reason": f"RSI weakening ({rsi_trend_details.get('change_pct', 0):+.1f}%) — favorable"})
-        key_drivers.append("RSI weakening (favorable)")
+        rsi_pts = {"strong": 12, "moderate": 8, "weak": 4}.get(rsi_strength, 4)
+        score += rsi_pts
+        score_breakdown.append({"factor": "RSI trend", "points": rsi_pts, "reason": f"RSI weakening ({rsi_pct:+.1f}%, {rsi_strength}) — favorable"})
+        key_drivers.append(f"RSI weakening ({rsi_strength})")
     elif rsi_trend == "improving":  # RSI rising = bad for short call
-        score -= 8
-        score_breakdown.append({"factor": "RSI trend", "points": -8, "reason": f"RSI strengthening ({rsi_trend_details.get('change_pct', 0):+.1f}%) — unfavorable"})
-        key_drivers.append("RSI strengthening (unfavorable)")
+        rsi_pts = {"strong": -12, "moderate": -8, "weak": -4}.get(rsi_strength, -4)
+        score += rsi_pts
+        score_breakdown.append({"factor": "RSI trend", "points": rsi_pts, "reason": f"RSI strengthening ({rsi_pct:+.1f}%, {rsi_strength}) — unfavorable"})
+        key_drivers.append(f"RSI strengthening ({rsi_strength})")
         rule_hits.append("rsi_strengthening")
     else:
         score_breakdown.append({"factor": "RSI trend", "points": 0, "reason": "RSI flat"})
 
-    # MACD (for calls: weakening MACD = favorable)
+    # MACD trend (for calls: weakening MACD = favorable — graduated)
+    macd_strength = macd_trend_details.get("strength")
+    macd_pct = macd_trend_details.get('change_pct', 0)
     if macd_trend == "worsening":  # MACD falling = good for short call
-        score += 12
-        score_breakdown.append({"factor": "MACD trend", "points": 12, "reason": f"MACD weakening ({macd_trend_details.get('change_pct', 0):+.1f}%) — favorable"})
-        key_drivers.append("MACD weakening (favorable)")
+        macd_pts = {"strong": 15, "moderate": 10, "weak": 5}.get(macd_strength, 5)
+        score += macd_pts
+        score_breakdown.append({"factor": "MACD trend", "points": macd_pts, "reason": f"MACD weakening ({macd_pct:+.1f}%, {macd_strength}) — favorable"})
+        key_drivers.append(f"MACD weakening ({macd_strength})")
     elif macd_trend == "improving":  # MACD rising = bad for short call
-        score -= 12
-        score_breakdown.append({"factor": "MACD trend", "points": -12, "reason": f"MACD improving ({macd_trend_details.get('change_pct', 0):+.1f}%) — unfavorable"})
-        key_drivers.append("MACD improving (unfavorable)")
+        macd_pts = {"strong": -15, "moderate": -10, "weak": -5}.get(macd_strength, -5)
+        score += macd_pts
+        score_breakdown.append({"factor": "MACD trend", "points": macd_pts, "reason": f"MACD improving ({macd_pct:+.1f}%, {macd_strength}) — unfavorable"})
+        key_drivers.append(f"MACD improving ({macd_strength})")
         rule_hits.append("macd_improving")
     else:
         score_breakdown.append({"factor": "MACD trend", "points": 0, "reason": "MACD flat"})
 
-    # ADX
+    # ADX (graduated)
+    adx_strength = adx_trend_details.get("strength")
     if adx < 20:
         score += 10
         score_breakdown.append({"factor": "ADX", "points": 10, "reason": f"ADX {adx:.1f} < 20 (no trend)"})
@@ -637,13 +669,15 @@ def score_short_call(
         score += 5
         score_breakdown.append({"factor": "ADX", "points": 5, "reason": f"ADX {adx:.1f} in 20–25"})
     elif adx_trend == "worsening":  # ADX falling = trend weakening = good
-        score += 3
-        score_breakdown.append({"factor": "ADX", "points": 3, "reason": f"ADX {adx:.1f} > 25 but falling"})
-        key_drivers.append(f"ADX {adx:.1f} but falling")
-    else:  # ADX > 25 and rising = strong uptrend = bad for short call
-        score -= 12
-        score_breakdown.append({"factor": "ADX", "points": -12, "reason": f"ADX {adx:.1f} > 25 and rising (strong uptrend)"})
-        key_drivers.append(f"ADX {adx:.1f} rising (strong uptrend)")
+        adx_pts = {"strong": 6, "moderate": 4, "weak": 2}.get(adx_strength, 3)
+        score += adx_pts
+        score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 but falling ({adx_strength})"})
+        key_drivers.append(f"ADX {adx:.1f} falling ({adx_strength})")
+    else:  # ADX > 25 and rising = strong trend = bad for short call
+        adx_pts = {"strong": -15, "moderate": -12, "weak": -8}.get(adx_strength, -10)
+        score += adx_pts
+        score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength or 'flat'})"})
+        key_drivers.append(f"ADX {adx:.1f} rising ({adx_strength or 'flat'} trend)")
         rule_hits.append("adx_rising")
 
     # DTE (contextual: depends on moneyness)
