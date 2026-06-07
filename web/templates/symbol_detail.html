@@ -847,6 +847,27 @@
             html += '</div></details>';
         }
 
+        // Score breakdown
+        if (result.score_breakdown && result.score_breakdown.length) {
+            html += '<details style="margin-top:0.4rem;"><summary style="font-size:0.78rem; color:var(--text-muted, #8d969e); cursor:pointer;">Score breakdown (50 base → ' + result.score + ')</summary>';
+            html += '<table style="margin-top:0.4rem; font-size:0.78rem; color:var(--text-muted, #c9d1d9); border-collapse:collapse; width:100%;">';
+            html += '<tr style="border-bottom:1px solid var(--border, #2d2d35);"><th style="text-align:left; padding:0.2rem 0.5rem;">Factor</th><th style="text-align:right; padding:0.2rem 0.5rem;">Points</th><th style="text-align:left; padding:0.2rem 0.5rem;">Reason</th></tr>';
+            var runningTotal = 0;
+            result.score_breakdown.forEach(function(item) {
+                if (item.factor === 'Base') { runningTotal = item.points; return; }
+                runningTotal += item.points;
+                var color = item.points > 0 ? '#3fb950' : (item.points < 0 ? '#f85149' : 'var(--text-muted, #8d969e)');
+                var sign = item.points > 0 ? '+' : '';
+                html += '<tr style="border-bottom:1px solid var(--border, #2d2d35)22;">';
+                html += '<td style="padding:0.2rem 0.5rem;">' + item.factor + '</td>';
+                html += '<td style="padding:0.2rem 0.5rem; text-align:right; color:' + color + '; font-weight:600;">' + sign + item.points + '</td>';
+                html += '<td style="padding:0.2rem 0.5rem; opacity:0.8;">' + item.reason + '</td>';
+                html += '</tr>';
+            });
+            html += '<tr style="border-top:2px solid var(--border, #2d2d35);"><td style="padding:0.3rem 0.5rem; font-weight:700;">Total</td><td style="padding:0.3rem 0.5rem; text-align:right; font-weight:700;">' + result.score + '</td><td></td></tr>';
+            html += '</table></details>';
+        }
+
         // Trend analysis details
         if (result.trend_analysis) {
             var ta = result.trend_analysis;

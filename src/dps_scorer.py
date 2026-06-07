@@ -226,96 +226,131 @@ def score_short_put(
     score = 50
     key_drivers = []
     rule_hits = []
+    score_breakdown = [{"factor": "Base", "points": 50, "reason": "Starting score"}]
 
     # Delta
     if delta < 0.30:
         score += 15
+        score_breakdown.append({"factor": "Delta", "points": 15, "reason": f"Δ {delta:.3f} < 0.30 (OTM)"})
         key_drivers.append(f"Delta {delta:.2f} favorable (OTM)")
     elif delta < 0.45:
-        pass  # +0
+        score_breakdown.append({"factor": "Delta", "points": 0, "reason": f"Δ {delta:.3f} in 0.30–0.45 (monitor)"})
     else:
         score -= 15
+        score_breakdown.append({"factor": "Delta", "points": -15, "reason": f"Δ {delta:.3f} ≥ 0.45 (ATM critical)"})
         key_drivers.append(f"Delta {delta:.2f} ATM critical")
         rule_hits.append("delta_critical")
 
     # GAP
     if gap_percent > 5.0:
         score += 10
+        score_breakdown.append({"factor": "GAP", "points": 10, "reason": f"Gap {gap_percent:.1f}% > 5% (comfortably OTM)"})
         key_drivers.append(f"Gap {gap_percent:.1f}% comfortably OTM")
-    elif gap_percent > 0 and gap_percent <= 2.0:
+    elif gap_percent > 2.0:
+        score_breakdown.append({"factor": "GAP", "points": 0, "reason": f"Gap {gap_percent:.1f}% in 2–5% (neutral)"})
+    elif gap_percent > 0:
         score -= 10
+        score_breakdown.append({"factor": "GAP", "points": -10, "reason": f"Gap {gap_percent:.1f}% ≤ 2% (near ATM)"})
         key_drivers.append(f"Gap {gap_percent:.1f}% near ATM")
         rule_hits.append("gap_near_atm")
-    elif gap_percent <= 0:
+    else:
         score -= 20
+        score_breakdown.append({"factor": "GAP", "points": -20, "reason": f"Gap {gap_percent:.1f}% ≤ 0 (ITM)"})
         key_drivers.append(f"Gap {gap_percent:.1f}% ITM")
         rule_hits.append("gap_itm")
 
     # RSI (for short put: low RSI = oversold = favorable for bounce)
     if rsi < 35:
         score += 12
+        score_breakdown.append({"factor": "RSI level", "points": 12, "reason": f"RSI {rsi:.1f} < 35 (oversold)"})
         key_drivers.append(f"RSI {rsi:.1f} oversold (bounce likely)")
     elif rsi < 50:
         score += 5
+        score_breakdown.append({"factor": "RSI level", "points": 5, "reason": f"RSI {rsi:.1f} in 35–50"})
     elif rsi <= 60:
-        pass
+        score_breakdown.append({"factor": "RSI level", "points": 0, "reason": f"RSI {rsi:.1f} in 50–60 (neutral)"})
     else:
         score -= 5
+        score_breakdown.append({"factor": "RSI level", "points": -5, "reason": f"RSI {rsi:.1f} > 60"})
 
     # RSI trend
     if rsi_trend == "improving":
         score += 8
+        score_breakdown.append({"factor": "RSI trend", "points": 8, "reason": f"RSI improving ({rsi_trend_details.get('change_pct', 0):+.1f}%)"})
         key_drivers.append("RSI trend improving")
     elif rsi_trend == "worsening":
         score -= 8
+        score_breakdown.append({"factor": "RSI trend", "points": -8, "reason": f"RSI worsening ({rsi_trend_details.get('change_pct', 0):+.1f}%)"})
         key_drivers.append("RSI trend worsening")
         rule_hits.append("rsi_worsening")
+    else:
+        score_breakdown.append({"factor": "RSI trend", "points": 0, "reason": "RSI flat"})
 
     # MACD (improving = less negative = favorable for put)
     if macd_trend == "improving":
         score += 12
+        score_breakdown.append({"factor": "MACD trend", "points": 12, "reason": f"MACD improving ({macd_trend_details.get('change_pct', 0):+.1f}%)"})
         key_drivers.append("MACD improving")
     elif macd_trend == "worsening":
         score -= 12
+        score_breakdown.append({"factor": "MACD trend", "points": -12, "reason": f"MACD worsening ({macd_trend_details.get('change_pct', 0):+.1f}%)"})
         key_drivers.append("MACD worsening")
         rule_hits.append("macd_worsening")
+    else:
+        score_breakdown.append({"factor": "MACD trend", "points": 0, "reason": "MACD flat"})
 
     # ADX
     if adx < 20:
         score += 10
+        score_breakdown.append({"factor": "ADX", "points": 10, "reason": f"ADX {adx:.1f} < 20 (no trend)"})
         key_drivers.append(f"ADX {adx:.1f} low (no trend)")
     elif adx <= 25:
         score += 5
+        score_breakdown.append({"factor": "ADX", "points": 5, "reason": f"ADX {adx:.1f} in 20–25"})
     elif adx_trend == "worsening":  # ADX falling = trend weakening = good
         score += 3
+        score_breakdown.append({"factor": "ADX", "points": 3, "reason": f"ADX {adx:.1f} > 25 but falling"})
         key_drivers.append(f"ADX {adx:.1f} but falling")
     else:  # ADX > 25 and rising
         score -= 12
+        score_breakdown.append({"factor": "ADX", "points": -12, "reason": f"ADX {adx:.1f} > 25 and rising"})
         key_drivers.append(f"ADX {adx:.1f} rising (strong trend)")
         rule_hits.append("adx_rising")
 
     # DTE
     if dte > 21:
         score += 8
+        score_breakdown.append({"factor": "DTE", "points": 8, "reason": f"DTE {dte} > 21"})
     else:
         score -= 8
+        score_breakdown.append({"factor": "DTE", "points": -8, "reason": f"DTE {dte} ≤ 21 (short)"})
         key_drivers.append(f"DTE {dte} short")
         rule_hits.append("dte_short")
 
     # Gamma penalty
     if gamma > 0.05 and delta >= 0.45:
         score -= 10
+        score_breakdown.append({"factor": "Gamma", "points": -10, "reason": f"Γ {gamma:.3f} high + ATM"})
         rule_hits.append("high_gamma_atm")
+    else:
+        score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (no penalty)"})
 
     # Theta benefit
     if theta > 0.10:
         score += 5
+        score_breakdown.append({"factor": "Theta", "points": 5, "reason": f"Θ {theta:.3f} > 0.10"})
+    else:
+        score_breakdown.append({"factor": "Theta", "points": 0, "reason": f"Θ {theta:.3f} ≤ 0.10"})
 
     # IV
     if iv_trend == "worsening":
         score -= 5
+        score_breakdown.append({"factor": "IV trend", "points": -5, "reason": "IV rising sharply"})
     elif iv_trend == "improving":
         score += 5
+        score_breakdown.append({"factor": "IV trend", "points": 5, "reason": "IV falling"})
+    else:
+        score_breakdown.append({"factor": "IV trend", "points": 0, "reason": "IV stable"})
 
     # Clamp
     score = max(0, min(100, score))
@@ -362,6 +397,7 @@ def score_short_put(
         "ticker": None,  # Caller fills in
         "status": status,
         "score": score,
+        "score_breakdown": score_breakdown,
         "risk_zone": risk_zone,
         "summary": ", ".join(summary_parts),
         "key_drivers": key_drivers[:5],
@@ -456,96 +492,131 @@ def score_short_call(
     score = 50
     key_drivers = []
     rule_hits = []
+    score_breakdown = [{"factor": "Base", "points": 50, "reason": "Starting score"}]
 
     # Delta
     if delta < 0.30:
         score += 15
+        score_breakdown.append({"factor": "Delta", "points": 15, "reason": f"Δ {delta:.3f} < 0.30 (OTM)"})
         key_drivers.append(f"Delta {delta:.2f} favorable (OTM)")
     elif delta < 0.45:
-        pass
+        score_breakdown.append({"factor": "Delta", "points": 0, "reason": f"Δ {delta:.3f} in 0.30–0.45 (monitor)"})
     else:
         score -= 15
+        score_breakdown.append({"factor": "Delta", "points": -15, "reason": f"Δ {delta:.3f} ≥ 0.45 (ATM critical)"})
         key_drivers.append(f"Delta {delta:.2f} ATM critical")
         rule_hits.append("delta_critical")
 
     # GAP
     if otm_gap > 5.0:
         score += 10
+        score_breakdown.append({"factor": "GAP", "points": 10, "reason": f"Gap {otm_gap:.1f}% > 5% (comfortably OTM)"})
         key_drivers.append(f"Gap {otm_gap:.1f}% comfortably OTM")
-    elif otm_gap > 0 and otm_gap <= 2.0:
+    elif otm_gap > 2.0:
+        score_breakdown.append({"factor": "GAP", "points": 0, "reason": f"Gap {otm_gap:.1f}% in 2–5% (neutral)"})
+    elif otm_gap > 0:
         score -= 10
+        score_breakdown.append({"factor": "GAP", "points": -10, "reason": f"Gap {otm_gap:.1f}% ≤ 2% (near ATM)"})
         key_drivers.append(f"Gap {otm_gap:.1f}% near ATM")
         rule_hits.append("gap_near_atm")
-    elif otm_gap <= 0:
+    else:
         score -= 20
+        score_breakdown.append({"factor": "GAP", "points": -20, "reason": f"Gap {otm_gap:.1f}% ≤ 0 (ITM)"})
         key_drivers.append(f"Gap {otm_gap:.1f}% ITM")
         rule_hits.append("gap_itm")
 
     # RSI (for short call: high RSI = overbought = favorable for pullback)
     if rsi > 65:
         score += 12
+        score_breakdown.append({"factor": "RSI level", "points": 12, "reason": f"RSI {rsi:.1f} > 65 (overbought)"})
         key_drivers.append(f"RSI {rsi:.1f} overbought (pullback likely)")
     elif rsi >= 50:
         score += 5
+        score_breakdown.append({"factor": "RSI level", "points": 5, "reason": f"RSI {rsi:.1f} in 50–65"})
     elif rsi >= 40:
-        pass
+        score_breakdown.append({"factor": "RSI level", "points": 0, "reason": f"RSI {rsi:.1f} in 40–50 (neutral)"})
     else:
         score -= 5
+        score_breakdown.append({"factor": "RSI level", "points": -5, "reason": f"RSI {rsi:.1f} < 40"})
 
     # RSI trend (for calls: weakening RSI = favorable)
     if rsi_trend == "worsening":  # RSI falling = good for short call
         score += 8
+        score_breakdown.append({"factor": "RSI trend", "points": 8, "reason": f"RSI weakening ({rsi_trend_details.get('change_pct', 0):+.1f}%) — favorable"})
         key_drivers.append("RSI weakening (favorable)")
     elif rsi_trend == "improving":  # RSI rising = bad for short call
         score -= 8
+        score_breakdown.append({"factor": "RSI trend", "points": -8, "reason": f"RSI strengthening ({rsi_trend_details.get('change_pct', 0):+.1f}%) — unfavorable"})
         key_drivers.append("RSI strengthening (unfavorable)")
         rule_hits.append("rsi_strengthening")
+    else:
+        score_breakdown.append({"factor": "RSI trend", "points": 0, "reason": "RSI flat"})
 
     # MACD (for calls: weakening MACD = favorable)
     if macd_trend == "worsening":  # MACD falling = good for short call
         score += 12
+        score_breakdown.append({"factor": "MACD trend", "points": 12, "reason": f"MACD weakening ({macd_trend_details.get('change_pct', 0):+.1f}%) — favorable"})
         key_drivers.append("MACD weakening (favorable)")
     elif macd_trend == "improving":  # MACD rising = bad for short call
         score -= 12
+        score_breakdown.append({"factor": "MACD trend", "points": -12, "reason": f"MACD improving ({macd_trend_details.get('change_pct', 0):+.1f}%) — unfavorable"})
         key_drivers.append("MACD improving (unfavorable)")
         rule_hits.append("macd_improving")
+    else:
+        score_breakdown.append({"factor": "MACD trend", "points": 0, "reason": "MACD flat"})
 
     # ADX
     if adx < 20:
         score += 10
+        score_breakdown.append({"factor": "ADX", "points": 10, "reason": f"ADX {adx:.1f} < 20 (no trend)"})
         key_drivers.append(f"ADX {adx:.1f} low (no trend)")
     elif adx <= 25:
         score += 5
+        score_breakdown.append({"factor": "ADX", "points": 5, "reason": f"ADX {adx:.1f} in 20–25"})
     elif adx_trend == "worsening":  # ADX falling = trend weakening = good
         score += 3
+        score_breakdown.append({"factor": "ADX", "points": 3, "reason": f"ADX {adx:.1f} > 25 but falling"})
         key_drivers.append(f"ADX {adx:.1f} but falling")
     else:  # ADX > 25 and rising = strong uptrend = bad for short call
         score -= 12
+        score_breakdown.append({"factor": "ADX", "points": -12, "reason": f"ADX {adx:.1f} > 25 and rising (strong uptrend)"})
         key_drivers.append(f"ADX {adx:.1f} rising (strong uptrend)")
         rule_hits.append("adx_rising")
 
     # DTE
     if dte > 21:
         score += 8
+        score_breakdown.append({"factor": "DTE", "points": 8, "reason": f"DTE {dte} > 21"})
     else:
         score -= 8
+        score_breakdown.append({"factor": "DTE", "points": -8, "reason": f"DTE {dte} ≤ 21 (short)"})
         key_drivers.append(f"DTE {dte} short")
         rule_hits.append("dte_short")
 
     # Gamma penalty
     if gamma > 0.05 and delta >= 0.45:
         score -= 10
+        score_breakdown.append({"factor": "Gamma", "points": -10, "reason": f"Γ {gamma:.3f} high + ATM"})
         rule_hits.append("high_gamma_atm")
+    else:
+        score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (no penalty)"})
 
     # Theta benefit
     if theta > 0.10:
         score += 5
+        score_breakdown.append({"factor": "Theta", "points": 5, "reason": f"Θ {theta:.3f} > 0.10"})
+    else:
+        score_breakdown.append({"factor": "Theta", "points": 0, "reason": f"Θ {theta:.3f} ≤ 0.10"})
 
     # IV
     if iv_trend == "worsening":
         score -= 5
+        score_breakdown.append({"factor": "IV trend", "points": -5, "reason": "IV rising sharply"})
     elif iv_trend == "improving":
         score += 5
+        score_breakdown.append({"factor": "IV trend", "points": 5, "reason": "IV falling"})
+    else:
+        score_breakdown.append({"factor": "IV trend", "points": 0, "reason": "IV stable"})
 
     # Clamp
     score = max(0, min(100, score))
@@ -592,6 +663,7 @@ def score_short_call(
         "ticker": None,
         "status": status,
         "score": score,
+        "score_breakdown": score_breakdown,
         "risk_zone": risk_zone,
         "summary": ", ".join(summary_parts),
         "key_drivers": key_drivers[:5],
