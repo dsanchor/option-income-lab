@@ -289,7 +289,12 @@
                                  style="margin-top:1rem; padding-top:0.75rem; border-top:1px dashed var(--border, #2d2d35);">
                                 <div style="display:flex; justify-content:space-between; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:0.75rem;">
                                     <h4 style="margin:0; color:var(--text, #ffffff);">📈 Monitoring History</h4>
-                                    <span style="font-size:0.8rem; color:var(--text-muted, #8d969e);">Gap %, RSI, MACD</span>
+                                    <div style="display:flex; align-items:center; gap:0.75rem;">
+                                        <label style="font-size:0.8rem; color:var(--text-muted, #8d969e); cursor:pointer; display:flex; align-items:center; gap:0.3rem;">
+                                            <input type="checkbox" class="snapshot-hide-weekends" style="cursor:pointer;"> Hide weekends
+                                        </label>
+                                        <span style="font-size:0.8rem; color:var(--text-muted, #8d969e);">Gap %, RSI, MACD, ADX</span>
+                                    </div>
                                 </div>
                                 <div class="position-snapshot-loading" style="display:none; color:var(--text-muted, #8d969e); font-size:0.9rem;">Loading monitoring data…</div>
                                 <div class="position-snapshot-empty" style="display:none; color:var(--text-muted, #8d969e); font-size:0.9rem;">No monitoring data yet</div>
@@ -550,6 +555,24 @@
         return { x: new Date(timestamp).getTime(), y: y };
     }
 
+    function isWeekend(ts) {
+        var d = new Date(ts);
+        var day = d.getUTCDay();
+        return day === 0 || day === 6;
+    }
+
+    function buildSnapshotDatasets(snapshots, hideWeekends) {
+        var filtered = hideWeekends
+            ? snapshots.filter(function(s) { return s && s.timestamp && !isWeekend(new Date(s.timestamp.indexOf('T') === -1 ? s.timestamp.replace(' ', 'T') + 'Z' : s.timestamp).getTime()); })
+            : snapshots;
+        return {
+            gap: filtered.map(function(s) { return snapshotPoint(s, 'gap_percent'); }).filter(Boolean),
+            rsi: filtered.map(function(s) { return snapshotPoint(s, 'rsi_14'); }).filter(Boolean),
+            macd: filtered.map(function(s) { return snapshotPoint(s, 'macd_level'); }).filter(Boolean),
+            adx: filtered.map(function(s) { return snapshotPoint(s, 'adx'); }).filter(Boolean)
+        };
+    }
+
     async function loadPositionSnapshotChart(container) {
         if (!container) return;
 
@@ -582,18 +605,11 @@
                 return;
             }
 
-            var gapData = snapshots.map(function(snapshot) {
-                return snapshotPoint(snapshot, 'gap_percent');
-            }).filter(Boolean);
-            var rsiData = snapshots.map(function(snapshot) {
-                return snapshotPoint(snapshot, 'rsi_14');
-            }).filter(Boolean);
-            var macdData = snapshots.map(function(snapshot) {
-                return snapshotPoint(snapshot, 'macd_level');
-            }).filter(Boolean);
-            var adxData = snapshots.map(function(snapshot) {
-                return snapshotPoint(snapshot, 'adx');
-            }).filter(Boolean);
+            container._snapshotRawData = snapshots;
+
+            var checkbox = container.querySelector('.snapshot-hide-weekends');
+            var hideWeekends = checkbox ? checkbox.checked : false;
+            var ds = buildSnapshotDatasets(snapshots, hideWeekends);
 
             canvas._snapshotChart = new Chart(canvas.getContext('2d'), {
                 type: 'line',
@@ -601,7 +617,7 @@
                     datasets: [
                         {
                             label: 'Gap %',
-                            data: gapData,
+                            data: ds.gap,
                             borderColor: '#494fdf',
                             backgroundColor: 'rgba(73, 79, 223, 0.15)',
                             yAxisID: 'yLeft',
@@ -613,7 +629,7 @@
                         },
                         {
                             label: 'RSI',
-                            data: rsiData,
+                            data: ds.rsi,
                             borderColor: '#f0883e',
                             backgroundColor: 'rgba(240, 136, 62, 0.15)',
                             yAxisID: 'yRight',
@@ -625,7 +641,7 @@
                         },
                         {
                             label: 'MACD',
-                            data: macdData,
+                            data: ds.macd,
                             borderColor: '#3fb950',
                             backgroundColor: 'rgba(63, 185, 80, 0.15)',
                             yAxisID: 'yMacd',
@@ -637,7 +653,7 @@
                         },
                         {
                             label: 'ADX',
-                            data: adxData,
+                            data: ds.adx,
                             borderColor: '#bc8cff',
                             backgroundColor: 'rgba(188, 140, 255, 0.15)',
                             yAxisID: 'yRight',
@@ -746,6 +762,20 @@
                     }
                 }
             });
+
+            // Wire up the "Hide weekends" checkbox
+            if (checkbox) {
+                checkbox.addEventListener('change', function() {
+                    var chart = canvas._snapshotChart;
+                    if (!chart || !container._snapshotRawData) return;
+                    var newDs = buildSnapshotDatasets(container._snapshotRawData, checkbox.checked);
+                    chart.data.datasets[0].data = newDs.gap;
+                    chart.data.datasets[1].data = newDs.rsi;
+                    chart.data.datasets[2].data = newDs.macd;
+                    chart.data.datasets[3].data = newDs.adx;
+                    chart.update();
+                });
+            }
 
             setSnapshotChartState(container, 'ready');
         } catch (err) {
