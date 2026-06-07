@@ -336,8 +336,10 @@ def score_short_put(
     else:
         score_breakdown.append({"factor": "MACD trend", "points": 0, "reason": "MACD flat"})
 
-    # ADX (graduated)
+    # ADX (graduated — direction-aware via MACD)
     adx_strength = adx_trend_details.get("strength")
+    # For short put: MACD improving = stock rising = trend moves AWAY from strike
+    trend_favorable = macd_trend == "improving"
     if adx < 20:
         score += 10
         score_breakdown.append({"factor": "ADX", "points": 10, "reason": f"ADX {adx:.1f} < 20 (no trend)"})
@@ -350,14 +352,20 @@ def score_short_put(
         score += adx_pts
         score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 but falling ({adx_strength})"})
         key_drivers.append(f"ADX {adx:.1f} falling ({adx_strength})")
-    else:  # ADX > 25 and rising or flat
+    elif adx_trend == "flat":  # ADX > 25 stable — existing trend not accelerating
+        adx_pts = -5
+        score += adx_pts
+        score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 flat (trend stable, not accelerating)"})
+    elif trend_favorable:  # ADX rising but trend direction is favorable
+        adx_pts = {"strong": -5, "moderate": -3, "weak": -2}.get(adx_strength, -3)
+        score += adx_pts
+        score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength}) but trend favorable"})
+    else:  # ADX > 25 and rising with unfavorable trend
         adx_pts = {"strong": -15, "moderate": -12, "weak": -8}.get(adx_strength, -10)
         score += adx_pts
-        score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength or 'flat'})"})
-        key_drivers.append(f"ADX {adx:.1f} rising ({adx_strength or 'flat'} trend)")
+        score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength}) — unfavorable trend"})
+        key_drivers.append(f"ADX {adx:.1f} rising ({adx_strength} trend)")
         rule_hits.append("adx_rising")
-
-    # DTE (contextual: depends on moneyness)
     if dte > 21:
         dte_pts = 8
         dte_reason = f"DTE {dte} > 21 (time comfortable)"
@@ -422,11 +430,11 @@ def score_short_put(
         iv_pts = 0
         iv_reason = f"IV {iv*100:.0f}% in 20–35% (normal)"
     elif iv > 0.10:
-        iv_pts = -3
+        iv_pts = -5
         iv_reason = f"IV {iv*100:.0f}% in 10–20% (low — less cushion)"
     else:
-        iv_pts = -5
-        iv_reason = f"IV {iv*100:.0f}% < 10% (very low)"
+        iv_pts = -8
+        iv_reason = f"IV {iv*100:.0f}% < 10% (very low — minimal premium)"
     score += iv_pts
     score_breakdown.append({"factor": "IV level", "points": iv_pts, "reason": iv_reason})
 
@@ -667,8 +675,10 @@ def score_short_call(
     else:
         score_breakdown.append({"factor": "MACD trend", "points": 0, "reason": "MACD flat"})
 
-    # ADX (graduated)
+    # ADX (graduated — direction-aware via MACD)
     adx_strength = adx_trend_details.get("strength")
+    # For short call: MACD worsening = stock falling = trend moves AWAY from strike
+    trend_favorable = macd_trend == "worsening"
     if adx < 20:
         score += 10
         score_breakdown.append({"factor": "ADX", "points": 10, "reason": f"ADX {adx:.1f} < 20 (no trend)"})
@@ -681,11 +691,19 @@ def score_short_call(
         score += adx_pts
         score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 but falling ({adx_strength})"})
         key_drivers.append(f"ADX {adx:.1f} falling ({adx_strength})")
-    else:  # ADX > 25 and rising = strong trend = bad for short call
+    elif adx_trend == "flat":  # ADX > 25 stable — existing trend not accelerating
+        adx_pts = -5
+        score += adx_pts
+        score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 flat (trend stable, not accelerating)"})
+    elif trend_favorable:  # ADX rising but trend direction is favorable
+        adx_pts = {"strong": -5, "moderate": -3, "weak": -2}.get(adx_strength, -3)
+        score += adx_pts
+        score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength}) but trend favorable"})
+    else:  # ADX > 25 and rising with unfavorable trend
         adx_pts = {"strong": -15, "moderate": -12, "weak": -8}.get(adx_strength, -10)
         score += adx_pts
-        score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength or 'flat'})"})
-        key_drivers.append(f"ADX {adx:.1f} rising ({adx_strength or 'flat'} trend)")
+        score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength}) — unfavorable trend"})
+        key_drivers.append(f"ADX {adx:.1f} rising ({adx_strength} trend)")
         rule_hits.append("adx_rising")
 
     # DTE (contextual: depends on moneyness)
@@ -753,11 +771,11 @@ def score_short_call(
         iv_pts = 0
         iv_reason = f"IV {iv*100:.0f}% in 20–35% (normal)"
     elif iv > 0.10:
-        iv_pts = -3
+        iv_pts = -5
         iv_reason = f"IV {iv*100:.0f}% in 10–20% (low — less cushion)"
     else:
-        iv_pts = -5
-        iv_reason = f"IV {iv*100:.0f}% < 10% (very low)"
+        iv_pts = -8
+        iv_reason = f"IV {iv*100:.0f}% < 10% (very low — minimal premium)"
     score += iv_pts
     score_breakdown.append({"factor": "IV level", "points": iv_pts, "reason": iv_reason})
 
