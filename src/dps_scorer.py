@@ -241,23 +241,36 @@ def score_short_put(
         key_drivers.append(f"Delta {delta:.2f} ATM critical")
         rule_hits.append("delta_critical")
 
-    # GAP
+    # GAP (gradual scale)
     if gap_percent > 5.0:
-        score += 10
-        score_breakdown.append({"factor": "GAP", "points": 10, "reason": f"Gap {gap_percent:.1f}% > 5% (comfortably OTM)"})
-        key_drivers.append(f"Gap {gap_percent:.1f}% comfortably OTM")
-    elif gap_percent > 2.0:
-        score_breakdown.append({"factor": "GAP", "points": 0, "reason": f"Gap {gap_percent:.1f}% in 2–5% (neutral)"})
+        gap_pts = 10
+        gap_reason = f"Gap {gap_percent:.1f}% > 5% (comfortably OTM)"
+    elif gap_percent > 3.0:
+        gap_pts = 5
+        gap_reason = f"Gap {gap_percent:.1f}% in 3–5% (safe)"
+    elif gap_percent > 1.0:
+        gap_pts = 0
+        gap_reason = f"Gap {gap_percent:.1f}% in 1–3% (neutral)"
     elif gap_percent > 0:
-        score -= 10
-        score_breakdown.append({"factor": "GAP", "points": -10, "reason": f"Gap {gap_percent:.1f}% ≤ 2% (near ATM)"})
-        key_drivers.append(f"Gap {gap_percent:.1f}% near ATM")
+        gap_pts = -5
+        gap_reason = f"Gap {gap_percent:.1f}% in 0–1% (near ATM)"
         rule_hits.append("gap_near_atm")
-    else:
-        score -= 20
-        score_breakdown.append({"factor": "GAP", "points": -20, "reason": f"Gap {gap_percent:.1f}% ≤ 0 (ITM)"})
-        key_drivers.append(f"Gap {gap_percent:.1f}% ITM")
+    elif gap_percent > -2.0:
+        gap_pts = -10
+        gap_reason = f"Gap {gap_percent:.1f}% slightly ITM (0–2%)"
+        rule_hits.append("gap_itm_slight")
+    elif gap_percent > -5.0:
+        gap_pts = -15
+        gap_reason = f"Gap {gap_percent:.1f}% ITM (2–5%)"
         rule_hits.append("gap_itm")
+    else:
+        gap_pts = -20
+        gap_reason = f"Gap {gap_percent:.1f}% deep ITM (>5%)"
+        rule_hits.append("gap_deep_itm")
+    score += gap_pts
+    score_breakdown.append({"factor": "GAP", "points": gap_pts, "reason": gap_reason})
+    if gap_pts != 0:
+        key_drivers.append(gap_reason)
 
     # RSI (for short put: low RSI = oversold = favorable for bounce)
     if rsi < 35:
@@ -507,23 +520,36 @@ def score_short_call(
         key_drivers.append(f"Delta {delta:.2f} ATM critical")
         rule_hits.append("delta_critical")
 
-    # GAP
+    # GAP (gradual scale)
     if otm_gap > 5.0:
-        score += 10
-        score_breakdown.append({"factor": "GAP", "points": 10, "reason": f"Gap {otm_gap:.1f}% > 5% (comfortably OTM)"})
-        key_drivers.append(f"Gap {otm_gap:.1f}% comfortably OTM")
-    elif otm_gap > 2.0:
-        score_breakdown.append({"factor": "GAP", "points": 0, "reason": f"Gap {otm_gap:.1f}% in 2–5% (neutral)"})
+        gap_pts = 10
+        gap_reason = f"Gap {otm_gap:.1f}% > 5% (comfortably OTM)"
+    elif otm_gap > 3.0:
+        gap_pts = 5
+        gap_reason = f"Gap {otm_gap:.1f}% in 3–5% (safe)"
+    elif otm_gap > 1.0:
+        gap_pts = 0
+        gap_reason = f"Gap {otm_gap:.1f}% in 1–3% (neutral)"
     elif otm_gap > 0:
-        score -= 10
-        score_breakdown.append({"factor": "GAP", "points": -10, "reason": f"Gap {otm_gap:.1f}% ≤ 2% (near ATM)"})
-        key_drivers.append(f"Gap {otm_gap:.1f}% near ATM")
+        gap_pts = -5
+        gap_reason = f"Gap {otm_gap:.1f}% in 0–1% (near ATM)"
         rule_hits.append("gap_near_atm")
-    else:
-        score -= 20
-        score_breakdown.append({"factor": "GAP", "points": -20, "reason": f"Gap {otm_gap:.1f}% ≤ 0 (ITM)"})
-        key_drivers.append(f"Gap {otm_gap:.1f}% ITM")
+    elif otm_gap > -2.0:
+        gap_pts = -10
+        gap_reason = f"Gap {otm_gap:.1f}% slightly ITM (0–2%)"
+        rule_hits.append("gap_itm_slight")
+    elif otm_gap > -5.0:
+        gap_pts = -15
+        gap_reason = f"Gap {otm_gap:.1f}% ITM (2–5%)"
         rule_hits.append("gap_itm")
+    else:
+        gap_pts = -20
+        gap_reason = f"Gap {otm_gap:.1f}% deep ITM (>5%)"
+        rule_hits.append("gap_deep_itm")
+    score += gap_pts
+    score_breakdown.append({"factor": "GAP", "points": gap_pts, "reason": gap_reason})
+    if gap_pts != 0:
+        key_drivers.append(gap_reason)
 
     # RSI (for short call: high RSI = overbought = favorable for pullback)
     if rsi > 65:
