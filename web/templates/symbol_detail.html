@@ -590,6 +590,9 @@
             var macdData = snapshots.map(function(snapshot) {
                 return snapshotPoint(snapshot, 'macd_level');
             }).filter(Boolean);
+            var adxData = snapshots.map(function(snapshot) {
+                return snapshotPoint(snapshot, 'adx');
+            }).filter(Boolean);
 
             canvas._snapshotChart = new Chart(canvas.getContext('2d'), {
                 type: 'line',
@@ -629,6 +632,19 @@
                             borderWidth: 2,
                             pointRadius: 1.25,
                             pointHoverRadius: 4,
+                            spanGaps: true
+                        },
+                        {
+                            label: 'ADX',
+                            data: adxData,
+                            borderColor: '#bc8cff',
+                            backgroundColor: 'rgba(188, 140, 255, 0.15)',
+                            yAxisID: 'yRight',
+                            tension: 0.25,
+                            borderWidth: 2,
+                            pointRadius: 1.25,
+                            pointHoverRadius: 4,
+                            borderDash: [4, 3],
                             spanGaps: true
                         }
                     ]

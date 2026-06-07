@@ -1560,6 +1560,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
         indicators = ((technicals.get("oscillators") or {}).get("indicators") or {})
         rsi_14 = _to_float((indicators.get("RSI") or {}).get("value"))
         macd_level = _to_float((indicators.get("MACD.macd") or {}).get("value"))
+        adx = _to_float((indicators.get("ADX") or {}).get("value"))
         gap_absolute = (
             current_price - strike_value
             if position_type == "call"
@@ -1575,6 +1576,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
             "gap_percent": round(gap_percent, 4) if gap_percent is not None else None,
             "rsi_14": rsi_14,
             "macd_level": macd_level,
+            "adx": adx,
         }
 
     # ------------------------------------------------------------------
