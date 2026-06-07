@@ -242,45 +242,45 @@ def score_short_put(
 
     # Delta
     if delta < 0.30:
-        score += 15
-        score_breakdown.append({"factor": "Delta", "points": 15, "reason": f"Δ {delta:.3f} < 0.30 (OTM)"})
+        score += 13
+        score_breakdown.append({"factor": "Delta", "points": 13, "reason": f"Δ {delta:.3f} < 0.30 (OTM)"})
         key_drivers.append(f"Delta {delta:.2f} favorable (OTM)")
     elif delta < 0.45:
         score_breakdown.append({"factor": "Delta", "points": 0, "reason": f"Δ {delta:.3f} in 0.30–0.45 (monitor)"})
     else:
-        score -= 15
-        score_breakdown.append({"factor": "Delta", "points": -15, "reason": f"Δ {delta:.3f} ≥ 0.45 (ATM critical)"})
+        score -= 13
+        score_breakdown.append({"factor": "Delta", "points": -13, "reason": f"Δ {delta:.3f} ≥ 0.45 (ATM critical)"})
         key_drivers.append(f"Delta {delta:.2f} ATM critical")
         rule_hits.append("delta_critical")
 
     # GAP (gradual scale — using otm_gap where positive = OTM)
     if otm_gap > 5.0:
-        gap_pts = 10
+        gap_pts = 8
         gap_reason = f"Gap {gap_percent:.1f}% > 5% OTM (comfortably safe)"
     elif otm_gap > 3.0:
-        gap_pts = 5
+        gap_pts = 4
         gap_reason = f"Gap {gap_percent:.1f}% 3–5% OTM (safe)"
     elif otm_gap > 1.0:
         gap_pts = 0
         gap_reason = f"Gap {gap_percent:.1f}% 1–3% OTM (neutral)"
     elif otm_gap > 0:
-        gap_pts = -5
+        gap_pts = -4
         gap_reason = f"Gap {gap_percent:.1f}% 0–1% OTM (near ATM)"
         rule_hits.append("gap_near_atm")
     elif otm_gap > -1.0:
-        gap_pts = -5
+        gap_pts = -4
         gap_reason = f"Gap {gap_percent:.1f}% barely ITM (0–1%)"
         rule_hits.append("gap_itm_slight")
     elif otm_gap > -2.0:
-        gap_pts = -10
+        gap_pts = -8
         gap_reason = f"Gap {gap_percent:.1f}% slightly ITM (1–2%)"
         rule_hits.append("gap_itm_slight")
     elif otm_gap > -5.0:
-        gap_pts = -15
+        gap_pts = -13
         gap_reason = f"Gap {gap_percent:.1f}% ITM (2–5%)"
         rule_hits.append("gap_itm")
     else:
-        gap_pts = -20
+        gap_pts = -17
         gap_reason = f"Gap {gap_percent:.1f}% deep ITM (>5%)"
         rule_hits.append("gap_deep_itm")
     score += gap_pts
@@ -290,28 +290,28 @@ def score_short_put(
 
     # RSI (for short put: low RSI = oversold = favorable for bounce)
     if rsi < 35:
-        score += 12
-        score_breakdown.append({"factor": "RSI level", "points": 12, "reason": f"RSI {rsi:.1f} < 35 (oversold)"})
+        score += 10
+        score_breakdown.append({"factor": "RSI level", "points": 10, "reason": f"RSI {rsi:.1f} < 35 (oversold)"})
         key_drivers.append(f"RSI {rsi:.1f} oversold (bounce likely)")
     elif rsi < 50:
-        score += 5
-        score_breakdown.append({"factor": "RSI level", "points": 5, "reason": f"RSI {rsi:.1f} in 35–50"})
+        score += 4
+        score_breakdown.append({"factor": "RSI level", "points": 4, "reason": f"RSI {rsi:.1f} in 35–50"})
     elif rsi <= 60:
         score_breakdown.append({"factor": "RSI level", "points": 0, "reason": f"RSI {rsi:.1f} in 50–60 (neutral)"})
     else:
-        score -= 5
-        score_breakdown.append({"factor": "RSI level", "points": -5, "reason": f"RSI {rsi:.1f} > 60"})
+        score -= 4
+        score_breakdown.append({"factor": "RSI level", "points": -4, "reason": f"RSI {rsi:.1f} > 60"})
 
     # RSI trend (graduated by strength)
     rsi_strength = rsi_trend_details.get("strength")
     rsi_pct = rsi_trend_details.get('change_pct', 0)
     if rsi_trend == "improving":
-        rsi_pts = {"strong": 12, "moderate": 8, "weak": 4}.get(rsi_strength, 4)
+        rsi_pts = {"strong": 10, "moderate": 7, "weak": 3}.get(rsi_strength, 3)
         score += rsi_pts
         score_breakdown.append({"factor": "RSI trend", "points": rsi_pts, "reason": f"RSI improving ({rsi_pct:+.1f}%, {rsi_strength})"})
         key_drivers.append(f"RSI improving ({rsi_strength})")
     elif rsi_trend == "worsening":
-        rsi_pts = {"strong": -12, "moderate": -8, "weak": -4}.get(rsi_strength, -4)
+        rsi_pts = {"strong": -10, "moderate": -7, "weak": -3}.get(rsi_strength, -3)
         score += rsi_pts
         score_breakdown.append({"factor": "RSI trend", "points": rsi_pts, "reason": f"RSI worsening ({rsi_pct:+.1f}%, {rsi_strength})"})
         key_drivers.append(f"RSI worsening ({rsi_strength})")
@@ -323,12 +323,12 @@ def score_short_put(
     macd_strength = macd_trend_details.get("strength")
     macd_pct = macd_trend_details.get('change_pct', 0)
     if macd_trend == "improving":
-        macd_pts = {"strong": 15, "moderate": 10, "weak": 5}.get(macd_strength, 5)
+        macd_pts = {"strong": 13, "moderate": 8, "weak": 4}.get(macd_strength, 4)
         score += macd_pts
         score_breakdown.append({"factor": "MACD trend", "points": macd_pts, "reason": f"MACD improving ({macd_pct:+.1f}%, {macd_strength})"})
         key_drivers.append(f"MACD improving ({macd_strength})")
     elif macd_trend == "worsening":
-        macd_pts = {"strong": -15, "moderate": -10, "weak": -5}.get(macd_strength, -5)
+        macd_pts = {"strong": -13, "moderate": -8, "weak": -4}.get(macd_strength, -4)
         score += macd_pts
         score_breakdown.append({"factor": "MACD trend", "points": macd_pts, "reason": f"MACD worsening ({macd_pct:+.1f}%, {macd_strength})"})
         key_drivers.append(f"MACD worsening ({macd_strength})")
@@ -341,48 +341,47 @@ def score_short_put(
     # For short put: MACD improving = stock rising = trend moves AWAY from strike
     trend_favorable = macd_trend == "improving"
     if adx < 20:
-        score += 10
-        score_breakdown.append({"factor": "ADX", "points": 10, "reason": f"ADX {adx:.1f} < 20 (no trend)"})
+        score += 8
+        score_breakdown.append({"factor": "ADX", "points": 8, "reason": f"ADX {adx:.1f} < 20 (no trend)"})
         key_drivers.append(f"ADX {adx:.1f} low (no trend)")
     elif adx <= 25:
-        score += 5
-        score_breakdown.append({"factor": "ADX", "points": 5, "reason": f"ADX {adx:.1f} in 20–25"})
+        score += 4
+        score_breakdown.append({"factor": "ADX", "points": 4, "reason": f"ADX {adx:.1f} in 20–25"})
     elif adx_trend == "worsening":  # ADX falling = trend weakening = good
-        adx_pts = {"strong": 6, "moderate": 4, "weak": 2}.get(adx_strength, 3)
+        adx_pts = {"strong": 5, "moderate": 3, "weak": 2}.get(adx_strength, 3)
         score += adx_pts
         score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 but falling ({adx_strength})"})
         key_drivers.append(f"ADX {adx:.1f} falling ({adx_strength})")
     elif adx_trend == "flat":  # ADX > 25 stable — existing trend not accelerating
-        adx_pts = -5
+        adx_pts = -4
         score += adx_pts
         score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 flat (trend stable, not accelerating)"})
     elif trend_favorable:  # ADX rising but trend direction is favorable
-        adx_pts = {"strong": -5, "moderate": -3, "weak": -2}.get(adx_strength, -3)
+        adx_pts = {"strong": -4, "moderate": -3, "weak": -2}.get(adx_strength, -3)
         score += adx_pts
         score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength}) but trend favorable"})
     else:  # ADX > 25 and rising with unfavorable trend
-        adx_pts = {"strong": -15, "moderate": -12, "weak": -8}.get(adx_strength, -10)
+        adx_pts = {"strong": -13, "moderate": -10, "weak": -7}.get(adx_strength, -8)
         score += adx_pts
         score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength}) — unfavorable trend"})
         key_drivers.append(f"ADX {adx:.1f} rising ({adx_strength} trend)")
         rule_hits.append("adx_rising")
+
+    # DTE (contextual: depends on moneyness)
     if dte > 21:
-        dte_pts = 8
+        dte_pts = 7
         dte_reason = f"DTE {dte} > 21 (time comfortable)"
     elif delta < 0.30:
-        # OTM + short DTE = about to expire safely → favorable
-        dte_pts = 10
+        dte_pts = 8
         dte_reason = f"DTE {dte} short BUT OTM (Δ {delta:.2f}) — near expiry profit"
         key_drivers.append(f"DTE {dte} short + OTM (expiring safely)")
     elif delta < 0.45:
-        # Monitor zone + short DTE = some pressure
-        dte_pts = -5
+        dte_pts = -4
         dte_reason = f"DTE {dte} ≤ 21 + Δ {delta:.2f} (monitor zone, time pressure)"
         key_drivers.append(f"DTE {dte} short in monitor zone")
         rule_hits.append("dte_short_monitor")
     else:
-        # ATM/ITM + short DTE = dangerous
-        dte_pts = -12
+        dte_pts = -10
         dte_reason = f"DTE {dte} ≤ 21 + Δ {delta:.2f} (ATM, high gamma risk)"
         key_drivers.append(f"DTE {dte} short + ATM critical")
         rule_hits.append("dte_short_atm")
@@ -391,8 +390,8 @@ def score_short_put(
 
     # Gamma penalty
     if gamma > 0.05 and delta >= 0.45:
-        score -= 10
-        score_breakdown.append({"factor": "Gamma", "points": -10, "reason": f"Γ {gamma:.3f} high + ATM"})
+        score -= 8
+        score_breakdown.append({"factor": "Gamma", "points": -8, "reason": f"Γ {gamma:.3f} high + ATM"})
         rule_hits.append("high_gamma_atm")
     else:
         score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (no penalty)"})
@@ -402,10 +401,10 @@ def score_short_put(
     if contract_mid > 0 and theta > 0 and dte > 0:
         total_decay_pct = (theta * dte / contract_mid) * 100
         if total_decay_pct > 3.0:
-            theta_pts = 8
+            theta_pts = 7
             theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (strong)"
         elif total_decay_pct > 1.5:
-            theta_pts = 5
+            theta_pts = 4
             theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (good)"
         elif total_decay_pct > 0.5:
             theta_pts = 3
@@ -421,19 +420,19 @@ def score_short_put(
 
     # IV level (single value — no trend available)
     if iv > 0.50:
-        iv_pts = 8
+        iv_pts = 7
         iv_reason = f"IV {iv*100:.0f}% > 50% (high — favorable for short)"
     elif iv > 0.35:
-        iv_pts = 5
+        iv_pts = 4
         iv_reason = f"IV {iv*100:.0f}% in 35–50% (elevated)"
     elif iv > 0.20:
         iv_pts = 0
         iv_reason = f"IV {iv*100:.0f}% in 20–35% (normal)"
     elif iv > 0.10:
-        iv_pts = -5
+        iv_pts = -4
         iv_reason = f"IV {iv*100:.0f}% in 10–20% (low — less cushion)"
     else:
-        iv_pts = -8
+        iv_pts = -7
         iv_reason = f"IV {iv*100:.0f}% < 10% (very low — minimal premium)"
     score += iv_pts
     score_breakdown.append({"factor": "IV level", "points": iv_pts, "reason": iv_reason})
@@ -635,45 +634,45 @@ def score_short_call(
 
     # Delta
     if delta < 0.30:
-        score += 15
-        score_breakdown.append({"factor": "Delta", "points": 15, "reason": f"Δ {delta:.3f} < 0.30 (OTM)"})
+        score += 13
+        score_breakdown.append({"factor": "Delta", "points": 13, "reason": f"Δ {delta:.3f} < 0.30 (OTM)"})
         key_drivers.append(f"Delta {delta:.2f} favorable (OTM)")
     elif delta < 0.45:
         score_breakdown.append({"factor": "Delta", "points": 0, "reason": f"Δ {delta:.3f} in 0.30–0.45 (monitor)"})
     else:
-        score -= 15
-        score_breakdown.append({"factor": "Delta", "points": -15, "reason": f"Δ {delta:.3f} ≥ 0.45 (ATM critical)"})
+        score -= 13
+        score_breakdown.append({"factor": "Delta", "points": -13, "reason": f"Δ {delta:.3f} ≥ 0.45 (ATM critical)"})
         key_drivers.append(f"Delta {delta:.2f} ATM critical")
         rule_hits.append("delta_critical")
 
     # GAP (gradual scale)
     if otm_gap > 5.0:
-        gap_pts = 10
+        gap_pts = 8
         gap_reason = f"Gap {otm_gap:.1f}% > 5% (comfortably OTM)"
     elif otm_gap > 3.0:
-        gap_pts = 5
+        gap_pts = 4
         gap_reason = f"Gap {otm_gap:.1f}% in 3–5% (safe)"
     elif otm_gap > 1.0:
         gap_pts = 0
         gap_reason = f"Gap {otm_gap:.1f}% in 1–3% (neutral)"
     elif otm_gap > 0:
-        gap_pts = -5
+        gap_pts = -4
         gap_reason = f"Gap {otm_gap:.1f}% in 0–1% (near ATM)"
         rule_hits.append("gap_near_atm")
     elif otm_gap > -1.0:
-        gap_pts = -5
+        gap_pts = -4
         gap_reason = f"Gap {otm_gap:.1f}% barely ITM (0–1%)"
         rule_hits.append("gap_itm_slight")
     elif otm_gap > -2.0:
-        gap_pts = -10
+        gap_pts = -8
         gap_reason = f"Gap {otm_gap:.1f}% slightly ITM (1–2%)"
         rule_hits.append("gap_itm_slight")
     elif otm_gap > -5.0:
-        gap_pts = -15
+        gap_pts = -13
         gap_reason = f"Gap {otm_gap:.1f}% ITM (2–5%)"
         rule_hits.append("gap_itm")
     else:
-        gap_pts = -20
+        gap_pts = -17
         gap_reason = f"Gap {otm_gap:.1f}% deep ITM (>5%)"
         rule_hits.append("gap_deep_itm")
     score += gap_pts
@@ -683,28 +682,28 @@ def score_short_call(
 
     # RSI (for short call: high RSI = overbought = favorable for pullback)
     if rsi > 65:
-        score += 12
-        score_breakdown.append({"factor": "RSI level", "points": 12, "reason": f"RSI {rsi:.1f} > 65 (overbought)"})
+        score += 10
+        score_breakdown.append({"factor": "RSI level", "points": 10, "reason": f"RSI {rsi:.1f} > 65 (overbought)"})
         key_drivers.append(f"RSI {rsi:.1f} overbought (pullback likely)")
     elif rsi >= 50:
-        score += 5
-        score_breakdown.append({"factor": "RSI level", "points": 5, "reason": f"RSI {rsi:.1f} in 50–65"})
+        score += 4
+        score_breakdown.append({"factor": "RSI level", "points": 4, "reason": f"RSI {rsi:.1f} in 50–65"})
     elif rsi >= 40:
         score_breakdown.append({"factor": "RSI level", "points": 0, "reason": f"RSI {rsi:.1f} in 40–50 (neutral)"})
     else:
-        score -= 5
-        score_breakdown.append({"factor": "RSI level", "points": -5, "reason": f"RSI {rsi:.1f} < 40"})
+        score -= 4
+        score_breakdown.append({"factor": "RSI level", "points": -4, "reason": f"RSI {rsi:.1f} < 40"})
 
     # RSI trend (for calls: weakening RSI = favorable — graduated)
     rsi_strength = rsi_trend_details.get("strength")
     rsi_pct = rsi_trend_details.get('change_pct', 0)
     if rsi_trend == "worsening":  # RSI falling = good for short call
-        rsi_pts = {"strong": 12, "moderate": 8, "weak": 4}.get(rsi_strength, 4)
+        rsi_pts = {"strong": 10, "moderate": 7, "weak": 3}.get(rsi_strength, 3)
         score += rsi_pts
         score_breakdown.append({"factor": "RSI trend", "points": rsi_pts, "reason": f"RSI weakening ({rsi_pct:+.1f}%, {rsi_strength}) — favorable"})
         key_drivers.append(f"RSI weakening ({rsi_strength})")
     elif rsi_trend == "improving":  # RSI rising = bad for short call
-        rsi_pts = {"strong": -12, "moderate": -8, "weak": -4}.get(rsi_strength, -4)
+        rsi_pts = {"strong": -10, "moderate": -7, "weak": -3}.get(rsi_strength, -3)
         score += rsi_pts
         score_breakdown.append({"factor": "RSI trend", "points": rsi_pts, "reason": f"RSI strengthening ({rsi_pct:+.1f}%, {rsi_strength}) — unfavorable"})
         key_drivers.append(f"RSI strengthening ({rsi_strength})")
@@ -716,12 +715,12 @@ def score_short_call(
     macd_strength = macd_trend_details.get("strength")
     macd_pct = macd_trend_details.get('change_pct', 0)
     if macd_trend == "worsening":  # MACD falling = good for short call
-        macd_pts = {"strong": 15, "moderate": 10, "weak": 5}.get(macd_strength, 5)
+        macd_pts = {"strong": 13, "moderate": 8, "weak": 4}.get(macd_strength, 4)
         score += macd_pts
         score_breakdown.append({"factor": "MACD trend", "points": macd_pts, "reason": f"MACD weakening ({macd_pct:+.1f}%, {macd_strength}) — favorable"})
         key_drivers.append(f"MACD weakening ({macd_strength})")
     elif macd_trend == "improving":  # MACD rising = bad for short call
-        macd_pts = {"strong": -15, "moderate": -10, "weak": -5}.get(macd_strength, -5)
+        macd_pts = {"strong": -13, "moderate": -8, "weak": -4}.get(macd_strength, -4)
         score += macd_pts
         score_breakdown.append({"factor": "MACD trend", "points": macd_pts, "reason": f"MACD improving ({macd_pct:+.1f}%, {macd_strength}) — unfavorable"})
         key_drivers.append(f"MACD improving ({macd_strength})")
@@ -734,27 +733,27 @@ def score_short_call(
     # For short call: MACD worsening = stock falling = trend moves AWAY from strike
     trend_favorable = macd_trend == "worsening"
     if adx < 20:
-        score += 10
-        score_breakdown.append({"factor": "ADX", "points": 10, "reason": f"ADX {adx:.1f} < 20 (no trend)"})
+        score += 8
+        score_breakdown.append({"factor": "ADX", "points": 8, "reason": f"ADX {adx:.1f} < 20 (no trend)"})
         key_drivers.append(f"ADX {adx:.1f} low (no trend)")
     elif adx <= 25:
-        score += 5
-        score_breakdown.append({"factor": "ADX", "points": 5, "reason": f"ADX {adx:.1f} in 20–25"})
+        score += 4
+        score_breakdown.append({"factor": "ADX", "points": 4, "reason": f"ADX {adx:.1f} in 20–25"})
     elif adx_trend == "worsening":  # ADX falling = trend weakening = good
-        adx_pts = {"strong": 6, "moderate": 4, "weak": 2}.get(adx_strength, 3)
+        adx_pts = {"strong": 5, "moderate": 3, "weak": 2}.get(adx_strength, 3)
         score += adx_pts
         score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 but falling ({adx_strength})"})
         key_drivers.append(f"ADX {adx:.1f} falling ({adx_strength})")
     elif adx_trend == "flat":  # ADX > 25 stable — existing trend not accelerating
-        adx_pts = -5
+        adx_pts = -4
         score += adx_pts
         score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 flat (trend stable, not accelerating)"})
     elif trend_favorable:  # ADX rising but trend direction is favorable
-        adx_pts = {"strong": -5, "moderate": -3, "weak": -2}.get(adx_strength, -3)
+        adx_pts = {"strong": -4, "moderate": -3, "weak": -2}.get(adx_strength, -3)
         score += adx_pts
         score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength}) but trend favorable"})
     else:  # ADX > 25 and rising with unfavorable trend
-        adx_pts = {"strong": -15, "moderate": -12, "weak": -8}.get(adx_strength, -10)
+        adx_pts = {"strong": -13, "moderate": -10, "weak": -7}.get(adx_strength, -8)
         score += adx_pts
         score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength}) — unfavorable trend"})
         key_drivers.append(f"ADX {adx:.1f} rising ({adx_strength} trend)")
@@ -762,22 +761,19 @@ def score_short_call(
 
     # DTE (contextual: depends on moneyness)
     if dte > 21:
-        dte_pts = 8
+        dte_pts = 7
         dte_reason = f"DTE {dte} > 21 (time comfortable)"
     elif delta < 0.30:
-        # OTM + short DTE = about to expire safely → favorable
-        dte_pts = 10
+        dte_pts = 8
         dte_reason = f"DTE {dte} short BUT OTM (Δ {delta:.2f}) — near expiry profit"
         key_drivers.append(f"DTE {dte} short + OTM (expiring safely)")
     elif delta < 0.45:
-        # Monitor zone + short DTE = some pressure
-        dte_pts = -5
+        dte_pts = -4
         dte_reason = f"DTE {dte} ≤ 21 + Δ {delta:.2f} (monitor zone, time pressure)"
         key_drivers.append(f"DTE {dte} short in monitor zone")
         rule_hits.append("dte_short_monitor")
     else:
-        # ATM/ITM + short DTE = dangerous
-        dte_pts = -12
+        dte_pts = -10
         dte_reason = f"DTE {dte} ≤ 21 + Δ {delta:.2f} (ATM, high gamma risk)"
         key_drivers.append(f"DTE {dte} short + ATM critical")
         rule_hits.append("dte_short_atm")
@@ -786,8 +782,8 @@ def score_short_call(
 
     # Gamma penalty
     if gamma > 0.05 and delta >= 0.45:
-        score -= 10
-        score_breakdown.append({"factor": "Gamma", "points": -10, "reason": f"Γ {gamma:.3f} high + ATM"})
+        score -= 8
+        score_breakdown.append({"factor": "Gamma", "points": -8, "reason": f"Γ {gamma:.3f} high + ATM"})
         rule_hits.append("high_gamma_atm")
     else:
         score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (no penalty)"})
@@ -797,10 +793,10 @@ def score_short_call(
     if contract_mid > 0 and theta > 0 and dte > 0:
         total_decay_pct = (theta * dte / contract_mid) * 100
         if total_decay_pct > 3.0:
-            theta_pts = 8
+            theta_pts = 7
             theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (strong)"
         elif total_decay_pct > 1.5:
-            theta_pts = 5
+            theta_pts = 4
             theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (good)"
         elif total_decay_pct > 0.5:
             theta_pts = 3
@@ -816,19 +812,19 @@ def score_short_call(
 
     # IV level (single value — no trend available)
     if iv > 0.50:
-        iv_pts = 8
+        iv_pts = 7
         iv_reason = f"IV {iv*100:.0f}% > 50% (high — favorable for short)"
     elif iv > 0.35:
-        iv_pts = 5
+        iv_pts = 4
         iv_reason = f"IV {iv*100:.0f}% in 35–50% (elevated)"
     elif iv > 0.20:
         iv_pts = 0
         iv_reason = f"IV {iv*100:.0f}% in 20–35% (normal)"
     elif iv > 0.10:
-        iv_pts = -5
+        iv_pts = -4
         iv_reason = f"IV {iv*100:.0f}% in 10–20% (low — less cushion)"
     else:
-        iv_pts = -8
+        iv_pts = -7
         iv_reason = f"IV {iv*100:.0f}% < 10% (very low — minimal premium)"
     score += iv_pts
     score_breakdown.append({"factor": "IV level", "points": iv_pts, "reason": iv_reason})
