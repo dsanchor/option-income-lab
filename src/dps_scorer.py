@@ -207,8 +207,6 @@ def score_short_put(
     rsi_trend, rsi_trend_details = _compute_trend(series["rsi"])
     macd_trend, macd_trend_details = _compute_trend(series["macd"])
     adx_trend, adx_trend_details = _compute_trend(series["adx"])
-    iv_series = [greeks.get("iv")]  # Only current point available from chain
-    iv_trend = "flat"
 
     # GAP
     gap_absolute = strike - underlying_price  # positive = OTM for put
@@ -348,22 +346,46 @@ def score_short_put(
     else:
         score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (no penalty)"})
 
-    # Theta benefit
-    if theta > 0.10:
-        score += 5
-        score_breakdown.append({"factor": "Theta", "points": 5, "reason": f"Θ {theta:.3f} > 0.10"})
+    # Theta benefit (daily decay relative to mid-price of contract)
+    contract_mid = abs(greeks.get("mid") or 0)
+    if contract_mid > 0 and theta > 0:
+        theta_pct = (theta / contract_mid) * 100
+        if theta_pct > 2.0:
+            theta_pts = 8
+            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day of premium — strong)"
+        elif theta_pct > 1.0:
+            theta_pts = 5
+            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day — good)"
+        elif theta_pct > 0.5:
+            theta_pts = 3
+            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day — moderate)"
+        else:
+            theta_pts = 0
+            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day — low)"
     else:
-        score_breakdown.append({"factor": "Theta", "points": 0, "reason": f"Θ {theta:.3f} ≤ 0.10"})
+        theta_pts = 0
+        theta_reason = f"Θ {theta:.4f} (no premium reference)"
+    score += theta_pts
+    score_breakdown.append({"factor": "Theta", "points": theta_pts, "reason": theta_reason})
 
-    # IV
-    if iv_trend == "worsening":
-        score -= 5
-        score_breakdown.append({"factor": "IV trend", "points": -5, "reason": "IV rising sharply"})
-    elif iv_trend == "improving":
-        score += 5
-        score_breakdown.append({"factor": "IV trend", "points": 5, "reason": "IV falling"})
+    # IV level (single value — no trend available)
+    if iv > 0.50:
+        iv_pts = 8
+        iv_reason = f"IV {iv*100:.0f}% > 50% (high — favorable for short)"
+    elif iv > 0.35:
+        iv_pts = 5
+        iv_reason = f"IV {iv*100:.0f}% in 35–50% (elevated)"
+    elif iv > 0.20:
+        iv_pts = 0
+        iv_reason = f"IV {iv*100:.0f}% in 20–35% (normal)"
+    elif iv > 0.10:
+        iv_pts = -3
+        iv_reason = f"IV {iv*100:.0f}% in 10–20% (low — less cushion)"
     else:
-        score_breakdown.append({"factor": "IV trend", "points": 0, "reason": "IV stable"})
+        iv_pts = -5
+        iv_reason = f"IV {iv*100:.0f}% < 10% (very low)"
+    score += iv_pts
+    score_breakdown.append({"factor": "IV level", "points": iv_pts, "reason": iv_reason})
 
     # Clamp
     score = max(0, min(100, score))
@@ -485,7 +507,6 @@ def score_short_call(
     rsi_trend, rsi_trend_details = _compute_trend(series["rsi"])
     macd_trend, macd_trend_details = _compute_trend(series["macd"])
     adx_trend, adx_trend_details = _compute_trend(series["adx"])
-    iv_trend = "flat"
 
     # GAP (for call: positive = OTM)
     gap_absolute = underlying_price - strike  # negative = OTM for call
@@ -627,22 +648,46 @@ def score_short_call(
     else:
         score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (no penalty)"})
 
-    # Theta benefit
-    if theta > 0.10:
-        score += 5
-        score_breakdown.append({"factor": "Theta", "points": 5, "reason": f"Θ {theta:.3f} > 0.10"})
+    # Theta benefit (daily decay relative to mid-price of contract)
+    contract_mid = abs(greeks.get("mid") or 0)
+    if contract_mid > 0 and theta > 0:
+        theta_pct = (theta / contract_mid) * 100
+        if theta_pct > 2.0:
+            theta_pts = 8
+            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day of premium — strong)"
+        elif theta_pct > 1.0:
+            theta_pts = 5
+            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day — good)"
+        elif theta_pct > 0.5:
+            theta_pts = 3
+            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day — moderate)"
+        else:
+            theta_pts = 0
+            theta_reason = f"Θ {theta:.4f} ({theta_pct:.1f}%/day — low)"
     else:
-        score_breakdown.append({"factor": "Theta", "points": 0, "reason": f"Θ {theta:.3f} ≤ 0.10"})
+        theta_pts = 0
+        theta_reason = f"Θ {theta:.4f} (no premium reference)"
+    score += theta_pts
+    score_breakdown.append({"factor": "Theta", "points": theta_pts, "reason": theta_reason})
 
-    # IV
-    if iv_trend == "worsening":
-        score -= 5
-        score_breakdown.append({"factor": "IV trend", "points": -5, "reason": "IV rising sharply"})
-    elif iv_trend == "improving":
-        score += 5
-        score_breakdown.append({"factor": "IV trend", "points": 5, "reason": "IV falling"})
+    # IV level (single value — no trend available)
+    if iv > 0.50:
+        iv_pts = 8
+        iv_reason = f"IV {iv*100:.0f}% > 50% (high — favorable for short)"
+    elif iv > 0.35:
+        iv_pts = 5
+        iv_reason = f"IV {iv*100:.0f}% in 35–50% (elevated)"
+    elif iv > 0.20:
+        iv_pts = 0
+        iv_reason = f"IV {iv*100:.0f}% in 20–35% (normal)"
+    elif iv > 0.10:
+        iv_pts = -3
+        iv_reason = f"IV {iv*100:.0f}% in 10–20% (low — less cushion)"
     else:
-        score_breakdown.append({"factor": "IV trend", "points": 0, "reason": "IV stable"})
+        iv_pts = -5
+        iv_reason = f"IV {iv*100:.0f}% < 10% (very low)"
+    score += iv_pts
+    score_breakdown.append({"factor": "IV level", "points": iv_pts, "reason": iv_reason})
 
     # Clamp
     score = max(0, min(100, score))
