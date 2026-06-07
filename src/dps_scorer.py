@@ -330,15 +330,29 @@ def score_short_put(
         key_drivers.append(f"ADX {adx:.1f} rising (strong trend)")
         rule_hits.append("adx_rising")
 
-    # DTE
+    # DTE (contextual: depends on moneyness)
     if dte > 21:
-        score += 8
-        score_breakdown.append({"factor": "DTE", "points": 8, "reason": f"DTE {dte} > 21"})
+        dte_pts = 8
+        dte_reason = f"DTE {dte} > 21 (time comfortable)"
+    elif delta < 0.30:
+        # OTM + short DTE = about to expire safely → favorable
+        dte_pts = 10
+        dte_reason = f"DTE {dte} short BUT OTM (Δ {delta:.2f}) — near expiry profit"
+        key_drivers.append(f"DTE {dte} short + OTM (expiring safely)")
+    elif delta < 0.45:
+        # Monitor zone + short DTE = some pressure
+        dte_pts = -5
+        dte_reason = f"DTE {dte} ≤ 21 + Δ {delta:.2f} (monitor zone, time pressure)"
+        key_drivers.append(f"DTE {dte} short in monitor zone")
+        rule_hits.append("dte_short_monitor")
     else:
-        score -= 8
-        score_breakdown.append({"factor": "DTE", "points": -8, "reason": f"DTE {dte} ≤ 21 (short)"})
-        key_drivers.append(f"DTE {dte} short")
-        rule_hits.append("dte_short")
+        # ATM/ITM + short DTE = dangerous
+        dte_pts = -12
+        dte_reason = f"DTE {dte} ≤ 21 + Δ {delta:.2f} (ATM, high gamma risk)"
+        key_drivers.append(f"DTE {dte} short + ATM critical")
+        rule_hits.append("dte_short_atm")
+    score += dte_pts
+    score_breakdown.append({"factor": "DTE", "points": dte_pts, "reason": dte_reason})
 
     # Gamma penalty
     if gamma > 0.05 and delta >= 0.45:
@@ -632,15 +646,29 @@ def score_short_call(
         key_drivers.append(f"ADX {adx:.1f} rising (strong uptrend)")
         rule_hits.append("adx_rising")
 
-    # DTE
+    # DTE (contextual: depends on moneyness)
     if dte > 21:
-        score += 8
-        score_breakdown.append({"factor": "DTE", "points": 8, "reason": f"DTE {dte} > 21"})
+        dte_pts = 8
+        dte_reason = f"DTE {dte} > 21 (time comfortable)"
+    elif delta < 0.30:
+        # OTM + short DTE = about to expire safely → favorable
+        dte_pts = 10
+        dte_reason = f"DTE {dte} short BUT OTM (Δ {delta:.2f}) — near expiry profit"
+        key_drivers.append(f"DTE {dte} short + OTM (expiring safely)")
+    elif delta < 0.45:
+        # Monitor zone + short DTE = some pressure
+        dte_pts = -5
+        dte_reason = f"DTE {dte} ≤ 21 + Δ {delta:.2f} (monitor zone, time pressure)"
+        key_drivers.append(f"DTE {dte} short in monitor zone")
+        rule_hits.append("dte_short_monitor")
     else:
-        score -= 8
-        score_breakdown.append({"factor": "DTE", "points": -8, "reason": f"DTE {dte} ≤ 21 (short)"})
-        key_drivers.append(f"DTE {dte} short")
-        rule_hits.append("dte_short")
+        # ATM/ITM + short DTE = dangerous
+        dte_pts = -12
+        dte_reason = f"DTE {dte} ≤ 21 + Δ {delta:.2f} (ATM, high gamma risk)"
+        key_drivers.append(f"DTE {dte} short + ATM critical")
+        rule_hits.append("dte_short_atm")
+    score += dte_pts
+    score_breakdown.append({"factor": "DTE", "points": dte_pts, "reason": dte_reason})
 
     # Gamma penalty
     if gamma > 0.05 and delta >= 0.45:
