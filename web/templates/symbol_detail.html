@@ -587,12 +587,160 @@
         var filtered = hideWeekends
             ? snapshots.filter(function(s) { return s && s.timestamp && !isWeekend(new Date(s.timestamp.indexOf('T') === -1 ? s.timestamp.replace(' ', 'T') + 'Z' : s.timestamp).getTime()); })
             : snapshots;
+
+        if (hideWeekends) {
+            // Use category labels (formatted dates) so weekends are collapsed
+            var labels = [];
+            var gap = [], rsi = [], macd = [], adx = [];
+            filtered.forEach(function(s) {
+                if (!s || !s.timestamp) return;
+                var ts = s.timestamp;
+                if (ts.indexOf('T') === -1 && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(ts)) {
+                    ts = ts.replace(' ', 'T') + 'Z';
+                }
+                var d = new Date(ts);
+                var label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+                labels.push(label);
+                gap.push(s.gap_percent != null ? s.gap_percent : null);
+                rsi.push(s.rsi_14 != null ? s.rsi_14 : null);
+                macd.push(s.macd_level != null ? s.macd_level : null);
+                adx.push(s.adx != null ? s.adx : null);
+            });
+            return { labels: labels, gap: gap, rsi: rsi, macd: macd, adx: adx, isCategory: true };
+        }
+
         return {
+            labels: null,
             gap: filtered.map(function(s) { return snapshotPoint(s, 'gap_percent'); }).filter(Boolean),
             rsi: filtered.map(function(s) { return snapshotPoint(s, 'rsi_14'); }).filter(Boolean),
             macd: filtered.map(function(s) { return snapshotPoint(s, 'macd_level'); }).filter(Boolean),
-            adx: filtered.map(function(s) { return snapshotPoint(s, 'adx'); }).filter(Boolean)
+            adx: filtered.map(function(s) { return snapshotPoint(s, 'adx'); }).filter(Boolean),
+            isCategory: false
         };
+    }
+
+    function createSnapshotChart(canvas, ds) {
+        var xScale = ds.isCategory
+            ? {
+                type: 'category',
+                ticks: { color: '#8d969e', maxTicksLimit: 8, maxRotation: 45 },
+                grid: { color: 'rgba(255,255,255,0.05)' }
+            }
+            : {
+                type: 'time',
+                time: { unit: 'hour', displayFormats: { hour: 'MMM d HH:mm' } },
+                ticks: { color: '#8d969e', maxTicksLimit: 8 },
+                grid: { color: 'rgba(255,255,255,0.05)' }
+            };
+
+        var chartData = ds.isCategory
+            ? { labels: ds.labels, datasets: [] }
+            : { datasets: [] };
+
+        var datasets = [
+            {
+                label: 'Gap %',
+                data: ds.gap,
+                borderColor: '#494fdf',
+                backgroundColor: 'rgba(73, 79, 223, 0.15)',
+                yAxisID: 'yLeft',
+                tension: 0.25,
+                borderWidth: 2,
+                pointRadius: 1.5,
+                pointHoverRadius: 4,
+                spanGaps: true
+            },
+            {
+                label: 'RSI',
+                data: ds.rsi,
+                borderColor: '#f0883e',
+                backgroundColor: 'rgba(240, 136, 62, 0.15)',
+                yAxisID: 'yRight',
+                tension: 0.25,
+                borderWidth: 2,
+                pointRadius: 1.25,
+                pointHoverRadius: 4,
+                spanGaps: true
+            },
+            {
+                label: 'MACD',
+                data: ds.macd,
+                borderColor: '#3fb950',
+                backgroundColor: 'rgba(63, 185, 80, 0.15)',
+                yAxisID: 'yMacd',
+                tension: 0.25,
+                borderWidth: 1.5,
+                pointRadius: 1,
+                pointHoverRadius: 3,
+                spanGaps: true
+            },
+            {
+                label: 'ADX',
+                data: ds.adx,
+                borderColor: '#bc8cff',
+                backgroundColor: 'rgba(188, 140, 255, 0.15)',
+                yAxisID: 'yRight',
+                tension: 0.25,
+                borderWidth: 1.5,
+                pointRadius: 1,
+                pointHoverRadius: 3,
+                borderDash: [4, 3],
+                spanGaps: true
+            }
+        ];
+        chartData.datasets = datasets;
+
+        return new Chart(canvas.getContext('2d'), {
+            type: 'line',
+            data: chartData,
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: {
+                        labels: { color: '#8d969e', usePointStyle: true, boxWidth: 8, boxHeight: 8 }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(22, 27, 34, 0.96)',
+                        borderColor: 'rgba(255,255,255,0.08)',
+                        borderWidth: 1,
+                        titleColor: '#ffffff',
+                        bodyColor: '#c9d1d9',
+                        filter: function() { return true; },
+                        callbacks: {
+                            label: function(context) {
+                                var label = context.dataset.label || '';
+                                var value = context.raw != null
+                                    ? (typeof context.raw === 'object' ? Number(context.raw.y).toFixed(2) : Number(context.raw).toFixed(2))
+                                    : '-';
+                                return ' ' + label + ': ' + value;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: xScale,
+                    yLeft: {
+                        position: 'left',
+                        ticks: { color: '#8d969e', callback: function(value) { return value + '%'; } },
+                        grid: { color: 'rgba(255,255,255,0.05)' },
+                        title: { display: true, text: 'Gap %', color: '#8d969e' }
+                    },
+                    yRight: {
+                        position: 'right',
+                        ticks: { color: '#8d969e' },
+                        grid: { drawOnChartArea: false, color: 'rgba(255,255,255,0.05)' },
+                        title: { display: true, text: 'RSI', color: '#8d969e' }
+                    },
+                    yMacd: {
+                        position: 'right',
+                        display: false,
+                        grid: { drawOnChartArea: false }
+                    }
+                }
+            }
+        });
     }
 
     async function loadPositionSnapshotChart(container) {
@@ -633,169 +781,19 @@
             var hideWeekends = checkbox ? checkbox.checked : false;
             var ds = buildSnapshotDatasets(snapshots, hideWeekends);
 
-            canvas._snapshotChart = new Chart(canvas.getContext('2d'), {
-                type: 'line',
-                data: {
-                    datasets: [
-                        {
-                            label: 'Gap %',
-                            data: ds.gap,
-                            borderColor: '#494fdf',
-                            backgroundColor: 'rgba(73, 79, 223, 0.15)',
-                            yAxisID: 'yLeft',
-                            tension: 0.25,
-                            borderWidth: 2,
-                            pointRadius: 1.5,
-                            pointHoverRadius: 4,
-                            spanGaps: true
-                        },
-                        {
-                            label: 'RSI',
-                            data: ds.rsi,
-                            borderColor: '#f0883e',
-                            backgroundColor: 'rgba(240, 136, 62, 0.15)',
-                            yAxisID: 'yRight',
-                            tension: 0.25,
-                            borderWidth: 2,
-                            pointRadius: 1.25,
-                            pointHoverRadius: 4,
-                            spanGaps: true
-                        },
-                        {
-                            label: 'MACD',
-                            data: ds.macd,
-                            borderColor: '#3fb950',
-                            backgroundColor: 'rgba(63, 185, 80, 0.15)',
-                            yAxisID: 'yMacd',
-                            tension: 0.25,
-                            borderWidth: 2,
-                            pointRadius: 1.25,
-                            pointHoverRadius: 4,
-                            spanGaps: true
-                        },
-                        {
-                            label: 'ADX',
-                            data: ds.adx,
-                            borderColor: '#bc8cff',
-                            backgroundColor: 'rgba(188, 140, 255, 0.15)',
-                            yAxisID: 'yRight',
-                            tension: 0.25,
-                            borderWidth: 2,
-                            pointRadius: 1.25,
-                            pointHoverRadius: 4,
-                            borderDash: [4, 3],
-                            spanGaps: true
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    animation: false,
-                    parsing: false,
-                    spanGaps: true,
-                    interaction: {
-                        mode: 'index',
-                        intersect: false
-                    },
-                    plugins: {
-                        legend: {
-                            labels: {
-                                color: '#8d969e',
-                                usePointStyle: true,
-                                boxWidth: 8,
-                                boxHeight: 8
-                            }
-                        },
-                        tooltip: {
-                            backgroundColor: 'rgba(22, 27, 34, 0.96)',
-                            borderColor: 'rgba(255,255,255,0.08)',
-                            borderWidth: 1,
-                            titleColor: '#ffffff',
-                            bodyColor: '#c9d1d9',
-                            filter: function() { return true; },
-                            callbacks: {
-                                label: function(context) {
-                                    var label = context.dataset.label || '';
-                                    var value = context.raw && context.raw.y != null
-                                        ? Number(context.raw.y).toFixed(2)
-                                        : '-';
-                                    return ' ' + label + ': ' + value;
-                                }
-                            }
-                        }
-                    },
-                    scales: {
-                        x: {
-                            type: 'time',
-                            time: {
-                                unit: 'hour',
-                                displayFormats: {
-                                    hour: 'MMM d HH:mm'
-                                }
-                            },
-                            ticks: {
-                                color: '#8d969e',
-                                maxTicksLimit: 8
-                            },
-                            grid: {
-                                color: 'rgba(255,255,255,0.05)'
-                            }
-                        },
-                        yLeft: {
-                            position: 'left',
-                            ticks: {
-                                color: '#8d969e',
-                                callback: function(value) {
-                                    return value + '%';
-                                }
-                            },
-                            grid: {
-                                color: 'rgba(255,255,255,0.05)'
-                            },
-                            title: {
-                                display: true,
-                                text: 'Gap %',
-                                color: '#8d969e'
-                            }
-                        },
-                        yRight: {
-                            position: 'right',
-                            ticks: {
-                                color: '#8d969e'
-                            },
-                            grid: {
-                                drawOnChartArea: false,
-                                color: 'rgba(255,255,255,0.05)'
-                            },
-                            title: {
-                                display: true,
-                                text: 'RSI',
-                                color: '#8d969e'
-                            }
-                        },
-                        yMacd: {
-                            position: 'right',
-                            display: false,
-                            grid: {
-                                drawOnChartArea: false
-                            }
-                        }
-                    }
-                }
-            });
+            canvas._snapshotChart = createSnapshotChart(canvas, ds);
 
-            // Wire up the "Hide weekends" checkbox
+            // Wire up the "Hide weekends" checkbox — destroy and recreate chart
+            // to switch between time scale (normal) and category scale (collapsed weekends)
             if (checkbox) {
                 checkbox.addEventListener('change', function() {
-                    var chart = canvas._snapshotChart;
-                    if (!chart || !container._snapshotRawData) return;
+                    if (!container._snapshotRawData) return;
+                    if (canvas._snapshotChart) {
+                        canvas._snapshotChart.destroy();
+                        canvas._snapshotChart = null;
+                    }
                     var newDs = buildSnapshotDatasets(container._snapshotRawData, checkbox.checked);
-                    chart.data.datasets[0].data = newDs.gap;
-                    chart.data.datasets[1].data = newDs.rsi;
-                    chart.data.datasets[2].data = newDs.macd;
-                    chart.data.datasets[3].data = newDs.adx;
-                    chart.update();
+                    canvas._snapshotChart = createSnapshotChart(canvas, newDs);
                 });
             }
 
