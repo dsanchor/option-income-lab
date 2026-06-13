@@ -469,7 +469,6 @@ class CosmosDBService:
             "doc_type": "position_snapshot",
             "position_id": position_id,
             "timestamp": ts,
-            "ttl": 7776000,
             **snapshot_data,
         }
         doc["id"] = doc_id
@@ -477,7 +476,6 @@ class CosmosDBService:
         doc["doc_type"] = "position_snapshot"
         doc["position_id"] = position_id
         doc["timestamp"] = ts
-        doc["ttl"] = 7776000
 
         try:
             self.container.create_item(doc)
