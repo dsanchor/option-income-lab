@@ -123,38 +123,58 @@ After filtering, a pre-computed **candidates table** with roll economics (buybac
 
 ### Position Snapshots & Time Series
 
-Each position monitor run captures a **snapshot** of the position's key indicators, stored in CosmosDB for historical tracking. Snapshots power both the chart visualization and the DPS scorer.
+Each position monitor run captures a **snapshot** of the position's key indicators, stored in CosmosDB for historical tracking (no TTL — kept indefinitely). Snapshots power both the chart visualization and the DPS scorer.
 
 **Captured indicators per snapshot:**
 - **Gap %** — distance from underlying price to strike (positive = OTM, negative = ITM)
 - **RSI (14)** — daily relative strength index
 - **MACD** — MACD line value (daily)
 - **ADX** — average directional index (trend strength)
-- Underlying price, timestamp
+- **Midprice** — current contract mid-price (from options chain)
+- **P&L %** — mark-to-market profit/loss: `(premium_received - midprice) / premium_received × 100`
+- Underlying price, premium_received, timestamp
 
-**Chart visualization:** The symbol detail page renders an interactive Chart.js time series with all indicators on dual y-axes (Gap% on left, RSI/MACD/ADX on right). Features include tooltip with all values, weekend filtering (hidden by default), and color-coded lines per indicator.
+**Chart visualization:** The symbol detail page renders an interactive Chart.js time series with all indicators on dual y-axes (Gap%/P&L% on left, RSI/MACD/ADX/DPS on right). Features include tooltip with all values, weekend filtering (hidden by default), color-coded lines per indicator, and **per-attribute toggle checkboxes** to show/hide individual lines. Charts are also visible on closed positions (read-only mode, no DPS button).
 
 ### Deterministic Position Scorer (DPS)
 
-The DPS provides **on-demand, rule-based analysis** of open positions without using an LLM. It combines live options chain Greeks with historical snapshot trends to produce a deterministic HOLD/WATCH/ROLL recommendation.
+The DPS provides **on-demand and scheduled rule-based analysis** of open positions without using an LLM. It combines live options chain Greeks with historical snapshot trends to produce a deterministic HOLD/WATCH/ROLL recommendation.
 
 **How it works:**
 1. Fetches live options chain via yfinance for the position's strike/expiration
 2. Extracts Greeks (delta, gamma, theta, IV) and contract mid-price
-3. Reads historical snapshots for RSI, MACD, and ADX trend analysis (last 5 non-null points)
+3. Reads historical snapshots for RSI, MACD, and ADX trend analysis (last 21 weekday-only snapshots, using linear regression + first-to-last delta)
 4. Applies a scoring algorithm (0–100 scale, base 50) with contributions from:
 
 | Factor | Range | Notes |
 |--------|-------|-------|
-| Delta | ±15 | OTM favorable, ATM penalized |
-| GAP | -20 to +10 | Gradual 7-level scale based on % distance to strike |
+| Delta | ±13 | OTM favorable, ATM penalized |
 | RSI level + trend | ±20 | Direction interpretation inverted for puts vs calls |
-| MACD trend | ±12 | Improving/worsening relative to position type |
-| ADX | -12 to +10 | Rising ADX = stronger trend = bad for short options |
-| DTE | ±8 | Penalty when ≤21 days to expiration |
-| Gamma | -10 | Penalty when high gamma + near ATM |
-| Theta | 0 to +8 | Based on `theta × DTE / mid` (% of premium expected to decay) |
-| IV level | 0 to +8 | High IV favorable for short options (more premium collected) |
+| MACD trend | ±13 | Improving/worsening relative to position type |
+| ADX | -13 to +8 | Direction-aware: rising ADX in unfavorable direction = bad |
+| DTE | -10 to +8 | Contextual: depends on moneyness (short DTE + OTM = bonus) |
+| Gamma | -8 | Penalty when high gamma + near ATM |
+| IV level | -7 to +7 | High IV favorable for short options |
+| **P&L** | **-8 to +10** | Mark-to-market: ≥80% profit → +10, <-20% loss → -8 |
+
+**Combo modifiers (cross-factor interactions):**
+
+| Combo | Range | Trigger |
+|-------|-------|---------|
+| P&L + DTE | ±5 | P&L ≥70% + DTE ≤7 → close opportunity; P&L <-20% + DTE ≤14 → time pressure |
+| IV + DTE | +6 | High IV + short DTE + OTM → accelerated decay |
+| MACD + RSI | ±9 | Both trends agreeing → confirmed signal |
+| Delta + ADX | -5 | ATM + rising unfavorable ADX → compound risk |
+
+**Informational factors (shown in breakdown but not scored):**
+- **GAP %** — redundant with Delta; kept in chart for visual reference
+- **Theta** — replaced by P&L which captures theta materialized as actual profit
+
+**Trend calculation:**
+- Uses last 21 non-None weekday snapshots (weekends filtered out)
+- Linear regression slope normalized by value range
+- Thresholds: `|rel_slope| > 0.08` or `|pct_change| > 3%` → trend detected
+- Strength levels: weak / moderate / strong
 
 **Decision thresholds:**
 - Score ≥ 70 → **HOLD** (position is safe)
@@ -163,7 +183,11 @@ The DPS provides **on-demand, rule-based analysis** of open positions without us
 
 **Override rules:** Force ROLL when delta is extreme + ADX rising + MACD worsening. Allow HOLD when delta is high but RSI + MACD + ADX all improving.
 
-**UI:** A "📊 DPS Analysis" button on each position panel triggers the analysis. Results show the recommendation, score, risk zone, key drivers, and an expandable score breakdown table with per-factor point contributions.
+**Daily DPS Cron:** A scheduled job (configurable, default `0 22 * * 1-5`) runs DPS for all active positions and stores the score in the snapshot timeline. Enable/disable and change the schedule from the Settings page.
+
+**Agent integration:** Monitor agents (call/put assessment) receive a supplementary `POSITION HEALTH METRICS` block with latest DPS score, trend direction, and P&L %. This is advisory context only — agents make independent decisions but can flag divergence.
+
+**UI:** A "📊 DPS Analysis" button on each active position panel triggers the analysis. Results show the recommendation, score, risk zone, key drivers, and an expandable score breakdown table with per-factor point contributions.
 
 ### Risk Rating (Sell-Side Agents)
 
