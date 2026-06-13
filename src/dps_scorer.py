@@ -177,13 +177,31 @@ def extract_greeks_from_chain(
 def extract_series_from_snapshots(
     snapshots: List[Dict],
 ) -> Dict[str, List[Optional[float]]]:
-    """Extract time series from position snapshots (ordered oldest→newest)."""
+    """Extract time series from position snapshots (ordered oldest→newest).
+
+    Filters out weekend snapshots (Saturday=5, Sunday=6) since market data
+    is stale and would add noise to trend calculations.
+    """
+    weekday_snapshots = []
+    for s in snapshots:
+        ts = s.get("timestamp", "")
+        if ts:
+            try:
+                # Parse timestamp and check day of week
+                ts_clean = ts.replace("Z", "+00:00") if "T" in ts else ts
+                dt = datetime.fromisoformat(ts_clean) if "T" in ts_clean else datetime.strptime(ts_clean, "%Y-%m-%d %H:%M:%S")
+                if dt.weekday() >= 5:  # Saturday=5, Sunday=6
+                    continue
+            except (ValueError, TypeError):
+                pass  # Include if we can't parse
+        weekday_snapshots.append(s)
+
     return {
-        "rsi": [s.get("rsi_14") for s in snapshots],
-        "macd": [s.get("macd_level") for s in snapshots],
-        "adx": [s.get("adx") for s in snapshots],
-        "gap_percent": [s.get("gap_percent") for s in snapshots],
-        "underlying_price": [s.get("underlying_price") for s in snapshots],
+        "rsi": [s.get("rsi_14") for s in weekday_snapshots],
+        "macd": [s.get("macd_level") for s in weekday_snapshots],
+        "adx": [s.get("adx") for s in weekday_snapshots],
+        "gap_percent": [s.get("gap_percent") for s in weekday_snapshots],
+        "underlying_price": [s.get("underlying_price") for s in weekday_snapshots],
     }
 
 
