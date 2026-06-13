@@ -84,6 +84,14 @@ async def run_dps_cron(cosmos, yf_provider) -> dict:
             try:
                 strike_f = float(strike)
 
+                # Get premium_received from position source
+                _src = pos.get("source") or {}
+                _prem = None
+                try:
+                    _prem = float(_src.get("premium") or _src.get("new_premium") or 0) or None
+                except (TypeError, ValueError):
+                    pass
+
                 # Get snapshots for this position (oldest first)
                 snapshots = cosmos.get_position_snapshots(
                     symbol, position_id, limit=20
@@ -98,6 +106,7 @@ async def run_dps_cron(cosmos, yf_provider) -> dict:
                     chain_json=chain_json,
                     snapshots=snapshots,
                     underlying_price=underlying_price,
+                    premium_received=_prem,
                 )
 
                 if result.get("status") == "ERROR" or result.get("error"):

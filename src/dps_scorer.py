@@ -197,6 +197,7 @@ def score_short_put(
     strike: float,
     expiration: str,
     underlying_price: float,
+    premium_received: Optional[float] = None,
 ) -> Dict:
     """Score a short put position deterministically.
 
@@ -253,40 +254,8 @@ def score_short_put(
         key_drivers.append(f"Delta {delta:.2f} ATM critical")
         rule_hits.append("delta_critical")
 
-    # GAP (gradual scale — using otm_gap where positive = OTM)
-    if otm_gap > 5.0:
-        gap_pts = 8
-        gap_reason = f"Gap {gap_percent:.1f}% > 5% OTM (comfortably safe)"
-    elif otm_gap > 3.0:
-        gap_pts = 4
-        gap_reason = f"Gap {gap_percent:.1f}% 3–5% OTM (safe)"
-    elif otm_gap > 1.0:
-        gap_pts = 0
-        gap_reason = f"Gap {gap_percent:.1f}% 1–3% OTM (neutral)"
-    elif otm_gap > 0:
-        gap_pts = -4
-        gap_reason = f"Gap {gap_percent:.1f}% 0–1% OTM (near ATM)"
-        rule_hits.append("gap_near_atm")
-    elif otm_gap > -1.0:
-        gap_pts = -4
-        gap_reason = f"Gap {gap_percent:.1f}% barely ITM (0–1%)"
-        rule_hits.append("gap_itm_slight")
-    elif otm_gap > -2.0:
-        gap_pts = -8
-        gap_reason = f"Gap {gap_percent:.1f}% slightly ITM (1–2%)"
-        rule_hits.append("gap_itm_slight")
-    elif otm_gap > -5.0:
-        gap_pts = -13
-        gap_reason = f"Gap {gap_percent:.1f}% ITM (2–5%)"
-        rule_hits.append("gap_itm")
-    else:
-        gap_pts = -17
-        gap_reason = f"Gap {gap_percent:.1f}% deep ITM (>5%)"
-        rule_hits.append("gap_deep_itm")
-    score += gap_pts
-    score_breakdown.append({"factor": "GAP", "points": gap_pts, "reason": gap_reason})
-    if gap_pts != 0:
-        key_drivers.append(gap_reason)
+    # GAP (kept for snapshot/chart but NOT scored — redundant with Delta)
+    score_breakdown.append({"factor": "GAP", "points": 0, "reason": f"Gap {gap_percent:.1f}% (informational, not scored)"})
 
     # RSI (for short put: low RSI = oversold = favorable for bounce)
     if rsi < 35:
@@ -396,27 +365,8 @@ def score_short_put(
     else:
         score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (no penalty)"})
 
-    # Theta benefit: expected total decay by expiration as % of premium
-    contract_mid = abs(greeks.get("mid") or 0)
-    if contract_mid > 0 and theta > 0 and dte > 0:
-        total_decay_pct = (theta * dte / contract_mid) * 100
-        if total_decay_pct > 3.0:
-            theta_pts = 7
-            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (strong)"
-        elif total_decay_pct > 1.5:
-            theta_pts = 4
-            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (good)"
-        elif total_decay_pct > 0.5:
-            theta_pts = 3
-            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (moderate)"
-        else:
-            theta_pts = 0
-            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (low)"
-    else:
-        theta_pts = 0
-        theta_reason = f"Θ {theta:.4f} (no premium reference)"
-    score += theta_pts
-    score_breakdown.append({"factor": "Theta", "points": theta_pts, "reason": theta_reason})
+    # Theta (informational — replaced by P&L which is theta materialized)
+    score_breakdown.append({"factor": "Theta", "points": 0, "reason": f"Θ {theta:.4f} (informational, not scored)"})
 
     # IV level (single value — no trend available)
     if iv > 0.50:
@@ -439,19 +389,61 @@ def score_short_put(
 
     # ── Combo Modifiers (cross-factor interactions) ──
 
-    # #1 RSI + GAP: Oversold near ITM → bounce likely, reduce gap penalty
-    if rsi < 35 and rsi_trend == "improving" and otm_gap > -2.0 and otm_gap <= 0:
+    # #1 P&L factor: mark-to-market profitability
+    pnl_pct = None
+    if premium_received is not None and premium_received > 0:
+        contract_mid = abs(greeks.get("mid") or 0)
+        if contract_mid > 0:
+            pnl_pct = (premium_received - contract_mid) / premium_received * 100
+    if pnl_pct is not None:
+        if pnl_pct >= 80:
+            pnl_pts = 10
+            pnl_reason = f"P&L {pnl_pct:.0f}% ≥ 80% (near max profit)"
+        elif pnl_pct >= 60:
+            pnl_pts = 7
+            pnl_reason = f"P&L {pnl_pct:.0f}% ≥ 60% (strong profit)"
+        elif pnl_pct >= 40:
+            pnl_pts = 4
+            pnl_reason = f"P&L {pnl_pct:.0f}% ≥ 40% (healthy profit)"
+        elif pnl_pct >= 20:
+            pnl_pts = 2
+            pnl_reason = f"P&L {pnl_pct:.0f}% ≥ 20% (moderate profit)"
+        elif pnl_pct >= 0:
+            pnl_pts = 0
+            pnl_reason = f"P&L {pnl_pct:.0f}% ≥ 0% (breakeven)"
+        elif pnl_pct >= -20:
+            pnl_pts = -4
+            pnl_reason = f"P&L {pnl_pct:.0f}% in -20–0% (slight loss)"
+        else:
+            pnl_pts = -8
+            pnl_reason = f"P&L {pnl_pct:.0f}% < -20% (significant loss)"
+            rule_hits.append("pnl_significant_loss")
+        score += pnl_pts
+        score_breakdown.append({"factor": "P&L", "points": pnl_pts, "reason": pnl_reason})
+        if pnl_pts != 0:
+            key_drivers.append(pnl_reason)
+    else:
+        score_breakdown.append({"factor": "P&L", "points": 0, "reason": "P&L unavailable (no premium data)"})
+
+    # #2 Combo P&L+DTE: near max profit + short DTE = close opportunity
+    if pnl_pct is not None and pnl_pct >= 70 and dte <= 7:
         combo_pts = 5
         score += combo_pts
-        score_breakdown.append({"factor": "Combo: RSI+GAP", "points": combo_pts,
-                                "reason": f"RSI {rsi:.0f} oversold + improving near ITM — bounce likely"})
-        key_drivers.append("RSI oversold near ITM (bounce signal)")
-        rule_hits.append("combo_rsi_gap_bounce")
+        score_breakdown.append({"factor": "Combo: P&L+DTE", "points": combo_pts,
+                                "reason": f"P&L {pnl_pct:.0f}% + DTE {dte} — near max profit, consider closing"})
+        key_drivers.append(f"P&L {pnl_pct:.0f}% + DTE {dte} (close opportunity)")
+    elif pnl_pct is not None and pnl_pct < -20 and dte <= 14:
+        combo_pts = -5
+        score += combo_pts
+        score_breakdown.append({"factor": "Combo: P&L+DTE", "points": combo_pts,
+                                "reason": f"P&L {pnl_pct:.0f}% + DTE {dte} — loss + time pressure"})
+        key_drivers.append(f"P&L {pnl_pct:.0f}% + DTE {dte} (loss + time pressure)")
+        rule_hits.append("combo_pnl_dte_loss")
     else:
-        score_breakdown.append({"factor": "Combo: RSI+GAP", "points": 0,
+        score_breakdown.append({"factor": "Combo: P&L+DTE", "points": 0,
                                 "reason": "Not triggered"})
 
-    # #2 IV + DTE: High IV + short DTE = accelerated decay (exponential theta)
+    # #3 IV + DTE: High IV + short DTE = accelerated decay (exponential theta)
     if iv > 0.35 and dte <= 14 and delta < 0.45:
         combo_pts = 6
         score += combo_pts
@@ -463,7 +455,7 @@ def score_short_put(
         score_breakdown.append({"factor": "Combo: IV+DTE", "points": 0,
                                 "reason": "Not triggered"})
 
-    # #3 MACD + RSI concordance: Both trends agree → signal confirmed
+    # #4 MACD + RSI concordance: Both trends agree → signal confirmed
     if macd_trend == rsi_trend and macd_trend != "flat":
         macd_s = macd_trend_details.get("strength", "weak")
         rsi_s = rsi_trend_details.get("strength", "weak")
@@ -485,7 +477,7 @@ def score_short_put(
         score_breakdown.append({"factor": "Combo: MACD+RSI", "points": 0,
                                 "reason": "Not triggered"})
 
-    # #4 Delta + ADX unfavorable: Compound assignment risk
+    # #5 Delta + ADX unfavorable: Compound assignment risk
     if delta >= 0.45 and adx > 25 and adx_trend == "improving" and not trend_favorable:
         combo_pts = -5
         score += combo_pts
@@ -496,15 +488,6 @@ def score_short_put(
         score_breakdown.append({"factor": "Combo: Delta+ADX", "points": 0,
                                 "reason": "Not triggered"})
 
-    # #5 Theta + Delta: High decay partially offsets ATM risk
-    if theta_pts >= 5 and delta >= 0.35 and delta < 0.50:
-        combo_pts = 3
-        score += combo_pts
-        score_breakdown.append({"factor": "Combo: Theta+Delta", "points": combo_pts,
-                                "reason": f"Θ decay strong enough to offset near-ATM risk"})
-    else:
-        score_breakdown.append({"factor": "Combo: Theta+Delta", "points": 0,
-                                "reason": "Not triggered"})
 
     # Clamp
     score = max(0, min(100, score))
@@ -604,6 +587,7 @@ def score_short_call(
     strike: float,
     expiration: str,
     underlying_price: float,
+    premium_received: Optional[float] = None,
 ) -> Dict:
     """Score a short call position deterministically.
 
@@ -660,40 +644,8 @@ def score_short_call(
         key_drivers.append(f"Delta {delta:.2f} ATM critical")
         rule_hits.append("delta_critical")
 
-    # GAP (gradual scale)
-    if otm_gap > 5.0:
-        gap_pts = 8
-        gap_reason = f"Gap {otm_gap:.1f}% > 5% (comfortably OTM)"
-    elif otm_gap > 3.0:
-        gap_pts = 4
-        gap_reason = f"Gap {otm_gap:.1f}% in 3–5% (safe)"
-    elif otm_gap > 1.0:
-        gap_pts = 0
-        gap_reason = f"Gap {otm_gap:.1f}% in 1–3% (neutral)"
-    elif otm_gap > 0:
-        gap_pts = -4
-        gap_reason = f"Gap {otm_gap:.1f}% in 0–1% (near ATM)"
-        rule_hits.append("gap_near_atm")
-    elif otm_gap > -1.0:
-        gap_pts = -4
-        gap_reason = f"Gap {otm_gap:.1f}% barely ITM (0–1%)"
-        rule_hits.append("gap_itm_slight")
-    elif otm_gap > -2.0:
-        gap_pts = -8
-        gap_reason = f"Gap {otm_gap:.1f}% slightly ITM (1–2%)"
-        rule_hits.append("gap_itm_slight")
-    elif otm_gap > -5.0:
-        gap_pts = -13
-        gap_reason = f"Gap {otm_gap:.1f}% ITM (2–5%)"
-        rule_hits.append("gap_itm")
-    else:
-        gap_pts = -17
-        gap_reason = f"Gap {otm_gap:.1f}% deep ITM (>5%)"
-        rule_hits.append("gap_deep_itm")
-    score += gap_pts
-    score_breakdown.append({"factor": "GAP", "points": gap_pts, "reason": gap_reason})
-    if gap_pts != 0:
-        key_drivers.append(gap_reason)
+    # GAP (kept for snapshot/chart but NOT scored — redundant with Delta)
+    score_breakdown.append({"factor": "GAP", "points": 0, "reason": f"Gap {otm_gap:.1f}% (informational, not scored)"})
 
     # RSI (for short call: high RSI = overbought = favorable for pullback)
     if rsi > 65:
@@ -803,27 +755,8 @@ def score_short_call(
     else:
         score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (no penalty)"})
 
-    # Theta benefit: expected total decay by expiration as % of premium
-    contract_mid = abs(greeks.get("mid") or 0)
-    if contract_mid > 0 and theta > 0 and dte > 0:
-        total_decay_pct = (theta * dte / contract_mid) * 100
-        if total_decay_pct > 3.0:
-            theta_pts = 7
-            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (strong)"
-        elif total_decay_pct > 1.5:
-            theta_pts = 4
-            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (good)"
-        elif total_decay_pct > 0.5:
-            theta_pts = 3
-            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (moderate)"
-        else:
-            theta_pts = 0
-            theta_reason = f"Θ {theta:.4f} × {dte}d = {total_decay_pct:.1f}% decay expected (low)"
-    else:
-        theta_pts = 0
-        theta_reason = f"Θ {theta:.4f} (no premium reference)"
-    score += theta_pts
-    score_breakdown.append({"factor": "Theta", "points": theta_pts, "reason": theta_reason})
+    # Theta (informational — replaced by P&L which is theta materialized)
+    score_breakdown.append({"factor": "Theta", "points": 0, "reason": f"Θ {theta:.4f} (informational, not scored)"})
 
     # IV level (single value — no trend available)
     if iv > 0.50:
@@ -846,19 +779,61 @@ def score_short_call(
 
     # ── Combo Modifiers (cross-factor interactions) ──
 
-    # #1 RSI + GAP: Overbought near ITM → pullback likely, reduce gap penalty
-    if rsi > 65 and rsi_trend == "worsening" and otm_gap > -2.0 and otm_gap <= 0:
+    # #1 P&L factor: mark-to-market profitability
+    pnl_pct = None
+    if premium_received is not None and premium_received > 0:
+        contract_mid = abs(greeks.get("mid") or 0)
+        if contract_mid > 0:
+            pnl_pct = (premium_received - contract_mid) / premium_received * 100
+    if pnl_pct is not None:
+        if pnl_pct >= 80:
+            pnl_pts = 10
+            pnl_reason = f"P&L {pnl_pct:.0f}% ≥ 80% (near max profit)"
+        elif pnl_pct >= 60:
+            pnl_pts = 7
+            pnl_reason = f"P&L {pnl_pct:.0f}% ≥ 60% (strong profit)"
+        elif pnl_pct >= 40:
+            pnl_pts = 4
+            pnl_reason = f"P&L {pnl_pct:.0f}% ≥ 40% (healthy profit)"
+        elif pnl_pct >= 20:
+            pnl_pts = 2
+            pnl_reason = f"P&L {pnl_pct:.0f}% ≥ 20% (moderate profit)"
+        elif pnl_pct >= 0:
+            pnl_pts = 0
+            pnl_reason = f"P&L {pnl_pct:.0f}% ≥ 0% (breakeven)"
+        elif pnl_pct >= -20:
+            pnl_pts = -4
+            pnl_reason = f"P&L {pnl_pct:.0f}% in -20–0% (slight loss)"
+        else:
+            pnl_pts = -8
+            pnl_reason = f"P&L {pnl_pct:.0f}% < -20% (significant loss)"
+            rule_hits.append("pnl_significant_loss")
+        score += pnl_pts
+        score_breakdown.append({"factor": "P&L", "points": pnl_pts, "reason": pnl_reason})
+        if pnl_pts != 0:
+            key_drivers.append(pnl_reason)
+    else:
+        score_breakdown.append({"factor": "P&L", "points": 0, "reason": "P&L unavailable (no premium data)"})
+
+    # #2 Combo P&L+DTE: near max profit + short DTE = close opportunity
+    if pnl_pct is not None and pnl_pct >= 70 and dte <= 7:
         combo_pts = 5
         score += combo_pts
-        score_breakdown.append({"factor": "Combo: RSI+GAP", "points": combo_pts,
-                                "reason": f"RSI {rsi:.0f} overbought + weakening near ITM — pullback likely"})
-        key_drivers.append("RSI overbought near ITM (pullback signal)")
-        rule_hits.append("combo_rsi_gap_pullback")
+        score_breakdown.append({"factor": "Combo: P&L+DTE", "points": combo_pts,
+                                "reason": f"P&L {pnl_pct:.0f}% + DTE {dte} — near max profit, consider closing"})
+        key_drivers.append(f"P&L {pnl_pct:.0f}% + DTE {dte} (close opportunity)")
+    elif pnl_pct is not None and pnl_pct < -20 and dte <= 14:
+        combo_pts = -5
+        score += combo_pts
+        score_breakdown.append({"factor": "Combo: P&L+DTE", "points": combo_pts,
+                                "reason": f"P&L {pnl_pct:.0f}% + DTE {dte} — loss + time pressure"})
+        key_drivers.append(f"P&L {pnl_pct:.0f}% + DTE {dte} (loss + time pressure)")
+        rule_hits.append("combo_pnl_dte_loss")
     else:
-        score_breakdown.append({"factor": "Combo: RSI+GAP", "points": 0,
+        score_breakdown.append({"factor": "Combo: P&L+DTE", "points": 0,
                                 "reason": "Not triggered"})
 
-    # #2 IV + DTE: High IV + short DTE = accelerated decay (exponential theta)
+    # #3 IV + DTE: High IV + short DTE = accelerated decay (exponential theta)
     if iv > 0.35 and dte <= 14 and delta < 0.45:
         combo_pts = 6
         score += combo_pts
@@ -870,7 +845,7 @@ def score_short_call(
         score_breakdown.append({"factor": "Combo: IV+DTE", "points": 0,
                                 "reason": "Not triggered"})
 
-    # #3 MACD + RSI concordance: Both trends agree → signal confirmed
+    # #4 MACD + RSI concordance: Both trends agree → signal confirmed
     if macd_trend == rsi_trend and macd_trend != "flat":
         macd_s = macd_trend_details.get("strength", "weak")
         rsi_s = rsi_trend_details.get("strength", "weak")
@@ -892,7 +867,7 @@ def score_short_call(
         score_breakdown.append({"factor": "Combo: MACD+RSI", "points": 0,
                                 "reason": "Not triggered"})
 
-    # #4 Delta + ADX unfavorable: Compound assignment risk
+    # #5 Delta + ADX unfavorable: Compound assignment risk
     if delta >= 0.45 and adx > 25 and adx_trend == "improving" and not trend_favorable:
         combo_pts = -5
         score += combo_pts
@@ -903,15 +878,6 @@ def score_short_call(
         score_breakdown.append({"factor": "Combo: Delta+ADX", "points": 0,
                                 "reason": "Not triggered"})
 
-    # #5 Theta + Delta: High decay partially offsets ATM risk
-    if theta_pts >= 5 and delta >= 0.35 and delta < 0.50:
-        combo_pts = 3
-        score += combo_pts
-        score_breakdown.append({"factor": "Combo: Theta+Delta", "points": combo_pts,
-                                "reason": f"Θ decay strong enough to offset near-ATM risk"})
-    else:
-        score_breakdown.append({"factor": "Combo: Theta+Delta", "points": 0,
-                                "reason": "Not triggered"})
 
     # Clamp
     score = max(0, min(100, score))
@@ -1013,6 +979,7 @@ def run_dps_analysis(
     chain_json: str | dict,
     snapshots: List[Dict],
     underlying_price: Optional[float] = None,
+    premium_received: Optional[float] = None,
 ) -> Dict:
     """Run the full DPS analysis for a position.
 
@@ -1024,6 +991,7 @@ def run_dps_analysis(
         chain_json: Full options chain JSON.
         snapshots: List of snapshot dicts (oldest first).
         underlying_price: Current underlying price (optional, derived from snapshots).
+        premium_received: Original premium received when position was opened.
 
     Returns:
         Full analysis result dict, or error dict on failure.
@@ -1048,9 +1016,9 @@ def run_dps_analysis(
 
     # Run scorer
     if option_type == "put":
-        result = score_short_put(greeks, snapshots, strike, expiration, underlying_price)
+        result = score_short_put(greeks, snapshots, strike, expiration, underlying_price, premium_received=premium_received)
     else:
-        result = score_short_call(greeks, snapshots, strike, expiration, underlying_price)
+        result = score_short_call(greeks, snapshots, strike, expiration, underlying_price, premium_received=premium_received)
 
     result["ticker"] = symbol
     return result

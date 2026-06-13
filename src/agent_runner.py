@@ -1403,6 +1403,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
         analysis_ts: str,
         current_contract_chain: str = "",
         model: str = None,
+        health_metrics: str = "",
     ) -> Tuple[str, Optional[Dict], Optional[Dict]]:
         """Run Phase 1 — position assessment agent.
 
@@ -1412,6 +1413,13 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
             - handoff_json is set when agent outputs an action_needed (ROLL).
             Exactly one of activity_json / handoff_json will be non-None on success.
         """
+        health_section = ""
+        if health_metrics:
+            health_section = f"""
+--- POSITION HEALTH METRICS (supplementary) ---
+{health_metrics}
+
+"""
         message = f"""Analyze open {position_type} position for {symbol}:
 - Current strike: ${strike}
 - Current expiration: {expiration}
@@ -1430,8 +1438,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
 
 --- CURRENT CONTRACT ({position_type.upper()} ${strike} exp {expiration}) ---
 {current_contract_chain}
-
-=== END OF DATA ===
+{health_section}=== END OF DATA ===
 
 Previous monitor activities for {symbol}:
 {previous_context}
@@ -1527,6 +1534,8 @@ Output your activity in the required JSON format. Use the timestamp above in you
         strike: float,
         position_type: str,
         timestamp: str,
+        expiration: str = "",
+        premium_received: Optional[float] = None,
     ) -> Optional[Dict]:
         """Extract the point-in-time metrics persisted for open positions."""
         def _parse_payload(raw_value) -> dict:
@@ -1568,7 +1577,25 @@ Output your activity in the required JSON format. Use the timestamp above in you
         )
         gap_percent = (gap_absolute / strike_value * 100.0) if strike_value else None
 
-        return {
+        # Extract midprice from options chain for P&L calculation
+        midprice = None
+        pnl_pct = None
+        if expiration:
+            from src.dps_scorer import extract_greeks_from_chain
+            chain_json = data.get("options_chain", "{}")
+            greeks = extract_greeks_from_chain(chain_json, strike_value, expiration, position_type)
+            if greeks and greeks.get("mid") is not None:
+                midprice = _to_float(greeks["mid"])
+            elif greeks:
+                bid = _to_float(greeks.get("bid"))
+                ask = _to_float(greeks.get("ask"))
+                if bid is not None and ask is not None:
+                    midprice = round((bid + ask) / 2, 4)
+
+        if midprice is not None and premium_received is not None and premium_received > 0:
+            pnl_pct = round((premium_received - midprice) / premium_received * 100, 2)
+
+        result = {
             "timestamp": timestamp,
             "underlying_price": round(current_price, 4),
             "strike": strike_value,
@@ -1578,6 +1605,14 @@ Output your activity in the required JSON format. Use the timestamp above in you
             "macd_level": macd_level,
             "adx": adx,
         }
+        if midprice is not None:
+            result["midprice"] = round(midprice, 4)
+        if premium_received is not None:
+            result["premium_received"] = round(premium_received, 4)
+        if pnl_pct is not None:
+            result["pnl_pct"] = pnl_pct
+
+        return result
 
     # ------------------------------------------------------------------
     # Position Monitor — 2-phase orchestrator
@@ -1645,8 +1680,17 @@ Output your activity in the required JSON format. Use the timestamp above in you
             )
 
             data = await fetcher.fetch_all(symbol, force_refresh=True)
+            # Extract premium_received from position source
+            _source = position.get("source") or {}
+            _premium_received = None
+            try:
+                _premium_received = float(_source.get("premium") or _source.get("new_premium") or 0) or None
+            except (TypeError, ValueError):
+                pass
             snapshot_data = self._build_position_snapshot_data(
                 data, float(strike), position_type, analysis_ts,
+                expiration=expiration,
+                premium_received=_premium_received,
             )
             if snapshot_data is not None and position_id:
                 cosmos.write_position_snapshot(symbol, position_id, snapshot_data)
@@ -1676,6 +1720,34 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 option_type=position_type,
             )
 
+            # Build position health metrics for agent context
+            _health_metrics = ""
+            try:
+                recent_snaps = cosmos.get_position_snapshots(symbol, position_id, limit=5)
+                if recent_snaps:
+                    latest_snap = recent_snaps[0]  # most recent
+                    parts = []
+                    # P&L
+                    _snap_pnl = latest_snap.get("pnl_pct")
+                    if _snap_pnl is not None:
+                        parts.append(f"P&L: {_snap_pnl:.1f}%")
+                    # DPS scores
+                    dps_scores = [s.get("dps_score") for s in recent_snaps if s.get("dps_score") is not None]
+                    if dps_scores:
+                        parts.append(f"DPS Score (latest): {dps_scores[0]}/100")
+                        if len(dps_scores) >= 3:
+                            trend_diff = dps_scores[0] - dps_scores[-1]
+                            if trend_diff > 5:
+                                parts.append("DPS Trend: improving")
+                            elif trend_diff < -5:
+                                parts.append("DPS Trend: worsening")
+                            else:
+                                parts.append("DPS Trend: flat")
+                    if parts:
+                        _health_metrics = " | ".join(parts)
+            except Exception:
+                pass
+
             response_text, activity_json, handoff_json = await self._run_position_assessment(
                 name=name,
                 instructions=assessment_instructions,
@@ -1689,6 +1761,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 analysis_ts=analysis_ts,
                 current_contract_chain=current_contract_chain,
                 model=assessment_model,
+                health_metrics=_health_metrics,
             )
 
             if handoff_json is not None:

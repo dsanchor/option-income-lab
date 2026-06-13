@@ -749,6 +749,12 @@ async def api_dps_analysis(request: Request, symbol: str, position_id: str):
 
         # Run DPS
         from src.dps_scorer import run_dps_analysis
+        _source = position.get("source") or {}
+        _premium = None
+        try:
+            _premium = float(_source.get("premium") or _source.get("new_premium") or 0) or None
+        except (TypeError, ValueError):
+            pass
         result = run_dps_analysis(
             symbol=symbol,
             strike=strike,
@@ -757,6 +763,7 @@ async def api_dps_analysis(request: Request, symbol: str, position_id: str):
             chain_json=chain_json,
             snapshots=snapshots,
             underlying_price=underlying_price,
+            premium_received=_premium,
         )
 
         return JSONResponse(result)

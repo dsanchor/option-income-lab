@@ -323,6 +323,9 @@
                                     <label style="font-size:0.78rem; color:#ec7063; cursor:pointer; display:flex; align-items:center; gap:0.2rem;">
                                         <input type="checkbox" class="snapshot-toggle" data-series="dps" style="cursor:pointer; accent-color:#ec7063;" checked> DPS
                                     </label>
+                                    <label style="font-size:0.78rem; color:#8d969e; display:flex; align-items:center; gap:3px;">
+                                        <input type="checkbox" class="snapshot-toggle" data-series="pnl" style="cursor:pointer; accent-color:#00bcd4;" checked> P&L %
+                                    </label>
                                 </div>
                                 <div class="position-snapshot-loading" style="display:none; color:var(--text-muted, #8d969e); font-size:0.9rem;">Loading monitoring data…</div>
                                 <div class="position-snapshot-empty" style="display:none; color:var(--text-muted, #8d969e); font-size:0.9rem;">No monitoring data yet</div>
@@ -608,7 +611,7 @@
         if (hideWeekends) {
             // Use category labels (formatted dates) so weekends are collapsed
             var labels = [];
-            var gap = [], rsi = [], macd = [], adx = [], dps = [];
+            var gap = [], rsi = [], macd = [], adx = [], dps = [], pnl = [];
             filtered.forEach(function(s) {
                 if (!s || !s.timestamp) return;
                 var ts = s.timestamp;
@@ -623,8 +626,9 @@
                 macd.push(s.macd_level != null ? s.macd_level : null);
                 adx.push(s.adx != null ? s.adx : null);
                 dps.push(s.dps_score != null ? s.dps_score : null);
+                pnl.push(s.pnl_pct != null ? s.pnl_pct : null);
             });
-            return { labels: labels, gap: gap, rsi: rsi, macd: macd, adx: adx, dps: dps, isCategory: true };
+            return { labels: labels, gap: gap, rsi: rsi, macd: macd, adx: adx, dps: dps, pnl: pnl, isCategory: true };
         }
 
         return {
@@ -634,6 +638,7 @@
             macd: filtered.map(function(s) { return snapshotPoint(s, 'macd_level'); }).filter(Boolean),
             adx: filtered.map(function(s) { return snapshotPoint(s, 'adx'); }).filter(Boolean),
             dps: filtered.map(function(s) { return snapshotPoint(s, 'dps_score'); }).filter(Boolean),
+            pnl: filtered.map(function(s) { return snapshotPoint(s, 'pnl_pct'); }).filter(Boolean),
             isCategory: false
         };
     }
@@ -723,6 +728,20 @@
                 pointStyle: 'rectRot',
                 spanGaps: true,
                 _seriesKey: 'dps'
+            },
+            {
+                label: 'P&L %',
+                data: ds.pnl,
+                borderColor: '#00bcd4',
+                backgroundColor: 'rgba(0, 188, 212, 0.15)',
+                yAxisID: 'yLeft',
+                tension: 0.25,
+                borderWidth: 2,
+                pointRadius: 2,
+                pointHoverRadius: 4,
+                borderDash: [6, 3],
+                spanGaps: true,
+                _seriesKey: 'pnl'
             }
         ];
         chartData.datasets = datasets;
