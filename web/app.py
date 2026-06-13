@@ -667,6 +667,32 @@ async def api_update_position_notes(request: Request, symbol: str,
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.patch("/api/symbols/{symbol}/positions/{position_id}/premium")
+async def api_update_position_premium(request: Request, symbol: str,
+                                      position_id: str):
+    """Update premium on a position."""
+    try:
+        cosmos = _get_cosmos(request)
+        body = await request.json()
+        premium = body.get("premium")
+        if premium is None:
+            return JSONResponse({"error": "premium is required"},
+                                status_code=400)
+        try:
+            premium = float(premium)
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "premium must be a number"},
+                                status_code=400)
+        doc = cosmos.update_position_premium(symbol.upper(), position_id, premium)
+        return JSONResponse(_clean_doc(doc))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.delete("/api/symbols/{symbol}/positions/{position_id}")
 async def api_delete_position(request: Request, symbol: str, position_id: str):
     try:

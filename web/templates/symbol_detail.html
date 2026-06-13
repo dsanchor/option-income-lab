@@ -214,7 +214,14 @@
                                 {% if pos.source.premium is not none %}
                                 <div class="detail-field">
                                     <div class="detail-label">Premium</div>
-                                    <div class="detail-value mono">${{ pos.source.premium }}</div>
+                                    <div class="detail-value mono premium-editable" data-symbol="{{ symbol }}" data-pos-id="{{ pos.position_id }}">
+                                        <span class="premium-display" title="Click to edit">${{ pos.source.premium }}</span>
+                                        <div class="premium-edit" style="display:none;">
+                                            <input type="number" step="0.01" class="input-field premium-input" value="{{ pos.source.premium }}" style="width:80px; font-size:0.85rem;">
+                                            <button class="btn-sm btn-primary premium-save">✓</button>
+                                            <button class="btn-sm premium-cancel">✗</button>
+                                        </div>
+                                    </div>
                                 </div>
                                 {% endif %}
                                 {% if pos.source.iv is not none %}
@@ -1160,7 +1167,7 @@
     document.querySelectorAll('tr.pos-row').forEach(function(row) {
         row.addEventListener('click', function(e) {
             // Don't toggle when clicking action buttons
-            if (e.target.closest('[data-close-pos], [data-delete-pos], [data-roll-pos], .roll-form, .notes-edit, .notes-display')) return;
+            if (e.target.closest('[data-close-pos], [data-delete-pos], [data-roll-pos], .roll-form, .notes-edit, .notes-display, .premium-editable')) return;
             var idx = this.dataset.posIdx;
             var detailRow = document.querySelector('tr.pos-detail-row[data-pos-idx="' + idx + '"]');
             var chevron = this.querySelector('.pos-chevron');
@@ -1302,6 +1309,62 @@
             }
             saveBtn.disabled = false;
             saveBtn.textContent = 'Save';
+        });
+    });
+
+    // ── Inline premium editing ──
+    document.querySelectorAll('.premium-editable').forEach(function(wrapper) {
+        var display = wrapper.querySelector('.premium-display');
+        var editDiv = wrapper.querySelector('.premium-edit');
+        var input = wrapper.querySelector('.premium-input');
+        var saveBtn = wrapper.querySelector('.premium-save');
+        var cancelBtn = wrapper.querySelector('.premium-cancel');
+
+        display.style.cursor = 'pointer';
+        display.addEventListener('click', function(e) {
+            e.stopPropagation();
+            display.style.display = 'none';
+            editDiv.style.display = 'inline-flex';
+            input.focus();
+            input.select();
+        });
+
+        cancelBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            editDiv.style.display = 'none';
+            display.style.display = '';
+        });
+
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); saveBtn.click(); }
+            if (e.key === 'Escape') { e.preventDefault(); cancelBtn.click(); }
+        });
+
+        saveBtn.addEventListener('click', async function(e) {
+            e.stopPropagation();
+            var symbol = wrapper.dataset.symbol;
+            var posId = wrapper.dataset.posId;
+            var newPremium = parseFloat(input.value);
+            if (isNaN(newPremium)) { alert('Invalid number'); return; }
+            saveBtn.disabled = true;
+            try {
+                var res = await fetch('/api/symbols/' + encodeURIComponent(symbol) + '/positions/' + encodeURIComponent(posId) + '/premium', {
+                    method: 'PATCH',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ premium: newPremium })
+                });
+                if (res.ok) {
+                    display.textContent = '$' + newPremium;
+                    editDiv.style.display = 'none';
+                    display.style.display = '';
+                } else {
+                    var data = await res.json();
+                    alert('Error: ' + (data.error || 'Failed to update premium'));
+                }
+            } catch(err) {
+                alert('Network error: ' + err.message);
+            }
+            saveBtn.disabled = false;
         });
     });
 
