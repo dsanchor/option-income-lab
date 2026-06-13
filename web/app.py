@@ -959,6 +959,49 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
                 row["option_type"] = (
                     "call" if agent_key == "open_call_monitor" else "put"
                 )
+                # DPS score + deltas (7d / 1d)
+                row["dps_score"] = None
+                row["dps_delta_7d"] = None
+                row["dps_delta_1d"] = None
+                try:
+                    pos_id = None
+                    # Find position_id from sym_cfg
+                    ptype = "call" if agent_key == "open_call_monitor" else "put"
+                    sym_c = sym_cfg_map.get(base_symbol, {})
+                    for p in sym_c.get("positions", []):
+                        if (p.get("status") == "active" and p["type"] == ptype
+                                and str(p.get("strike")) == str(parts[1] if len(parts) > 1 else "")
+                                and p.get("expiration") == (parts[2] if len(parts) > 2 else "")):
+                            pos_id = p.get("position_id")
+                            break
+                    if pos_id and cosmos:
+                        snaps = cosmos.get_position_snapshots(base_symbol, pos_id, limit=50)
+                        dps_snaps = [s for s in snaps if s.get("dps_score") is not None]
+                        if dps_snaps:
+                            row["dps_score"] = dps_snaps[0].get("dps_score")
+                            # 7d and 1d deltas only
+                            from datetime import timedelta
+                            now_utc = datetime.now(timezone.utc)
+                            seven_days_ago = now_utc - timedelta(days=7)
+                            one_day_ago = now_utc - timedelta(days=1)
+                            snap_7d = None
+                            snap_1d = None
+                            for s in dps_snaps:
+                                ts_str = s.get("timestamp", "")
+                                try:
+                                    ts_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                                except (ValueError, TypeError):
+                                    continue
+                                if snap_7d is None and ts_dt <= seven_days_ago:
+                                    snap_7d = s
+                                if snap_1d is None and ts_dt <= one_day_ago:
+                                    snap_1d = s
+                            if snap_7d:
+                                row["dps_delta_7d"] = dps_snaps[0]["dps_score"] - snap_7d["dps_score"]
+                            if snap_1d:
+                                row["dps_delta_1d"] = dps_snaps[0]["dps_score"] - snap_1d["dps_score"]
+                except Exception:
+                    pass
             else:
                 dec = latest_by_key.get(key, {})
                 if agent_key == "buy_tracker":
