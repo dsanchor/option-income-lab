@@ -294,19 +294,35 @@
                                 </div>
                             </div>
 
-                            {% if pos.status == 'active' %}
                             <div class="position-snapshot-chart"
                                  data-symbol="{{ symbol_doc.symbol }}"
                                  data-position-id="{{ pos.position_id }}"
                                  style="margin-top:1rem; padding-top:0.75rem; border-top:1px dashed var(--border, #2d2d35);">
                                 <div style="display:flex; justify-content:space-between; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:0.75rem;">
                                     <h4 style="margin:0; color:var(--text, #ffffff);">📈 Monitoring History</h4>
-                                    <div style="display:flex; align-items:center; gap:0.75rem;">
+                                    <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
                                         <label style="font-size:0.8rem; color:var(--text-muted, #8d969e); cursor:pointer; display:flex; align-items:center; gap:0.3rem;">
                                             <input type="checkbox" class="snapshot-hide-weekends" style="cursor:pointer;" checked> Hide weekends
                                         </label>
-                                        <span style="font-size:0.8rem; color:var(--text-muted, #8d969e);">Gap %, RSI, MACD, ADX</span>
                                     </div>
+                                </div>
+                                <!-- Per-attribute visibility toggles -->
+                                <div class="snapshot-toggles" style="display:none; margin-bottom:0.5rem; gap:0.75rem; flex-wrap:wrap; align-items:center;">
+                                    <label style="font-size:0.78rem; color:#58d68d; cursor:pointer; display:flex; align-items:center; gap:0.2rem;">
+                                        <input type="checkbox" class="snapshot-toggle" data-series="gap" style="cursor:pointer; accent-color:#58d68d;" checked> Gap %
+                                    </label>
+                                    <label style="font-size:0.78rem; color:#5dade2; cursor:pointer; display:flex; align-items:center; gap:0.2rem;">
+                                        <input type="checkbox" class="snapshot-toggle" data-series="rsi" style="cursor:pointer; accent-color:#5dade2;" checked> RSI
+                                    </label>
+                                    <label style="font-size:0.78rem; color:#af7ac5; cursor:pointer; display:flex; align-items:center; gap:0.2rem;">
+                                        <input type="checkbox" class="snapshot-toggle" data-series="macd" style="cursor:pointer; accent-color:#af7ac5;" checked> MACD
+                                    </label>
+                                    <label style="font-size:0.78rem; color:#f5b041; cursor:pointer; display:flex; align-items:center; gap:0.2rem;">
+                                        <input type="checkbox" class="snapshot-toggle" data-series="adx" style="cursor:pointer; accent-color:#f5b041;" checked> ADX
+                                    </label>
+                                    <label style="font-size:0.78rem; color:#ec7063; cursor:pointer; display:flex; align-items:center; gap:0.2rem;">
+                                        <input type="checkbox" class="snapshot-toggle" data-series="dps" style="cursor:pointer; accent-color:#ec7063;" checked> DPS
+                                    </label>
                                 </div>
                                 <div class="position-snapshot-loading" style="display:none; color:var(--text-muted, #8d969e); font-size:0.9rem;">Loading monitoring data…</div>
                                 <div class="position-snapshot-empty" style="display:none; color:var(--text-muted, #8d969e); font-size:0.9rem;">No monitoring data yet</div>
@@ -314,7 +330,8 @@
                                 <div class="position-snapshot-canvas-wrap" style="display:none; position:relative; height:190px;">
                                     <canvas class="position-snapshot-canvas" aria-label="Position monitoring chart"></canvas>
                                 </div>
-                                <!-- DPS Analysis button & results -->
+                                {% if pos.status == 'active' %}
+                                <!-- DPS Analysis button & results (only for active positions) -->
                                 <div class="dps-analysis-section" style="margin-top:0.75rem;">
                                     <button class="dps-analyze-btn"
                                             data-symbol="{{ symbol_doc.symbol }}"
@@ -324,8 +341,8 @@
                                     </button>
                                     <div class="dps-result" style="display:none; margin-top:0.75rem; padding:0.75rem; border-radius:6px; background:var(--surface-alt, rgba(255,255,255,0.03)); border:1px solid var(--border, #2d2d35);"></div>
                                 </div>
+                                {% endif %}
                             </div>
-                            {% endif %}
 
                             {% if pos.closing_source %}
                             <div style="margin-top:1rem; padding-top:0.75rem; border-top:1px dashed var(--border, #2d2d35);">
@@ -591,7 +608,7 @@
         if (hideWeekends) {
             // Use category labels (formatted dates) so weekends are collapsed
             var labels = [];
-            var gap = [], rsi = [], macd = [], adx = [];
+            var gap = [], rsi = [], macd = [], adx = [], dps = [];
             filtered.forEach(function(s) {
                 if (!s || !s.timestamp) return;
                 var ts = s.timestamp;
@@ -605,8 +622,9 @@
                 rsi.push(s.rsi_14 != null ? s.rsi_14 : null);
                 macd.push(s.macd_level != null ? s.macd_level : null);
                 adx.push(s.adx != null ? s.adx : null);
+                dps.push(s.dps_score != null ? s.dps_score : null);
             });
-            return { labels: labels, gap: gap, rsi: rsi, macd: macd, adx: adx, isCategory: true };
+            return { labels: labels, gap: gap, rsi: rsi, macd: macd, adx: adx, dps: dps, isCategory: true };
         }
 
         return {
@@ -615,6 +633,7 @@
             rsi: filtered.map(function(s) { return snapshotPoint(s, 'rsi_14'); }).filter(Boolean),
             macd: filtered.map(function(s) { return snapshotPoint(s, 'macd_level'); }).filter(Boolean),
             adx: filtered.map(function(s) { return snapshotPoint(s, 'adx'); }).filter(Boolean),
+            dps: filtered.map(function(s) { return snapshotPoint(s, 'dps_score'); }).filter(Boolean),
             isCategory: false
         };
     }
@@ -641,51 +660,69 @@
             {
                 label: 'Gap %',
                 data: ds.gap,
-                borderColor: '#494fdf',
-                backgroundColor: 'rgba(73, 79, 223, 0.15)',
+                borderColor: '#58d68d',
+                backgroundColor: 'rgba(88, 214, 141, 0.15)',
                 yAxisID: 'yLeft',
                 tension: 0.25,
                 borderWidth: 2,
                 pointRadius: 1.5,
                 pointHoverRadius: 4,
-                spanGaps: true
+                spanGaps: true,
+                _seriesKey: 'gap'
             },
             {
                 label: 'RSI',
                 data: ds.rsi,
-                borderColor: '#f0883e',
-                backgroundColor: 'rgba(240, 136, 62, 0.15)',
+                borderColor: '#5dade2',
+                backgroundColor: 'rgba(93, 173, 226, 0.15)',
                 yAxisID: 'yRight',
                 tension: 0.25,
                 borderWidth: 2,
                 pointRadius: 1.25,
                 pointHoverRadius: 4,
-                spanGaps: true
+                spanGaps: true,
+                _seriesKey: 'rsi'
             },
             {
                 label: 'MACD',
                 data: ds.macd,
-                borderColor: '#3fb950',
-                backgroundColor: 'rgba(63, 185, 80, 0.15)',
+                borderColor: '#af7ac5',
+                backgroundColor: 'rgba(175, 122, 197, 0.15)',
                 yAxisID: 'yMacd',
                 tension: 0.25,
                 borderWidth: 1.5,
                 pointRadius: 1,
                 pointHoverRadius: 3,
-                spanGaps: true
+                spanGaps: true,
+                _seriesKey: 'macd'
             },
             {
                 label: 'ADX',
                 data: ds.adx,
-                borderColor: '#bc8cff',
-                backgroundColor: 'rgba(188, 140, 255, 0.15)',
+                borderColor: '#f5b041',
+                backgroundColor: 'rgba(245, 176, 65, 0.15)',
                 yAxisID: 'yRight',
                 tension: 0.25,
                 borderWidth: 1.5,
                 pointRadius: 1,
                 pointHoverRadius: 3,
                 borderDash: [4, 3],
-                spanGaps: true
+                spanGaps: true,
+                _seriesKey: 'adx'
+            },
+            {
+                label: 'DPS',
+                data: ds.dps,
+                borderColor: '#ec7063',
+                backgroundColor: 'rgba(236, 112, 99, 0.15)',
+                yAxisID: 'yRight',
+                tension: 0.25,
+                borderWidth: 2.5,
+                pointRadius: 3,
+                pointHoverRadius: 5,
+                pointStyle: 'rectRot',
+                spanGaps: true,
+                _seriesKey: 'dps'
             }
         ];
         chartData.datasets = datasets;
@@ -698,9 +735,7 @@
                 maintainAspectRatio: false,
                 interaction: { mode: 'index', intersect: false },
                 plugins: {
-                    legend: {
-                        labels: { color: '#8d969e', usePointStyle: true, boxWidth: 8, boxHeight: 8 }
-                    },
+                    legend: { display: false },
                     tooltip: {
                         backgroundColor: 'rgba(22, 27, 34, 0.96)',
                         borderColor: 'rgba(255,255,255,0.08)',
@@ -741,6 +776,20 @@
                 }
             }
         });
+    }
+
+    function applyToggleVisibility(container, chart) {
+        if (!chart) return;
+        var toggles = container.querySelectorAll('.snapshot-toggle');
+        toggles.forEach(function(toggle) {
+            var seriesKey = toggle.dataset.series;
+            chart.data.datasets.forEach(function(dataset, idx) {
+                if (dataset._seriesKey === seriesKey) {
+                    chart.setDatasetVisibility(idx, toggle.checked);
+                }
+            });
+        });
+        chart.update();
     }
 
     async function loadPositionSnapshotChart(container) {
@@ -794,8 +843,19 @@
                     }
                     var newDs = buildSnapshotDatasets(container._snapshotRawData, checkbox.checked);
                     canvas._snapshotChart = createSnapshotChart(canvas, newDs);
+                    applyToggleVisibility(container, canvas._snapshotChart);
                 });
             }
+
+            // Wire up per-series toggle checkboxes
+            var toggles = container.querySelectorAll('.snapshot-toggle');
+            var togglesContainer = container.querySelector('.snapshot-toggles');
+            if (togglesContainer) togglesContainer.style.display = 'flex';
+            toggles.forEach(function(toggle) {
+                toggle.addEventListener('change', function() {
+                    applyToggleVisibility(container, canvas._snapshotChart);
+                });
+            });
 
             setSnapshotChartState(container, 'ready');
         } catch (err) {

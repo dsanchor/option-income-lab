@@ -53,6 +53,10 @@ banner_agent:
   cron: "0 5 * * *"  # 5 AM daily
   max_items: 10
 
+dps_scorer:
+  enabled: true
+  cron: "0 22 * * 1-5"  # 10 PM weekdays (America/New_York)
+
 options_chain_scheduler:
   enabled: true
   cron: "0 * * * *"  # Every hour
