@@ -71,6 +71,7 @@
                     <th>Moneyness</th>
                     <th>Risk</th>
                     <th class="num">Delta</th>
+                    <th class="num">P&L</th>
                     <th class="num">DPS</th>
                     {% elif agent.key == "buy_tracker" %}
                     <th>Entry Zone</th>
@@ -119,6 +120,11 @@
                         {% else %}—{% endif %}
                     </td>
                     <td class="num metric-value">{{ "%.2f" | format(row.delta) if row.delta is not none else "—" }}</td>
+                    <td class="num mono" style="white-space:nowrap;">
+                        {% if row.pnl_pct is not none %}
+                        <span style="color: {{ '#58d68d' if row.pnl_pct >= 0 else '#ec7063' }}">{{ "%+.1f%%" | format(row.pnl_pct) }}</span>
+                        {% else %}—{% endif %}
+                    </td>
                     <td class="num" style="white-space:nowrap;">
                         {% if row.dps_score is not none %}
                         <strong style="color: {{ '#58d68d' if row.dps_score >= 70 else ('#f5b041' if row.dps_score >= 50 else '#ec7063') }}">{{ row.dps_score }}</strong>

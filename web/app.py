@@ -985,10 +985,11 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
                 row["option_type"] = (
                     "call" if agent_key == "open_call_monitor" else "put"
                 )
-                # DPS score + deltas (7d / 1d)
+                # DPS score + deltas (7d / 1d) + P&L
                 row["dps_score"] = None
                 row["dps_delta_7d"] = None
                 row["dps_delta_1d"] = None
+                row["pnl_pct"] = None
                 try:
                     pos_id = None
                     # Find position_id from sym_cfg
@@ -1002,6 +1003,9 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
                             break
                     if pos_id and cosmos:
                         snaps = cosmos.get_position_snapshots(base_symbol, pos_id, limit=50)
+                        # P&L from most recent snapshot
+                        if snaps:
+                            row["pnl_pct"] = snaps[0].get("pnl_pct")
                         dps_snaps = [s for s in snaps if s.get("dps_score") is not None]
                         if dps_snaps:
                             row["dps_score"] = dps_snaps[0].get("dps_score")
