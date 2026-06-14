@@ -448,21 +448,28 @@
             data: {
                 labels: data.monthly.map((row) => row.label),
                 datasets: [{
-                    label: 'Net Income',
-                    data: data.monthly.map((row) => row.net),
-                    backgroundColor: data.monthly.map((row) => row.net >= 0 ? 'rgba(0, 168, 126, 0.7)' : 'rgba(226, 59, 74, 0.75)'),
-                    borderColor: data.monthly.map((row) => row.net >= 0 ? '#00a87e' : '#e23b4a'),
+                    label: 'Calls Net',
+                    data: data.monthly.map((row) => row.calls_net),
+                    backgroundColor: 'rgba(0, 168, 126, 0.7)',
+                    borderColor: '#00a87e',
                     borderWidth: 1,
-                    borderRadius: 8
+                    borderRadius: 4
+                }, {
+                    label: 'Puts Net',
+                    data: data.monthly.map((row) => row.puts_net),
+                    backgroundColor: 'rgba(236, 126, 0, 0.7)',
+                    borderColor: '#ec7e00',
+                    borderWidth: 1,
+                    borderRadius: 4
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
+                plugins: { legend: { labels: { color: '#8d969e' } } },
                 scales: {
-                    x: { ticks: { color: '#8d969e' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-                    y: { ticks: { color: '#8d969e' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+                    x: { stacked: true, ticks: { color: '#8d969e' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                    y: { stacked: true, ticks: { color: '#8d969e' }, grid: { color: 'rgba(255,255,255,0.05)' } }
                 }
             }
         });

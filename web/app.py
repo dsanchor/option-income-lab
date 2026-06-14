@@ -305,6 +305,10 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
     for (group_year, group_month) in sorted(monthly_groups):
         group_positions = monthly_groups[(group_year, group_month)]
         metrics = _group_economics_metrics(group_positions)
+        calls_in_group = [p for p in group_positions if p["type"] == "call"]
+        puts_in_group = [p for p in group_positions if p["type"] == "put"]
+        calls_metrics = _group_economics_metrics(calls_in_group) if calls_in_group else {"net": 0}
+        puts_metrics = _group_economics_metrics(puts_in_group) if puts_in_group else {"net": 0}
         monthly.append({
             "month": group_month,
             "year": group_year,
@@ -312,11 +316,13 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
             "premium": metrics["premium"],
             "buyback": metrics["buyback"],
             "net": metrics["net"],
+            "calls_net": calls_metrics["net"],
+            "puts_net": puts_metrics["net"],
             "positions_count": metrics["count"],
             "avg_roc_pct": metrics["avg_roc_pct"],
             "avg_roc_annualized": metrics["avg_roc_annualized"],
-            "calls_count": len([p for p in group_positions if p["type"] == "call"]),
-            "puts_count": len([p for p in group_positions if p["type"] == "put"]),
+            "calls_count": len(calls_in_group),
+            "puts_count": len(puts_in_group),
         })
 
     by_symbol = []
