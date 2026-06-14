@@ -209,6 +209,9 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
             if premium is None:
                 continue
 
+            # Options contracts are for 100 shares
+            CONTRACT_MULTIPLIER = 100
+
             opened_dt = _parse_datetime_value(position.get("opened_at"))
             closed_dt = _parse_datetime_value(position.get("closed_at"))
             expiration_dt = _parse_date_value(position.get("expiration"))
@@ -216,6 +219,10 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
             buyback_cost = _parse_numeric(position.get("buyback_cost"))
             status = str(position.get("status", "active")).lower()
             pos_type = str(position.get("type", "")).lower()
+
+            # Dollar amounts (per contract = premium × 100)
+            premium_total = premium * CONTRACT_MULTIPLIER
+            buyback_total = buyback_cost * CONTRACT_MULTIPLIER if buyback_cost is not None else None
 
             roc_pct = None
             if strike not in (None, 0):
@@ -246,9 +253,11 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
                 "type": pos_type,
                 "strike": strike,
                 "expiration": position.get("expiration"),
-                "premium": _round2(premium),
-                "buyback_cost": _round2(buyback_cost) if buyback_cost is not None else None,
-                "net": _round2(premium - buyback_cost) if buyback_cost is not None else _round2(premium),
+                "premium": _round2(premium_total),
+                "premium_per_share": _round2(premium),
+                "buyback_cost": _round2(buyback_total) if buyback_total is not None else None,
+                "buyback_per_share": _round2(buyback_cost) if buyback_cost is not None else None,
+                "net": _round2(premium_total - buyback_total) if buyback_total is not None else _round2(premium_total),
                 "roc_pct": roc_pct,
                 "roc_annualized": roc_annualized,
                 "days_held": days_held,
