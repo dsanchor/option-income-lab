@@ -1199,36 +1199,20 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                 timestamp=analysis_ts,
             )
             
-            # ── Supervisor always runs; Alpha only on alerts / prolonged waits ──
-            alpha_chain_text = self._build_alpha_options_chain(data, agent_type)
-            market_data = self._build_market_data_block(data, symbol, exchange)
-            alpha_market_data = self._build_market_data_block(data, symbol, exchange, options_chain_text=alpha_chain_text)
-            prolonged_wait = False
+            # ── Supervisor/Alpha reviews (skip for agent types without playbooks) ──
+            _skip_reviews = agent_type in ("buy_tracker",)
+            supervisor_view = None
+            alpha_view = None
 
-            if is_alert:
-                alert_activity = activity_payload.get("activity", "ALERT")
-                print(f"⚠️ {alert_activity} ALERT logged for {symbol}")
-                # Both supervisor + alpha run in parallel
-                supervisor_view, alpha_view = await asyncio.gather(
-                    self._run_supervisor_review(
-                        activity_payload=activity_payload,
-                        market_data=market_data,
-                        previous_context=previous_context,
-                        agent_type=agent_type,
-                        model=supervisor_model,
-                    ),
-                    self._run_alpha_review(
-                        activity_payload=activity_payload,
-                        market_data=alpha_market_data,
-                        previous_context=previous_context,
-                        agent_type=agent_type,
-                        model=alpha_model,
-                    ),
-                )
-            else:
-                prolonged_wait = self._detect_prolonged_wait(cosmos, symbol, agent_type)
-                if prolonged_wait:
-                    print(f"⏳ Prolonged WAIT detected for {symbol} — triggering supervisor + alpha review")
+            if not _skip_reviews:
+                alpha_chain_text = self._build_alpha_options_chain(data, agent_type)
+                market_data = self._build_market_data_block(data, symbol, exchange)
+                alpha_market_data = self._build_market_data_block(data, symbol, exchange, options_chain_text=alpha_chain_text)
+                prolonged_wait = False
+
+                if is_alert:
+                    alert_activity = activity_payload.get("activity", "ALERT")
+                    print(f"⚠️ {alert_activity} ALERT logged for {symbol}")
                     # Both supervisor + alpha run in parallel
                     supervisor_view, alpha_view = await asyncio.gather(
                         self._run_supervisor_review(
@@ -1247,16 +1231,37 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                         ),
                     )
                 else:
-                    # Supervisor runs alone (unconditional)
-                    supervisor_view = await self._run_supervisor_review(
-                        activity_payload=activity_payload,
-                        market_data=market_data,
-                        previous_context=previous_context,
-                        agent_type=agent_type,
-                        model=supervisor_model,
-                    )
-                    alpha_view = None
-                    print(f"Logged activity")
+                    prolonged_wait = self._detect_prolonged_wait(cosmos, symbol, agent_type)
+                    if prolonged_wait:
+                        print(f"⏳ Prolonged WAIT detected for {symbol} — triggering supervisor + alpha review")
+                        # Both supervisor + alpha run in parallel
+                        supervisor_view, alpha_view = await asyncio.gather(
+                            self._run_supervisor_review(
+                                activity_payload=activity_payload,
+                                market_data=market_data,
+                                previous_context=previous_context,
+                                agent_type=agent_type,
+                                model=supervisor_model,
+                            ),
+                            self._run_alpha_review(
+                                activity_payload=activity_payload,
+                                market_data=alpha_market_data,
+                                previous_context=previous_context,
+                                agent_type=agent_type,
+                                model=alpha_model,
+                            ),
+                        )
+                    else:
+                        # Supervisor runs alone (unconditional)
+                        supervisor_view = await self._run_supervisor_review(
+                            activity_payload=activity_payload,
+                            market_data=market_data,
+                            previous_context=previous_context,
+                            agent_type=agent_type,
+                            model=supervisor_model,
+                        )
+                        alpha_view = None
+                        print(f"Logged activity")
 
             # Persist supervisor result (always)
             if supervisor_view is not None:
