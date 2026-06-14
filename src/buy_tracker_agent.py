@@ -57,8 +57,6 @@ async def run_buy_tracker_analysis(config, runner: AgentRunner,
             max_activity_entries=config.max_activity_entries,
             fetcher=provider,
             model=config.model_for('buy_tracker'),
-            supervisor_model=config.model_for('supervisor'),
-            alpha_model=config.model_for('alpha'),
         )
 
     print(f"\n{'='*60}")
