@@ -16,6 +16,7 @@
         <div class="nav-links">
             <a href="/dashboard" class="{% if request.url.path in ('/', '/dashboard') %}active{% endif %}">Dashboard</a>
             <a href="/symbols" class="{% if request.url.path.startswith('/symbols') %}active{% endif %}">Symbols</a>
+            <a href="/economics" class="{% if request.url.path.startswith('/economics') %}active{% endif %}">Economics</a>
             <a href="/chat" class="{% if request.url.path == '/chat' %}active{% endif %}">Chat</a>
             <a href="/dgi" class="{% if request.url.path.startswith('/dgi') %}active{% endif %}">DGI Screener</a>
             <div class="nav-dropdown">

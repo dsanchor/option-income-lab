@@ -1,10 +1,12 @@
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import threading
 import time
+from calendar import month_abbr
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import defaultdict
@@ -106,6 +108,275 @@ def parse_timestamp(ts: str) -> Optional[datetime]:
         except ValueError:
             continue
     return None
+
+
+def _parse_numeric(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        return numeric if math.isfinite(numeric) else None
+    if isinstance(value, str):
+        cleaned = value.strip().replace("$", "").replace(",", "")
+        if not cleaned or cleaned.upper() in {"N/A", "NA", "NONE", "NULL", "—", "-"}:
+            return None
+        try:
+            numeric = float(cleaned)
+        except ValueError:
+            return None
+        return numeric if math.isfinite(numeric) else None
+    return None
+
+
+def _parse_datetime_value(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    parsed = parse_timestamp(value.strip())
+    if parsed is not None:
+        return parsed
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _parse_date_value(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.strptime(value.strip(), "%Y-%m-%d").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        return None
+
+
+def _round2(value: float) -> float:
+    return round(value, 2)
+
+
+def _average(values: List[float]) -> float:
+    return _round2(sum(values) / len(values)) if values else 0.0
+
+
+def _group_economics_metrics(positions: List[Dict[str, Any]]) -> Dict[str, float]:
+    total_premium = sum(p["premium"] for p in positions)
+    total_buyback = sum(
+        p["buyback_cost"] for p in positions if p["buyback_cost"] is not None
+    )
+    roc_values = [p["roc_pct"] for p in positions if p["roc_pct"] is not None]
+    roc_annualized_values = [
+        p["roc_annualized"] for p in positions if p["roc_annualized"] is not None
+    ]
+    return {
+        "premium": _round2(total_premium),
+        "buyback": _round2(total_buyback),
+        "net": _round2(total_premium - total_buyback),
+        "count": len(positions),
+        "avg_roc_pct": _average(roc_values),
+        "avg_roc_annualized": _average(roc_annualized_values),
+    }
+
+
+def _build_economics_report(symbol_docs: List[Dict[str, Any]],
+                            year: Optional[int] = None,
+                            symbol_filter: Optional[str] = None,
+                            option_type: Optional[str] = None,
+                            status_filter: Optional[str] = None,
+                            now: Optional[datetime] = None) -> Dict[str, Any]:
+    now = now or datetime.now(timezone.utc)
+    all_positions: List[Dict[str, Any]] = []
+    available_years: set[int] = set()
+    available_symbols: set[str] = set()
+
+    for symbol_doc in symbol_docs:
+        symbol = str(symbol_doc.get("symbol", "")).upper()
+        if not symbol:
+            continue
+        for position in symbol_doc.get("positions", []):
+            source = position.get("source")
+            if not isinstance(source, dict):
+                source = {}
+            premium = _parse_numeric(source.get("premium"))
+            if premium is None:
+                continue
+
+            opened_dt = _parse_datetime_value(position.get("opened_at"))
+            closed_dt = _parse_datetime_value(position.get("closed_at"))
+            expiration_dt = _parse_date_value(position.get("expiration"))
+            strike = _parse_numeric(position.get("strike"))
+            buyback_cost = _parse_numeric(position.get("buyback_cost"))
+            status = str(position.get("status", "active")).lower()
+            pos_type = str(position.get("type", "")).lower()
+
+            roc_pct = None
+            if strike not in (None, 0):
+                roc_pct = _round2((premium / strike) * 100)
+
+            roc_annualized = None
+            if roc_pct is not None and opened_dt and expiration_dt:
+                days_to_expiration = (
+                    expiration_dt.date() - opened_dt.astimezone(timezone.utc).date()
+                ).days
+                if days_to_expiration > 0:
+                    roc_annualized = _round2(
+                        roc_pct * (365 / days_to_expiration)
+                    )
+
+            days_held = None
+            if opened_dt is not None:
+                end_dt = closed_dt or now
+                days_held = max(
+                    (end_dt.astimezone(timezone.utc).date()
+                     - opened_dt.astimezone(timezone.utc).date()).days,
+                    0,
+                )
+
+            position_data = {
+                "symbol": symbol,
+                "position_id": position.get("position_id"),
+                "type": pos_type,
+                "strike": strike,
+                "expiration": position.get("expiration"),
+                "premium": _round2(premium),
+                "buyback_cost": _round2(buyback_cost) if buyback_cost is not None else None,
+                "net": _round2(premium - buyback_cost) if buyback_cost is not None else _round2(premium),
+                "roc_pct": roc_pct,
+                "roc_annualized": roc_annualized,
+                "days_held": days_held,
+                "status": status,
+                "opened_at": position.get("opened_at"),
+                "_opened_year": opened_dt.year if opened_dt else None,
+                "_opened_month": opened_dt.month if opened_dt else None,
+            }
+            all_positions.append(position_data)
+            available_symbols.add(symbol)
+            if opened_dt is not None:
+                available_years.add(opened_dt.year)
+
+    filtered_positions = [
+        position for position in all_positions
+        if (year is None or position["_opened_year"] == year)
+        and (symbol_filter is None or position["symbol"] == symbol_filter)
+        and (option_type is None or position["type"] == option_type)
+        and (status_filter is None or position["status"] == status_filter)
+    ]
+
+    summary_metrics = _group_economics_metrics(filtered_positions)
+    settled_positions = [
+        position for position in filtered_positions
+        if position["status"] in {"closed", "rolled"}
+    ]
+    wins = [
+        position for position in settled_positions
+        if position["status"] != "rolled"
+    ]
+    win_rate = _round2((len(wins) / len(settled_positions)) * 100) if settled_positions else 0.0
+
+    monthly_groups: Dict[tuple[int, int], List[Dict[str, Any]]] = defaultdict(list)
+    symbol_groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for position in filtered_positions:
+        symbol_groups[position["symbol"]].append(position)
+        if position["_opened_year"] and position["_opened_month"]:
+            monthly_groups[(position["_opened_year"], position["_opened_month"])].append(position)
+
+    monthly = []
+    for (group_year, group_month) in sorted(monthly_groups):
+        group_positions = monthly_groups[(group_year, group_month)]
+        metrics = _group_economics_metrics(group_positions)
+        monthly.append({
+            "month": group_month,
+            "year": group_year,
+            "label": f"{month_abbr[group_month]} {group_year}",
+            "premium": metrics["premium"],
+            "buyback": metrics["buyback"],
+            "net": metrics["net"],
+            "positions_count": metrics["count"],
+            "avg_roc_pct": metrics["avg_roc_pct"],
+            "avg_roc_annualized": metrics["avg_roc_annualized"],
+            "calls_count": len([p for p in group_positions if p["type"] == "call"]),
+            "puts_count": len([p for p in group_positions if p["type"] == "put"]),
+        })
+
+    by_symbol = []
+    for grouped_symbol in sorted(symbol_groups):
+        group_positions = symbol_groups[grouped_symbol]
+        metrics = _group_economics_metrics(group_positions)
+        by_symbol.append({
+            "symbol": grouped_symbol,
+            "premium": metrics["premium"],
+            "buyback": metrics["buyback"],
+            "net": metrics["net"],
+            "positions_count": metrics["count"],
+            "avg_roc_pct": metrics["avg_roc_pct"],
+            "avg_roc_annualized": metrics["avg_roc_annualized"],
+        })
+
+    calls_positions = [p for p in filtered_positions if p["type"] == "call"]
+    puts_positions = [p for p in filtered_positions if p["type"] == "put"]
+    calls_metrics = _group_economics_metrics(calls_positions)
+    puts_metrics = _group_economics_metrics(puts_positions)
+
+    return {
+        "summary": {
+            "total_premium": summary_metrics["premium"],
+            "total_buyback": summary_metrics["buyback"],
+            "net_income": summary_metrics["net"],
+            "avg_roc_pct": summary_metrics["avg_roc_pct"],
+            "avg_roc_annualized": summary_metrics["avg_roc_annualized"],
+            "win_rate": win_rate,
+            "total_positions": summary_metrics["count"],
+        },
+        "monthly": monthly,
+        "by_symbol": by_symbol,
+        "by_type": {
+            "calls": {
+                "premium": calls_metrics["premium"],
+                "buyback": calls_metrics["buyback"],
+                "net": calls_metrics["net"],
+                "count": calls_metrics["count"],
+                "avg_roc_pct": calls_metrics["avg_roc_pct"],
+                "avg_roc_annualized": calls_metrics["avg_roc_annualized"],
+            },
+            "puts": {
+                "premium": puts_metrics["premium"],
+                "buyback": puts_metrics["buyback"],
+                "net": puts_metrics["net"],
+                "count": puts_metrics["count"],
+                "avg_roc_pct": puts_metrics["avg_roc_pct"],
+                "avg_roc_annualized": puts_metrics["avg_roc_annualized"],
+            },
+        },
+        "positions": sorted(
+            [
+                {
+                    key: value for key, value in position.items()
+                    if not key.startswith("_")
+                }
+                for position in filtered_positions
+            ],
+            key=lambda position: position.get("opened_at") or "",
+            reverse=True,
+        ),
+        "filters": {
+            "years": sorted(available_years, reverse=True),
+            "symbols": sorted(available_symbols),
+        },
+        "applied_filters": {
+            "year": year,
+            "symbol": symbol_filter,
+            "type": option_type,
+            "status": status_filter,
+        },
+    }
 
 
 def _count_by_range(entries: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -275,6 +546,50 @@ async def api_list_symbols(request: Request):
         cosmos = _get_cosmos(request)
         symbols = cosmos.list_symbols()
         return JSONResponse([_clean_doc(s) for s in symbols])
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/economics")
+async def api_economics(request: Request,
+                        year: Optional[int] = Query(default=None),
+                        symbol: Optional[str] = Query(default=None),
+                        option_type: Optional[str] = Query(default=None, alias="type"),
+                        status: Optional[str] = Query(default=None)):
+    try:
+        cosmos = _get_cosmos(request)
+        normalized_symbol = symbol.strip().upper() if symbol else None
+        normalized_type = option_type.strip().lower() if option_type else None
+        normalized_status = status.strip().lower() if status else None
+
+        if normalized_type and normalized_type not in {"call", "put"}:
+            return JSONResponse(
+                {"error": "type must be 'call' or 'put'"},
+                status_code=400,
+            )
+        if normalized_status and normalized_status not in {"active", "closed", "rolled"}:
+            return JSONResponse(
+                {"error": "status must be 'active', 'closed', or 'rolled'"},
+                status_code=400,
+            )
+
+        get_all_symbols = getattr(cosmos, "get_all_symbols", None)
+        symbol_docs = (
+            get_all_symbols()
+            if callable(get_all_symbols)
+            else cosmos.list_symbols()
+        )
+        return JSONResponse(
+            _build_economics_report(
+                symbol_docs,
+                year=year,
+                symbol_filter=normalized_symbol,
+                option_type=normalized_type,
+                status_filter=normalized_status,
+            )
+        )
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
@@ -1229,6 +1544,17 @@ async def dashboard(request: Request):
         "banner_items": (banner_doc or {}).get("items", []),
         "agent_types": AGENT_TYPES,
         "market_open": market_open,
+    })
+
+
+# ===========================================================================
+# Page Routes — Economics
+# ===========================================================================
+
+@app.get("/economics", response_class=HTMLResponse)
+async def economics_page(request: Request):
+    return templates.TemplateResponse("economics.html", {
+        "request": request,
     })
 
 
