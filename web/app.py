@@ -693,6 +693,33 @@ async def api_update_position_premium(request: Request, symbol: str,
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.patch("/api/symbols/{symbol}/positions/{position_id}/buyback_cost")
+async def api_update_position_buyback_cost(request: Request, symbol: str,
+                                           position_id: str):
+    """Update buyback cost on a rolled position."""
+    try:
+        cosmos = _get_cosmos(request)
+        body = await request.json()
+        buyback_cost = body.get("buyback_cost")
+        if buyback_cost is None:
+            return JSONResponse({"error": "buyback_cost is required"},
+                                status_code=400)
+        try:
+            buyback_cost = float(buyback_cost)
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "buyback_cost must be a number"},
+                                status_code=400)
+        doc = cosmos.update_position_buyback_cost(symbol.upper(), position_id,
+                                                  buyback_cost)
+        return JSONResponse(_clean_doc(doc))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.delete("/api/symbols/{symbol}/positions/{position_id}")
 async def api_delete_position(request: Request, symbol: str, position_id: str):
     try:

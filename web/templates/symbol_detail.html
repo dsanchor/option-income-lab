@@ -449,6 +449,31 @@
                             </div>
                             {% endif %}
 
+                            {% if pos.rolled_to %}
+                            <div class="detail-grid" style="margin-top:0.75rem;">
+                                <div class="detail-field">
+                                    <div class="detail-label">Buyback Cost</div>
+                                    <div class="detail-value mono buyback-editable" data-symbol="{{ symbol_doc.symbol }}" data-pos-id="{{ pos.position_id }}">
+                                        {% if pos.buyback_cost is defined and pos.buyback_cost is not none %}
+                                        <span class="buyback-display" title="Click to edit">${{ pos.buyback_cost }}</span>
+                                        <div class="buyback-edit" style="display:none;">
+                                            <input type="number" step="0.01" class="input-field buyback-input" value="{{ pos.buyback_cost }}" style="width:80px; font-size:0.85rem;">
+                                            <button class="btn-sm btn-primary buyback-save">✓</button>
+                                            <button class="btn-sm buyback-cancel">✗</button>
+                                        </div>
+                                        {% else %}
+                                        <span class="buyback-display" title="Click to edit" style="color:var(--text-muted, #8d969e);">N/A</span>
+                                        <div class="buyback-edit" style="display:none;">
+                                            <input type="number" step="0.01" class="input-field buyback-input" value="" style="width:80px; font-size:0.85rem;">
+                                            <button class="btn-sm btn-primary buyback-save">✓</button>
+                                            <button class="btn-sm buyback-cancel">✗</button>
+                                        </div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
+
                             <div style="margin-top:1rem; padding-top:0.75rem; border-top:1px dashed var(--border, #2d2d35); text-align:right;">
                                 <button class="btn-sm btn-danger" data-delete-pos="{{ pos.position_id }}">🗑 Delete Position</button>
                             </div>
@@ -1191,7 +1216,7 @@
     document.querySelectorAll('tr.pos-row').forEach(function(row) {
         row.addEventListener('click', function(e) {
             // Don't toggle when clicking action buttons
-            if (e.target.closest('[data-close-pos], [data-delete-pos], [data-roll-pos], .roll-form, .notes-edit, .notes-display, .premium-editable')) return;
+            if (e.target.closest('[data-close-pos], [data-delete-pos], [data-roll-pos], .roll-form, .notes-edit, .notes-display, .premium-editable, .buyback-editable')) return;
             var idx = this.dataset.posIdx;
             var detailRow = document.querySelector('tr.pos-detail-row[data-pos-idx="' + idx + '"]');
             var chevron = this.querySelector('.pos-chevron');
@@ -1384,6 +1409,63 @@
                 } else {
                     var data = await res.json();
                     alert('Error: ' + (data.error || 'Failed to update premium'));
+                }
+            } catch(err) {
+                alert('Network error: ' + err.message);
+            }
+            saveBtn.disabled = false;
+        });
+    });
+
+    // ── Inline buyback cost editing ──
+    document.querySelectorAll('.buyback-editable').forEach(function(wrapper) {
+        var display = wrapper.querySelector('.buyback-display');
+        var editDiv = wrapper.querySelector('.buyback-edit');
+        var input = wrapper.querySelector('.buyback-input');
+        var saveBtn = wrapper.querySelector('.buyback-save');
+        var cancelBtn = wrapper.querySelector('.buyback-cancel');
+
+        display.style.cursor = 'pointer';
+        display.addEventListener('click', function(e) {
+            e.stopPropagation();
+            display.style.display = 'none';
+            editDiv.style.display = 'inline-flex';
+            input.focus();
+            input.select();
+        });
+
+        cancelBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            editDiv.style.display = 'none';
+            display.style.display = '';
+        });
+
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); saveBtn.click(); }
+            if (e.key === 'Escape') { e.preventDefault(); cancelBtn.click(); }
+        });
+
+        saveBtn.addEventListener('click', async function(e) {
+            e.stopPropagation();
+            var symbol = wrapper.dataset.symbol;
+            var posId = wrapper.dataset.posId;
+            var newCost = parseFloat(input.value);
+            if (isNaN(newCost)) { alert('Invalid number'); return; }
+            saveBtn.disabled = true;
+            try {
+                var res = await fetch('/api/symbols/' + encodeURIComponent(symbol) + '/positions/' + encodeURIComponent(posId) + '/buyback_cost', {
+                    method: 'PATCH',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ buyback_cost: newCost })
+                });
+                if (res.ok) {
+                    display.textContent = '$' + newCost;
+                    display.style.color = '';
+                    editDiv.style.display = 'none';
+                    display.style.display = '';
+                } else {
+                    var data = await res.json();
+                    alert('Error: ' + (data.error || 'Failed to update buyback cost'));
                 }
             } catch(err) {
                 alert('Network error: ' + err.message);

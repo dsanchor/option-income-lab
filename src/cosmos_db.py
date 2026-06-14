@@ -369,6 +369,28 @@ class CosmosDBService:
         doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
         return self.container.replace_item(item=doc["id"], body=doc)
 
+    def update_position_buyback_cost(self, symbol: str, position_id: str,
+                                      buyback_cost: float) -> dict:
+        """Update the buyback cost on a rolled position."""
+        doc = self.get_symbol(symbol)
+        if doc is None:
+            raise ValueError(f"Symbol {symbol} not found")
+
+        found = False
+        for pos in doc.get("positions", []):
+            if pos["position_id"] == position_id:
+                if not pos.get("rolled_to"):
+                    raise ValueError(f"Position {position_id} was not rolled")
+                pos["buyback_cost"] = buyback_cost
+                found = True
+                break
+
+        if not found:
+            raise ValueError(f"Position {position_id} not found")
+
+        doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        return self.container.replace_item(item=doc["id"], body=doc)
+
     def delete_position(self, symbol: str, position_id: str) -> dict:
         """Remove a position and all linked activities/alerts from a symbol."""
         doc = self.get_symbol(symbol)
