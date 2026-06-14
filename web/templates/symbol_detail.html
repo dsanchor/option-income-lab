@@ -245,6 +245,28 @@
                                     </div>
                                 </div>
                                 {% endif %}
+                                {% if pos.rolled_to %}
+                                <div class="detail-field">
+                                    <div class="detail-label">Buyback Cost</div>
+                                    <div class="detail-value mono buyback-editable" data-symbol="{{ symbol_doc.symbol }}" data-pos-id="{{ pos.position_id }}">
+                                        {% if pos.buyback_cost is defined and pos.buyback_cost is not none %}
+                                        <span class="buyback-display" title="Click to edit">${{ pos.buyback_cost }}</span>
+                                        <div class="buyback-edit" style="display:none;">
+                                            <input type="number" step="0.01" class="input-field buyback-input" value="{{ pos.buyback_cost }}" style="width:80px; font-size:0.85rem;">
+                                            <button class="btn-sm btn-primary buyback-save">✓</button>
+                                            <button class="btn-sm buyback-cancel">✗</button>
+                                        </div>
+                                        {% else %}
+                                        <span class="buyback-display" title="Click to edit" style="color:var(--text-muted, #8d969e);">N/A</span>
+                                        <div class="buyback-edit" style="display:none;">
+                                            <input type="number" step="0.01" class="input-field buyback-input" value="" style="width:80px; font-size:0.85rem;">
+                                            <button class="btn-sm btn-primary buyback-save">✓</button>
+                                            <button class="btn-sm buyback-cancel">✗</button>
+                                        </div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                {% endif %}
                                 {% if pos.source.iv is not none %}
                                 <div class="detail-field">
                                     <div class="detail-label">IV</div>
@@ -314,6 +336,28 @@
                                         </div>
                                     </div>
                                 </div>
+                                {% if pos.rolled_to %}
+                                <div class="detail-field">
+                                    <div class="detail-label">Buyback Cost</div>
+                                    <div class="detail-value mono buyback-editable" data-symbol="{{ symbol_doc.symbol }}" data-pos-id="{{ pos.position_id }}">
+                                        {% if pos.buyback_cost is defined and pos.buyback_cost is not none %}
+                                        <span class="buyback-display" title="Click to edit">${{ pos.buyback_cost }}</span>
+                                        <div class="buyback-edit" style="display:none;">
+                                            <input type="number" step="0.01" class="input-field buyback-input" value="{{ pos.buyback_cost }}" style="width:80px; font-size:0.85rem;">
+                                            <button class="btn-sm btn-primary buyback-save">✓</button>
+                                            <button class="btn-sm buyback-cancel">✗</button>
+                                        </div>
+                                        {% else %}
+                                        <span class="buyback-display" title="Click to edit" style="color:var(--text-muted, #8d969e);">N/A</span>
+                                        <div class="buyback-edit" style="display:none;">
+                                            <input type="number" step="0.01" class="input-field buyback-input" value="" style="width:80px; font-size:0.85rem;">
+                                            <button class="btn-sm btn-primary buyback-save">✓</button>
+                                            <button class="btn-sm buyback-cancel">✗</button>
+                                        </div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                {% endif %}
                             </div>
                             {% endif %}
 
@@ -454,31 +498,6 @@
                                 {% if pos.rolled_to %}
                                 <span style="color:var(--text-muted, #8d969e); font-size:0.85rem;">➡ Rolled to: <span class="mono" style="color:var(--text, #ffffff);">{{ pos.rolled_to }}</span></span>
                                 {% endif %}
-                            </div>
-                            {% endif %}
-
-                            {% if pos.rolled_to %}
-                            <div class="detail-grid" style="margin-top:0.75rem;">
-                                <div class="detail-field">
-                                    <div class="detail-label">Buyback Cost</div>
-                                    <div class="detail-value mono buyback-editable" data-symbol="{{ symbol_doc.symbol }}" data-pos-id="{{ pos.position_id }}">
-                                        {% if pos.buyback_cost is defined and pos.buyback_cost is not none %}
-                                        <span class="buyback-display" title="Click to edit">${{ pos.buyback_cost }}</span>
-                                        <div class="buyback-edit" style="display:none;">
-                                            <input type="number" step="0.01" class="input-field buyback-input" value="{{ pos.buyback_cost }}" style="width:80px; font-size:0.85rem;">
-                                            <button class="btn-sm btn-primary buyback-save">✓</button>
-                                            <button class="btn-sm buyback-cancel">✗</button>
-                                        </div>
-                                        {% else %}
-                                        <span class="buyback-display" title="Click to edit" style="color:var(--text-muted, #8d969e);">N/A</span>
-                                        <div class="buyback-edit" style="display:none;">
-                                            <input type="number" step="0.01" class="input-field buyback-input" value="" style="width:80px; font-size:0.85rem;">
-                                            <button class="btn-sm btn-primary buyback-save">✓</button>
-                                            <button class="btn-sm buyback-cancel">✗</button>
-                                        </div>
-                                        {% endif %}
-                                    </div>
-                                </div>
                             </div>
                             {% endif %}
 
