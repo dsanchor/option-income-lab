@@ -425,6 +425,19 @@ async def api_add_position(request: Request, symbol: str):
                     "timestamp": activity.get("timestamp"),
                 }
 
+        # If premium provided manually, ensure it's stored in source
+        premium = body.get("premium")
+        if premium is not None:
+            try:
+                premium = float(premium)
+            except (TypeError, ValueError):
+                premium = None
+            if premium is not None:
+                if source is None:
+                    source = {"premium": premium}
+                else:
+                    source["premium"] = premium
+
         doc = cosmos.add_position(symbol.upper(), position_type, strike,
                                   expiration, notes, source=source)
         return JSONResponse(_clean_doc(doc), status_code=201)
@@ -616,12 +629,42 @@ async def api_manual_roll_position(request: Request, symbol: str,
                     "timestamp": activity.get("timestamp"),
                 }
 
+        # If premium provided manually for the new position
+        premium = body.get("premium")
+        if premium is not None:
+            try:
+                premium = float(premium)
+            except (TypeError, ValueError):
+                premium = None
+            if premium is not None:
+                if source is None:
+                    source = {"premium": premium}
+                else:
+                    source["premium"] = premium
+
+        # Buyback cost for the old (closed) position
+        buyback_cost = body.get("buyback_cost")
+        if buyback_cost is not None:
+            try:
+                buyback_cost = float(buyback_cost)
+            except (TypeError, ValueError):
+                buyback_cost = None
+
         doc = cosmos.roll_position(
             symbol.upper(), position_id, pos["type"],
             float(new_strike), new_expiration,
             source=source,
             notes=notes,
         )
+
+        # Set buyback_cost on the old (now closed) position
+        if buyback_cost is not None:
+            for p in doc.get("positions", []):
+                if p["position_id"] == position_id:
+                    p["buyback_cost"] = buyback_cost
+                    break
+            doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
+            doc = cosmos.container.replace_item(item=doc["id"], body=doc)
 
         return JSONResponse(_clean_doc(doc), status_code=201)
     except ValueError as e:
