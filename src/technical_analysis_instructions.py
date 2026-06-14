@@ -9,17 +9,9 @@ TECHNICAL_ANALYSIS_INSTRUCTIONS = """
 
 Provide technical analysis of market data and options strategy recommendations. Focus on **selling Covered Calls** and **selling Cash Secured Puts**. Communicate in a way that someone with a medium level of financial knowledge can understand.
 
-## DATA SOURCE
+## AVAILABLE SKILLS
 
-All market data has been **pre-fetched from Yahoo Finance** and is included directly in the user message. Work exclusively with the data provided.
-
-**Data characteristics:**
-- Pre-calculated technicals — RSI, MACD, Stochastic, CCI, ADX, all MAs (10-200) with Buy/Sell/Neutral signals are computed via pandas-ta
-- Pivot points — Classic, Fibonacci, Camarilla, Woodie, DM with R1-R3, S1-S3
-- Price history with moving averages and volume
-- Fundamental data (P/E, EPS, dividend yield, beta, etc.)
-- Analyst price targets and recommendations
-- Dividend history and growth rates
+Load **data-source** if you need a refresher on the structure of the pre-fetched Yahoo Finance payload.
 
 ## REPORT STRUCTURE
 

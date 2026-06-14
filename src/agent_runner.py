@@ -5,10 +5,15 @@ import os
 import re
 import time
 import traceback
+import warnings
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from agent_framework import Agent
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message=r".*experimental.*")
+
+from agent_framework import Agent, SkillsProvider
 from agent_framework.openai import OpenAIChatCompletionClient
 
 from .cosmos_db import CosmosDBService
@@ -81,6 +86,10 @@ class AgentRunner:
         self._clients: Dict[str, object] = {}
         self.telegram_notifier = telegram_notifier
 
+        # Native skills providers
+        self._skills_providers: Dict[str, SkillsProvider] = {}
+        self._skills_dir = Path(__file__).parent / "skills"
+
     def _get_client(self, model: str = None) -> OpenAIChatCompletionClient:
         """Return a cached chat client for the given model name."""
         deployment = model or self._default_model
@@ -98,6 +107,24 @@ class AgentRunner:
     def client(self):
         """Backward-compatible accessor — returns the default model client."""
         return self._get_client()
+
+    def _get_skills_provider(self, skill_names: list) -> "SkillsProvider | None":
+        """Get or create a cached SkillsProvider for the given skill subdirectories."""
+        if not self._skills_dir.exists():
+            return None
+        cache_key = ",".join(sorted(skill_names))
+        if cache_key not in self._skills_providers:
+            paths = [
+                str(self._skills_dir / name)
+                for name in skill_names
+                if (self._skills_dir / name).exists()
+            ]
+            if not paths:
+                return None
+            self._skills_providers[cache_key] = SkillsProvider.from_paths(
+                skill_paths=paths,
+            )
+        return self._skills_providers[cache_key]
     
     # ── Options chain formatting ────────────────────────────────────────
 
@@ -1112,10 +1139,12 @@ Previous activities for {symbol}:
 Current UTC timestamp: {analysis_ts}
 All market data has been pre-fetched above. Do NOT use any browser tools — analyze the data provided and output your activity in the required JSON format. Use the timestamp above in your JSON output; do NOT generate your own."""
 
+            _skills = self._get_skills_provider(["earnings-gate-sell", "data-source", "risk-flags"])
             agent = Agent(
                 client=self._get_client(model),
                 name=name,
                 instructions=instructions,
+                context_providers=[_skills] if _skills else None,
             )
             result = await agent.run(message)
             response_text = result.text or str(result)
@@ -1446,10 +1475,12 @@ Previous monitor activities for {symbol}:
 Current UTC timestamp: {analysis_ts}
 Analyze the position risk and output your response in the required JSON format. Use the timestamp above in your JSON output; do NOT generate your own."""
 
+        _skills = self._get_skills_provider(["earnings-gate-monitor", "data-source", "activity-log", "risk-flags"])
         agent = Agent(
             client=self._get_client(model),
             name=name,
             instructions=instructions,
+            context_providers=[_skills] if _skills else None,
         )
         result = await agent.run(message)
         response_text = result.text or str(result)
@@ -1507,10 +1538,12 @@ Pick a candidate by its row number. Use the pre-computed values (net credit, DTE
 Current UTC timestamp: {analysis_ts}
 Output your activity in the required JSON format. Use the timestamp above in your JSON output; do NOT generate your own."""
 
+        _skills = self._get_skills_provider(["roll-economics", "risk-flags"])
         agent = Agent(
             client=self._get_client(model),
             name=f"{name}_roll",
             instructions=roll_instructions,
+            context_providers=[_skills] if _skills else None,
         )
         result = await agent.run(message)
         response_text = result.text or str(result)
@@ -2482,10 +2515,12 @@ Every symbol listed in the portfolio overview MUST appear in the corresponding s
 Current UTC timestamp: {analysis_ts}
 All market data has been pre-fetched above. Do NOT use any browser tools — analyze the data provided and generate your report."""
 
+        _skills = self._get_skills_provider(["data-source"])
         agent = Agent(
             client=self._get_client(model),
             name="ReportAgent",
             instructions=TV_REPORT_INSTRUCTIONS,
+            context_providers=[_skills] if _skills else None,
         )
         result = await agent.run(message)
         report_text = result.text or str(result)
@@ -2563,10 +2598,12 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
 Current UTC timestamp: {analysis_ts}
 All market data has been pre-fetched above. Please analyze this data and generate your analysis."""
 
+        _skills = self._get_skills_provider(["data-source"])
         agent = Agent(
             client=self._get_client(model),
             name="TechnicalAnalysisAgent",
             instructions=TECHNICAL_ANALYSIS_INSTRUCTIONS,
+            context_providers=[_skills] if _skills else None,
         )
         result = await agent.run(message)
         analysis_text = result.text or str(result)

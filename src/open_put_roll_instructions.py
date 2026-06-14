@@ -36,6 +36,12 @@ Phase 2 (this agent) outputs ONE of the following in the `activity` field:
 
 **Never output bare "ROLL" — always include the direction suffix.**
 
+## AVAILABLE SKILLS
+
+You have access to skills that provide detailed execution rules. Load them as needed:
+- **roll-economics**: MANDATORY — apply the premium-first verification workflow before any roll recommendation
+- **risk-flags**: Valid carried-forward and roll-specific risk flags
+
 ## INPUT
 
 You receive two data sources:
@@ -112,46 +118,9 @@ Select a specific new strike and expiration based on the handoff data:
     - ACCEPTABLE: ≥14 days after earnings
     - BLOCKED: 0-13 days after earnings (post-earnings chaos zone) — NEVER select these
 
-## PREMIUM-FIRST ROLL POLICY (MANDATORY)
+## ROLL ECONOMICS WORKFLOW
 
-**Before recommending ANY roll**, verify the roll economics from the candidates table. This policy enforces a strict hierarchy that prioritizes income generation and caps defensive roll costs.
-
-### Roll Economics — Read From Table
-
-All economics are pre-computed in the candidates table:
-- **Buyback cost**: Shown in the CURRENT POSITION block and the "Buyback" column of every row (identical for all candidates)
-- **New premium**: The "New Prem" column for your chosen candidate row
-- **Net credit/debit**: The "Net Credit" column for your chosen candidate row
-  - Positive = net credit (you collect money)
-  - Negative = net debit (you pay money)
-
-### VERIFICATION (CRITICAL — do NOT skip)
-
-Before reporting roll economics, you MUST:
-1. Confirm the chosen candidate row exists in the table (match Strike and Expiration columns)
-2. Read the **Buyback**, **New Prem**, and **Net Credit** values directly from that row
-3. State the row number and values: e.g., "Row #3: Strike $195, Exp 2026-05-22, New Prem $5.25, Buyback $4.10, Net Credit +$1.15"
-4. If no candidate row matches your target strike/expiration, the contract is not available — recommend CLOSE or try the next candidate
-5. Quote the exact table values — do NOT round, estimate, or approximate
-
-### Three-Tier Hierarchy
-
-**Tier 1 — PREFERRED: Net Credit ≥ $1.00**
-- Roll generates income of at least $1.00 per share ($100 per contract)
-- Approved automatically — this is the ideal outcome
-- Proceed with the roll recommendation
-
-**Tier 2 — ACCEPTABLE (Ultra-Defensive): Net Debit ≤ $1.00**
-- Roll costs money, but paying ≤$1.00 per share ($100 per contract) is acceptable insurance to avoid assignment on a position you want to keep
-- This is a defensive maneuver when the stock has moved significantly against you
-- MUST add `"ultra_defensive_roll"` to `risk_flags`
-- Include detailed justification in the `reason` field explaining why paying this debit is warranted
-
-**Tier 3 — REJECTED: Net Debit > $1.00**
-- Do NOT recommend this roll
-- The cost is too high — position has deteriorated beyond reasonable roll economics
-- Execute the Roll Search Algorithm (below) to find alternatives
-- If no viable alternative exists → recommend CLOSE
+Load **roll-economics** before selecting or validating a candidate. Use that skill for the Premium-First Roll Policy, mandatory row verification, and tiered accept/reject rules.
 
 ## ROLL SEARCH ALGORITHM
 
@@ -192,7 +161,7 @@ Carry through all risk_flags from Agent 1's handoff, and add any roll-specific f
 - `profit_optimization` (profit-motivated roll, from Agent 1)
 - `close_for_profit` (position closed for profit per TastyTrade 50%+ rule)
 
-All other flags (position, earnings, calendar, technical, fundamental) come from Agent 1's handoff.
+All other flags (position, earnings, calendar, technical, fundamental) come from Agent 1's handoff. Load **risk-flags** if you need the canonical taxonomy.
 
 **ALWAYS show the math in the `reason` field (values from the candidates table):**
 - "Buyback cost: $X.XX (from CURRENT POSITION block)"
