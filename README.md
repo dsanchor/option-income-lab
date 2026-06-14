@@ -1229,6 +1229,16 @@ az cosmosdb sql container create \
   --partition-key-version 2 \
   -o none
 
+# Create calendar container (partition key /symbol, earnings & ex-dividend dates)
+az cosmosdb sql container create \
+  --account-name "$COSMOSDB_ACCOUNT" \
+  --resource-group "$RESOURCE_GROUP" \
+  --database-name "$DATABASE_NAME" \
+  --name "calendar" \
+  --partition-key-path "/symbol" \
+  --partition-key-version 2 \
+  -o none
+
 # Apply custom indexing policy
 az cosmosdb sql container update \
   --account-name "$COSMOSDB_ACCOUNT" \
