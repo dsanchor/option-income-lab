@@ -12,8 +12,9 @@ Option Income Lab makes DGI *interesting* by layering options strategies on top:
 - 💰 **Cash-Secured Puts** → Get paid to wait for stocks you want at prices you choose
 - 📈 **Covered Calls** → Squeeze extra income from stocks you already own
 - 🤖 **AI-Powered Monitoring** → Agents watch your positions 24/7, suggest rolls, flag risks
+- 📊 **Economics Dashboard** → Track P&L, premiums, buyback costs, RoC%, and win rate across all positions
 
-The result: a DGI portfolio that generates income from **dividends AND option premiums** — with an AI copilot keeping watch while you sleep.
+The result: a DGI portfolio that generates income from **dividends AND option premiums** — with an AI copilot keeping watch while you sleep, and a full economics dashboard tracking your P&L.
 
 ---
 
@@ -333,8 +334,13 @@ Active positions in the Symbol Detail page have a Roll button in the positions t
 
 **Position Actions:**
 - **Close** — Marks position as closed (status: "closed") with the timestamp
-- **Roll** — Atomically closes current position and opens a new one, maintaining traceability chain
+- **Roll** — Atomically closes current position (status: "rolled") and opens a new one, maintaining traceability chain. Supports optional buyback cost (per-share cost to close the old position) and new premium (per-share premium on the new position).
 - **Delete** — Permanently removes the position and cascade-deletes all linked activities/alerts
+
+**Position Financial Fields:**
+- **Premium** — Per-share premium received when opening the position. Editable inline on the symbol detail page. Stored in `source.premium` (from alert) or top-level when manually set.
+- **Buyback Cost** — Per-share cost to buy back a rolled position. Only shown for positions with `status: "rolled"`. Editable inline.
+- **Status values:** `active` (open position), `closed` (expired/closed manually), `rolled` (closed via roll to a new position)
 
 **Position Model Example:**
 ```json
@@ -345,11 +351,13 @@ Active positions in the Symbol Detail page have a Roll button in the positions t
   "expiration": "2025-06-20",
   "opened_at": "2025-03-15T10:00:00Z",
   "status": "active",
+  "buyback_cost": null,
   "notes": "",
   "source": {
     "activity_id": "dec_...",
     "agent_type": "covered_call",
-    "timestamp": "2025-03-15T10:00:00Z"
+    "timestamp": "2025-03-15T10:00:00Z",
+    "premium": 1.25
   },
   "rolled_from": "pos_MO_call_55.0_20250520"
 }
@@ -785,6 +793,7 @@ stock-options-manager/
 │   │   ├── symbol_chat.html              # Per-symbol chat page with context selection
 │   │   ├── fetch_preview.html            # Raw data debug/preview page
 │   │   ├── dgi_screener.html             # DGI Screener Top 20 page
+│   │   ├── economics.html                # Economics P&L analytics dashboard
 │   │   └── chat.html                     # Chat interface (dual-mode)
 │   └── static/
 │       ├── style.css                     # Revolut-inspired dark trading theme CSS
@@ -810,6 +819,15 @@ stock-options-manager/
   - Mode selector on the chat page lets you switch between modes at any time.
 - **Settings** (`/settings`) — Scheduler config, Telegram notifications toggle & test button, Summarization Agent config (cron schedule & activity count), runtime stats (today/7d/30d telemetry), a Debug Data Fetch tool for testing data fetching per symbol, and an **Agent Chain Pipeline** debug view (`/api/debug/agent-chain/{symbol}`) for inspecting the full two-phase monitor pipeline per symbol. Settings are persisted to CosmosDB and survive application restarts and deployments. Changes made in the Settings UI are immediately available to all components (scheduler, telegram notifier, summarization agent, etc.) without requiring a restart.
 - **DGI Screener** (`/dgi`) — Top 20 dividend growth stock candidates ranked by composite quality score. Color-coded category badges, per-row Quick Analysis (▶) and Add to Symbols (➕) actions. Configurable stock universe and filter thresholds via Settings.
+- **Economics** (`/economics`) — P&L analytics dashboard for options trading performance. Features:
+  - **Summary cards** — Total premium collected, total buyback costs, net income, weighted average RoC% (annualized), and win rate
+  - **Filters** — Year, months (multi-select dropdown with checkboxes), symbols (multi-select dropdown with checkboxes), type (call/put), status (closed/rolled). Defaults to current year on load.
+  - **Monthly breakdown table** — Net income, premium, buyback, RoC%, and win rate per month
+  - **By-symbol breakdown table** — Same metrics grouped by underlying symbol
+  - **Charts** — Monthly Net Income stacked bar chart (calls vs puts breakdown) and Calls vs Puts donut chart
+  - **Positions detail table** — All matching positions with per-share and dollar amounts, individual RoC%, days held, and status
+  - **Weighted RoC%** — Calculated as `total_net_income / sum(strike × 100)` to avoid misleading simple averages. Annualized using average days to expiration.
+  - **Contract multiplier** — Premium and buyback are stored per-share; Economics displays total dollar amounts (×100 for standard options contracts)
 
 ---
 
