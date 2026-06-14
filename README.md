@@ -13,6 +13,8 @@ Option Income Lab makes DGI *interesting* by layering options strategies on top:
 - 📈 **Covered Calls** → Squeeze extra income from stocks you already own
 - 🤖 **AI-Powered Monitoring** → Agents watch your positions 24/7, suggest rolls, flag risks
 - 📊 **Economics Dashboard** → Track P&L, premiums, buyback costs, RoC%, and win rate across all positions
+- 📅 **Events Calendar** → Earnings and ex-dividend dates with position exposure warnings
+- 🎯 **Profit Target Gate** → Auto-roll positions at 70% profit to lock in gains
 
 The result: a DGI portfolio that generates income from **dividends AND option premiums** — with an AI copilot keeping watch while you sleep, and a full economics dashboard tracking your P&L.
 
@@ -36,7 +38,7 @@ The first two agents (sell-side) decide whether to **open** new positions. The n
 
 Both sell-side agents use the Microsoft Agent Framework (`agent-framework`) with Yahoo Finance (yfinance) as the data source. All market data — overview, technicals, forecast, dividends, and full options chains — is fetched via the `yfinance` Python library. No browser, no scraping, no authentication required. Data is pre-fetched deterministically and passed to the LLM for analysis. The LLM never makes HTTP requests directly.
 
-**Storage backend:** Azure CosmosDB with four containers: `symbols` (watchlists, positions, activities, alerts, reports), `telemetry` (runtime performance stats with 30-day TTL), `settings` (application configuration persistence), and `dgi_screener` (DGI screening results and daily snapshots). Each symbol is a partition key in the symbols container containing four document types: `symbol_config` (watchlist flags + positions), `activity` (full audit trail), `alert` (actionable alerts), and `report` (generated symbol reports). The telemetry container tracks data fetch durations and agent run times, displayed on the Settings page. The settings container persists application configuration with partition key `/id`. The dgi_screener container stores current Top 20 entries and daily snapshots for historical tracking, partitioned by `/symbol`. See the [Azure CosmosDB Setup](#azure-cosmosdb-setup) section for provisioning.
+**Storage backend:** Azure CosmosDB with five containers: `symbols` (watchlists, positions, activities, alerts, reports), `telemetry` (runtime performance stats with 30-day TTL), `settings` (application configuration persistence), `dgi_screener` (DGI screening results and daily snapshots), and `calendar` (cached earnings and ex-dividend dates from Yahoo Finance). Each symbol is a partition key in the symbols container containing four document types: `symbol_config` (watchlist flags + positions), `activity` (full audit trail), `alert` (actionable alerts), and `report` (generated symbol reports). The telemetry container tracks data fetch durations and agent run times, displayed on the Settings page. The settings container persists application configuration with partition key `/id`. The dgi_screener container stores current Top 20 entries and daily snapshots for historical tracking, partitioned by `/symbol`. The calendar container stores event data partitioned by `/symbol`. See the [Azure CosmosDB Setup](#azure-cosmosdb-setup) section for provisioning.
 
 ## How It Works
 
@@ -208,6 +210,36 @@ Every sell-side agent output (Covered Call and Cash Secured Put) includes a **ri
 | 9–10 | Very high | Definitely WAIT |
 
 The rating appears in JSON output (`risk_rating` integer + `risk_rating_breakdown` object) and in the SUMMARY line (`Risk X/10`). Telegram sell alerts also include `Risk: X/10`.
+
+### Profit Target Gate (Monitor Agents)
+
+A **mandatory hard rule** embedded in both position monitor agents (Open Call Monitor and Open Put Monitor) that triggers profit-optimization rolls when favorable conditions are met. This ensures the system proactively locks in gains rather than passively waiting for expiration.
+
+**Trigger conditions (ALL must be true):**
+- **P&L ≥ 70%** — the position has captured at least 70% of maximum profit
+- **DTE ≥ 10** — at least 10 days remain until expiration (enough time to roll effectively)
+
+**Actions:**
+- **Calls** → `ROLL_DOWN` or `ROLL_DOWN_AND_OUT` (tighten strike to collect new premium)
+- **Puts** → `ROLL_UP` or `ROLL_UP_AND_OUT` (tighten strike to collect new premium)
+
+The gate fires BEFORE other assessment logic (except earnings proximity). When triggered, the agent sets `close_for_profit_recommended: true` and adds `"profit_optimization"` to risk flags. The roll economics (buyback cost, new premium, net credit) are calculated from the filtered options chain.
+
+### Events Calendar
+
+The **Events Calendar** (`/symbols/calendar`) provides a monthly view of earnings dates and ex-dividend dates for all tracked symbols, with color coding to indicate whether open positions are exposed.
+
+**Color coding:**
+| Event Type | Position Active on Date | No Active Position |
+|------------|------------------------|--------------------|
+| Earnings | 🟣 Purple (warning) | 🟠 Orange (informational) |
+| Ex-Dividend | 🔴 Red (warning) | 🟡 Yellow (informational) |
+
+**Active position detection:** A position is considered "active on a date" if its status is `active` AND its expiration date is on or after the event date. This ensures only positions actually exposed to the event are flagged — not just any open position for that symbol.
+
+**Data source:** Earnings and ex-dividend dates are fetched from Yahoo Finance (`yfinance`) and cached in CosmosDB (`calendar` container, partition key `/symbol`). A scheduled sync job runs Mon–Fri at 5am by default (configurable via Settings). A manual **Refresh** button on the calendar page triggers an on-demand sync.
+
+**Navigation:** Accessible from the Symbols dropdown menu → "📅 Calendar" (alongside "📋 Configuration" for symbol management).
 
 ### Supervisor Agent (Quality Auditor)
 
@@ -794,6 +826,7 @@ stock-options-manager/
 │   │   ├── fetch_preview.html            # Raw data debug/preview page
 │   │   ├── dgi_screener.html             # DGI Screener Top 20 page
 │   │   ├── economics.html                # Economics P&L analytics dashboard
+│   │   ├── calendar.html                 # Events Calendar (earnings & ex-dividend dates)
 │   │   └── chat.html                     # Chat interface (dual-mode)
 │   └── static/
 │       ├── style.css                     # Revolut-inspired dark trading theme CSS
@@ -828,6 +861,7 @@ stock-options-manager/
   - **Positions detail table** — All matching positions with per-share and dollar amounts, individual RoC%, days held, and status
   - **Weighted RoC%** — Calculated as `total_net_income / sum(strike × 100)` to avoid misleading simple averages. Annualized using average days to expiration.
   - **Contract multiplier** — Premium and buyback are stored per-share; Economics displays total dollar amounts (×100 for standard options contracts)
+- **Events Calendar** (`/symbols/calendar`) — Monthly calendar view showing earnings and ex-dividend dates for all tracked symbols. Color-coded by event type and position exposure (purple/orange for earnings, red/yellow for ex-dividend). Data cached in CosmosDB with configurable daily sync from Yahoo Finance. Includes a manual Refresh button for on-demand updates.
 
 ---
 

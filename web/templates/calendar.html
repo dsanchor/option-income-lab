@@ -2,7 +2,7 @@
 {% block title %}Calendar — Option Income Lab{% endblock %}
 
 {% block content %}
-<div class="page-header">
+<div class="page-header" style="margin-bottom: 1.5rem;">
     <h1>📅 Events Calendar</h1>
     <div class="subtitle">Earnings and ex-dividend dates for all tracked symbols.</div>
 </div>
@@ -11,7 +11,7 @@
     .calendar-legend {
         display: flex;
         gap: 1.5rem;
-        margin-bottom: 1.25rem;
+        margin-bottom: 1.5rem;
         flex-wrap: wrap;
     }
     .calendar-legend-item {
@@ -26,7 +26,7 @@
         height: 12px;
         border-radius: 3px;
     }
-    .legend-earnings-active { background: var(--accent-red, #e53935); }
+    .legend-earnings-active { background: #9c27b0; }
     .legend-earnings-info { background: var(--accent-orange, #f59e0b); }
     .legend-exdiv-active { background: var(--accent-red, #e53935); }
     .legend-exdiv-info { background: #fbbf24; }
@@ -42,7 +42,7 @@
     }
     .calendar-header-cell {
         background: var(--surface-alt, rgba(255,255,255,0.04));
-        padding: 0.5rem;
+        padding: 0.6rem 0.5rem;
         text-align: center;
         font-size: 0.75rem;
         font-weight: 600;
@@ -51,8 +51,8 @@
     }
     .calendar-cell {
         background: var(--bg-card, #1c1c24);
-        min-height: 90px;
-        padding: 0.4rem;
+        min-height: 100px;
+        padding: 0.5rem;
         position: relative;
         vertical-align: top;
     }
@@ -67,20 +67,20 @@
         font-size: 0.75rem;
         font-weight: 500;
         color: var(--text-muted);
-        margin-bottom: 0.25rem;
+        margin-bottom: 0.35rem;
     }
     .calendar-event {
         font-size: 0.7rem;
         padding: 2px 5px;
         border-radius: 3px;
-        margin-bottom: 2px;
+        margin-bottom: 3px;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
         font-weight: 500;
     }
     .event-earnings-active {
-        background: var(--accent-red, #e53935);
+        background: #9c27b0;
         color: #fff;
     }
     .event-earnings-info {
@@ -100,14 +100,16 @@
         display: flex;
         align-items: center;
         gap: 1rem;
-        margin-bottom: 1rem;
+        margin-bottom: 1.25rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--border, #2d2d35);
     }
     .calendar-nav button {
         background: var(--surface-alt, rgba(255,255,255,0.06));
         border: 1px solid var(--border, #2d2d35);
         border-radius: 6px;
         color: var(--text, #fff);
-        padding: 0.4rem 0.75rem;
+        padding: 0.5rem 0.85rem;
         cursor: pointer;
         font-size: 0.85rem;
     }
@@ -124,6 +126,9 @@
         text-align: center;
         padding: 2rem;
         color: var(--text-muted);
+    }
+    .calendar-card {
+        padding: 1.5rem;
     }
 </style>
 
@@ -146,13 +151,13 @@
     </div>
 </div>
 
-<div class="card">
+<div class="card calendar-card">
     <div class="calendar-nav">
         <button id="cal-prev">◀</button>
         <h2 id="cal-title">June 2026</h2>
         <button id="cal-next">▶</button>
         <button id="cal-today">Today</button>
-        <button id="cal-refresh" style="margin-left:auto;">🔄 Refresh</button>
+        <button id="cal-refresh" style="margin-left:auto; padding: 0.5rem 1rem;">🔄 Refresh</button>
     </div>
     <div id="calendar-loading" class="calendar-loading">Loading events...</div>
     <div id="calendar-grid" class="calendar-grid" style="display:none;"></div>

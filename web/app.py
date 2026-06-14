@@ -1680,30 +1680,62 @@ async def api_calendar_refresh(request: Request):
         try:
             ticker = yf.Ticker(symbol)
             info = ticker.info or {}
-        except Exception:
+        except Exception as exc:
+            logger.warning("Calendar: failed to fetch info for %s: %s", symbol, exc)
             errors += 1
             continue
 
-        # Earnings date
-        earnings_ts = info.get("earningsTimestampStart")
-        if earnings_ts:
+        # Earnings date — try multiple keys from yfinance
+        earnings_ts = (
+            info.get("earningsTimestampStart")
+            or info.get("earningsTimestamp")
+            or info.get("mostRecentQuarter")
+        )
+        if not earnings_ts:
+            # Try the calendar endpoint for next earnings
             try:
-                earnings_date = datetime.fromtimestamp(earnings_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                cal = ticker.calendar
+                if cal is not None:
+                    if isinstance(cal, dict):
+                        ed = cal.get("Earnings Date")
+                        if ed and len(ed) > 0:
+                            # Returns list of Timestamp objects
+                            earnings_date = str(ed[0].date()) if hasattr(ed[0], 'date') else str(ed[0])[:10]
+                            has_active = _has_position_active_on(earnings_date)
+                            cosmos.upsert_calendar_event(symbol, "earnings", earnings_date, has_active)
+                            updated += 1
+                            earnings_ts = "done"
+                    elif hasattr(cal, 'iloc'):
+                        # DataFrame format
+                        if "Earnings Date" in cal.columns:
+                            earnings_date = str(cal["Earnings Date"].iloc[0])[:10]
+                            has_active = _has_position_active_on(earnings_date)
+                            cosmos.upsert_calendar_event(symbol, "earnings", earnings_date, has_active)
+                            updated += 1
+                            earnings_ts = "done"
+            except Exception:
+                pass
+
+        if earnings_ts and earnings_ts != "done":
+            try:
+                earnings_date = datetime.fromtimestamp(int(earnings_ts), tz=timezone.utc).strftime("%Y-%m-%d")
                 has_active = _has_position_active_on(earnings_date)
                 cosmos.upsert_calendar_event(symbol, "earnings", earnings_date, has_active)
                 updated += 1
-            except (OSError, ValueError):
+            except (OSError, ValueError, TypeError):
                 pass
 
         # Ex-dividend date
         ex_div_ts = info.get("exDividendDate")
+        if not ex_div_ts:
+            ex_div_ts = info.get("lastDividendDate")
         if ex_div_ts:
             try:
-                ex_div_date = datetime.fromtimestamp(ex_div_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                ex_div_date = datetime.fromtimestamp(int(ex_div_ts), tz=timezone.utc).strftime("%Y-%m-%d")
                 has_active = _has_position_active_on(ex_div_date)
                 cosmos.upsert_calendar_event(symbol, "ex_dividend", ex_div_date, has_active)
                 updated += 1
-            except (OSError, ValueError):
+            except (OSError, ValueError, TypeError):
                 pass
 
     return {"updated": updated, "errors": errors, "symbols_processed": len(symbols)}
