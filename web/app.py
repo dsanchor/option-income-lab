@@ -172,17 +172,23 @@ def _group_economics_metrics(positions: List[Dict[str, Any]]) -> Dict[str, float
     total_buyback = sum(
         p["buyback_cost"] for p in positions if p["buyback_cost"] is not None
     )
-    roc_values = [p["roc_pct"] for p in positions if p["roc_pct"] is not None]
-    roc_annualized_values = [
-        p["roc_annualized"] for p in positions if p["roc_annualized"] is not None
-    ]
+    total_net = total_premium - total_buyback
+    # Weighted RoC: net / total capital deployed (sum of strikes × 100)
+    total_capital = sum(
+        p["strike"] * 100 for p in positions if p["strike"] is not None and p["strike"] > 0
+    )
+    avg_roc_pct = _round2((total_net / total_capital) * 100) if total_capital > 0 else 0.0
+    # Annualized: weight by average days to expiration
+    days_values = [p["_days_to_exp"] for p in positions if p.get("_days_to_exp") and p["_days_to_exp"] > 0]
+    avg_days = sum(days_values) / len(days_values) if days_values else 0
+    avg_roc_annualized = _round2(avg_roc_pct * (365 / avg_days)) if avg_days > 0 else avg_roc_pct
     return {
         "premium": _round2(total_premium),
         "buyback": _round2(total_buyback),
-        "net": _round2(total_premium - total_buyback),
+        "net": _round2(total_net),
         "count": len(positions),
-        "avg_roc_pct": _average(roc_values),
-        "avg_roc_annualized": _average(roc_annualized_values),
+        "avg_roc_pct": avg_roc_pct,
+        "avg_roc_annualized": avg_roc_annualized,
     }
 
 
@@ -232,6 +238,7 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
                 roc_pct = _round2((net_per_share / strike) * 100)
 
             roc_annualized = None
+            days_to_expiration = 0
             if roc_pct is not None and opened_dt and expiration_dt:
                 days_to_expiration = (
                     expiration_dt.date() - opened_dt.astimezone(timezone.utc).date()
@@ -268,6 +275,7 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
                 "opened_at": position.get("opened_at"),
                 "_opened_year": opened_dt.year if opened_dt else None,
                 "_opened_month": opened_dt.month if opened_dt else None,
+                "_days_to_exp": days_to_expiration if days_to_expiration > 0 else None,
             }
             all_positions.append(position_data)
             available_symbols.add(symbol)
