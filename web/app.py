@@ -22,6 +22,11 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+try:
+    import yfinance as yf
+except ImportError:
+    yf = None
+
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -1618,6 +1623,71 @@ async def symbols_page(request: Request):
         "request": request,
         "symbols": symbols,
     })
+
+
+@app.get("/symbols/calendar", response_class=HTMLResponse)
+async def symbols_calendar_page(request: Request):
+    return templates.TemplateResponse("calendar.html", {"request": request})
+
+
+@app.get("/api/calendar")
+async def api_calendar(request: Request):
+    """Return earnings and ex-dividend dates for all tracked symbols."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    if cosmos is None:
+        return {"events": [], "error": "CosmosDB not available"}
+
+    symbols = cosmos.list_symbols() if cosmos else []
+    yf_provider = getattr(request.app.state, "yf_provider", None)
+
+    if not yf_provider or yf is None:
+        return {"events": [], "error": "yfinance provider not available"}
+
+    events = []
+    for sym_doc in symbols:
+        symbol = sym_doc.get("symbol", "")
+        if not symbol:
+            continue
+
+        has_active_position = any(
+            p.get("status") == "active" for p in sym_doc.get("positions", [])
+        )
+
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info or {}
+        except Exception:
+            continue
+
+        # Earnings date
+        earnings_ts = info.get("earningsTimestampStart")
+        if earnings_ts:
+            try:
+                earnings_date = datetime.fromtimestamp(earnings_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                events.append({
+                    "symbol": symbol,
+                    "type": "earnings",
+                    "date": earnings_date,
+                    "has_active_position": has_active_position,
+                })
+            except (OSError, ValueError):
+                pass
+
+        # Ex-dividend date
+        ex_div_ts = info.get("exDividendDate")
+        if ex_div_ts:
+            try:
+                ex_div_date = datetime.fromtimestamp(ex_div_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                events.append({
+                    "symbol": symbol,
+                    "type": "ex_dividend",
+                    "date": ex_div_date,
+                    "has_active_position": has_active_position,
+                })
+            except (OSError, ValueError):
+                pass
+
+    return {"events": events}
 
 
 @app.get("/symbols/{symbol}", response_class=HTMLResponse)

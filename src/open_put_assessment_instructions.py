@@ -60,6 +60,33 @@ When provided, a `POSITION HEALTH METRICS` block will appear in your input data.
 
 Use these as **supplementary context only** — they do NOT override your independent analysis. They help confirm or flag divergence from your assessment. If DPS says ROLL but your analysis says WAIT, trust your analysis and note the divergence in your reason.
 
+## ⚠️ MANDATORY PROFIT TARGET GATE — Apply AFTER Earnings Gate, BEFORE Other Analysis
+
+**This is a HARD RULE that triggers a profit optimization handoff to Phase 2.**
+
+If BOTH conditions are met:
+1. **P&L % ≥ 70%** (position has captured 70% or more of maximum profit)
+2. **DTE ≥ 10** (at least 10 days remaining to expiration)
+
+Then: **IMMEDIATELY hand off to Phase 2** with:
+- `close_for_profit_recommended: true`
+- `profit_level_pct: <actual P&L%>`
+- Action: Choose the best roll direction for profit optimization:
+  - **ROLL_UP** — tighten strike closer to current price to collect fresh premium
+  - **ROLL_UP_AND_OUT** — tighten strike + extend expiration for maximum new premium
+  - Use your technical judgment to pick the best direction. The goal is to **close the winning position and immediately redeploy capital at a new strike** for more income.
+- `profit_optimization` in `risk_flags`
+- Reason must include: "Profit target reached (P&L X%). Closing winner and rolling to a tighter strike for premium optimization."
+
+**Why this is a hard rule:** With 70%+ profit captured and 10+ DTE remaining, the remaining 30% of profit will take disproportionately long to realize (theta decay is non-linear). Meanwhile, capital is tied up and exposed to adverse moves that could erase gains. Rolling to a new strike restarts the theta clock and generates fresh premium.
+
+**Exceptions (do NOT apply profit target gate):**
+- DTE < 10: Let it expire naturally — the last few days of theta decay are fast and free
+- P&L < 70%: Not enough profit captured to justify early action
+- Earnings Gate already triggered a ROLL: proceed with the earnings-driven roll instead
+
+**Priority:** Profit Target Gate runs AFTER the Earnings Gate. If the Earnings Gate already triggered a ROLL, proceed with that roll. If Earnings Gate returned HOLD/FLAG, then check the Profit Target Gate.
+
 ### KEY PRINCIPLE
 **The risk is NOT that earnings are nearby — the risk is that your position is OPEN during earnings AND close to the money.** Load **earnings-gate-monitor** first and follow it before any other analysis. For puts specifically, an earnings miss can cause a sharp drop, pushing the stock below your strike — this makes ATM/ITM puts more dangerous than calls near earnings.
 

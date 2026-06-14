@@ -15,7 +15,13 @@
         <button class="hamburger" aria-label="Menu">☰</button>
         <div class="nav-links">
             <a href="/dashboard" class="{% if request.url.path in ('/', '/dashboard') %}active{% endif %}">Dashboard</a>
-            <a href="/symbols" class="{% if request.url.path.startswith('/symbols') %}active{% endif %}">Symbols</a>
+            <div class="nav-dropdown">
+                <span class="nav-dropdown-trigger {% if request.url.path.startswith('/symbols') %}active{% endif %}">Symbols</span>
+                <div class="nav-dropdown-content">
+                    <a href="/symbols">📋 Configuration</a>
+                    <a href="/symbols/calendar">📅 Calendar</a>
+                </div>
+            </div>
             <a href="/economics" class="{% if request.url.path.startswith('/economics') %}active{% endif %}">Economics</a>
             <a href="/chat" class="{% if request.url.path == '/chat' %}active{% endif %}">Chat</a>
             <a href="/dgi" class="{% if request.url.path.startswith('/dgi') %}active{% endif %}">DGI Screener</a>

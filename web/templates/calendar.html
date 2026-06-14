@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+{% block title %}Calendar — Option Income Lab{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>📅 Events Calendar</h1>
+    <div class="subtitle">Earnings and ex-dividend dates for all tracked symbols.</div>
+</div>
+
+<style>
+    .calendar-legend {
+        display: flex;
+        gap: 1.5rem;
+        margin-bottom: 1.25rem;
+        flex-wrap: wrap;
+    }
+    .calendar-legend-item {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.85rem;
+        color: var(--text-muted);
+    }
+    .calendar-legend-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 3px;
+    }
+    .legend-earnings-active { background: var(--accent-red, #e53935); }
+    .legend-earnings-info { background: var(--accent-orange, #f59e0b); }
+    .legend-exdiv-active { background: var(--accent-red, #e53935); }
+    .legend-exdiv-info { background: #fbbf24; }
+
+    .calendar-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 1px;
+        background: var(--border, #2d2d35);
+        border: 1px solid var(--border, #2d2d35);
+        border-radius: var(--radius-card, 12px);
+        overflow: hidden;
+    }
+    .calendar-header-cell {
+        background: var(--surface-alt, rgba(255,255,255,0.04));
+        padding: 0.5rem;
+        text-align: center;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        color: var(--text-muted);
+    }
+    .calendar-cell {
+        background: var(--bg-card, #1c1c24);
+        min-height: 90px;
+        padding: 0.4rem;
+        position: relative;
+        vertical-align: top;
+    }
+    .calendar-cell.other-month {
+        opacity: 0.3;
+    }
+    .calendar-cell.today {
+        background: rgba(73, 79, 223, 0.08);
+        border: 1px solid var(--accent-blue, #494fdf);
+    }
+    .calendar-day-number {
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: var(--text-muted);
+        margin-bottom: 0.25rem;
+    }
+    .calendar-event {
+        font-size: 0.7rem;
+        padding: 2px 5px;
+        border-radius: 3px;
+        margin-bottom: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-weight: 500;
+    }
+    .event-earnings-active {
+        background: var(--accent-red, #e53935);
+        color: #fff;
+    }
+    .event-earnings-info {
+        background: var(--accent-orange, #f59e0b);
+        color: #000;
+    }
+    .event-exdiv-active {
+        background: var(--accent-red, #e53935);
+        color: #fff;
+    }
+    .event-exdiv-info {
+        background: #fbbf24;
+        color: #000;
+    }
+
+    .calendar-nav {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+    .calendar-nav button {
+        background: var(--surface-alt, rgba(255,255,255,0.06));
+        border: 1px solid var(--border, #2d2d35);
+        border-radius: 6px;
+        color: var(--text, #fff);
+        padding: 0.4rem 0.75rem;
+        cursor: pointer;
+        font-size: 0.85rem;
+    }
+    .calendar-nav button:hover {
+        border-color: var(--accent-blue, #494fdf);
+    }
+    .calendar-nav h2 {
+        font-size: 1.1rem;
+        font-weight: 500;
+        min-width: 180px;
+        text-align: center;
+    }
+    .calendar-loading {
+        text-align: center;
+        padding: 2rem;
+        color: var(--text-muted);
+    }
+</style>
+
+<div class="calendar-legend">
+    <div class="calendar-legend-item">
+        <div class="calendar-legend-dot legend-earnings-active"></div>
+        <span>Earnings (active position)</span>
+    </div>
+    <div class="calendar-legend-item">
+        <div class="calendar-legend-dot legend-earnings-info"></div>
+        <span>Earnings (no active position)</span>
+    </div>
+    <div class="calendar-legend-item">
+        <div class="calendar-legend-dot legend-exdiv-active"></div>
+        <span>Ex-Dividend (active position)</span>
+    </div>
+    <div class="calendar-legend-item">
+        <div class="calendar-legend-dot legend-exdiv-info"></div>
+        <span>Ex-Dividend (no active position)</span>
+    </div>
+</div>
+
+<div class="card">
+    <div class="calendar-nav">
+        <button id="cal-prev">◀</button>
+        <h2 id="cal-title">June 2026</h2>
+        <button id="cal-next">▶</button>
+        <button id="cal-today">Today</button>
+    </div>
+    <div id="calendar-loading" class="calendar-loading">Loading events...</div>
+    <div id="calendar-grid" class="calendar-grid" style="display:none;"></div>
+</div>
+
+<script>
+(function() {
+    const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    const DAY_NAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+    let currentYear = new Date().getFullYear();
+    let currentMonth = new Date().getMonth(); // 0-indexed
+    let events = [];
+
+    const grid = document.getElementById('calendar-grid');
+    const title = document.getElementById('cal-title');
+    const loading = document.getElementById('calendar-loading');
+
+    document.getElementById('cal-prev').addEventListener('click', () => { currentMonth--; if (currentMonth < 0) { currentMonth = 11; currentYear--; } render(); });
+    document.getElementById('cal-next').addEventListener('click', () => { currentMonth++; if (currentMonth > 11) { currentMonth = 0; currentYear++; } render(); });
+    document.getElementById('cal-today').addEventListener('click', () => { currentYear = new Date().getFullYear(); currentMonth = new Date().getMonth(); render(); });
+
+    function getEventClass(ev) {
+        if (ev.type === 'earnings') {
+            return ev.has_active_position ? 'event-earnings-active' : 'event-earnings-info';
+        }
+        return ev.has_active_position ? 'event-exdiv-active' : 'event-exdiv-info';
+    }
+
+    function getEventLabel(ev) {
+        const prefix = ev.type === 'earnings' ? '📊' : '💰';
+        return `${prefix} ${ev.symbol}`;
+    }
+
+    function render() {
+        title.textContent = `${MONTH_NAMES[currentMonth]} ${currentYear}`;
+
+        const firstDay = new Date(currentYear, currentMonth, 1);
+        const lastDay = new Date(currentYear, currentMonth + 1, 0);
+        // Monday = 0 in our grid
+        let startDow = firstDay.getDay() - 1;
+        if (startDow < 0) startDow = 6;
+
+        const today = new Date();
+        const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+
+        // Build event lookup
+        const eventsByDate = {};
+        events.forEach(ev => {
+            if (!eventsByDate[ev.date]) eventsByDate[ev.date] = [];
+            eventsByDate[ev.date].push(ev);
+        });
+
+        let html = '';
+        // Header row
+        DAY_NAMES.forEach(d => { html += `<div class="calendar-header-cell">${d}</div>`; });
+
+        // Previous month days
+        const prevMonthLast = new Date(currentYear, currentMonth, 0).getDate();
+        for (let i = startDow - 1; i >= 0; i--) {
+            const day = prevMonthLast - i;
+            html += `<div class="calendar-cell other-month"><div class="calendar-day-number">${day}</div></div>`;
+        }
+
+        // Current month days
+        for (let d = 1; d <= lastDay.getDate(); d++) {
+            const dateStr = `${currentYear}-${String(currentMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+            const isToday = dateStr === todayStr;
+            html += `<div class="calendar-cell${isToday ? ' today' : ''}">`;
+            html += `<div class="calendar-day-number">${d}</div>`;
+            if (eventsByDate[dateStr]) {
+                eventsByDate[dateStr].forEach(ev => {
+                    html += `<div class="calendar-event ${getEventClass(ev)}" title="${ev.type === 'earnings' ? 'Earnings' : 'Ex-Dividend'}: ${ev.symbol}${ev.has_active_position ? ' (ACTIVE POSITION)' : ''}">${getEventLabel(ev)}</div>`;
+                });
+            }
+            html += '</div>';
+        }
+
+        // Next month padding
+        const totalCells = startDow + lastDay.getDate();
+        const remaining = (7 - (totalCells % 7)) % 7;
+        for (let i = 1; i <= remaining; i++) {
+            html += `<div class="calendar-cell other-month"><div class="calendar-day-number">${i}</div></div>`;
+        }
+
+        grid.innerHTML = html;
+    }
+
+    // Fetch events
+    fetch('/api/calendar')
+        .then(r => r.json())
+        .then(data => {
+            events = data.events || [];
+            loading.style.display = 'none';
+            grid.style.display = 'grid';
+            render();
+        })
+        .catch(err => {
+            loading.textContent = 'Failed to load calendar events.';
+            console.error(err);
+        });
+})();
+</script>
+{% endblock %}
