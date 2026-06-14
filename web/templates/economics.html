@@ -133,9 +133,17 @@
             </select>
         </div>
         <div class="economics-filter-block">
-            <label class="economics-filter-label" for="economics-symbol">Symbol</label>
-            <select id="economics-symbol" class="filter-select">
-                <option value="">All Symbols</option>
+            <label class="economics-filter-label" for="economics-month">Months</label>
+            <select id="economics-month" class="filter-select" multiple style="min-height:34px; max-height:120px;">
+                <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
+                <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
+                <option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option>
+                <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+            </select>
+        </div>
+        <div class="economics-filter-block">
+            <label class="economics-filter-label" for="economics-symbol">Symbols</label>
+            <select id="economics-symbol" class="filter-select" multiple style="min-height:34px; max-height:120px;">
             </select>
         </div>
         <div class="economics-filter-block">
@@ -270,6 +278,7 @@
 
     const errorEl = document.getElementById('economics-error');
     const yearSelect = document.getElementById('economics-year');
+    const monthSelect = document.getElementById('economics-month');
     const symbolSelect = document.getElementById('economics-symbol');
     const typePills = document.getElementById('economics-type-pills');
     const statusPills = document.getElementById('economics-status-pills');
@@ -300,10 +309,17 @@
         });
     }
 
+    function getSelectedValues(selectEl) {
+        return Array.from(selectEl.selectedOptions).map(o => o.value);
+    }
+
     function syncUrl() {
         const params = new URLSearchParams();
         if (yearSelect.value) params.set('year', yearSelect.value);
-        if (symbolSelect.value) params.set('symbol', symbolSelect.value);
+        const months = getSelectedValues(monthSelect);
+        if (months.length) params.set('month', months.join(','));
+        const symbols = getSelectedValues(symbolSelect);
+        if (symbols.length) params.set('symbol', symbols.join(','));
         if (state.type) params.set('type', state.type);
         if (state.status) params.set('status', state.status);
         const next = params.toString() ? `${window.location.pathname}?${params.toString()}` : window.location.pathname;
@@ -313,9 +329,13 @@
     function getApiUrl() {
         const params = new URLSearchParams();
         const selectedYear = yearSelect.value || state.initialYear || '';
-        const selectedSymbol = symbolSelect.value || state.initialSymbol || '';
+        const symbols = getSelectedValues(symbolSelect);
+        const selectedSymbols = symbols.length ? symbols.join(',') : (state.initialSymbol || '');
+        const months = getSelectedValues(monthSelect);
+        const selectedMonths = months.length ? months.join(',') : (state.initialMonth || '');
         if (selectedYear) params.set('year', selectedYear);
-        if (selectedSymbol) params.set('symbol', selectedSymbol);
+        if (selectedMonths) params.set('month', selectedMonths);
+        if (selectedSymbols) params.set('symbol', selectedSymbols);
         if (state.type) params.set('type', state.type);
         if (state.status) params.set('status', state.status);
         return `/api/economics${params.toString() ? `?${params.toString()}` : ''}`;
@@ -484,17 +504,20 @@
 
     function populateFilterOptions(filters) {
         const selectedYear = yearSelect.value;
-        const selectedSymbol = symbolSelect.value;
+        const selectedSymbols = getSelectedValues(symbolSelect);
 
         yearSelect.innerHTML = ['<option value="">All Years</option>']
             .concat(filters.years.map((year) => `<option value="${year}">${year}</option>`))
             .join('');
-        symbolSelect.innerHTML = ['<option value="">All Symbols</option>']
-            .concat(filters.symbols.map((symbol) => `<option value="${symbol}">${symbol}</option>`))
+        symbolSelect.innerHTML = filters.symbols
+            .map((symbol) => `<option value="${symbol}">${symbol}</option>`)
             .join('');
 
         yearSelect.value = filters.years.map(String).includes(selectedYear) ? selectedYear : (state.initialYear || '');
-        symbolSelect.value = filters.symbols.includes(selectedSymbol) ? selectedSymbol : (state.initialSymbol || '');
+        // Restore multi-select symbols
+        const initialSymbols = state.initialSymbol ? state.initialSymbol.split(',') : [];
+        const toSelect = selectedSymbols.length ? selectedSymbols : initialSymbols;
+        Array.from(symbolSelect.options).forEach(o => { o.selected = toSelect.includes(o.value); });
         state.initialYear = '';
         state.initialSymbol = '';
     }
@@ -525,10 +548,16 @@
         const params = new URLSearchParams(window.location.search);
         state.type = params.get('type') || '';
         state.status = params.get('status') || '';
-        state.initialYear = params.get('year') || '';
+        state.initialYear = params.get('year') || String(new Date().getFullYear());
         state.initialSymbol = params.get('symbol') || '';
+        state.initialMonth = params.get('month') || '';
         setPillGroupValue(typePills, state.type);
         setPillGroupValue(statusPills, state.status);
+        // Pre-select months from URL
+        if (state.initialMonth) {
+            const months = state.initialMonth.split(',');
+            Array.from(monthSelect.options).forEach(o => { o.selected = months.includes(o.value); });
+        }
     }
 
     [typePills, statusPills].forEach((group) => {

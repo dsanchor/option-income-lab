@@ -188,7 +188,8 @@ def _group_economics_metrics(positions: List[Dict[str, Any]]) -> Dict[str, float
 
 def _build_economics_report(symbol_docs: List[Dict[str, Any]],
                             year: Optional[int] = None,
-                            symbol_filter: Optional[str] = None,
+                            month_filter: Optional[List[int]] = None,
+                            symbol_filter: Optional[List[str]] = None,
                             option_type: Optional[str] = None,
                             status_filter: Optional[str] = None,
                             now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -224,9 +225,11 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
             premium_total = premium * CONTRACT_MULTIPLIER
             buyback_total = buyback_cost * CONTRACT_MULTIPLIER if buyback_cost is not None else None
 
+            # Net RoC uses (premium - buyback) when buyback exists
+            net_per_share = premium - buyback_cost if buyback_cost is not None else premium
             roc_pct = None
             if strike not in (None, 0):
-                roc_pct = _round2((premium / strike) * 100)
+                roc_pct = _round2((net_per_share / strike) * 100)
 
             roc_annualized = None
             if roc_pct is not None and opened_dt and expiration_dt:
@@ -274,7 +277,8 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
     filtered_positions = [
         position for position in all_positions
         if (year is None or position["_opened_year"] == year)
-        and (symbol_filter is None or position["symbol"] == symbol_filter)
+        and (month_filter is None or position["_opened_month"] in month_filter)
+        and (symbol_filter is None or position["symbol"] in symbol_filter)
         and (option_type is None or position["type"] == option_type)
         and (status_filter is None or position["status"] == status_filter)
     ]
@@ -381,7 +385,7 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
         },
         "applied_filters": {
             "year": year,
-            "symbol": symbol_filter,
+            "symbols": symbol_filter,
             "type": option_type,
             "status": status_filter,
         },
@@ -564,12 +568,27 @@ async def api_list_symbols(request: Request):
 @app.get("/api/economics")
 async def api_economics(request: Request,
                         year: Optional[int] = Query(default=None),
+                        month: Optional[str] = Query(default=None),
                         symbol: Optional[str] = Query(default=None),
                         option_type: Optional[str] = Query(default=None, alias="type"),
                         status: Optional[str] = Query(default=None)):
     try:
         cosmos = _get_cosmos(request)
-        normalized_symbol = symbol.strip().upper() if symbol else None
+        # Support comma-separated symbols (e.g., ?symbol=MSFT,AAPL)
+        symbol_list = None
+        if symbol:
+            symbol_list = [s.strip().upper() for s in symbol.split(",") if s.strip()]
+            if not symbol_list:
+                symbol_list = None
+        # Support comma-separated months (e.g., ?month=1,2,3)
+        month_list = None
+        if month:
+            try:
+                month_list = [int(m.strip()) for m in month.split(",") if m.strip()]
+                if not month_list:
+                    month_list = None
+            except ValueError:
+                month_list = None
         normalized_type = option_type.strip().lower() if option_type else None
         normalized_status = status.strip().lower() if status else None
 
@@ -594,7 +613,8 @@ async def api_economics(request: Request,
             _build_economics_report(
                 symbol_docs,
                 year=year,
-                symbol_filter=normalized_symbol,
+                month_filter=month_list,
+                symbol_filter=symbol_list,
                 option_type=normalized_type,
                 status_filter=normalized_status,
             )
