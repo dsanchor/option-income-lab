@@ -126,7 +126,7 @@
             </thead>
             <tbody>
                 {% for pos in symbol_doc.positions %}
-                <tr class="pos-row {% if pos.status == 'closed' %}row-muted{% endif %}" data-pos-idx="{{ loop.index0 }}" style="cursor:pointer;">
+                <tr class="pos-row {% if pos.status != 'active' %}row-muted{% endif %}" data-pos-idx="{{ loop.index0 }}" style="cursor:pointer;">
                     <td class="pos-chevron" style="text-align:center; color:var(--text-muted, #8d969e);">▸</td>
                     <td><span class="badge badge-{{ 'sell' if pos.type == 'call' else 'info' }}">{{ pos.type | upper }}</span></td>
                     <td class="mono">${{ pos.strike }}</td>
@@ -141,7 +141,7 @@
                         <span class="badge badge-moneyness-{{ pos._moneyness | lower | replace(' ', '-') }}">{{ pos._moneyness }}</span>
                         {% else %}—{% endif %}
                     </td>
-                    <td><span class="badge badge-{{ 'wait' if pos.status == 'active' else 'info' }}">{{ pos.status }}</span></td>
+                    <td><span class="badge badge-{{ 'wait' if pos.status == 'active' else ('roll' if pos.status == 'rolled' else 'info') }}">{{ pos.status }}</span></td>
                     <td class="mono">{{ pos.opened_at[:10] if pos.opened_at else "—" }}</td>
                     <td class="pos-notes-cell" data-pos-id="{{ pos.position_id }}" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
                         <span class="notes-display" title="Click to edit">{{ pos.notes or "—" }}</span>
@@ -291,7 +291,7 @@
                                 </div>
                                 <div class="detail-field">
                                     <div class="detail-label">Status</div>
-                                    <div class="detail-value"><span class="badge badge-{{ 'wait' if pos.status == 'active' else 'info' }}">{{ pos.status }}</span></div>
+                                    <div class="detail-value"><span class="badge badge-{{ 'wait' if pos.status == 'active' else ('roll' if pos.status == 'rolled' else 'info') }}">{{ pos.status }}</span></div>
                                 </div>
                                 <div class="detail-field">
                                     <div class="detail-label">Opened</div>

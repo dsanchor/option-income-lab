@@ -277,9 +277,9 @@ class CosmosDBService:
         # Generate new position ID with timestamp for uniqueness
         new_position_id = self._generate_position_id(symbol, new_type, new_strike, new_expiration)
 
-        # Close old position
+        # Close old position (mark as rolled)
         now = datetime.utcnow().isoformat() + "Z"
-        old_pos["status"] = "closed"
+        old_pos["status"] = "rolled"
         old_pos["closed_at"] = now
         if closing_source is not None:
             old_pos["closing_source"] = closing_source
