@@ -13,7 +13,7 @@
 #   1. Creates a resource group (if it doesn't exist)
 #   2. Creates a CosmosDB account (serverless by default)
 #   3. Creates the "stock-options-manager" database
-#   4. Creates four containers: "symbols", "telemetry", "settings", "dgi_screener"
+#   4. Creates five containers: "symbols", "telemetry", "settings", "dgi_screener", "calendar"
 #   5. Applies custom indexing policy (index query fields, exclude large blobs)
 #   6. Retrieves and prints the connection endpoint and primary key
 #
@@ -222,6 +222,22 @@ az cosmosdb sql container create \
 #   -o none
 
 echo "  ✓ DGI Screener container ready"
+
+# ── 4e. Create Calendar Container ─────────────────────────────────────────────
+CALENDAR_CONTAINER="calendar"
+echo "▶ Creating container '$CALENDAR_CONTAINER' (partition key: /symbol)..."
+
+az cosmosdb sql container create \
+  --account-name "$COSMOSDB_ACCOUNT" \
+  --resource-group "$RESOURCE_GROUP" \
+  --database-name "$DATABASE_NAME" \
+  --name "$CALENDAR_CONTAINER" \
+  --partition-key-path "/symbol" \
+  --partition-key-version 2 \
+  --only-show-errors \
+  -o none
+
+echo "  ✓ Calendar container ready"
 
 # ── 5. Apply Custom Indexing Policy ──────────────────────────────────────────
 echo "▶ Applying custom indexing policy..."

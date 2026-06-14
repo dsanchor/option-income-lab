@@ -67,6 +67,19 @@ class CosmosDBService:
             )
             self.dgi_screener_container = None
 
+        # Calendar container — best-effort; never blocks if missing
+        try:
+            self.calendar_container = self.database.get_container_client(
+                "calendar"
+            )
+            self.calendar_container.read()
+        except Exception:
+            logger.warning(
+                "Calendar container not found — calendar events disabled. "
+                "Run scripts/provision_cosmosdb.sh to create it."
+            )
+            self.calendar_container = None
+
     # ── Symbol Config CRUD ─────────────────────────────────────────────
 
     def create_symbol(self, symbol: str, exchange: str,
@@ -1305,3 +1318,54 @@ class CosmosDBService:
             return doc is not None
         except Exception:
             return False
+
+    # ── Calendar Events ───────────────────────────────────────────────
+
+    def upsert_calendar_event(self, symbol: str, event_type: str,
+                              date: str, has_active_position: bool = False):
+        """Upsert a calendar event (earnings or ex_dividend) for a symbol."""
+        if not self.calendar_container:
+            return None
+        doc = {
+            "id": f"{symbol}_{event_type}",
+            "symbol": symbol,
+            "type": event_type,
+            "date": date,
+            "has_active_position": has_active_position,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            return self.calendar_container.upsert_item(doc)
+        except Exception as exc:
+            logger.warning("Failed to upsert calendar event for %s: %s", symbol, exc)
+            return None
+
+    def get_calendar_events(self) -> list:
+        """Return all calendar events."""
+        if not self.calendar_container:
+            return []
+        try:
+            return list(self.calendar_container.query_items(
+                query="SELECT c.symbol, c.type, c.date, c.has_active_position, c.updated_at FROM c",
+                enable_cross_partition_query=True,
+            ))
+        except Exception as exc:
+            logger.warning("Failed to read calendar events: %s", exc)
+            return []
+
+    def delete_calendar_events_for_symbol(self, symbol: str):
+        """Delete all calendar events for a symbol."""
+        if not self.calendar_container:
+            return
+        try:
+            items = list(self.calendar_container.query_items(
+                query="SELECT c.id FROM c WHERE c.symbol = @symbol",
+                parameters=[{"name": "@symbol", "value": symbol}],
+                partition_key=symbol,
+            ))
+            for item in items:
+                self.calendar_container.delete_item(
+                    item=item["id"], partition_key=symbol
+                )
+        except Exception as exc:
+            logger.warning("Failed to delete calendar events for %s: %s", symbol, exc)

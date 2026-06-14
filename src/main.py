@@ -79,6 +79,7 @@ class OptionsAgentScheduler:
         self._options_chain_cron_changed = False
         self._dgi_screener_cron_changed = False
         self._banner_cron_changed = False
+        self._calendar_cron_changed = False
         self._last_config_reload = None
         self._config_reload_interval = 60  # seconds
     
@@ -116,6 +117,13 @@ class OptionsAgentScheduler:
         banner_config['cron'] = new_cron
         self.config.config['banner_agent'] = banner_config
         self._banner_cron_changed = True
+
+    def reschedule_calendar(self, new_cron: str):
+        """Update calendar sync cron expression. The run loop will pick it up on next iteration."""
+        calendar_config = self.config.config.get('calendar_sync', {})
+        calendar_config['cron'] = new_cron
+        self.config.config['calendar_sync'] = calendar_config
+        self._calendar_cron_changed = True
     
     def setup(self):
         """Initialize configuration, CosmosDB, and agent runner."""
@@ -209,6 +217,18 @@ class OptionsAgentScheduler:
             print(f"  Timezone: {self.config.timezone}")
             print(f"  Model: {self.config.model_for('banner')}")
             print(f"  Max items: {banner_max_items}")
+        else:
+            print(f"  Status: Disabled in config")
+
+        calendar_config = self.config.config.get('calendar_sync', {})
+        calendar_enabled = calendar_config.get('enabled', True)
+        calendar_cron = calendar_config.get('cron', '0 5 * * 1-5')
+
+        print(f"\nCalendar Sync Configuration:")
+        print(f"  Enabled: {calendar_enabled}")
+        if calendar_enabled:
+            print(f"  Cron: {calendar_cron}")
+            print(f"  Timezone: {self.config.timezone}")
         else:
             print(f"  Status: Disabled in config")
     
@@ -367,6 +387,72 @@ class OptionsAgentScheduler:
                   f"{result.get('symbols_analyzed', 0)} symbols")
         except Exception as e:
             print(f"ERROR during dashboard banner generation: {e}")
+
+    def run_calendar_sync_job(self):
+        """Execute calendar sync (bridges async to sync for scheduler)."""
+        _run_async(self._run_calendar_sync_async())
+
+    async def _run_calendar_sync_async(self):
+        """Fetch earnings and ex-dividend dates from yfinance and store in CosmosDB."""
+        calendar_config = self.config.config.get('calendar_sync', {})
+        if not calendar_config.get('enabled', True):
+            print("⏭️  Calendar sync disabled in config")
+            return
+
+        tz = pytz.timezone(self.config.timezone)
+        now_tz = datetime.now(tz)
+        print(f"\n{'📅'*35}")
+        print(f"📅 Calendar Sync - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"{'📅'*35}\n")
+
+        try:
+            import yfinance as yf_lib
+        except ImportError:
+            print("ERROR: yfinance not installed — calendar sync skipped")
+            return
+
+        symbols = self.cosmos.list_symbols()
+        updated = 0
+        errors = 0
+
+        for sym_doc in symbols:
+            symbol = sym_doc.get("symbol", "")
+            if not symbol:
+                continue
+
+            has_active_position = any(
+                p.get("status") == "active" for p in sym_doc.get("positions", [])
+            )
+
+            try:
+                ticker = yf_lib.Ticker(symbol)
+                info = ticker.info or {}
+            except Exception as e:
+                errors += 1
+                print(f"  ✗ {symbol}: {e}")
+                continue
+
+            # Earnings date
+            earnings_ts = info.get("earningsTimestampStart")
+            if earnings_ts:
+                try:
+                    earnings_date = datetime.fromtimestamp(earnings_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                    self.cosmos.upsert_calendar_event(symbol, "earnings", earnings_date, has_active_position)
+                    updated += 1
+                except (OSError, ValueError):
+                    pass
+
+            # Ex-dividend date
+            ex_div_ts = info.get("exDividendDate")
+            if ex_div_ts:
+                try:
+                    ex_div_date = datetime.fromtimestamp(ex_div_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                    self.cosmos.upsert_calendar_event(symbol, "ex_dividend", ex_div_date, has_active_position)
+                    updated += 1
+                except (OSError, ValueError):
+                    pass
+
+        print(f"\nCalendar Sync Complete: {updated} events updated, {errors} errors, {len(symbols)} symbols processed")
     
     def signal_handler(self, sig, frame):
         """Handle graceful shutdown on Ctrl+C."""
@@ -505,6 +591,29 @@ class OptionsAgentScheduler:
             if banner_cron_changed:
                 self._banner_cron_changed = True
                 print(f"✓ Config reloaded from CosmosDB: banner agent cron changed to {new_banner_cron}")
+
+            # Check calendar sync settings
+            calendar_settings = cosmos_settings.get('calendar_sync', {})
+            new_calendar_cron = calendar_settings.get('cron')
+            current_calendar_cron = self.config.config.get('calendar_sync', {}).get('cron', '0 5 * * 1-5')
+
+            calendar_cron_changed = False
+            if new_calendar_cron and new_calendar_cron != current_calendar_cron:
+                if 'calendar_sync' not in self.config.config:
+                    self.config.config['calendar_sync'] = {}
+                self.config.config['calendar_sync']['cron'] = new_calendar_cron
+                calendar_cron_changed = True
+
+            if calendar_settings:
+                if 'calendar_sync' not in self.config.config:
+                    self.config.config['calendar_sync'] = {}
+                for key in ['enabled']:
+                    if key in calendar_settings:
+                        self.config.config['calendar_sync'][key] = calendar_settings[key]
+
+            if calendar_cron_changed:
+                self._calendar_cron_changed = True
+                print(f"✓ Config reloaded from CosmosDB: calendar sync cron changed to {new_calendar_cron}")
                 
         except Exception as e:
             # Don't crash the scheduler on config reload errors
@@ -557,6 +666,13 @@ class OptionsAgentScheduler:
         banner_cron_expr = banner_config.get('cron', '0 5 * * *')
         banner_next_run = None
         banner_cron = None
+
+        # Initialize calendar sync cron (if enabled)
+        calendar_config = self.config.config.get('calendar_sync', {})
+        calendar_enabled = calendar_config.get('enabled', True)
+        calendar_cron_expr = calendar_config.get('cron', '0 5 * * 1-5')
+        calendar_next_run = None
+        calendar_cron = None
         
         if summary_enabled:
             try:
@@ -593,6 +709,15 @@ class OptionsAgentScheduler:
                 print(f"⚠️  Invalid banner agent cron expression '{banner_cron_expr}': {e}")
                 print(f"⚠️  Dashboard banner scheduling disabled")
                 banner_enabled = False
+
+        if calendar_enabled:
+            try:
+                calendar_cron = croniter(calendar_cron_expr, now_tz)
+                calendar_next_run = calendar_cron.get_next(datetime)
+            except (ValueError, KeyError) as e:
+                print(f"⚠️  Invalid calendar sync cron expression '{calendar_cron_expr}': {e}")
+                print(f"⚠️  Calendar sync scheduling disabled")
+                calendar_enabled = False
         
         # Display initial schedule
         print(f"\nMonitor Agents        - Next run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
@@ -612,6 +737,10 @@ class OptionsAgentScheduler:
             print(f"Dashboard Banner      - Next run: {banner_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         else:
             print(f"Dashboard Banner      - Disabled")
+        if calendar_enabled and calendar_next_run:
+            print(f"Calendar Sync         - Next run: {calendar_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        else:
+            print(f"Calendar Sync         - Disabled")
         
         # Track when we last reloaded config
         self._last_config_reload = time.time()
@@ -704,6 +833,23 @@ class OptionsAgentScheduler:
                     print(f"⚠️  Invalid banner agent cron expression '{banner_cron_expr}': {e}")
                     banner_enabled = False
 
+            # Check if calendar cron was updated from the web UI
+            if self._calendar_cron_changed:
+                self._calendar_cron_changed = False
+                calendar_config = self.config.config.get('calendar_sync', {})
+                calendar_cron_expr = calendar_config.get('cron', '0 5 * * 1-5')
+                try:
+                    tz = pytz.timezone(self.config.timezone)
+                    now_tz = datetime.now(tz)
+                    calendar_cron = croniter(calendar_cron_expr, now_tz)
+                    calendar_next_run = calendar_cron.get_next(datetime)
+                    calendar_enabled = calendar_config.get('enabled', True)
+                    print(f"Calendar sync cron rescheduled to: {calendar_cron_expr}")
+                    print(f"Next scheduled run: {calendar_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
+                except (ValueError, KeyError) as e:
+                    print(f"⚠️  Invalid calendar sync cron expression '{calendar_cron_expr}': {e}")
+                    calendar_enabled = False
+
             now_tz = datetime.now(tz)
             
             # Check main scheduler
@@ -736,6 +882,11 @@ class OptionsAgentScheduler:
                 self.run_banner_agent_job()
                 banner_next_run = banner_cron.get_next(datetime)
                 print(f"Dashboard Banner      - Next run: {banner_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
+
+            if calendar_enabled and calendar_next_run and now_tz >= calendar_next_run:
+                self.run_calendar_sync_job()
+                calendar_next_run = calendar_cron.get_next(datetime)
+                print(f"Calendar Sync         - Next run: {calendar_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
             
             time.sleep(1)
         

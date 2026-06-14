@@ -182,6 +182,39 @@
                     <span id="bannerRunStatus" class="mono" style="margin-left:0.75rem; font-size:0.85rem;"></span>
                 </div>
             </div>
+
+            <!-- Calendar Sync Section -->
+            <div style="margin-top:1.5rem;">
+                <h3 style="font-size:0.95rem; font-weight:600; margin:0 0 0.75rem 0; padding-bottom:0.5rem; border-bottom:1px solid var(--border); color:var(--text);">Calendar Sync (Earnings & Ex-Dividend)</h3>
+                
+                <div style="margin-bottom:1rem;">
+                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                        <input type="checkbox" name="calendar_enabled" value="true" {{ 'checked' if calendar_enabled }}>
+                        <span style="font-size:0.9rem;">Enable calendar sync</span>
+                    </label>
+                    <small style="display:block; margin-top:0.3rem; margin-left:1.5rem; color:var(--text-muted); font-size:0.75rem;">
+                        Fetches earnings and ex-dividend dates from Yahoo Finance and stores them in CosmosDB for the Calendar view.
+                    </small>
+                </div>
+
+                <div style="margin-bottom:1rem;">
+                    <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
+                        Cron Schedule
+                        <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to sync calendar data (uses main scheduler timezone)">ⓘ</span>
+                    </label>
+                    <input type="text" name="calendar_cron" value="{{ calendar_cron }}" placeholder="0 5 * * 1-5" spellcheck="false"
+                        style="width:100%; max-width:300px; padding:0.5rem 0.8rem; border-radius:var(--radius); border:1px solid var(--border); background:var(--bg-input); color:var(--text); font-family:var(--font-mono); font-size:0.85rem;">
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
+                    <div>
+                        <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                            {{ calendar_next_run or "N/A" }}
+                        </div>
+                    </div>
+                </div>
+            </div>
             
             <!-- DPS Scorer Cron Section -->
             <div style="margin-top:1.5rem;">

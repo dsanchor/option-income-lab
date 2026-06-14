@@ -1632,18 +1632,29 @@ async def symbols_calendar_page(request: Request):
 
 @app.get("/api/calendar")
 async def api_calendar(request: Request):
-    """Return earnings and ex-dividend dates for all tracked symbols."""
+    """Return earnings and ex-dividend dates from the calendar container."""
     cosmos = getattr(request.app.state, "cosmos", None)
     if cosmos is None:
         return {"events": [], "error": "CosmosDB not available"}
 
+    events = cosmos.get_calendar_events()
+    return {"events": events}
+
+
+@app.post("/api/calendar/refresh")
+async def api_calendar_refresh(request: Request):
+    """Refresh calendar events from yfinance and store in CosmosDB."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    if cosmos is None:
+        return JSONResponse({"error": "CosmosDB not available"}, status_code=503)
+
+    if yf is None:
+        return JSONResponse({"error": "yfinance not installed"}, status_code=503)
+
     symbols = cosmos.list_symbols() if cosmos else []
-    yf_provider = getattr(request.app.state, "yf_provider", None)
+    updated = 0
+    errors = 0
 
-    if not yf_provider or yf is None:
-        return {"events": [], "error": "yfinance provider not available"}
-
-    events = []
     for sym_doc in symbols:
         symbol = sym_doc.get("symbol", "")
         if not symbol:
@@ -1657,6 +1668,7 @@ async def api_calendar(request: Request):
             ticker = yf.Ticker(symbol)
             info = ticker.info or {}
         except Exception:
+            errors += 1
             continue
 
         # Earnings date
@@ -1664,12 +1676,8 @@ async def api_calendar(request: Request):
         if earnings_ts:
             try:
                 earnings_date = datetime.fromtimestamp(earnings_ts, tz=timezone.utc).strftime("%Y-%m-%d")
-                events.append({
-                    "symbol": symbol,
-                    "type": "earnings",
-                    "date": earnings_date,
-                    "has_active_position": has_active_position,
-                })
+                cosmos.upsert_calendar_event(symbol, "earnings", earnings_date, has_active_position)
+                updated += 1
             except (OSError, ValueError):
                 pass
 
@@ -1678,16 +1686,12 @@ async def api_calendar(request: Request):
         if ex_div_ts:
             try:
                 ex_div_date = datetime.fromtimestamp(ex_div_ts, tz=timezone.utc).strftime("%Y-%m-%d")
-                events.append({
-                    "symbol": symbol,
-                    "type": "ex_dividend",
-                    "date": ex_div_date,
-                    "has_active_position": has_active_position,
-                })
+                cosmos.upsert_calendar_event(symbol, "ex_dividend", ex_div_date, has_active_position)
+                updated += 1
             except (OSError, ValueError):
                 pass
 
-    return {"events": events}
+    return {"updated": updated, "errors": errors, "symbols_processed": len(symbols)}
 
 
 @app.get("/symbols/{symbol}", response_class=HTMLResponse)
@@ -2476,6 +2480,11 @@ async def settings_config_page(request: Request):
     banner_cron = banner_cfg.get("cron", "0 5 * * *")
     banner_max_items = banner_cfg.get("max_items", 10)
 
+    # Calendar sync settings
+    calendar_cfg = config.get("calendar_sync", {})
+    calendar_enabled = calendar_cfg.get("enabled", True)
+    calendar_cron = calendar_cfg.get("cron", "0 5 * * 1-5")
+
     # DPS scorer settings
     dps_cfg = config.get("dps_scorer", {})
     dps_enabled = dps_cfg.get("enabled", True)
@@ -2607,6 +2616,17 @@ async def settings_config_page(request: Request):
             dps_next_run = _format_time_dual_tz(next_run_dt, timezone)
         except Exception:
             dps_next_run = "Invalid cron"
+
+    # Calculate scheduler times for Calendar Sync
+    calendar_next_run = ""
+    if calendar_cron:
+        try:
+            now_tz = datetime.now(tz)
+            cron = croniter(calendar_cron, now_tz)
+            next_run_dt = cron.get_next(datetime)
+            calendar_next_run = _format_time_dual_tz(next_run_dt, timezone)
+        except Exception:
+            calendar_next_run = "Invalid cron"
     
     return templates.TemplateResponse("settings_config.html", {
         "request": request,
@@ -2637,6 +2657,9 @@ async def settings_config_page(request: Request):
         "banner_max_items": banner_max_items,
         "banner_last_run": banner_last_run,
         "banner_next_run": banner_next_run,
+        "calendar_enabled": calendar_enabled,
+        "calendar_cron": calendar_cron,
+        "calendar_next_run": calendar_next_run,
         "dps_enabled": dps_enabled,
         "dps_cron": dps_cron,
         "dps_next_run": dps_next_run,
@@ -2844,6 +2867,33 @@ async def settings_config_save(request: Request):
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
                 scheduler.reschedule_banner(banner_cron)
+        except (ValueError, KeyError):
+            pass
+
+    # Calendar sync settings
+    calendar_enabled = form.get("calendar_enabled") == "true"
+    calendar_cron = str(form.get("calendar_cron", "0 5 * * 1-5")).strip()
+
+    if calendar_cron:
+        try:
+            croniter(calendar_cron)
+            if cosmos:
+                cosmos_settings = _load_settings_from_cosmos(cosmos) or {}
+                cosmos_settings.setdefault("calendar_sync", {})
+                cosmos_settings["calendar_sync"]["enabled"] = calendar_enabled
+                cosmos_settings["calendar_sync"]["cron"] = calendar_cron
+                _save_settings_to_cosmos(cosmos, cosmos_settings)
+
+            config = _load_config()
+            config.setdefault("calendar_sync", {})
+            config["calendar_sync"]["enabled"] = calendar_enabled
+            config["calendar_sync"]["cron"] = calendar_cron
+            _write_config(config)
+            saved.append("Calendar sync")
+
+            scheduler = getattr(request.app.state, "scheduler", None)
+            if scheduler is not None:
+                scheduler.reschedule_calendar(calendar_cron)
         except (ValueError, KeyError):
             pass
 

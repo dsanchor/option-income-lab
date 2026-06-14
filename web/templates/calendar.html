@@ -152,6 +152,7 @@
         <h2 id="cal-title">June 2026</h2>
         <button id="cal-next">▶</button>
         <button id="cal-today">Today</button>
+        <button id="cal-refresh" style="margin-left:auto;">🔄 Refresh</button>
     </div>
     <div id="calendar-loading" class="calendar-loading">Loading events...</div>
     <div id="calendar-grid" class="calendar-grid" style="display:none;"></div>
@@ -173,6 +174,23 @@
     document.getElementById('cal-prev').addEventListener('click', () => { currentMonth--; if (currentMonth < 0) { currentMonth = 11; currentYear--; } render(); });
     document.getElementById('cal-next').addEventListener('click', () => { currentMonth++; if (currentMonth > 11) { currentMonth = 0; currentYear++; } render(); });
     document.getElementById('cal-today').addEventListener('click', () => { currentYear = new Date().getFullYear(); currentMonth = new Date().getMonth(); render(); });
+    document.getElementById('cal-refresh').addEventListener('click', function() {
+        const btn = this;
+        btn.disabled = true;
+        btn.textContent = '⏳ Refreshing...';
+        fetch('/api/calendar/refresh', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                btn.textContent = `✅ ${data.updated} updated`;
+                setTimeout(() => { btn.textContent = '🔄 Refresh'; btn.disabled = false; }, 2000);
+                // Reload calendar data
+                return fetch('/api/calendar').then(r => r.json());
+            })
+            .then(data => {
+                if (data) { events = data.events || []; render(); }
+            })
+            .catch(() => { btn.textContent = '❌ Error'; setTimeout(() => { btn.textContent = '🔄 Refresh'; btn.disabled = false; }, 2000); });
+    });
 
     function getEventClass(ev) {
         if (ev.type === 'earnings') {
