@@ -1738,7 +1738,8 @@ async def api_calendar_refresh(request: Request):
             except (OSError, ValueError, TypeError):
                 pass
 
-    return {"updated": updated, "errors": errors, "symbols_processed": len(symbols)}
+    return {"updated": updated, "errors": errors, "symbols_processed": len(symbols),
+            "calendar_container_available": cosmos.calendar_container is not None}
 
 
 @app.get("/symbols/{symbol}", response_class=HTMLResponse)

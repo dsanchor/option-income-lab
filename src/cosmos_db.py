@@ -68,6 +68,10 @@ class CosmosDBService:
             self.dgi_screener_container = None
 
         # Calendar container — best-effort; never blocks if missing
+        self._init_calendar_container()
+
+    def _init_calendar_container(self):
+        """Try to connect to the calendar container. Safe to call multiple times."""
         try:
             self.calendar_container = self.database.get_container_client(
                 "calendar"
@@ -1325,6 +1329,8 @@ class CosmosDBService:
                               date: str, has_active_position: bool = False):
         """Upsert a calendar event (earnings or ex_dividend) for a symbol."""
         if not self.calendar_container:
+            self._init_calendar_container()
+        if not self.calendar_container:
             return None
         doc = {
             "id": f"{symbol}_{event_type}",
@@ -1342,6 +1348,8 @@ class CosmosDBService:
 
     def get_calendar_events(self) -> list:
         """Return all calendar events."""
+        if not self.calendar_container:
+            self._init_calendar_container()
         if not self.calendar_container:
             return []
         try:
