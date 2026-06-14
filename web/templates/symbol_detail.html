@@ -214,7 +214,7 @@
                                 {% if pos.source.premium is not none %}
                                 <div class="detail-field">
                                     <div class="detail-label">Premium</div>
-                                    <div class="detail-value mono premium-editable" data-symbol="{{ symbol }}" data-pos-id="{{ pos.position_id }}">
+                                    <div class="detail-value mono premium-editable" data-symbol="{{ symbol_doc.symbol }}" data-pos-id="{{ pos.position_id }}">
                                         <span class="premium-display" title="Click to edit">${{ pos.source.premium }}</span>
                                         <div class="premium-edit" style="display:none;">
                                             <input type="number" step="0.01" class="input-field premium-input" value="{{ pos.source.premium }}" style="width:80px; font-size:0.85rem;">
