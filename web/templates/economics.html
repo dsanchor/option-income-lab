@@ -93,6 +93,62 @@
             width: 100%;
         }
     }
+    .dropdown-multi {
+        position: relative;
+        display: inline-block;
+    }
+    .dropdown-multi-btn {
+        background: var(--surface-alt, rgba(255,255,255,0.06));
+        border: 1px solid var(--border, #2d2d35);
+        border-radius: 6px;
+        color: var(--text, #fff);
+        padding: 0.4rem 0.75rem;
+        font-size: 0.85rem;
+        cursor: pointer;
+        min-width: 120px;
+        text-align: left;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .dropdown-multi-btn:hover {
+        border-color: var(--accent-blue, #494fdf);
+    }
+    .dropdown-multi-menu {
+        display: none;
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        z-index: 100;
+        background: var(--surface, #1c1c24);
+        border: 1px solid var(--border, #2d2d35);
+        border-radius: 8px;
+        padding: 0.5rem;
+        min-width: 140px;
+        max-height: 240px;
+        overflow-y: auto;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .dropdown-multi.open .dropdown-multi-menu {
+        display: block;
+    }
+    .dropdown-multi-menu label {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.3rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.85rem;
+        color: var(--text, #fff);
+        cursor: pointer;
+        white-space: nowrap;
+    }
+    .dropdown-multi-menu label:hover {
+        background: rgba(255,255,255,0.06);
+    }
+    .dropdown-multi-menu input[type="checkbox"] {
+        accent-color: var(--accent-blue, #494fdf);
+    }
 </style>
 
 <div id="economics-error" class="alert alert-error" style="display:none;"></div>
@@ -133,18 +189,32 @@
             </select>
         </div>
         <div class="economics-filter-block">
-            <label class="economics-filter-label" for="economics-month">Months</label>
-            <select id="economics-month" class="filter-select" multiple style="min-height:34px; max-height:120px;">
-                <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
-                <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
-                <option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option>
-                <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
-            </select>
+            <span class="economics-filter-label">Months</span>
+            <div class="dropdown-multi" id="economics-month-dropdown">
+                <button type="button" class="dropdown-multi-btn">All Months ▾</button>
+                <div class="dropdown-multi-menu">
+                    <label><input type="checkbox" value="1"> Jan</label>
+                    <label><input type="checkbox" value="2"> Feb</label>
+                    <label><input type="checkbox" value="3"> Mar</label>
+                    <label><input type="checkbox" value="4"> Apr</label>
+                    <label><input type="checkbox" value="5"> May</label>
+                    <label><input type="checkbox" value="6"> Jun</label>
+                    <label><input type="checkbox" value="7"> Jul</label>
+                    <label><input type="checkbox" value="8"> Aug</label>
+                    <label><input type="checkbox" value="9"> Sep</label>
+                    <label><input type="checkbox" value="10"> Oct</label>
+                    <label><input type="checkbox" value="11"> Nov</label>
+                    <label><input type="checkbox" value="12"> Dec</label>
+                </div>
+            </div>
         </div>
         <div class="economics-filter-block">
-            <label class="economics-filter-label" for="economics-symbol">Symbols</label>
-            <select id="economics-symbol" class="filter-select" multiple style="min-height:34px; max-height:120px;">
-            </select>
+            <span class="economics-filter-label">Symbols</span>
+            <div class="dropdown-multi" id="economics-symbol-dropdown">
+                <button type="button" class="dropdown-multi-btn">All Symbols ▾</button>
+                <div class="dropdown-multi-menu" id="economics-symbol-menu">
+                </div>
+            </div>
         </div>
         <div class="economics-filter-block">
             <span class="economics-filter-label">Type</span>
@@ -278,8 +348,9 @@
 
     const errorEl = document.getElementById('economics-error');
     const yearSelect = document.getElementById('economics-year');
-    const monthSelect = document.getElementById('economics-month');
-    const symbolSelect = document.getElementById('economics-symbol');
+    const monthDropdown = document.getElementById('economics-month-dropdown');
+    const symbolDropdown = document.getElementById('economics-symbol-dropdown');
+    const symbolMenu = document.getElementById('economics-symbol-menu');
     const typePills = document.getElementById('economics-type-pills');
     const statusPills = document.getElementById('economics-status-pills');
 
@@ -309,16 +380,53 @@
         });
     }
 
-    function getSelectedValues(selectEl) {
-        return Array.from(selectEl.selectedOptions).map(o => o.value);
+    function getSelectedValues(dropdownEl) {
+        return Array.from(dropdownEl.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
     }
+
+    function updateDropdownLabel(dropdownEl, allLabel) {
+        const selected = getSelectedValues(dropdownEl);
+        const btn = dropdownEl.querySelector('.dropdown-multi-btn');
+        if (selected.length === 0) {
+            btn.textContent = allLabel + ' ▾';
+        } else if (selected.length <= 3) {
+            const labels = Array.from(dropdownEl.querySelectorAll('input[type="checkbox"]:checked'))
+                .map(cb => cb.parentElement.textContent.trim());
+            btn.textContent = labels.join(', ') + ' ▾';
+        } else {
+            btn.textContent = selected.length + ' selected ▾';
+        }
+    }
+
+    // Toggle dropdown open/close
+    document.querySelectorAll('.dropdown-multi-btn').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const dropdown = this.closest('.dropdown-multi');
+            document.querySelectorAll('.dropdown-multi.open').forEach(d => {
+                if (d !== dropdown) d.classList.remove('open');
+            });
+            dropdown.classList.toggle('open');
+        });
+    });
+    // Close dropdowns on outside click
+    document.addEventListener('click', function() {
+        document.querySelectorAll('.dropdown-multi.open').forEach(d => d.classList.remove('open'));
+    });
+    document.querySelectorAll('.dropdown-multi-menu').forEach(menu => {
+        menu.addEventListener('click', e => e.stopPropagation());
+    });
+
+    // Update labels on checkbox change
+    monthDropdown.addEventListener('change', () => updateDropdownLabel(monthDropdown, 'All Months'));
+    symbolDropdown.addEventListener('change', () => updateDropdownLabel(symbolDropdown, 'All Symbols'));
 
     function syncUrl() {
         const params = new URLSearchParams();
         if (yearSelect.value) params.set('year', yearSelect.value);
-        const months = getSelectedValues(monthSelect);
+        const months = getSelectedValues(monthDropdown);
         if (months.length) params.set('month', months.join(','));
-        const symbols = getSelectedValues(symbolSelect);
+        const symbols = getSelectedValues(symbolDropdown);
         if (symbols.length) params.set('symbol', symbols.join(','));
         if (state.type) params.set('type', state.type);
         if (state.status) params.set('status', state.status);
@@ -329,9 +437,9 @@
     function getApiUrl() {
         const params = new URLSearchParams();
         const selectedYear = yearSelect.value || state.initialYear || '';
-        const symbols = getSelectedValues(symbolSelect);
+        const symbols = getSelectedValues(symbolDropdown);
         const selectedSymbols = symbols.length ? symbols.join(',') : (state.initialSymbol || '');
-        const months = getSelectedValues(monthSelect);
+        const months = getSelectedValues(monthDropdown);
         const selectedMonths = months.length ? months.join(',') : (state.initialMonth || '');
         if (selectedYear) params.set('year', selectedYear);
         if (selectedMonths) params.set('month', selectedMonths);
@@ -511,20 +619,21 @@
 
     function populateFilterOptions(filters) {
         const selectedYear = yearSelect.value;
-        const selectedSymbols = getSelectedValues(symbolSelect);
+        const selectedSymbols = getSelectedValues(symbolDropdown);
 
         yearSelect.innerHTML = ['<option value="">All Years</option>']
             .concat(filters.years.map((year) => `<option value="${year}">${year}</option>`))
             .join('');
-        symbolSelect.innerHTML = filters.symbols
-            .map((symbol) => `<option value="${symbol}">${symbol}</option>`)
-            .join('');
 
-        yearSelect.value = filters.years.map(String).includes(selectedYear) ? selectedYear : (state.initialYear || '');
-        // Restore multi-select symbols
+        // Populate symbol checkboxes
         const initialSymbols = state.initialSymbol ? state.initialSymbol.split(',') : [];
         const toSelect = selectedSymbols.length ? selectedSymbols : initialSymbols;
-        Array.from(symbolSelect.options).forEach(o => { o.selected = toSelect.includes(o.value); });
+        symbolMenu.innerHTML = filters.symbols
+            .map((s) => `<label><input type="checkbox" value="${s}"${toSelect.includes(s) ? ' checked' : ''}> ${s}</label>`)
+            .join('');
+        updateDropdownLabel(symbolDropdown, 'All Symbols');
+
+        yearSelect.value = filters.years.map(String).includes(selectedYear) ? selectedYear : (state.initialYear || '');
         state.initialYear = '';
         state.initialSymbol = '';
     }
@@ -563,7 +672,10 @@
         // Pre-select months from URL
         if (state.initialMonth) {
             const months = state.initialMonth.split(',');
-            Array.from(monthSelect.options).forEach(o => { o.selected = months.includes(o.value); });
+            monthDropdown.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                cb.checked = months.includes(cb.value);
+            });
+            updateDropdownLabel(monthDropdown, 'All Months');
         }
     }
 
