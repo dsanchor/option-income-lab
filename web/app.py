@@ -2536,7 +2536,7 @@ async def settings_config_page(request: Request):
     # DPS scorer settings
     dps_cfg = config.get("dps_scorer", {})
     dps_enabled = dps_cfg.get("enabled", True)
-    dps_cron = dps_cfg.get("cron", "0 22 * * 1-5")
+    dps_cron = dps_cfg.get("cron", "0 22/12 * * *")
     
     # Resolve env vars for display
     if telegram_bot_token.startswith("${"):
@@ -2954,7 +2954,7 @@ async def settings_config_save(request: Request):
     
     # DPS scorer settings save
     dps_enabled = form.get("dps_enabled") == "true"
-    dps_cron = str(form.get("dps_cron", "0 22 * * 1-5")).strip()
+    dps_cron = str(form.get("dps_cron", "0 22/12 * * *")).strip()
 
     if dps_cron:
         try:
@@ -3023,7 +3023,7 @@ async def settings_config_save(request: Request):
     # DPS scorer settings
     dps_cfg = config.get("dps_scorer", {})
     dps_en = dps_cfg.get("enabled", True)
-    dps_cr = dps_cfg.get("cron", "0 22 * * 1-5")
+    dps_cr = dps_cfg.get("cron", "0 22/12 * * *")
 
     return templates.TemplateResponse("settings_config.html", {
         "request": request,
