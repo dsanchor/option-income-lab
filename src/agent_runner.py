@@ -2222,6 +2222,29 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 timestamp=analysis_ts,
             )
 
+        # ── Run DPS after monitor completes (uses fresh snapshot) ──────
+        try:
+            if position_id and snapshot_data is not None:
+                from .dps_scorer import run_dps_analysis as _run_dps
+                _dps_snaps = cosmos.get_position_snapshots(symbol, position_id, limit=20)
+                _dps_snaps.reverse()
+                _dps_result = _run_dps(
+                    symbol=symbol,
+                    strike=float(strike),
+                    expiration=expiration,
+                    option_type=position_type,
+                    chain_json=data.get('options_chain', '{}'),
+                    snapshots=_dps_snaps,
+                    underlying_price=snapshot_data.get("underlying_price"),
+                    premium_received=_premium_received,
+                )
+                _dps_score = _dps_result.get("score")
+                if _dps_score is not None:
+                    cosmos.update_snapshot_dps(symbol, position_id, _dps_score)
+                    print(f"  📊 DPS: {symbol} ${strike} → {_dps_result.get('recommendation', '?')} (score: {_dps_score})")
+        except Exception as dps_err:
+            logger.debug("DPS scoring skipped for %s: %s", symbol, dps_err)
+
         # ── Telemetry (best-effort, never blocks) ─────────────────
         try:
             total_duration = round(time.time() - run_start, 2)

@@ -80,7 +80,6 @@ class OptionsAgentScheduler:
         self._dgi_screener_cron_changed = False
         self._banner_cron_changed = False
         self._calendar_cron_changed = False
-        self._dps_cron_changed = False
         self._last_config_reload = None
         self._config_reload_interval = 60  # seconds
     
@@ -125,13 +124,6 @@ class OptionsAgentScheduler:
         calendar_config['cron'] = new_cron
         self.config.config['calendar_sync'] = calendar_config
         self._calendar_cron_changed = True
-
-    def reschedule_dps(self, new_cron: str):
-        """Update DPS scorer cron expression. The run loop will pick it up on next iteration."""
-        dps_config = self.config.config.get('dps_scorer', {})
-        dps_config['cron'] = new_cron
-        self.config.config['dps_scorer'] = dps_config
-        self._dps_cron_changed = True
     
     def setup(self):
         """Initialize configuration, CosmosDB, and agent runner."""
@@ -236,18 +228,6 @@ class OptionsAgentScheduler:
         print(f"  Enabled: {calendar_enabled}")
         if calendar_enabled:
             print(f"  Cron: {calendar_cron}")
-            print(f"  Timezone: {self.config.timezone}")
-        else:
-            print(f"  Status: Disabled in config")
-
-        dps_config = self.config.config.get('dps_scorer', {})
-        dps_enabled = dps_config.get('enabled', True)
-        dps_cron = dps_config.get('cron', '0 22/12 * * *')
-
-        print(f"\nDPS Scorer Configuration:")
-        print(f"  Enabled: {dps_enabled}")
-        if dps_enabled:
-            print(f"  Cron: {dps_cron}")
             print(f"  Timezone: {self.config.timezone}")
         else:
             print(f"  Status: Disabled in config")
@@ -473,97 +453,6 @@ class OptionsAgentScheduler:
                     pass
 
         print(f"\nCalendar Sync Complete: {updated} events updated, {errors} errors, {len(symbols)} symbols processed")
-
-    def run_dps_job(self):
-        """Execute DPS scorer for all active positions (bridges async to sync for scheduler)."""
-        _run_async(self._run_dps_async())
-
-    async def _run_dps_async(self):
-        """Run DPS scorer for all active positions if enabled in config."""
-        dps_config = self.config.config.get('dps_scorer', {})
-        if not dps_config.get('enabled', True):
-            print("⏭️  DPS Scorer disabled in config")
-            return
-
-        tz = pytz.timezone(self.config.timezone)
-        now_tz = datetime.now(tz)
-        print(f"\n{'📊'*35}")
-        print(f"📊 DPS Scorer - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        print(f"{'📊'*35}\n")
-
-        from .dps_scorer import run_dps_analysis
-        from .yfinance_data_provider import get_shared_provider
-        import json as _json
-
-        provider = get_shared_provider(getattr(self.config, 'yfinance_config', None))
-        symbols = self.cosmos.list_symbols()
-        scored = 0
-        errors = 0
-
-        for sym_doc in symbols:
-            symbol = sym_doc.get("symbol", "")
-            if not symbol:
-                continue
-
-            positions = sym_doc.get("positions", [])
-            active_positions = [p for p in positions if p.get("status") == "active"]
-            if not active_positions:
-                continue
-
-            # Fetch live market data once per symbol
-            try:
-                data = await provider.fetch_all(symbol, force_refresh=True)
-                chain_json = data.get("options_chain", "{}")
-                overview = data.get("overview", "{}")
-                if isinstance(overview, str):
-                    try:
-                        overview = _json.loads(overview)
-                    except (ValueError, TypeError):
-                        overview = {}
-                fundamentals = overview.get("fundamentals", {})
-                price_field = fundamentals.get("current_price", {})
-                underlying_price = price_field.get("value") if isinstance(price_field, dict) else price_field
-                if underlying_price is not None:
-                    underlying_price = float(underlying_price)
-            except Exception as e:
-                errors += len(active_positions)
-                print(f"  ✗ {symbol}: failed to fetch market data: {e}")
-                continue
-
-            for pos in active_positions:
-                position_id = pos.get("position_id", "")
-                if not position_id:
-                    continue
-                try:
-                    snapshots = self.cosmos.get_position_snapshots(symbol, position_id, limit=20)
-                    snapshots.reverse()
-
-                    _source = pos.get("source") or {}
-                    _premium = None
-                    try:
-                        _premium = float(_source.get("premium") or _source.get("new_premium") or 0) or None
-                    except (TypeError, ValueError):
-                        pass
-
-                    result = run_dps_analysis(
-                        symbol=symbol,
-                        strike=float(pos["strike"]),
-                        expiration=pos["expiration"],
-                        option_type=pos.get("type", "call"),
-                        chain_json=chain_json,
-                        snapshots=snapshots,
-                        underlying_price=underlying_price,
-                        premium_received=_premium,
-                    )
-                    score = result.get("score", "?")
-                    rec = result.get("recommendation", "?")
-                    print(f"  ✓ {symbol} ({pos.get('type','')}) ${pos.get('strike','')} → {rec} (score: {score})")
-                    scored += 1
-                except Exception as e:
-                    errors += 1
-                    print(f"  ✗ {symbol} ({position_id}): {e}")
-
-        print(f"\nDPS Scorer Complete: {scored} positions scored, {errors} errors")
     
     def signal_handler(self, sig, frame):
         """Handle graceful shutdown on Ctrl+C."""
@@ -725,29 +614,6 @@ class OptionsAgentScheduler:
             if calendar_cron_changed:
                 self._calendar_cron_changed = True
                 print(f"✓ Config reloaded from CosmosDB: calendar sync cron changed to {new_calendar_cron}")
-
-            # Check DPS scorer settings
-            dps_settings = cosmos_settings.get('dps_scorer', {})
-            new_dps_cron = dps_settings.get('cron')
-            current_dps_cron = self.config.config.get('dps_scorer', {}).get('cron', '0 22/12 * * *')
-
-            dps_cron_changed = False
-            if new_dps_cron and new_dps_cron != current_dps_cron:
-                if 'dps_scorer' not in self.config.config:
-                    self.config.config['dps_scorer'] = {}
-                self.config.config['dps_scorer']['cron'] = new_dps_cron
-                dps_cron_changed = True
-
-            if dps_settings:
-                if 'dps_scorer' not in self.config.config:
-                    self.config.config['dps_scorer'] = {}
-                for key in ['enabled']:
-                    if key in dps_settings:
-                        self.config.config['dps_scorer'][key] = dps_settings[key]
-
-            if dps_cron_changed:
-                self._dps_cron_changed = True
-                print(f"✓ Config reloaded from CosmosDB: DPS scorer cron changed to {new_dps_cron}")
                 
         except Exception as e:
             # Don't crash the scheduler on config reload errors
@@ -807,13 +673,6 @@ class OptionsAgentScheduler:
         calendar_cron_expr = calendar_config.get('cron', '0 5 * * 1-5')
         calendar_next_run = None
         calendar_cron = None
-
-        # Initialize DPS scorer cron (if enabled)
-        dps_config = self.config.config.get('dps_scorer', {})
-        dps_enabled = dps_config.get('enabled', True)
-        dps_cron_expr = dps_config.get('cron', '0 22/12 * * *')
-        dps_next_run = None
-        dps_cron = None
         
         if summary_enabled:
             try:
@@ -859,15 +718,6 @@ class OptionsAgentScheduler:
                 print(f"⚠️  Invalid calendar sync cron expression '{calendar_cron_expr}': {e}")
                 print(f"⚠️  Calendar sync scheduling disabled")
                 calendar_enabled = False
-
-        if dps_enabled:
-            try:
-                dps_cron = croniter(dps_cron_expr, now_tz)
-                dps_next_run = dps_cron.get_next(datetime)
-            except (ValueError, KeyError) as e:
-                print(f"⚠️  Invalid DPS scorer cron expression '{dps_cron_expr}': {e}")
-                print(f"⚠️  DPS scorer scheduling disabled")
-                dps_enabled = False
         
         # Display initial schedule
         print(f"\nMonitor Agents        - Next run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
@@ -891,10 +741,6 @@ class OptionsAgentScheduler:
             print(f"Calendar Sync         - Next run: {calendar_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         else:
             print(f"Calendar Sync         - Disabled")
-        if dps_enabled and dps_next_run:
-            print(f"DPS Scorer            - Next run: {dps_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        else:
-            print(f"DPS Scorer            - Disabled")
         
         # Track when we last reloaded config
         self._last_config_reload = time.time()
@@ -1004,23 +850,6 @@ class OptionsAgentScheduler:
                     print(f"⚠️  Invalid calendar sync cron expression '{calendar_cron_expr}': {e}")
                     calendar_enabled = False
 
-            # Check if DPS scorer cron was updated from the web UI
-            if self._dps_cron_changed:
-                self._dps_cron_changed = False
-                dps_config = self.config.config.get('dps_scorer', {})
-                dps_cron_expr = dps_config.get('cron', '0 22/12 * * *')
-                try:
-                    tz = pytz.timezone(self.config.timezone)
-                    now_tz = datetime.now(tz)
-                    dps_cron = croniter(dps_cron_expr, now_tz)
-                    dps_next_run = dps_cron.get_next(datetime)
-                    dps_enabled = dps_config.get('enabled', True)
-                    print(f"DPS scorer cron rescheduled to: {dps_cron_expr}")
-                    print(f"Next scheduled run: {dps_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-                except (ValueError, KeyError) as e:
-                    print(f"⚠️  Invalid DPS scorer cron expression '{dps_cron_expr}': {e}")
-                    dps_enabled = False
-
             now_tz = datetime.now(tz)
             
             # Check main scheduler
@@ -1058,11 +887,6 @@ class OptionsAgentScheduler:
                 self.run_calendar_sync_job()
                 calendar_next_run = calendar_cron.get_next(datetime)
                 print(f"Calendar Sync         - Next run: {calendar_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-
-            if dps_enabled and dps_next_run and now_tz >= dps_next_run:
-                self.run_dps_job()
-                dps_next_run = dps_cron.get_next(datetime)
-                print(f"DPS Scorer            - Next run: {dps_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
             
             time.sleep(1)
         

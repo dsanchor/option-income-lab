@@ -562,6 +562,22 @@ class CosmosDBService:
             partition_key=symbol,
         ))
 
+    def update_snapshot_dps(self, symbol: str, position_id: str,
+                            dps_score: int) -> None:
+        """Update the most recent snapshot with the DPS score (best-effort)."""
+        try:
+            snaps = self.get_position_snapshots(symbol, position_id, limit=1)
+            if not snaps:
+                return
+            doc = snaps[0]
+            doc["dps_score"] = dps_score
+            self.container.replace_item(item=doc["id"], body=doc)
+        except Exception as exc:
+            logger.warning(
+                "DPS score update failed for %s/%s: %s",
+                symbol, position_id, exc,
+            )
+
     # ── Activity / Alert Write ─────────────────────────────────────────
 
     def write_activity(self, symbol: str, agent_type: str,
