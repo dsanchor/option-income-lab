@@ -215,46 +215,6 @@
                     </div>
                 </div>
             </div>
-            
-            <!-- DPS Scorer Cron Section -->
-            <div style="margin-top:1.5rem;">
-                <h3 style="font-size:0.95rem; font-weight:600; margin:0 0 0.75rem 0; padding-bottom:0.5rem; border-bottom:1px solid var(--border); color:var(--text);">DPS Scorer (Daily Position Scoring)</h3>
-                
-                <div style="margin-bottom:1rem;">
-                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
-                        <input type="checkbox" name="dps_enabled" value="true" {{ 'checked' if dps_enabled }}>
-                        <span style="font-size:0.9rem;">Enable daily DPS scoring</span>
-                    </label>
-                    <small style="display:block; margin-top:0.3rem; margin-left:1.5rem; color:var(--text-muted); font-size:0.75rem;">
-                        Runs deterministic position scoring (DPS) for all active positions daily. Scores are stored in snapshots and shown in monitoring charts.
-                    </small>
-                </div>
-
-                <div style="margin-bottom:0.75rem;">
-                    <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
-                        Cron Expression
-                        <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to run DPS analysis (uses main scheduler timezone)">ⓘ</span>
-                    </label>
-                    <input type="text" name="dps_cron" value="{{ dps_cron }}" placeholder="0 22 * * 1-5" spellcheck="false"
-                           style="width:100%; padding:0.6rem 0.8rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
-                    <small style="display:block; margin-top:0.3rem; color:var(--text-muted); font-size:0.75rem;">Example: <code>0 22 * * 1-5</code> = 10 PM weekdays</small>
-                </div>
-
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
-                    <div>
-                        <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
-                            {{ dps_next_run or "N/A" }}
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Run Now button -->
-                <div style="margin-top:0.75rem;">
-                    <button type="button" class="btn btn-primary" id="btnRunDps" style="font-size:0.85rem; padding:0.4rem 1rem;">▶ Run Now</button>
-                    <span id="dpsRunStatus" class="mono" style="margin-left:0.75rem; font-size:0.85rem;"></span>
-                </div>
-            </div>
 
             <!-- Options Chain Scheduler Section -->
             <div style="margin-top:1.5rem;">
@@ -450,30 +410,6 @@
             } finally {
                 bannerBtn.disabled = false;
                 setTimeout(function() { bannerStatus.textContent = ''; }, 8000);
-            }
-        });
-    }
-
-    // Run Now — DPS Scorer
-    var dpsBtn = document.getElementById('btnRunDps');
-    var dpsStatus = document.getElementById('dpsRunStatus');
-    if (dpsBtn) {
-        dpsBtn.addEventListener('click', async function() {
-            dpsBtn.disabled = true;
-            dpsStatus.textContent = '⏳ Running...';
-            try {
-                var res = await fetch('/api/trigger/dps_scorer', { method: 'POST' });
-                var data = await res.json();
-                if (res.ok) {
-                    dpsStatus.textContent = '✅ Triggered!';
-                } else {
-                    dpsStatus.textContent = '❌ ' + (data.error || 'Failed');
-                }
-            } catch(e) {
-                dpsStatus.textContent = '❌ ' + e.message;
-            } finally {
-                dpsBtn.disabled = false;
-                setTimeout(function() { dpsStatus.textContent = ''; }, 8000);
             }
         });
     }

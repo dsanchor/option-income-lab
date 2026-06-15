@@ -2532,11 +2532,6 @@ async def settings_config_page(request: Request):
     calendar_cfg = config.get("calendar_sync", {})
     calendar_enabled = calendar_cfg.get("enabled", True)
     calendar_cron = calendar_cfg.get("cron", "0 5 * * 1-5")
-
-    # DPS scorer settings
-    dps_cfg = config.get("dps_scorer", {})
-    dps_enabled = dps_cfg.get("enabled", True)
-    dps_cron = dps_cfg.get("cron", "0 22/12 * * *")
     
     # Resolve env vars for display
     if telegram_bot_token.startswith("${"):
@@ -2654,17 +2649,6 @@ async def settings_config_page(request: Request):
         except Exception:
             banner_next_run = "Invalid cron"
 
-    # Calculate scheduler times for DPS Scorer
-    dps_next_run = ""
-    if dps_cron:
-        try:
-            now_tz = datetime.now(tz)
-            cron = croniter(dps_cron, now_tz)
-            next_run_dt = cron.get_next(datetime)
-            dps_next_run = _format_time_dual_tz(next_run_dt, timezone)
-        except Exception:
-            dps_next_run = "Invalid cron"
-
     # Calculate scheduler times for Calendar Sync
     calendar_next_run = ""
     if calendar_cron:
@@ -2708,9 +2692,6 @@ async def settings_config_page(request: Request):
         "calendar_enabled": calendar_enabled,
         "calendar_cron": calendar_cron,
         "calendar_next_run": calendar_next_run,
-        "dps_enabled": dps_enabled,
-        "dps_cron": dps_cron,
-        "dps_next_run": dps_next_run,
     })
 
 
@@ -2945,40 +2926,6 @@ async def settings_config_save(request: Request):
         except (ValueError, KeyError):
             pass
 
-    # Re-read for display
-    cosmos_settings = _load_settings_from_cosmos(cosmos)
-    if cosmos_settings:
-        config = cosmos_settings
-    else:
-        config = _load_config()
-    
-    # DPS scorer settings save
-    dps_enabled = form.get("dps_enabled") == "true"
-    dps_cron = str(form.get("dps_cron", "0 22/12 * * *")).strip()
-
-    if dps_cron:
-        try:
-            croniter(dps_cron)
-            if cosmos:
-                cosmos_settings_upd = _load_settings_from_cosmos(cosmos) or {}
-                cosmos_settings_upd.setdefault("dps_scorer", {})
-                cosmos_settings_upd["dps_scorer"]["enabled"] = dps_enabled
-                cosmos_settings_upd["dps_scorer"]["cron"] = dps_cron
-                _save_settings_to_cosmos(cosmos, cosmos_settings_upd)
-
-            config_file = _load_config()
-            config_file.setdefault("dps_scorer", {})
-            config_file["dps_scorer"]["enabled"] = dps_enabled
-            config_file["dps_scorer"]["cron"] = dps_cron
-            _write_config(config_file)
-            saved.append("DPS scorer")
-
-            scheduler = getattr(request.app.state, "scheduler", None)
-            if scheduler is not None and hasattr(scheduler, "reschedule_dps"):
-                scheduler.reschedule_dps(dps_cron)
-        except (ValueError, KeyError):
-            pass
-
     # Re-read final state for display
     cosmos_settings = _load_settings_from_cosmos(cosmos)
     if cosmos_settings:
@@ -3020,11 +2967,6 @@ async def settings_config_save(request: Request):
     ban_cron = banner_cfg.get("cron", "0 5 * * *")
     ban_max_items = banner_cfg.get("max_items", 10)
 
-    # DPS scorer settings
-    dps_cfg = config.get("dps_scorer", {})
-    dps_en = dps_cfg.get("enabled", True)
-    dps_cr = dps_cfg.get("cron", "0 22/12 * * *")
-
     return templates.TemplateResponse("settings_config.html", {
         "request": request,
         "cron_expr": cron_expr,
@@ -3045,9 +2987,6 @@ async def settings_config_save(request: Request):
         "banner_enabled": ban_enabled,
         "banner_cron": ban_cron,
         "banner_max_items": ban_max_items,
-        "dps_enabled": dps_en,
-        "dps_cron": dps_cr,
-        "dps_next_run": "",
     })
 
 
