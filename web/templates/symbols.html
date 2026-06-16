@@ -33,11 +33,11 @@
 <div style="padding:0.75rem 1.25rem; border-bottom:1px solid var(--border);">
     <div class="filter-pills" id="signal-filter-pills" data-value="">
         <button type="button" class="pill active" data-value="">All</button>
-        <button type="button" class="pill" data-value="ideal-puts" title="Entry: Strong Buy/Buy + Momentum: Bullish — confluent setup for selling puts">Ideal Puts</button>
-        <button type="button" class="pill" data-value="ideal-calls" title="Entry: Hold/Wait + Momentum: Weakening/Bearish/Neutral — ideal for covered calls">Ideal Calls</button>
-        <button type="button" class="pill" data-value="accumulate" title="Entry: Accumulate + Momentum: Bullish/Neutral — small DCA, not urgent">Accumulate</button>
-        <button type="button" class="pill" data-value="no-puts" title="Entry: Strong Buy/Buy + Momentum: Bearish — falling knife, do NOT sell puts">⚠️ No Puts</button>
-        <button type="button" class="pill" data-value="no-calls" title="Entry: Wait + Momentum: Bullish — runaway bull, do NOT sell calls">⚠️ No Calls</button>
+        <button type="button" class="pill" data-value="ideal-puts" title="(SB/Buy + Bullish) or (SB/Buy + Oversold) — confluent setup for selling puts">Ideal Puts</button>
+        <button type="button" class="pill" data-value="ideal-calls" title="(Hold/Wait + Weakening/Bearish/Neutral) or (any + Overextended) — ideal for covered calls">Ideal Calls</button>
+        <button type="button" class="pill" data-value="accumulate" title="Accumulate + Bullish/Neutral — small DCA, not urgent">Accumulate</button>
+        <button type="button" class="pill" data-value="no-puts" title="SB/Buy + Bearish (pure) — falling knife without oversold bounce signal">⚠️ No Puts</button>
+        <button type="button" class="pill" data-value="no-calls" title="Wait + Bullish (pure) — runaway bull without exhaustion signal">⚠️ No Calls</button>
     </div>
 </div>
 <div class="table-wrap">
@@ -353,26 +353,30 @@
             var momentum = (entry.momentum || '').toLowerCase();
             var visible = true;
 
+            var isSBorBuy = (entryTag === 'strong buy' || entryTag === 'buy');
+            var isHoldOrWait = (entryTag === 'hold' || entryTag === 'wait');
+            var isBullishPure = (momentum === 'bullish');
+            var isOverextended = (momentum === 'bullish (overextended)');
+            var isBearishPure = (momentum === 'bearish');
+            var isOversold = (momentum === 'bearish (oversold)');
+            var isWeakening = (momentum === 'weakening');
+            var isNeutral = (momentum === 'neutral');
+
             if (filter === 'ideal-puts') {
-                var goodEntry = (entryTag === 'strong buy' || entryTag === 'buy');
-                var goodMom = momentum.indexOf('bullish') >= 0;
-                visible = goodEntry && goodMom;
+                // (SB/B + Bullish pure) OR (SB/B + Bearish oversold)
+                visible = (isSBorBuy && isBullishPure) || (isSBorBuy && isOversold);
             } else if (filter === 'ideal-calls') {
-                var callEntry = (entryTag === 'hold' || entryTag === 'wait');
-                var callMom = (momentum.indexOf('weakening') >= 0 || momentum.indexOf('bearish') >= 0 || momentum === 'neutral');
-                visible = callEntry && callMom;
+                // (Hold/Wait + Weakening/Bearish pure/Neutral) OR (any + overextended)
+                visible = (isHoldOrWait && (isWeakening || isBearishPure || isNeutral)) || isOverextended;
             } else if (filter === 'accumulate') {
                 var accEntry = (entryTag === 'accumulate');
-                var accMom = (momentum.indexOf('bullish') >= 0 || momentum === 'neutral');
-                visible = accEntry && accMom;
+                visible = accEntry && (isBullishPure || isNeutral);
             } else if (filter === 'no-puts') {
-                var noPutEntry = (entryTag === 'strong buy' || entryTag === 'buy');
-                var noPutMom = momentum.indexOf('bearish') >= 0;
-                visible = noPutEntry && noPutMom;
+                // SB/B + Bearish pure (falling knife, no oversold bounce)
+                visible = isSBorBuy && isBearishPure;
             } else if (filter === 'no-calls') {
-                var noCallEntry = (entryTag === 'wait');
-                var noCallMom = momentum.indexOf('bullish') >= 0;
-                visible = noCallEntry && noCallMom;
+                // Wait + Bullish pure (runaway, no exhaustion)
+                visible = (entryTag === 'wait') && isBullishPure;
             }
 
             row.style.display = visible ? '' : 'none';
