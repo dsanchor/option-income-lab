@@ -30,7 +30,7 @@
 {% if top20 %}
 <!-- Filter Panel -->
 <div class="card" style="margin-bottom:1rem;">
-    <div class="card-header" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;padding:1rem 1.25rem;" onclick="toggleFilters()">
+    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;padding:1rem 1.25rem;">
         <h2 style="margin:0;font-size:1.1rem;">Filters</h2>
         <span id="filterCount" style="font-size:0.9rem;color:var(--text-muted);">Showing {{ top20|length }} of {{ top20|length }}</span>
     </div>
@@ -184,12 +184,7 @@
         window.location.href = '/dgi/analyze/' + encodeURIComponent(sym);
         return false;
     };
-    /* ── Filter Panel Toggle & Logic ── */
-    window.toggleFilters = function() {
-        var panel = document.getElementById('filterPanel');
-        var isVisible = panel.style.display !== 'none';
-        panel.style.display = isVisible ? 'none' : 'block';
-    };
+    /* ── Filter Panel Logic ── */
 
     window.clampPriceSliders = function(changed) {
         var minEl = document.getElementById('filterPriceMin');

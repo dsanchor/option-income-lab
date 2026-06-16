@@ -26,11 +26,11 @@
 <div class="card">
 {% if symbols %}
 <!-- Signal Filters -->
-<div class="card-header" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;padding:1rem 1.25rem;" onclick="toggleSignalFilters()">
+<div class="card-header" style="display:flex;justify-content:space-between;align-items:center;padding:1rem 1.25rem;">
     <h2 style="margin:0;font-size:1.1rem;">Filters</h2>
     <span id="signalFilterCount" style="font-size:0.9rem;color:var(--text-muted);">{{ symbols|length }} symbols</span>
 </div>
-<div id="signalFilterPanel" style="padding:0.75rem 1.25rem; border-bottom:1px solid var(--border);">
+<div style="padding:0.75rem 1.25rem; border-bottom:1px solid var(--border);">
     <div class="filter-pills" id="signal-filter-pills" data-value="">
         <button type="button" class="pill active" data-value="">All</button>
         <button type="button" class="pill" data-value="ideal-puts" title="Entry: Strong Buy/Buy + Momentum: Bullish — confluent setup for selling puts">Ideal Puts</button>
@@ -332,12 +332,6 @@
     }
 
     // ── Signal Filters ──
-    function toggleSignalFilters() {
-        var panel = document.getElementById('signalFilterPanel');
-        var isVisible = panel.style.display !== 'none';
-        panel.style.display = isVisible ? 'none' : 'block';
-    }
-
     var signalPills = document.querySelectorAll('#signal-filter-pills .pill');
     signalPills.forEach(function(pill) {
         pill.addEventListener('click', function() {
