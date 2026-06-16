@@ -64,7 +64,9 @@
                 <tr>
                     <th>{{ "Position" if agent.is_position_monitor else "Symbol" }}</th>
                     <th class="num">Price</th>
+                    {% if agent.key != "buy_tracker" %}
                     <th class="num">Gap</th>
+                    {% endif %}
                     <th>Recent</th>
                     {% if agent.is_position_monitor %}
                     <th class="num">DTE</th>
@@ -90,6 +92,7 @@
                 <tr class="clickable-row" data-href="/symbols/{{ row.symbol }}">
                     <td><strong>{{ row.display }}</strong></td>
                     <td class="num mono">{{ "$%.2f" | format(row.underlying_price) if row.underlying_price else "—" }}</td>
+                    {% if agent.key != "buy_tracker" %}
                     <td class="num mono">
                         {% if row.strike_pct is not none %}
                         {% if row.option_type == "call" %}
@@ -99,6 +102,7 @@
                         {% endif %}
                         {% else %}—{% endif %}
                     </td>
+                    {% endif %}
                     <td class="trend-cell">
                         {% if row.recent_activities %}
                         {% for act in row.recent_activities %}
