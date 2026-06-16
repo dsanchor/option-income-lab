@@ -63,20 +63,38 @@ class OptionsChainCache:
     def get_or_load(self, symbol: str) -> str:
         """Get from cache or load synchronously on miss.
 
-        This is the primary entry point for all consumers.
-        Returns the options chain as a JSON string.
+        Safe to call from sync contexts. If an event loop is already
+        running (e.g. inside an async framework), uses a thread to avoid
+        'Cannot run the event loop while another loop is running'.
         """
         cached = self.get(symbol)
         if cached is not None:
             return cached
 
         logger.info("%s: options chain cache miss — loading from sources", symbol)
+
+        try:
+            asyncio.get_running_loop()
+            # Already inside an async context — run in a thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                chain_json = pool.submit(self._sync_refresh, symbol).result(timeout=120)
+        except RuntimeError:
+            # No running loop — safe to create one
+            loop = asyncio.new_event_loop()
+            try:
+                chain_json = loop.run_until_complete(self.refresh(symbol))
+            finally:
+                loop.close()
+        return chain_json
+
+    def _sync_refresh(self, symbol: str) -> str:
+        """Helper: run refresh() in a new event loop (for thread execution)."""
         loop = asyncio.new_event_loop()
         try:
-            chain_json = loop.run_until_complete(self.refresh(symbol))
+            return loop.run_until_complete(self.refresh(symbol))
         finally:
             loop.close()
-        return chain_json
 
     async def get_or_load_async(self, symbol: str) -> str:
         """Async version of get_or_load."""

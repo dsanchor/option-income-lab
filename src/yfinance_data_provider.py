@@ -204,7 +204,7 @@ class YFinanceDataProvider:
             "technicals": self._build_technicals(history, info),
             "forecast": self._build_forecast(info, ticker),
             "dividends": self._build_dividends(info, ticker),
-            "options_chain": self._build_options_chain(ticker, current_price, symbol),
+            "options_chain": await self._build_options_chain(symbol),
         }
 
         self._cache[symbol] = {"data": result, "timestamp": time.monotonic()}
@@ -470,15 +470,14 @@ class YFinanceDataProvider:
     # ------------------------------------------------------------------
     # Options chain
     # ------------------------------------------------------------------
-    def _build_options_chain(self, ticker, current_price: Optional[float],
-                             symbol: str) -> str:
+    async def _build_options_chain(self, symbol: str) -> str:
         """Get options chain from the centralized cache.
 
         The cache handles the load procedure (yfinance + TradingView merge)
         transparently on miss. TTL is 30 minutes.
         """
         cache = get_options_chain_cache()
-        return cache.get_or_load(symbol)
+        return await cache.get_or_load_async(symbol)
 
     def _process_option_df(self, df: pd.DataFrame, option_type: str,
                            exp_key: str, current_price: float,
