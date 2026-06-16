@@ -146,6 +146,15 @@ class CosmosDBService:
         doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
         return self.container.replace_item(item=doc["id"], body=doc)
 
+    def update_symbol_enrichment(self, symbol: str, enrichment: dict) -> dict:
+        """Update the enrichment data on a symbol config document."""
+        doc = self.get_symbol(symbol)
+        if doc is None:
+            raise ValueError(f"Symbol {symbol} not found")
+        doc["enrichment"] = enrichment
+        doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        return self.container.replace_item(item=doc["id"], body=doc)
+
     def delete_symbol(self, symbol: str) -> None:
         """Delete a symbol config and ALL associated activities/alerts."""
         try:

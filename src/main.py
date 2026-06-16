@@ -80,6 +80,7 @@ class OptionsAgentScheduler:
         self._dgi_screener_cron_changed = False
         self._banner_cron_changed = False
         self._calendar_cron_changed = False
+        self._portfolio_enrichment_cron_changed = False
         self._last_config_reload = None
         self._config_reload_interval = 60  # seconds
     
@@ -110,6 +111,13 @@ class OptionsAgentScheduler:
         dgi_config['cron'] = new_cron
         self.config.config['dgi_screener'] = dgi_config
         self._dgi_screener_cron_changed = True
+    
+    def reschedule_portfolio_enrichment(self, new_cron: str):
+        """Update portfolio enrichment cron expression."""
+        pe_config = self.config.config.get('portfolio_enrichment', {})
+        pe_config['cron'] = new_cron
+        self.config.config['portfolio_enrichment'] = pe_config
+        self._portfolio_enrichment_cron_changed = True
 
     def reschedule_banner(self, new_cron: str):
         """Update banner agent cron expression. The run loop will pick it up on next iteration."""
@@ -352,6 +360,32 @@ class OptionsAgentScheduler:
                   f"{result.get('top_n', 0)} in top list")
         except Exception as e:
             print(f"ERROR during DGI screener: {e}")
+
+    def run_portfolio_enrichment_job(self):
+        """Execute portfolio enrichment (bridges async to sync for scheduler)."""
+        _run_async(self._run_portfolio_enrichment_async())
+
+    async def _run_portfolio_enrichment_async(self):
+        """Run portfolio enrichment if enabled in config."""
+        pe_config = self.config.config.get('portfolio_enrichment', {})
+        if not pe_config.get('enabled', True):
+            print("⏭️  Portfolio Enrichment disabled in config")
+            return
+
+        from .portfolio_enrichment import run_portfolio_enrichment
+
+        tz = pytz.timezone(self.config.timezone)
+        now_tz = datetime.now(tz)
+        print(f"\n{'📊'*1}{'='*68}")
+        print(f"📊 Portfolio Enrichment - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"{'='*70}\n")
+
+        try:
+            result = await run_portfolio_enrichment(self.cosmos)
+            print(f"Portfolio Enrichment complete: {result.get('success', 0)}/{result.get('total', 0)} success, "
+                  f"{result.get('errors', 0)} errors")
+        except Exception as e:
+            print(f"ERROR during Portfolio Enrichment: {e}")
 
     def run_banner_agent_job(self):
         """Execute banner agent (bridges async to sync for scheduler)."""
@@ -603,6 +637,29 @@ class OptionsAgentScheduler:
             if calendar_cron_changed:
                 self._calendar_cron_changed = True
                 print(f"✓ Config reloaded from CosmosDB: calendar sync cron changed to {new_calendar_cron}")
+
+            # Check portfolio enrichment settings
+            pe_settings = cosmos_settings.get('portfolio_enrichment', {})
+            new_pe_cron = pe_settings.get('cron')
+            current_pe_cron = self.config.config.get('portfolio_enrichment', {}).get('cron', '0 9-17 * * 1-5')
+
+            pe_cron_changed = False
+            if new_pe_cron and new_pe_cron != current_pe_cron:
+                if 'portfolio_enrichment' not in self.config.config:
+                    self.config.config['portfolio_enrichment'] = {}
+                self.config.config['portfolio_enrichment']['cron'] = new_pe_cron
+                pe_cron_changed = True
+
+            if pe_settings:
+                if 'portfolio_enrichment' not in self.config.config:
+                    self.config.config['portfolio_enrichment'] = {}
+                for key in ['enabled']:
+                    if key in pe_settings:
+                        self.config.config['portfolio_enrichment'][key] = pe_settings[key]
+
+            if pe_cron_changed:
+                self._portfolio_enrichment_cron_changed = True
+                print(f"✓ Config reloaded from CosmosDB: portfolio enrichment cron changed to {new_pe_cron}")
                 
         except Exception as e:
             # Don't crash the scheduler on config reload errors
@@ -662,6 +719,13 @@ class OptionsAgentScheduler:
         calendar_cron_expr = calendar_config.get('cron', '0 5 * * 1-5')
         calendar_next_run = None
         calendar_cron = None
+
+        # Initialize portfolio enrichment cron (if enabled)
+        pe_config = self.config.config.get('portfolio_enrichment', {})
+        pe_enabled = pe_config.get('enabled', True)
+        pe_cron_expr = pe_config.get('cron', '0 9-17 * * 1-5')
+        pe_next_run = None
+        pe_cron = None
         
         if summary_enabled:
             try:
@@ -707,6 +771,15 @@ class OptionsAgentScheduler:
                 print(f"⚠️  Invalid calendar sync cron expression '{calendar_cron_expr}': {e}")
                 print(f"⚠️  Calendar sync scheduling disabled")
                 calendar_enabled = False
+
+        if pe_enabled:
+            try:
+                pe_cron = croniter(pe_cron_expr, now_tz)
+                pe_next_run = pe_cron.get_next(datetime)
+            except (ValueError, KeyError) as e:
+                print(f"⚠️  Invalid portfolio enrichment cron expression '{pe_cron_expr}': {e}")
+                print(f"⚠️  Portfolio enrichment scheduling disabled")
+                pe_enabled = False
         
         # Display initial schedule
         print(f"\nMonitor Agents        - Next run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
@@ -730,6 +803,10 @@ class OptionsAgentScheduler:
             print(f"Calendar Sync         - Next run: {calendar_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         else:
             print(f"Calendar Sync         - Disabled")
+        if pe_enabled and pe_next_run:
+            print(f"Portfolio Enrichment  - Next run: {pe_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        else:
+            print(f"Portfolio Enrichment  - Disabled")
         
         # Track when we last reloaded config
         self._last_config_reload = time.time()
@@ -839,6 +916,22 @@ class OptionsAgentScheduler:
                     print(f"⚠️  Invalid calendar sync cron expression '{calendar_cron_expr}': {e}")
                     calendar_enabled = False
 
+            if self._portfolio_enrichment_cron_changed:
+                self._portfolio_enrichment_cron_changed = False
+                pe_config = self.config.config.get('portfolio_enrichment', {})
+                pe_cron_expr = pe_config.get('cron', '0 9-17 * * 1-5')
+                try:
+                    tz = pytz.timezone(self.config.timezone)
+                    now_tz = datetime.now(tz)
+                    pe_cron = croniter(pe_cron_expr, now_tz)
+                    pe_next_run = pe_cron.get_next(datetime)
+                    pe_enabled = pe_config.get('enabled', True)
+                    print(f"Portfolio enrichment cron rescheduled to: {pe_cron_expr}")
+                    print(f"Next scheduled run: {pe_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
+                except (ValueError, KeyError) as e:
+                    print(f"⚠️  Invalid portfolio enrichment cron expression '{pe_cron_expr}': {e}")
+                    pe_enabled = False
+
             now_tz = datetime.now(tz)
             
             # Check main scheduler
@@ -876,6 +969,12 @@ class OptionsAgentScheduler:
                 self.run_calendar_sync_job()
                 calendar_next_run = calendar_cron.get_next(datetime)
                 print(f"Calendar Sync         - Next run: {calendar_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
+
+            # Check portfolio enrichment scheduler
+            if pe_enabled and pe_next_run and now_tz >= pe_next_run:
+                self.run_portfolio_enrichment_job()
+                pe_next_run = pe_cron.get_next(datetime)
+                print(f"Portfolio Enrichment  - Next run: {pe_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
             
             time.sleep(1)
         

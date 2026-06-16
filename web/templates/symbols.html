@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Symbols — Option Income Lab{% endblock %}
+{% block title %}Portfolio — Option Income Lab{% endblock %}
 
 {% block content %}
 <div class="page-header">
-    <h1>Symbols</h1>
-    <p class="subtitle">Manage your watchlist symbols and positions.</p>
+    <h1>Portfolio</h1>
+    <p class="subtitle">Your watchlist symbols with quality metrics and dividend analysis.</p>
 </div>
 
 <!-- Add Symbol form -->
@@ -22,81 +22,96 @@
     <div id="addSymbolSuccess" class="alert alert-success" style="display:none; margin:0.75rem 1.25rem;"></div>
 </div>
 
-<!-- Symbols table -->
-<div class="card">
-    <div class="card-header">
-        <h2>All Symbols</h2>
+<!-- Portfolio table -->
+<div class="card" style="overflow-x:auto;">
+{% if symbols %}
+    <table class="table dgi-table" id="symbolsTable">
+        <thead>
+            <tr>
+                <th class="sortable" data-col="symbol" data-type="str">Symbol <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="category" data-type="str">Category <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="score" data-type="num">Quality Score <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="dividend_yield" data-type="num">Div Yield % <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="dividend_growth_cagr" data-type="num">Div Growth CAGR % <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="years_of_growth" data-type="num">Years <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="technical_timing_score" data-type="num">Timing <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="entry_tag" data-type="str">Entry <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="current_price" data-type="num">Price <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="active_positions" data-type="num">Active Pos. <span class="sort-indicator">⇅</span></th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for sym in symbols %}
+            {% set enr = sym.enrichment | default({}) or {} %}
+            {% set metrics = enr.metrics | default({}) %}
+            {% set technicals = enr.technicals | default({}) %}
+            {% set cat_lower = (enr.category | default('') | lower | replace(' ', '-')) or 'none' %}
+            {% set score = enr.quality_score | default(0) %}
+            {% set score_class = 'score-high' if score >= 70 else ('score-medium' if score >= 40 else 'score-low') %}
+            {% set tag = enr.entry_tag | default('—') %}
+            {% set tag_lower = tag | lower | replace(' ', '-') %}
+            {% set entry_data = enr | tojson | e if enr else '{}' %}
+            <tr class="dgi-row" data-entry='{{ entry_data }}' data-symbol="{{ sym.symbol }}">
+                <td><strong><a href="#" class="sym-detail-link" data-symbol="{{ sym.symbol }}">{{ sym.symbol }}</a></strong></td>
+                <td>
+                    {% if enr.category %}
+                    <span class="badge badge-cat-{{ cat_lower }}">{{ enr.category }}</span>
+                    {% else %}—{% endif %}
+                </td>
+                <td class="mono">
+                    {% if score > 0 %}
+                    <span class="{{ score_class }}">
+                        <span class="score-bar"><span class="score-bar-fill" style="width:{{ score }}%"></span></span>
+                        {{ "%.1f" | format(score) }}
+                    </span>
+                    {% else %}—{% endif %}
+                </td>
+                <td class="mono">{% if metrics.dividend_yield is defined and metrics.dividend_yield %}{{ "%.2f" | format(metrics.dividend_yield * 100) }}%{% else %}—{% endif %}</td>
+                <td class="mono">{% if metrics.dividend_cagr_5y is defined and metrics.dividend_cagr_5y %}{{ "%.1f" | format(metrics.dividend_cagr_5y * 100) }}%{% else %}—{% endif %}</td>
+                <td class="mono">{{ metrics.years_consecutive_increases | default('—') }}</td>
+                <td class="mono">{% if technicals.score is defined %}{{ "%.1f" | format(technicals.score) }}{% else %}—{% endif %}</td>
+                <td>{% if enr.entry_tag %}<span class="badge badge-entry-{{ tag_lower }}">{{ tag }}</span>{% else %}—{% endif %}</td>
+                <td class="mono">{% if metrics.current_price %}${{ "%.2f" | format(metrics.current_price) }}{% else %}—{% endif %}</td>
+                <td class="mono">{{ sym._active_count }}</td>
+                <td class="actions-cell">
+                    <a href="/symbols/{{ sym.symbol }}" class="btn-sm" title="Symbol details">Details</a>
+                    <button class="btn-sm btn-danger" data-delete-symbol="{{ sym.symbol }}" title="Delete {{ sym.symbol }}">Delete</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% else %}
+    <p class="empty-state" style="padding:2rem; text-align:center;">No symbols configured. Add your first symbol above.</p>
+{% endif %}
+</div>
+
+<!-- Detail Modal -->
+<div class="modal-overlay" id="portfolioDetailModal" style="display:none;">
+    <div class="modal-content" style="max-width:700px;">
+        <div class="modal-header">
+            <h3 id="portfolioDetailTitle">Stock Detail</h3>
+            <button class="modal-close" id="portfolioDetailClose">&times;</button>
+        </div>
+        <div id="portfolioDetailBody"></div>
+        <div id="portfolioRadarChartContainer" style="margin:1rem 1.25rem 1.25rem; display:none;">
+            <h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.5rem;">Score Contribution</h4>
+            <div style="background:var(--bg-input);border-radius:var(--radius);padding:0.75rem 1rem;max-width:500px;margin:0 auto;">
+                <canvas id="portfolioRadarChart" height="300"></canvas>
+            </div>
+        </div>
     </div>
-    {% if symbols %}
-    <div class="table-wrap">
-        <table id="symbolsTable">
-            <thead>
-                <tr>
-                    <th>Ticker</th>
-                    <th>Exchange</th>
-                    <th>Display Name</th>
-                    <th>Call Watchlist</th>
-                    <th>Put Watchlist</th>
-                    <th>Buy Tracker</th>
-                    <th>Notifications</th>
-                    <th class="num">Active Positions</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for sym in symbols %}
-                <tr data-symbol="{{ sym.symbol }}">
-                    <td><strong><a href="/symbols/{{ sym.symbol }}">{{ sym.symbol }}</a></strong></td>
-                    <td>{{ sym.exchange }}</td>
-                    <td>{{ sym.display_name }}</td>
-                    <td>
-                        <label class="switch">
-                            <input type="checkbox" class="toggle-cc" data-symbol="{{ sym.symbol }}"
-                                   {% if sym.watchlist.covered_call %}checked{% endif %}>
-                            <span class="slider"></span>
-                        </label>
-                    </td>
-                    <td>
-                        <label class="switch">
-                            <input type="checkbox" class="toggle-csp" data-symbol="{{ sym.symbol }}"
-                                   {% if sym.watchlist.cash_secured_put %}checked{% endif %}>
-                            <span class="slider"></span>
-                        </label>
-                    </td>
-                    <td>
-                        <label class="switch">
-                            <input type="checkbox" class="toggle-bt" data-symbol="{{ sym.symbol }}"
-                                   {% if sym.watchlist.buy_tracker %}checked{% endif %}>
-                            <span class="slider"></span>
-                        </label>
-                    </td>
-                    <td>
-                        <label class="switch">
-                            <input type="checkbox" class="toggle-notifications" data-symbol="{{ sym.symbol }}"
-                                   {% if sym.telegram_notifications_enabled is not defined or sym.telegram_notifications_enabled %}checked{% endif %}>
-                            <span class="slider"></span>
-                        </label>
-                    </td>
-                    <td class="num">{{ sym._active_count }}</td>
-                    <td>
-                        <a href="/symbols/{{ sym.symbol }}" class="btn-sm">View</a>
-                        <button class="btn-sm btn-danger" data-delete-symbol="{{ sym.symbol }}">Delete</button>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% else %}
-    <p class="empty-state">No symbols configured. Add your first symbol above.</p>
-    {% endif %}
 </div>
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 (function() {
-    // Add symbol
+    var _radarChart = null;
+
+    // ── Add Symbol ──
     document.getElementById('btnAddSymbol').addEventListener('click', async function() {
         var ticker = document.getElementById('newTicker').value.trim().toUpperCase();
         var exchange = document.getElementById('newExchange').value.trim().toUpperCase();
@@ -126,9 +141,9 @@
                 errEl.textContent = data.error || 'Failed to add symbol.';
                 errEl.style.display = 'block';
             } else {
-                okEl.textContent = 'Added ' + ticker + ' successfully!';
+                okEl.textContent = 'Added ' + ticker + ' successfully! Enrichment data will be available shortly.';
                 okEl.style.display = 'block';
-                setTimeout(function() { window.location.reload(); }, 800);
+                setTimeout(function() { window.location.reload(); }, 1500);
             }
         } catch(e) {
             errEl.textContent = 'Network error: ' + e.message;
@@ -136,60 +151,7 @@
         }
     });
 
-    // Toggle watchlist flags and notifications
-    document.querySelectorAll('.toggle-cc, .toggle-csp, .toggle-bt, .toggle-notifications').forEach(function(toggle) {
-        toggle.addEventListener('change', async function() {
-            var sym = this.dataset.symbol;
-            var field;
-            if (this.classList.contains('toggle-cc')) {
-                field = 'covered_call';
-            } else if (this.classList.contains('toggle-csp')) {
-                field = 'cash_secured_put';
-            } else if (this.classList.contains('toggle-bt')) {
-                field = 'buy_tracker';
-            } else {
-                field = 'telegram_notifications_enabled';
-            }
-            var payload = {};
-            payload[field] = this.checked;
-
-            try {
-                var res = await fetch('/api/symbols/' + sym, {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(payload)
-                });
-                if (!res.ok) {
-                    this.checked = !this.checked; // revert on failure
-                }
-            } catch(e) {
-                this.checked = !this.checked;
-            }
-        });
-    });
-
-    // Toggle notifications
-    document.querySelectorAll('.toggle-notifications').forEach(function(toggle) {
-        toggle.addEventListener('change', async function() {
-            var sym = this.dataset.symbol;
-            var payload = { telegram_notifications_enabled: this.checked };
-
-            try {
-                var res = await fetch('/api/symbols/' + sym, {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(payload)
-                });
-                if (!res.ok) {
-                    this.checked = !this.checked; // revert on failure
-                }
-            } catch(e) {
-                this.checked = !this.checked;
-            }
-        });
-    });
-
-    // Delete symbol
+    // ── Delete Symbol ──
     document.querySelectorAll('[data-delete-symbol]').forEach(function(btn) {
         btn.addEventListener('click', async function() {
             var sym = this.dataset.deleteSymbol;
@@ -208,6 +170,257 @@
             }
         });
     });
+
+    // ── Sortable Columns ──
+    var currentSort = { col: 'score', dir: 'desc' };
+    document.querySelectorAll('#symbolsTable th.sortable').forEach(function(th) {
+        th.style.cursor = 'pointer';
+        th.addEventListener('click', function() {
+            var col = th.dataset.col;
+            var type = th.dataset.type;
+            if (currentSort.col === col) {
+                currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSort.col = col;
+                currentSort.dir = type === 'num' ? 'desc' : 'asc';
+            }
+            sortTable(col, type, currentSort.dir);
+            document.querySelectorAll('#symbolsTable .sort-indicator').forEach(function(s) { s.textContent = '⇅'; });
+            th.querySelector('.sort-indicator').textContent = currentSort.dir === 'asc' ? '▲' : '▼';
+        });
+    });
+
+    function sortTable(col, type, dir) {
+        var tbody = document.querySelector('#symbolsTable tbody');
+        if (!tbody) return;
+        var rows = Array.from(tbody.querySelectorAll('tr'));
+        rows.sort(function(a, b) {
+            var va = extractVal(a, col, type);
+            var vb = extractVal(b, col, type);
+            if (type === 'num') return dir === 'asc' ? va - vb : vb - va;
+            return dir === 'asc' ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+        });
+        rows.forEach(function(r) { tbody.appendChild(r); });
+    }
+
+    function extractVal(row, col, type) {
+        var entry = {};
+        try { entry = JSON.parse(row.getAttribute('data-entry') || '{}'); } catch(e) {}
+        var metrics = entry.metrics || {};
+        var technicals = entry.technicals || {};
+        switch(col) {
+            case 'symbol': return row.dataset.symbol || '';
+            case 'category': return entry.category || '';
+            case 'score': return entry.quality_score || 0;
+            case 'dividend_yield': return metrics.dividend_yield || 0;
+            case 'dividend_growth_cagr': return metrics.dividend_cagr_5y || 0;
+            case 'years_of_growth': return metrics.years_consecutive_increases || 0;
+            case 'technical_timing_score': return technicals.score || 0;
+            case 'entry_tag': return entry.entry_tag || '';
+            case 'current_price': return metrics.current_price || 0;
+            case 'active_positions':
+                var cells = row.querySelectorAll('td');
+                return parseInt(cells[cells.length - 2].textContent) || 0;
+            default: return '';
+        }
+    }
+
+    // ── Detail Modal ──
+    var modal = document.getElementById('portfolioDetailModal');
+    var modalTitle = document.getElementById('portfolioDetailTitle');
+    var modalBody = document.getElementById('portfolioDetailBody');
+    var modalClose = document.getElementById('portfolioDetailClose');
+
+    function fmtVal(v) {
+        if (v === null || v === undefined) return '—';
+        if (typeof v === 'number') return v.toLocaleString(undefined, { maximumFractionDigits: 4 });
+        return String(v);
+    }
+
+    function buildSection(title, obj) {
+        if (!obj || typeof obj !== 'object') return '';
+        var html = '<div style="margin-bottom:1.25rem;">';
+        html += '<h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.5rem;">' + title + '</h4>';
+        html += '<div style="background:var(--bg-input);border-radius:var(--radius);padding:0.75rem 1rem;">';
+        html += '<div class="modal-grid">';
+        var keys = Object.keys(obj);
+        for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            var v = obj[k];
+            if (v && typeof v === 'object' && !Array.isArray(v)) {
+                html += '</div></div>';
+                html += buildSection(title + ' › ' + k.replace(/_/g, ' '), v);
+                html += '<div style="background:var(--bg-input);border-radius:var(--radius);padding:0 1rem;"><div class="modal-grid">';
+                continue;
+            }
+            var label = k.replace(/_/g, ' ');
+            var displayVal;
+            if (typeof v === 'number' && (k === 'payout_ratio' || k === 'dividend_yield' || k === 'dividend_cagr_5y' || k === 'roe')) {
+                displayVal = (v * 100).toFixed(k === 'payout_ratio' ? 1 : 2) + '%';
+            } else if (k === 'debt_to_equity' && typeof v === 'number') {
+                displayVal = v.toFixed(2);
+            } else if (k === 'market_cap' && typeof v === 'number' && v >= 1e9) {
+                displayVal = '$' + (v / 1e9).toFixed(2) + 'B';
+            } else if (k === 'market_cap' && typeof v === 'number' && v >= 1e6) {
+                displayVal = '$' + (v / 1e6).toFixed(2) + 'M';
+            } else if (k === 'current_price' && typeof v === 'number') {
+                displayVal = '$' + v.toFixed(2);
+            } else {
+                displayVal = fmtVal(v);
+            }
+            html += '<div class="modal-field" style="margin-bottom:0.4rem;">';
+            html += '<label>' + label + '</label>';
+            html += '<div style="font-family:var(--font-mono);font-size:0.9rem;">' + displayVal + '</div>';
+            html += '</div>';
+        }
+        html += '</div></div></div>';
+        return html;
+    }
+
+    function openDetail(entry, symbol) {
+        modalTitle.textContent = symbol + ' — Detail';
+        var html = '';
+
+        if (!entry || !entry.quality_score) {
+            html = '<div style="padding:1.5rem;text-align:center;color:var(--text-muted);">No enrichment data available yet. Run portfolio enrichment to populate.</div>';
+            modalBody.innerHTML = html;
+            document.getElementById('portfolioRadarChartContainer').style.display = 'none';
+            modal.style.display = 'flex';
+            return;
+        }
+
+        var topFields = { quality_score: entry.quality_score, category: entry.category, entry_tag: entry.entry_tag };
+        html += buildSection('Overview', topFields);
+
+        // Filter Status
+        if (entry.filter_detail && entry.filter_detail.checks) {
+            var fd = entry.filter_detail;
+            var passAll = fd.passes_all;
+            var filterHtml = '<div style="margin-bottom:1.25rem;">';
+            filterHtml += '<h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.5rem;">'
+                + (passAll ? '✅' : '⚠️') + ' Filter Status</h4>';
+            filterHtml += '<div style="background:var(--bg-input);border-radius:var(--radius);padding:0.75rem 1rem;">';
+            var checks = fd.checks;
+            var filterKeys = Object.keys(checks);
+            for (var fi = 0; fi < filterKeys.length; fi++) {
+                var fk = filterKeys[fi];
+                var fc = checks[fk];
+                var icon = fc.passes ? '✅' : '❌';
+                var color = fc.passes ? 'var(--text)' : 'var(--red, #ef4444)';
+                var actualFmt = typeof fc.actual === 'number' ? fc.actual.toLocaleString(undefined, {maximumFractionDigits:4}) : String(fc.actual);
+                var threshFmt = typeof fc.threshold === 'number' ? fc.threshold.toLocaleString(undefined, {maximumFractionDigits:4}) : String(fc.threshold);
+                if (fk === 'min_yield' || fk === 'max_payout' || fk === 'min_growth') {
+                    actualFmt = (fc.actual * 100).toFixed(2) + '%';
+                    threshFmt = (fc.threshold * 100).toFixed(2) + '%';
+                }
+                if (fk === 'min_market_cap') {
+                    actualFmt = '$' + (fc.actual / 1e9).toFixed(1) + 'B';
+                    threshFmt = '$' + (fc.threshold / 1e9).toFixed(1) + 'B';
+                }
+                if (fk === 'min_years') {
+                    actualFmt = Math.round(fc.actual) + ' yrs';
+                    threshFmt = Math.round(fc.threshold) + ' yrs';
+                }
+                filterHtml += '<div style="display:flex;justify-content:space-between;align-items:center;padding:0.3rem 0;'
+                    + (fi < filterKeys.length - 1 ? 'border-bottom:1px solid var(--border);' : '')
+                    + 'color:' + color + ';">';
+                filterHtml += '<span>' + icon + ' ' + fc.label + '</span>';
+                filterHtml += '<span style="font-family:var(--font-mono);font-size:0.85rem;">' + actualFmt + ' <span style="color:var(--text-muted);font-size:0.8rem;">' + fc.op + ' ' + threshFmt + '</span></span>';
+                filterHtml += '</div>';
+            }
+            filterHtml += '</div></div>';
+            html += filterHtml;
+        }
+
+        if (entry.metrics) html += buildSection('Fundamentals', entry.metrics);
+        if (entry.technicals) html += buildSection('Technical Timing', entry.technicals);
+        modalBody.innerHTML = html;
+
+        modal.style.display = 'flex';
+
+        // Radar chart
+        var radarCanvas = document.getElementById('portfolioRadarChart');
+        var radarContainer = document.getElementById('portfolioRadarChartContainer');
+        if (_radarChart) { _radarChart.destroy(); _radarChart = null; }
+
+        var qd = entry.quality_detail;
+        if (qd && qd.sub_scores) {
+            radarContainer.style.display = '';
+            var radarLabels = ['Div Yield', 'Div Growth', 'Payout Safety', 'Valuation', 'Fin. Health', 'Consistency'];
+            var radarKeys = ['dividend_yield', 'dividend_growth', 'payout_safety', 'valuation', 'financial_health', 'consistency'];
+            var radarData = radarKeys.map(function(k) { return qd.sub_scores[k] || 0; });
+            var radarMin = radarKeys.map(function(k) { return (qd.minimum_thresholds && qd.minimum_thresholds[k]) || 65; });
+            var radarIdeal = radarKeys.map(function(k) { return (qd.ideal_thresholds && qd.ideal_thresholds[k]) || 80; });
+
+            _radarChart = new Chart(radarCanvas.getContext('2d'), {
+                type: 'radar',
+                data: {
+                    labels: radarLabels,
+                    datasets: [{
+                        label: symbol,
+                        data: radarData,
+                        fill: true,
+                        backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                        borderColor: 'rgba(59, 130, 246, 0.8)',
+                        pointBackgroundColor: 'rgba(59, 130, 246, 1)',
+                        pointBorderColor: '#fff',
+                        pointRadius: 4
+                    }, {
+                        label: 'Minimum',
+                        data: radarMin,
+                        fill: false,
+                        borderColor: 'rgba(239, 68, 68, 0.4)',
+                        borderDash: [5, 5],
+                        pointRadius: 0
+                    }, {
+                        label: 'Ideal',
+                        data: radarIdeal,
+                        fill: false,
+                        borderColor: 'rgba(34, 197, 94, 0.4)',
+                        borderDash: [3, 3],
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        r: {
+                            beginAtZero: true, max: 100,
+                            ticks: { display: false },
+                            grid: { color: 'rgba(128,128,128,0.15)' },
+                            pointLabels: { font: { size: 11 }, color: 'var(--text-muted)' }
+                        }
+                    },
+                    plugins: {
+                        legend: { position: 'bottom', labels: { font: { size: 11 }, usePointStyle: true } }
+                    }
+                }
+            });
+        } else {
+            radarContainer.style.display = 'none';
+        }
+    }
+
+    // Click on symbol name → open detail modal
+    document.querySelectorAll('.sym-detail-link').forEach(function(link) {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            var row = this.closest('tr');
+            var entry = {};
+            try { entry = JSON.parse(row.getAttribute('data-entry') || '{}'); } catch(err) {}
+            openDetail(entry, this.dataset.symbol);
+        });
+    });
+
+    // Close modal
+    if (modalClose) {
+        modalClose.addEventListener('click', function() { modal.style.display = 'none'; });
+    }
+    if (modal) {
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) modal.style.display = 'none';
+        });
+    }
 })();
 </script>
 {% endblock %}

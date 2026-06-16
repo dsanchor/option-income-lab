@@ -669,6 +669,19 @@ async def api_create_symbol(request: Request):
 
         doc = cosmos.create_symbol(symbol, exchange, display_name,
                                    covered_call, cash_secured_put, buy_tracker)
+
+        # Enrich the new symbol in background (non-blocking)
+        import threading
+        def _enrich():
+            try:
+                from src.portfolio_enrichment import enrich_symbol
+                enrichment = enrich_symbol(symbol)
+                if enrichment:
+                    cosmos.update_symbol_enrichment(symbol, enrichment)
+            except Exception:
+                pass
+        threading.Thread(target=_enrich, daemon=True).start()
+
         return JSONResponse(_clean_doc(doc), status_code=201)
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
@@ -1620,6 +1633,11 @@ async def symbols_page(request: Request):
             [p for p in s.get("positions", [])
              if p.get("status") == "active"]
         )
+    # Sort by enrichment quality_score descending (enriched first)
+    symbols.sort(
+        key=lambda s: (s.get("enrichment", {}) or {}).get("quality_score", -1),
+        reverse=True,
+    )
     return templates.TemplateResponse("symbols.html", {
         "request": request,
         "symbols": symbols,
@@ -2533,6 +2551,11 @@ async def settings_config_page(request: Request):
     calendar_cfg = config.get("calendar_sync", {})
     calendar_enabled = calendar_cfg.get("enabled", True)
     calendar_cron = calendar_cfg.get("cron", "0 5 * * 1-5")
+
+    # Portfolio enrichment settings
+    pe_cfg = config.get("portfolio_enrichment", {})
+    pe_enabled = pe_cfg.get("enabled", True)
+    pe_cron = pe_cfg.get("cron", "0 9-17 * * 1-5")
     
     # Resolve env vars for display
     if telegram_bot_token.startswith("${"):
@@ -2660,6 +2683,17 @@ async def settings_config_page(request: Request):
             calendar_next_run = _format_time_dual_tz(next_run_dt, timezone)
         except Exception:
             calendar_next_run = "Invalid cron"
+
+    # Calculate scheduler times for Portfolio Enrichment
+    pe_next_run = ""
+    if pe_cron:
+        try:
+            now_tz = datetime.now(tz)
+            cron = croniter(pe_cron, now_tz)
+            next_run_dt = cron.get_next(datetime)
+            pe_next_run = _format_time_dual_tz(next_run_dt, timezone)
+        except Exception:
+            pe_next_run = "Invalid cron"
     
     return templates.TemplateResponse("settings_config.html", {
         "request": request,
@@ -2693,6 +2727,9 @@ async def settings_config_page(request: Request):
         "calendar_enabled": calendar_enabled,
         "calendar_cron": calendar_cron,
         "calendar_next_run": calendar_next_run,
+        "pe_enabled": pe_enabled,
+        "pe_cron": pe_cron,
+        "pe_next_run": pe_next_run,
     })
 
 
@@ -2927,6 +2964,33 @@ async def settings_config_save(request: Request):
         except (ValueError, KeyError):
             pass
 
+    # Portfolio enrichment settings
+    pe_enabled = form.get("pe_enabled") == "true"
+    pe_cron = str(form.get("pe_cron", "0 9-17 * * 1-5")).strip()
+
+    if pe_cron:
+        try:
+            croniter(pe_cron)
+            if cosmos:
+                cosmos_settings = _load_settings_from_cosmos(cosmos) or {}
+                cosmos_settings.setdefault("portfolio_enrichment", {})
+                cosmos_settings["portfolio_enrichment"]["enabled"] = pe_enabled
+                cosmos_settings["portfolio_enrichment"]["cron"] = pe_cron
+                _save_settings_to_cosmos(cosmos, cosmos_settings)
+
+            config = _load_config()
+            config.setdefault("portfolio_enrichment", {})
+            config["portfolio_enrichment"]["enabled"] = pe_enabled
+            config["portfolio_enrichment"]["cron"] = pe_cron
+            _write_config(config)
+            saved.append("Portfolio enrichment")
+
+            scheduler = getattr(request.app.state, "scheduler", None)
+            if scheduler is not None:
+                scheduler.reschedule_portfolio_enrichment(pe_cron)
+        except (ValueError, KeyError):
+            pass
+
     # Re-read final state for display
     cosmos_settings = _load_settings_from_cosmos(cosmos)
     if cosmos_settings:
@@ -2968,6 +3032,16 @@ async def settings_config_save(request: Request):
     ban_cron = banner_cfg.get("cron", "0 5 * * *")
     ban_max_items = banner_cfg.get("max_items", 10)
 
+    # Calendar sync settings
+    cal_cfg = config.get("calendar_sync", {})
+    cal_enabled = cal_cfg.get("enabled", True)
+    cal_cron = cal_cfg.get("cron", "0 5 * * 1-5")
+
+    # Portfolio enrichment settings
+    pe_cfg_save = config.get("portfolio_enrichment", {})
+    pe_en = pe_cfg_save.get("enabled", True)
+    pe_cr = pe_cfg_save.get("cron", "0 9-17 * * 1-5")
+
     return templates.TemplateResponse("settings_config.html", {
         "request": request,
         "cron_expr": cron_expr,
@@ -2988,6 +3062,12 @@ async def settings_config_save(request: Request):
         "banner_enabled": ban_enabled,
         "banner_cron": ban_cron,
         "banner_max_items": ban_max_items,
+        "calendar_enabled": cal_enabled,
+        "calendar_cron": cal_cron,
+        "calendar_next_run": "",
+        "pe_enabled": pe_en,
+        "pe_cron": pe_cr,
+        "pe_next_run": "",
     })
 
 
@@ -3375,6 +3455,37 @@ async def trigger_dps_scorer(request: Request):
     )
     thread.start()
     return JSONResponse({"status": "triggered", "agent_type": "dps_scorer"})
+
+
+@app.post("/api/trigger/portfolio_enrichment")
+async def trigger_portfolio_enrichment(request: Request):
+    """Manually trigger portfolio enrichment for all symbols."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    if cosmos is None:
+        return JSONResponse({"error": "CosmosDB not available"}, status_code=503)
+
+    state_ref = getattr(request.app.state, "_pe_status", None)
+    if state_ref is None:
+        state_ref = {"running": False, "last_result": None}
+        request.app.state._pe_status = state_ref
+
+    if state_ref.get("running"):
+        return JSONResponse({"error": "Portfolio enrichment already running"}, status_code=409)
+
+    state_ref["running"] = True
+
+    def _run():
+        try:
+            from src.portfolio_enrichment import run_portfolio_enrichment
+            run_portfolio_enrichment(cosmos)
+            state_ref["last_result"] = {"status": "ok"}
+        except Exception as e:
+            state_ref["last_result"] = {"status": "error", "error": str(e)}
+        finally:
+            state_ref["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return JSONResponse({"status": "triggered", "agent_type": "portfolio_enrichment"})
 
 
 @app.post("/api/trigger/{agent_type}")
