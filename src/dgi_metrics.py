@@ -156,12 +156,12 @@ def calculate_technical_timing_score(
     rsi_val = calculate_rsi(close, period=rsi_period)
     if rsi_val <= 30:
         rsi_score = 100
-    elif rsi_val <= 40:
+    elif rsi_val <= 35:
         rsi_score = 75
-    elif rsi_val <= 50:
-        rsi_score = 50
-    elif rsi_val <= 70:
-        rsi_score = 25
+    elif rsi_val <= 45:
+        rsi_score = 40
+    elif rsi_val <= 60:
+        rsi_score = 20
     else:
         rsi_score = 0
 

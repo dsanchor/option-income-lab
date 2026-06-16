@@ -1207,6 +1207,7 @@ input:checked + .slider::before { transform: translateX(16px); background: #fff;
 .dgi-table th.sortable:hover { color: var(--accent-blue); }
 .dgi-table th .sort-indicator { font-size: 0.65rem; margin-left: 0.25rem; opacity: 0.5; }
 .dgi-table th.sort-active .sort-indicator { opacity: 1; color: var(--accent-blue); }
+.dgi-table th, .dgi-table td { padding: 0.5rem 0.6rem; }
 
 /* ── Range Slider Styling ── */
 .range-slider {
