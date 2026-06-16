@@ -37,6 +37,7 @@
                 <th class="sortable" data-col="current_price" data-type="num">Price <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="shares" data-type="num">Shares <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="in_calls" data-type="num">In Calls <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="put_exposure" data-type="num" title="Capital committed if assigned: active put contracts × strike × 100">Put Exposure <span class="sort-indicator">⇅</span></th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -57,6 +58,7 @@
             {% set entry_data = enr | tojson | e if enr else '{}' %}
             {% set total_shares = sym.total_shares | default(0) %}
             {% set in_calls = sym._in_calls | default(0) %}
+            {% set put_exposure = sym._put_exposure | default(0) %}
             <tr class="dgi-row" data-entry='{{ entry_data }}' data-symbol="{{ sym.symbol }}">
                 <td><strong>{{ sym.symbol }}</strong></td>
                 <td>
@@ -89,9 +91,14 @@
                     <input type="number" class="shares-input" min="0" step="100" value="{{ total_shares }}"
                            style="display:none; width:70px; padding:0.2rem 0.4rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
                 </td>
-                <td class="mono">
+                <td class="mono in-calls-cell">
                     {% if in_calls > 0 %}
                     <span class="{{ 'text-warning' if total_shares > 0 and in_calls >= total_shares else '' }}">{{ in_calls }}</span>
+                    {% else %}—{% endif %}
+                </td>
+                <td class="mono put-exposure-cell" data-value="{{ put_exposure }}">
+                    {% if put_exposure > 0 %}
+                    ${{ "{:,.0f}".format(put_exposure) }}
                     {% else %}—{% endif %}
                 </td>
                 <td class="actions-cell">
@@ -298,8 +305,11 @@
                 var sharesCell = row.querySelector('.shares-cell');
                 return parseInt(sharesCell ? sharesCell.dataset.total : '0') || 0;
             case 'in_calls':
-                var callsCell = row.querySelectorAll('td');
-                return parseInt(callsCell[callsCell.length - 2].textContent) || 0;
+                var callsCell = row.querySelector('.in-calls-cell');
+                return parseInt(callsCell ? callsCell.textContent : '0') || 0;
+            case 'put_exposure':
+                var peCell = row.querySelector('.put-exposure-cell');
+                return parseFloat(peCell ? peCell.dataset.value : '0') || 0;
             default: return '';
         }
     }
