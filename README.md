@@ -15,6 +15,8 @@ Option Income Lab makes DGI *interesting* by layering options strategies on top:
 - 📊 **Economics Dashboard** → Track P&L, premiums, buyback costs, RoC%, and win rate across all positions
 - 📅 **Events Calendar** → Earnings and ex-dividend dates with position exposure warnings
 - 🎯 **Profit Target Gate** → Auto-roll positions at 70% profit to lock in gains
+- 📡 **Momentum & Signal Filters** → SMA50/200 + RSI + ADX momentum analysis with actionable signal categories (Ideal Puts, Ideal Calls, Accumulate, No Puts, No Calls)
+- 🛒 **Buy Tracker** → AI-powered DCA timing agent scoring 5 dimensions (value entry, trend, momentum, income, calendar)
 
 The result: a DGI portfolio that generates income from **dividends AND option premiums** — with an AI copilot keeping watch while you sleep, and a full economics dashboard tracking your P&L.
 
@@ -33,6 +35,8 @@ Eight specialized agents handle options trading and stock screening:
 - **Alpha Advisor Agent (Aggressive Perspective)**: Provides alternative, more aggressive viewpoints when technically justified — suggesting higher-premium strikes, shorter DTE, or bolder entries to complement the conservative primary agents
 - **Report Agent**: Generates comprehensive per-symbol reports combining technical analysis, dividends, options chain, open position risk, and monitoring recommendations
 - **DGI Screener**: Screens a configurable stock universe for top dividend growth investing candidates, ranking by composite quality score (70% fundamental + 30% technical timing) and selecting the Top 20
+- **Buy Tracker Agent**: AI-powered DCA timing agent that evaluates 5 dimensions (value entry/pullback, trend, momentum, income/fundamentals, calendar/risk) and produces STRONG_BUY, BUY, or WAIT signals per symbol. Designed for patient accumulation timing — not momentum trading
+- **Portfolio Enrichment**: Background process that enriches watchlist symbols with DGI quality scores, technical timing, momentum signals, and category classification. Results power the watchlist UI columns and signal filters
 
 The first two agents (sell-side) decide whether to **open** new positions. The next two (position monitors) decide whether to **hold or adjust** existing positions. The Supervisor and Alpha Advisor run as Phase 3 in parallel — after the primary decision is written but before Telegram notifications, providing quality assurance and aggressive alternatives respectively. The report agent provides on-demand deep-dive analysis accessible from each symbol's detail page. Additionally, **per-symbol chat** is available directly from the symbol detail page, offering context-aware conversations with pre-loaded market data via the yfinance provider.
 
@@ -432,6 +436,22 @@ The yfinance provider includes a built-in TTL cache that sits between consumers 
 
 **Consumers:** The cache is used by the `/chat` endpoint (Portfolio Chat and Quick Analysis), the Report Agent, and the per-symbol analysis runner. Any component that calls `YFinanceDataProvider` benefits from deduplication transparently.
 
+### Options Chain Cache
+
+A separate, centralized **Options Chain Cache** (`src/options_chain_cache.py`) provides the single source of truth for options chain data across the entire application. This addresses gaps in yfinance data (missing strikes) by merging with TradingView.
+
+**Load procedure (on miss or hourly cron refresh):**
+1. Fetch from **yfinance** — all expirations with computed Greeks (delta, gamma, theta, vega)
+2. Fetch from **TradingView** — overlay: overwrites matching strikes, adds missing ones
+3. Store merged result in cache with **30-minute TTL**
+
+**Design rationale:**
+- yfinance occasionally misses strikes that TradingView has (observed with VZ $48.5 strike)
+- TradingView data fills gaps and corrects stale entries
+- No market-open detection needed — cache always contains the best available merge
+
+**Consumers:** All agents (CSP, CC, monitors), DPS analysis, web endpoints, and the options chain trigger endpoint read from this cache. On miss, the load procedure runs automatically before returning data.
+
 ### Per-symbol Context Filtering
 
 Each symbol's analysis sees its last N activities (default 2, configurable 0–5). Each activity includes whether it triggered an alert via the `is_alert` field — there is no separate alert configuration. The context provider queries CosmosDB within the symbol's partition, returning only matching entries up to the configured limit. This prevents cross-contamination between symbols and keeps context focused.
@@ -739,8 +759,10 @@ The DGI Screener has a dedicated page at `/dgi`, accessible from the navigation 
 | Yield | Current dividend yield |
 | Growth CAGR | Dividend growth compound annual growth rate |
 | Years | Consecutive years of dividend growth |
-| Timing | Technical timing score (0-100) |
 | Days on List | Number of consecutive days the stock has appeared in the Top 20 |
+| Timing | Technical timing score (0-100) |
+| Entry | Entry tag based on timing (Strong Buy, Buy, Accumulate, Hold, Wait) |
+| Price | Current stock price |
 
 Each row has per-symbol actions:
 - **Quick Analysis (▶)** — Triggers the CSP agent for immediate analysis of the stock
@@ -762,6 +784,79 @@ The DGI Screener runs an 11-step pipeline:
 10. **Update days_on_list** — persist consecutive appearance count across runs
 11. **Write to CosmosDB** — upsert `dgi_top` documents + append `dgi_snapshot` for the day
 
+## Momentum Analysis
+
+Each watchlist symbol gets a **Momentum** signal computed by the Portfolio Enrichment process. The signal combines trend direction (SMA50/SMA200) with trend strength (ADX) and exhaustion (RSI):
+
+### Signals
+
+| Signal | Condition | Options Implication |
+|--------|-----------|---------------------|
+| **Bullish** | SMA50 > SMA200, price > SMA50, ADX ≥ 20 | ✅ Sell Puts / ⚠️ Avoid Calls |
+| **Bullish (overextended)** | Bullish + RSI > 70 | ⚠️ Possible reversal — cautious on puts |
+| **Weakening** | SMA50 > SMA200 but price ≤ SMA50 | ✅ Sell Calls / ⚠️ Caution on puts |
+| **Neutral** | ADX < 20 (no real trend) or mixed signals | Range-bound — premium decay favors sellers |
+| **Bearish** | SMA50 < SMA200, price < SMA50, ADX ≥ 20 | ✅ Sell Calls / ❌ Avoid Puts |
+| **Bearish (oversold)** | Bearish + RSI < 30 | Possible bounce — timing for puts |
+
+### Technical Indicators Used
+
+- **SMA50 / SMA200** — Moving average crossover for trend direction
+- **ADX (14-period, Wilder's smoothing)** — Trend strength filter. ADX < 20 forces Neutral regardless of SMAs
+- **RSI (14-period)** — Exhaustion modifier. RSI > 70 flags overextension, RSI < 30 flags oversold
+
+### Signal Filters (Watchlist UI)
+
+The watchlist provides predefined filter pills combining Entry (technical timing) + Momentum for actionable categories:
+
+| Filter | Entry | Momentum | Action |
+|--------|-------|----------|--------|
+| **Ideal Puts** | Strong Buy / Buy | Bullish | Confluent — sell puts with confidence |
+| **Ideal Calls** | Hold / Wait | Weakening / Bearish / Neutral | Sell covered calls |
+| **Accumulate** | Accumulate | Bullish / Neutral | Small DCA add |
+| **No Puts** | Strong Buy / Buy | Bearish | Falling knife — don't sell puts |
+| **No Calls** | Wait | Bullish | Runaway — don't sell calls |
+
+## Buy Tracker
+
+The Buy Tracker is an AI-powered DCA timing agent that helps determine optimal accumulation timing for DGI stocks. Unlike the Entry tag (pure technical timing score), the Buy Tracker evaluates **5 dimensions** holistically:
+
+### Scoring Dimensions (0 or 1 each)
+
+| Dimension | Scores 1 if... |
+|-----------|----------------|
+| **Value Entry / Pullback** | Price pulled back ≥5% from high, near SMA50, RSI < 45, or yield above typical range |
+| **Trend Not Broken** | Price > SMA200, or golden cross structure, or testing major support |
+| **Momentum Not Extreme** | RSI 20–65, or oversold (< 30), or oscillators neutral/sell |
+| **Income & Fundamentals** | Yield ≥ 2%, payout < 75%, analyst consensus not bearish, no imminent earnings |
+| **Calendar & Risk Context** | No earnings within 7 days, ex-div approaching, beta ≤ 1.5, orderly price action |
+
+### Activity Determination
+
+| Score | Signal | Meaning |
+|-------|--------|---------|
+| 5/5 | `STRONG_BUY` | All dimensions confirm — high-conviction larger entry |
+| 4/5 | `STRONG_BUY` | Near-perfect — strong entry |
+| 3/5 | `BUY` | Good DCA setup — small add |
+| 2/5 | `WAIT` | Mixed signals — wait |
+| 1/5 | `WAIT` | Weak setup |
+| 0/5 | `WAIT` | Bearish — stay away |
+
+### WAIT Triggers (Override)
+
+Any ONE of these forces WAIT regardless of score:
+- Earnings within 2 days
+- RSI > 80 (severely overbought)
+
+### Entry Tag vs Buy Tracker
+
+| Aspect | Entry Tag | Buy Tracker |
+|--------|-----------|-------------|
+| Method | Deterministic (tech timing score thresholds) | AI (LLM interprets 5 dimensions) |
+| Inputs | RSI, SMA, pivot supports, volume | + dividend yield, earnings calendar, analyst consensus, payout ratio, Fear & Greed |
+| Output | Strong Buy / Buy / Accumulate / Hold / Wait | STRONG_BUY / BUY / WAIT |
+| When they diverge | Normal — Entry may say "Strong Buy" while Buy Tracker says "WAIT" (e.g., earnings tomorrow) |
+
 ## Project Structure
 
 ```
@@ -776,6 +871,7 @@ stock-options-manager/
 │   ├── context.py                        # Context injection adapter — formats CosmosDB data for prompts
 │   ├── agent_runner.py                   # Core execution engine — yfinance pre-fetch + SkillsProvider integration
 │   ├── yfinance_data_provider.py         # Yahoo Finance data provider (overview, technicals, forecast, dividends, options chain)
+│   ├── options_chain_cache.py            # Centralized options chain cache (yfinance + TradingView merge, 30-min TTL)
 │   ├── options_chain_filters.py          # Options chain filter pipeline + roll candidates table
 │   ├── covered_call_agent.py             # Covered call wrapper
 │   ├── covered_call_instructions.py      # Covered call system prompt
@@ -805,7 +901,8 @@ stock-options-manager/
 │   │   ├── risk-flags/SKILL.md              # Risk flag taxonomy
 │   │   └── activity-log/SKILL.md            # Previous activity log interpretation
 │   ├── dgi_screener.py                   # DGI Screener pipeline
-│   ├── dgi_metrics.py                    # DGI metric calculations
+│   ├── dgi_metrics.py                    # DGI metric calculations (quality score, RSI, ADX, technical timing)
+│   ├── portfolio_enrichment.py           # Watchlist enrichment (DGI scores, momentum, technicals → CosmosDB)
 │   ├── yfinance_fetcher.py               # Yahoo Finance data fetcher for DGI Screener
 │   ├── stockanalysis_fetcher.py          # StockAnalysis.com scraper
 │   └── telegram_notifier.py             # Telegram notification service
@@ -820,6 +917,8 @@ stock-options-manager/
 │   │   ├── alerts.html                   # Alert list for agent+symbol
 │   │   ├── alert_detail.html             # Single alert + backing activities
 │   │   ├── settings.html                 # Settings (cron expression, error stats)
+│   │   ├── settings_config.html           # Settings config tab (scheduler toggles, Run Now buttons)
+│   │   ├── symbols.html                   # Symbols watchlist (signal filters, momentum, put exposure)
 │   │   ├── symbol_detail.html            # Symbol detail with positions, activities, notes
 │   │   ├── symbol_report.html            # Per-symbol report display page
 │   │   ├── symbol_chat.html              # Per-symbol chat page with context selection
@@ -843,6 +942,13 @@ stock-options-manager/
 - **Alert Details** (`/alerts/{agent}/{symbol}`) — All alerts for a specific symbol, newest first, with activity badges and risk flags.
 - **Alert + Activities** (`/alerts/{agent}/{symbol}/{index}`) — Full alert JSON and backing activities from the same time window.
 - **Symbol Detail** (`/symbols/{symbol}`) — Full detail page for a symbol: expandable positions with source traceability, editable notes field, Close/Roll/Delete actions, activities, alerts, and "Open Position from Alert" / "Roll Position from Alert" buttons on activity detail. Features a **play button** (▶) for running individual symbol analysis on demand. **Generate Report** and **Chat** buttons are aligned right; watchlist toggles are aligned left. Activities support confidence and agent-type filtering. WAIT activities with MODERATE or STRONG supervisor opinions display a 🤔 indicator icon. Activity detail includes collapsible "Supervisor" and "Alpha Advisor" panels with color-coded badges showing audit findings and aggressive alternatives.
+- **Symbols Watchlist** (`/symbols`) — Central watchlist management page showing all tracked symbols with enrichment data. Columns: Symbol, Category, DGI Score, Tech Timing, Entry (technical timing tag), Momentum (directional signal), Price, Shares (inline editable), In Calls, Put Exposure ($committed if assigned). Features **signal filter pills** for actionable categories:
+  - **All** — Show everything
+  - **Ideal Puts** — Entry Strong Buy/Buy + Momentum Bullish (confluent setup for selling puts)
+  - **Ideal Calls** — Entry Hold/Wait + Momentum Weakening/Bearish/Neutral (ideal for covered calls)
+  - **Accumulate** — Entry Accumulate + Momentum Bullish/Neutral (small DCA)
+  - **⚠️ No Puts** — Entry Strong Buy/Buy + Momentum Bearish (falling knife — do NOT sell puts)
+  - **⚠️ No Calls** — Entry Wait + Momentum Bullish (runaway — do NOT sell calls)
 - **Symbol Report** (`/symbols/{symbol}/report`) — Dedicated report display page showing the latest generated report for a symbol (technical analysis, dividends, options chain, risk assessment, and recommendations).
 - **Symbol Chat** (`/symbols/{symbol}/chat`) — Per-symbol chat page with a context selection screen before starting the conversation. Pre-loads market data via the yfinance provider for faster responses. Supports open call and open put analysis contexts.
 - **Fetch Preview** (`/symbols/{symbol}/fetch-preview`) — Debug page showing raw market data for each resource (overview, technicals, forecast, options chain) with fetch timing and size.
@@ -850,7 +956,7 @@ stock-options-manager/
   - **Portfolio Chat** — Analyze tracked symbols using CosmosDB data (watchlists, positions, recent activities). Click "Portfolio Chat" to ask questions about your tracked symbols.
   - **Quick Analysis** — Analyze any symbol (tracked or not) by fetching live Yahoo Finance data without saving to the database. Click "Quick Analysis", select a market (NASDAQ/NYSE/AMEX/OTC), and get instant analysis without committing to tracking.
   - Mode selector on the chat page lets you switch between modes at any time.
-- **Settings** (`/settings`) — Scheduler config, Telegram notifications toggle & test button, Summarization Agent config (cron schedule & activity count), runtime stats (today/7d/30d telemetry), a Debug Data Fetch tool for testing data fetching per symbol, and an **Agent Chain Pipeline** debug view (`/api/debug/agent-chain/{symbol}`) for inspecting the full two-phase monitor pipeline per symbol. Settings are persisted to CosmosDB and survive application restarts and deployments. Changes made in the Settings UI are immediately available to all components (scheduler, telegram notifier, summarization agent, etc.) without requiring a restart.
+- **Settings** (`/settings`) — Scheduler config, Telegram notifications toggle & test button, Summarization Agent config (cron schedule & activity count), runtime stats (today/7d/30d telemetry), a Debug Data Fetch tool for testing data fetching per symbol, and an **Agent Chain Pipeline** debug view (`/api/debug/agent-chain/{symbol}`) for inspecting the full two-phase monitor pipeline per symbol. Each scheduled agent (Monitoring, Calendar Sync, Options Chain, DGI Screener, Summary, Portfolio Enrichment) has a **Run Now** button for manual triggering. Settings are persisted to CosmosDB and survive application restarts and deployments. Changes made in the Settings UI are immediately available to all components (scheduler, telegram notifier, summarization agent, etc.) without requiring a restart.
 - **DGI Screener** (`/dgi`) — Top 20 dividend growth stock candidates ranked by composite quality score. Color-coded category badges, per-row Quick Analysis (▶) and Add to Symbols (➕) actions. Configurable stock universe and filter thresholds via Settings.
 - **Economics** (`/economics`) — P&L analytics dashboard for options trading performance. Features:
   - **Summary cards** — Total premium collected, total buyback costs, net income, weighted average RoC% (annualized), and win rate
