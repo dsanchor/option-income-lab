@@ -36,7 +36,7 @@
                 <th class="sortable" data-col="years_of_growth" data-type="num">Years <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="technical_timing_score" data-type="num">Timing <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="entry_tag" data-type="str" title="Based on technical timing score: Strong Buy (≥70), Buy (≥50), Accumulate (≥35), Hold (≥20), Wait (<20). Higher = more oversold/undervalued">Entry <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="momentum" data-type="str" title="Directional trend for options: Bullish (sell Puts safely), Weakening (caution with Calls), Bearish (sell Calls safely), Neutral (range-bound strategies)">Momentum <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="momentum" data-type="str" title="Señal direccional para venta de opciones. Basado en SMA50/SMA200 + RSI + ADX. ADX<20 fuerza Neutral. RSI extremos añaden alerta (overextended/oversold)">Momentum <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="current_price" data-type="num">Price <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="shares" data-type="num">Shares <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="in_calls" data-type="num">In Calls <span class="sort-indicator">⇅</span></th>
@@ -54,7 +54,9 @@
             {% set tag = enr.entry_tag | default('—') %}
             {% set tag_lower = tag | lower | replace(' ', '-') %}
             {% set momentum = enr.momentum | default('') %}
-            {% set mom_lower = momentum | lower %}
+            {% set mom_base = momentum | replace(' (overextended)', '') | replace(' (oversold)', '') %}
+            {% set mom_lower = mom_base | lower %}
+            {% set mom_warn = '(overextended)' in momentum or '(oversold)' in momentum %}
             {% set entry_data = enr | tojson | e if enr else '{}' %}
             {% set total_shares = sym.total_shares | default(0) %}
             {% set in_calls = sym._in_calls | default(0) %}
@@ -80,8 +82,8 @@
                 <td>{% if enr.entry_tag %}<span class="badge badge-entry-{{ tag_lower }}" title="{% if tag == 'Strong Buy' %}Timing ≥70 — strong oversold signal, ideal entry{% elif tag == 'Buy' %}Timing ≥50 — good entry opportunity{% elif tag == 'Accumulate' %}Timing ≥35 — acceptable to accumulate{% elif tag == 'Hold' %}Timing ≥20 — hold existing, avoid new entries{% else %}Timing <20 — overbought, wait for pullback{% endif %}">{{ tag }}</span>{% else %}—{% endif %}</td>
                 <td>
                     {% if momentum %}
-                    <span class="badge badge-momentum-{{ mom_lower }}" title="{% if momentum == 'Bullish' %}SMA50 > SMA200, price above both — uptrend. Puts safe, Calls risky (may get assigned){% elif momentum == 'Weakening' %}SMA50 > SMA200 but price dropping below SMA50 — trend losing steam. Caution with Puts{% elif momentum == 'Neutral' %}Price between SMAs, no clear trend — range-bound strategies (iron condors, strangles){% elif momentum == 'Bearish' %}SMA50 < SMA200, price below both — downtrend. Calls safe, Puts risky{% else %}Insufficient data{% endif %}">
-                        {% if momentum == 'Bullish' %}🟢{% elif momentum == 'Weakening' %}🟡{% elif momentum == 'Neutral' %}🔵{% elif momentum == 'Bearish' %}🔴{% else %}⚪{% endif %} {{ momentum }}
+                    <span class="badge badge-momentum-{{ mom_lower }}" title="{% if mom_base == 'Bullish' and not mom_warn %}SMA50 > SMA200, precio por encima — tendencia alcista. Vender Puts: ✅ seguro | Vender Calls: ⚠️ riesgo asignación{% elif momentum == 'Bullish (overextended)' %}Alcista PERO RSI > 70 (sobrecomprado) — puede revertir pronto. Vender Puts: ⚠️ posible caída | Vender Calls: ✅ buen timing{% elif momentum == 'Weakening' %}SMA50 > SMA200 pero precio cayendo bajo SMA50 — pierde fuerza. Vender Calls: ✅ ideal | Vender Puts: ⚠️ cuidado{% elif momentum == 'Neutral' %}ADX < 20 o sin tendencia clara — rango lateral. Vender Puts: ✅ | Vender Calls: ✅ (prima decae){% elif mom_base == 'Bearish' and not mom_warn %}SMA50 < SMA200, precio por debajo — tendencia bajista. Vender Calls: ✅ seguro | Vender Puts: ❌ riesgo asignación{% elif momentum == 'Bearish (oversold)' %}Bajista PERO RSI < 30 (sobrevendido) — puede rebotar pronto. Vender Calls: ⚠️ posible rebote | Vender Puts: ✅ buen timing{% else %}Datos insuficientes{% endif %}">
+                        {% if mom_base == 'Bullish' %}🟢{% elif momentum == 'Weakening' %}🟡{% elif mom_base == 'Neutral' %}🔵{% elif mom_base == 'Bearish' %}🔴{% else %}⚪{% endif %}{% if mom_warn %} ⚠️{% endif %} {{ momentum }}
                     </span>
                     {% else %}—{% endif %}
                 </td>

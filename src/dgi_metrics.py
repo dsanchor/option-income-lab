@@ -72,6 +72,68 @@ def calculate_bollinger_bands(
     }
 
 
+def calculate_adx(high_prices: np.ndarray, low_prices: np.ndarray, close_prices: np.ndarray, period: int = 14) -> float:
+    """Average Directional Index — measures trend strength (0-100).
+    ADX > 25 = strong trend, ADX < 20 = no clear trend."""
+    high = np.asarray(high_prices, dtype=float)
+    low = np.asarray(low_prices, dtype=float)
+    close = np.asarray(close_prices, dtype=float)
+
+    n = len(close)
+    if n < period + 1:
+        return 0.0
+
+    # True Range, +DM, -DM
+    tr_list = []
+    plus_dm_list = []
+    minus_dm_list = []
+
+    for i in range(1, n):
+        h_l = high[i] - low[i]
+        h_pc = abs(high[i] - close[i - 1])
+        l_pc = abs(low[i] - close[i - 1])
+        tr_list.append(max(h_l, h_pc, l_pc))
+
+        up_move = high[i] - high[i - 1]
+        down_move = low[i - 1] - low[i]
+        plus_dm_list.append(up_move if up_move > down_move and up_move > 0 else 0.0)
+        minus_dm_list.append(down_move if down_move > up_move and down_move > 0 else 0.0)
+
+    # Smoothed averages (Wilder's smoothing)
+    tr_arr = np.array(tr_list)
+    plus_dm_arr = np.array(plus_dm_list)
+    minus_dm_arr = np.array(minus_dm_list)
+
+    if len(tr_arr) < period:
+        return 0.0
+
+    atr = float(np.mean(tr_arr[:period]))
+    avg_plus_dm = float(np.mean(plus_dm_arr[:period]))
+    avg_minus_dm = float(np.mean(minus_dm_arr[:period]))
+
+    dx_list = []
+    for i in range(period, len(tr_arr)):
+        atr = atr - atr / period + tr_arr[i]
+        avg_plus_dm = avg_plus_dm - avg_plus_dm / period + plus_dm_arr[i]
+        avg_minus_dm = avg_minus_dm - avg_minus_dm / period + minus_dm_arr[i]
+
+        plus_di = 100 * avg_plus_dm / atr if atr > 0 else 0
+        minus_di = 100 * avg_minus_dm / atr if atr > 0 else 0
+        di_sum = plus_di + minus_di
+        dx = 100 * abs(plus_di - minus_di) / di_sum if di_sum > 0 else 0
+        dx_list.append(dx)
+
+    if len(dx_list) < period:
+        return float(np.mean(dx_list)) if dx_list else 0.0
+
+    # ADX = smoothed average of DX
+    adx = float(np.mean(dx_list[:period]))
+    for i in range(period, len(dx_list)):
+        adx = (adx * (period - 1) + dx_list[i]) / period
+
+    return round(adx, 2)
+
+
 def calculate_technical_timing_score(
     close_prices: np.ndarray,
     high_prices: np.ndarray,
@@ -163,9 +225,13 @@ def calculate_technical_timing_score(
         + bb_score * 0.20
     )
 
+    # --- ADX (trend strength) ---
+    adx_val = calculate_adx(high, low, close)
+
     return {
         "score": round(combined, 2),
         "rsi": round(rsi_val, 2),
+        "adx": adx_val,
         "sma_50": round(sma_50, 2),
         "sma_200": round(sma_200, 2),
         "high_52w": round(high_52w, 2),

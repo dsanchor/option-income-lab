@@ -132,19 +132,31 @@ def analyze_single_symbol(symbol: str, filters: dict = None) -> dict:
     else:
         entry_tag = "Wait"
 
-    # Momentum (directional signal for options)
+    # Momentum (directional signal for options selling)
     sma_50 = technicals.get("sma_50", 0)
     sma_200 = technicals.get("sma_200", 0)
     price = metrics.get("current_price", 0)
+    rsi = technicals.get("rsi", 50)
+    adx = technicals.get("adx", 0)
+
     if sma_50 and sma_200 and price:
-        if sma_50 > sma_200 and price > sma_50:
-            momentum = "Bullish"
+        # ADX < 20 = no real trend, force Neutral
+        if adx < 20:
+            momentum = "Neutral"
+        elif sma_50 > sma_200 and price > sma_50:
+            if rsi > 70:
+                momentum = "Bullish (overextended)"
+            else:
+                momentum = "Bullish"
         elif sma_50 > sma_200 and price <= sma_50:
             momentum = "Weakening"
         elif sma_50 <= sma_200 and price >= sma_50:
             momentum = "Neutral"
         else:
-            momentum = "Bearish"
+            if rsi < 30:
+                momentum = "Bearish (oversold)"
+            else:
+                momentum = "Bearish"
     else:
         momentum = "Unknown"
 
@@ -330,19 +342,30 @@ async def run_dgi_screener(config, cosmos) -> dict:
                             symbol,
                             " | ".join(f"{k}={v:.2f}" for k, v in components.items()))
 
-            # Momentum (directional signal for options)
+            # Momentum (directional signal for options selling)
             sma_50 = technicals.get("sma_50", 0)
             sma_200 = technicals.get("sma_200", 0)
             price = metrics.get("current_price", 0)
+            rsi = technicals.get("rsi", 50)
+            adx = technicals.get("adx", 0)
+
             if sma_50 and sma_200 and price:
-                if sma_50 > sma_200 and price > sma_50:
-                    momentum = "Bullish"
+                if adx < 20:
+                    momentum = "Neutral"
+                elif sma_50 > sma_200 and price > sma_50:
+                    if rsi > 70:
+                        momentum = "Bullish (overextended)"
+                    else:
+                        momentum = "Bullish"
                 elif sma_50 > sma_200 and price <= sma_50:
                     momentum = "Weakening"
                 elif sma_50 <= sma_200 and price >= sma_50:
                     momentum = "Neutral"
                 else:
-                    momentum = "Bearish"
+                    if rsi < 30:
+                        momentum = "Bearish (oversold)"
+                    else:
+                        momentum = "Bearish"
             else:
                 momentum = "Unknown"
 
