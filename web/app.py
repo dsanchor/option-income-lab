@@ -3497,6 +3497,28 @@ async def trigger_portfolio_enrichment(request: Request):
     return JSONResponse({"status": "triggered", "agent_type": "portfolio_enrichment"})
 
 
+@app.post("/api/trigger/options_chain")
+async def trigger_options_chain(request: Request):
+    """Manually trigger options chain cache refresh for all symbols."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    if cosmos is None:
+        return JSONResponse({"error": "CosmosDB not available"}, status_code=503)
+
+    def _run():
+        try:
+            import asyncio
+            from src.options_chain_cache import get_options_chain_cache
+            symbols = cosmos.list_symbols()
+            symbol_names = [s["symbol"] for s in symbols]
+            cache = get_options_chain_cache()
+            asyncio.run(cache.refresh_all(symbol_names))
+        except Exception as e:
+            print(f"ERROR running options_chain trigger: {e}")
+
+    threading.Thread(target=_run, daemon=True).start()
+    return JSONResponse({"status": "triggered", "agent_type": "options_chain"})
+
+
 @app.post("/api/trigger/{agent_type}")
 async def trigger_agent(request: Request, agent_type: str):
     if agent_type not in AGENT_FUNCTIONS:

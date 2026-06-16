@@ -66,6 +66,12 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Run Now button -->
+                <div style="margin-top:0.75rem;">
+                    <button type="button" class="btn btn-primary" id="btnRunMonitoring" style="font-size:0.85rem; padding:0.4rem 1rem;">▶ Run Now</button>
+                    <span id="monitoringRunStatus" class="mono" style="margin-left:0.75rem; font-size:0.85rem;"></span>
+                </div>
             </div>
 
             <!-- Summarization Agent Section -->
@@ -214,6 +220,12 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Run Now button -->
+                <div style="margin-top:0.75rem;">
+                    <button type="button" class="btn btn-primary" id="btnRunCalendar" style="font-size:0.85rem; padding:0.4rem 1rem;">▶ Run Now</button>
+                    <span id="calendarRunStatus" class="mono" style="margin-left:0.75rem; font-size:0.85rem;"></span>
+                </div>
             </div>
 
             <!-- Options Chain Scheduler Section -->
@@ -255,6 +267,12 @@
                             {{ options_chain_next_run or "N/A" }}
                         </div>
                     </div>
+                </div>
+
+                <!-- Run Now button -->
+                <div style="margin-top:0.75rem;">
+                    <button type="button" class="btn btn-primary" id="btnRunOptionsChain" style="font-size:0.85rem; padding:0.4rem 1rem;">▶ Run Now</button>
+                    <span id="optionsChainRunStatus" class="mono" style="margin-left:0.75rem; font-size:0.85rem;"></span>
                 </div>
             </div>
 
@@ -301,6 +319,12 @@
                            style="width:120px; padding:0.6rem 0.8rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
                     <small style="display:block; margin-top:0.3rem; color:var(--text-muted); font-size:0.75rem;">Number of top-scoring stocks to include in the DGI list (default: 40)</small>
                 </div>
+
+                <!-- Run Now button -->
+                <div style="margin-top:0.75rem;">
+                    <button type="button" class="btn btn-primary" id="btnRunDgi" style="font-size:0.85rem; padding:0.4rem 1rem;">▶ Run Now</button>
+                    <span id="dgiRunStatus" class="mono" style="margin-left:0.75rem; font-size:0.85rem;"></span>
+                </div>
             </div>
 
             <!-- Watchlist Enrichment Section -->
@@ -336,8 +360,11 @@
                     </div>
                 </div>
 
-                <button type="button" class="btn btn-primary" id="btnRunPortfolioEnrichment" style="margin-top:0.75rem;">▶ Run Now</button>
-                <span id="peRunStatus" class="mono" style="margin-left:0.75rem; font-size:0.85rem;"></span>
+                <!-- Run Now button -->
+                <div style="margin-top:0.75rem;">
+                    <button type="button" class="btn btn-primary" id="btnRunPortfolioEnrichment" style="font-size:0.85rem; padding:0.4rem 1rem;">▶ Run Now</button>
+                    <span id="peRunStatus" class="mono" style="margin-left:0.75rem; font-size:0.85rem;"></span>
+                </div>
             </div>
         </div>
     </div>
@@ -471,6 +498,102 @@
             } finally {
                 peBtn.disabled = false;
                 setTimeout(function() { peStatus.textContent = ''; }, 8000);
+            }
+        });
+    }
+
+    // Run Now — Monitoring Agent (all agents)
+    var monBtn = document.getElementById('btnRunMonitoring');
+    var monStatus = document.getElementById('monitoringRunStatus');
+    if (monBtn) {
+        monBtn.addEventListener('click', async function() {
+            monBtn.disabled = true;
+            monStatus.textContent = '⏳ Running...';
+            try {
+                var res = await fetch('/api/trigger-all', { method: 'POST' });
+                var data = await res.json();
+                if (res.ok) {
+                    monStatus.textContent = '✅ Triggered!';
+                } else {
+                    monStatus.textContent = '❌ ' + (data.error || 'Failed');
+                }
+            } catch(e) {
+                monStatus.textContent = '❌ ' + e.message;
+            } finally {
+                monBtn.disabled = false;
+                setTimeout(function() { monStatus.textContent = ''; }, 8000);
+            }
+        });
+    }
+
+    // Run Now — Calendar Sync
+    var calBtn = document.getElementById('btnRunCalendar');
+    var calStatus = document.getElementById('calendarRunStatus');
+    if (calBtn) {
+        calBtn.addEventListener('click', async function() {
+            calBtn.disabled = true;
+            calStatus.textContent = '⏳ Running...';
+            try {
+                var res = await fetch('/api/calendar/refresh', { method: 'POST' });
+                var data = await res.json();
+                if (res.ok) {
+                    calStatus.textContent = '✅ Triggered!';
+                } else {
+                    calStatus.textContent = '❌ ' + (data.error || 'Failed');
+                }
+            } catch(e) {
+                calStatus.textContent = '❌ ' + e.message;
+            } finally {
+                calBtn.disabled = false;
+                setTimeout(function() { calStatus.textContent = ''; }, 8000);
+            }
+        });
+    }
+
+    // Run Now — Options Chain
+    var ocBtn = document.getElementById('btnRunOptionsChain');
+    var ocStatus = document.getElementById('optionsChainRunStatus');
+    if (ocBtn) {
+        ocBtn.addEventListener('click', async function() {
+            ocBtn.disabled = true;
+            ocStatus.textContent = '⏳ Running...';
+            try {
+                var res = await fetch('/api/trigger/options_chain', { method: 'POST' });
+                var data = await res.json();
+                if (res.ok) {
+                    ocStatus.textContent = '✅ Triggered!';
+                } else {
+                    ocStatus.textContent = '❌ ' + (data.error || 'Failed');
+                }
+            } catch(e) {
+                ocStatus.textContent = '❌ ' + e.message;
+            } finally {
+                ocBtn.disabled = false;
+                setTimeout(function() { ocStatus.textContent = ''; }, 8000);
+            }
+        });
+    }
+
+    // Run Now — DGI Screener
+    var dgiBtn = document.getElementById('btnRunDgi');
+    var dgiStatus = document.getElementById('dgiRunStatus');
+    if (dgiBtn) {
+        dgiBtn.addEventListener('click', async function() {
+            dgiBtn.disabled = true;
+            dgiStatus.textContent = '⏳ Running...';
+            try {
+                var res = await fetch('/api/trigger/dgi_screener', { method: 'POST' });
+                var data = await res.json();
+                if (res.ok) {
+                    dgiStatus.textContent = '✅ Triggered!';
+                } else {
+                    dgiStatus.textContent = '❌ ' + (data.error || 'Failed');
+                }
+            } catch(e) {
+                dgiStatus.textContent = '❌ ' + e.message;
+            } finally {
+                dgiBtn.disabled = false;
+                setTimeout(function() { dgiStatus.textContent = ''; }, 8000);
             }
         });
     }

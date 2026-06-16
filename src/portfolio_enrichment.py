@@ -10,12 +10,26 @@ Also triggered on-demand when a new symbol is added.
 """
 
 import logging
+import math
 import time
 from datetime import datetime, timezone
 
 from src.dgi_screener import analyze_single_symbol
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_for_cosmos(obj):
+    """Recursively replace NaN/Infinity with None for CosmosDB compatibility."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_cosmos(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_cosmos(v) for v in obj]
+    return obj
 
 
 def enrich_symbol(symbol: str) -> dict | None:
@@ -30,17 +44,19 @@ def enrich_symbol(symbol: str) -> dict | None:
             return None
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return {
+        enrichment = {
             "last_updated": now,
             "quality_score": result.get("quality_score", 0),
             "quality_detail": result.get("quality_detail", {}),
             "category": result.get("category", ""),
             "entry_tag": result.get("entry_tag", ""),
+            "momentum": result.get("momentum", ""),
             "metrics": result.get("metrics", {}),
             "technicals": result.get("technicals", {}),
             "has_dividends": result.get("has_dividends", False),
             "filter_detail": result.get("filter_detail"),
         }
+        return _sanitize_for_cosmos(enrichment)
     except Exception as exc:
         logger.exception("Portfolio enrichment failed for %s: %s", symbol, exc)
         return None
