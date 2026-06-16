@@ -1640,7 +1640,7 @@ async def symbols_page(request: Request):
         s["_active_count"] = len(active_positions)
         s["_shares_in_use"] = len(active_positions) * 100
         s["_in_calls"] = sum(100 for p in active_positions
-                            if p.get("option_type") == "call")
+                            if p.get("type") == "call")
     # Sort by enrichment quality_score descending (enriched first)
     symbols.sort(
         key=lambda s: (s.get("enrichment", {}) or {}).get("quality_score", -1),
