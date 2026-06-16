@@ -30,11 +30,8 @@
             <tr>
                 <th class="sortable" data-col="symbol" data-type="str">Symbol <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="category" data-type="str" title="Based on dividend history: Aristocrat (≥25y+yield≥2%), Rising Star (CAGR≥10%+≥5y), Compounder (≥15y+CAGR≥7%), High Yield (yield≥4%), Balanced (default)">Category <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="score" data-type="num">Quality Score <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="dividend_yield" data-type="num">Div Yield % <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="dividend_growth_cagr" data-type="num">Div Growth CAGR % <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="years_of_growth" data-type="num">Years <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="technical_timing_score" data-type="num">Timing <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="score" data-type="num">DGI Score <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="technical_timing_score" data-type="num">Tech Timing <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="entry_tag" data-type="str" title="Based on technical timing score: Strong Buy (≥70), Buy (≥50), Accumulate (≥35), Hold (≥20), Wait (<20). Higher = more oversold/undervalued">Entry <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="momentum" data-type="str" title="Directional signal for options selling. Based on SMA50/SMA200 + RSI + ADX. ADX<20 forces Neutral. Extreme RSI adds warning (overextended/oversold)">Momentum <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="current_price" data-type="num">Price <span class="sort-indicator">⇅</span></th>
@@ -75,15 +72,12 @@
                     </span>
                     {% else %}—{% endif %}
                 </td>
-                <td class="mono">{% if metrics.dividend_yield is defined and metrics.dividend_yield %}{{ "%.2f" | format(metrics.dividend_yield * 100) }}%{% else %}—{% endif %}</td>
-                <td class="mono">{% if metrics.dividend_cagr_5y is defined and metrics.dividend_cagr_5y %}{{ "%.1f" | format(metrics.dividend_cagr_5y * 100) }}%{% else %}—{% endif %}</td>
-                <td class="mono">{{ metrics.years_consecutive_increases | default('—') }}</td>
                 <td class="mono">{% if technicals.score is defined %}{{ "%.1f" | format(technicals.score) }}{% else %}—{% endif %}</td>
                 <td>{% if enr.entry_tag %}<span class="badge badge-entry-{{ tag_lower }}" title="{% if tag == 'Strong Buy' %}Timing ≥70 — strong oversold signal, ideal entry{% elif tag == 'Buy' %}Timing ≥50 — good entry opportunity{% elif tag == 'Accumulate' %}Timing ≥35 — acceptable to accumulate{% elif tag == 'Hold' %}Timing ≥20 — hold existing, avoid new entries{% else %}Timing <20 — overbought, wait for pullback{% endif %}">{{ tag }}</span>{% else %}—{% endif %}</td>
                 <td>
                     {% if momentum %}
                     <span class="badge badge-momentum-{{ mom_lower }}" title="{% if mom_base == 'Bullish' and not mom_warn %}SMA50 > SMA200, price above both — uptrend. Sell Puts: ✅ safe | Sell Calls: ⚠️ assignment risk{% elif momentum == 'Bullish (overextended)' %}Bullish BUT RSI > 70 (overbought) — may reverse soon. Sell Puts: ⚠️ possible drop | Sell Calls: ✅ good timing{% elif momentum == 'Weakening' %}SMA50 > SMA200 but price dropping below SMA50 — losing steam. Sell Calls: ✅ ideal | Sell Puts: ⚠️ caution{% elif momentum == 'Neutral' %}ADX < 20 or no clear trend — range-bound. Sell Puts: ✅ | Sell Calls: ✅ (premium decays){% elif mom_base == 'Bearish' and not mom_warn %}SMA50 < SMA200, price below both — downtrend. Sell Calls: ✅ safe | Sell Puts: ❌ assignment risk{% elif momentum == 'Bearish (oversold)' %}Bearish BUT RSI < 30 (oversold) — may bounce soon. Sell Calls: ⚠️ possible bounce | Sell Puts: ✅ good timing{% else %}Insufficient data{% endif %}">
-                        {% if mom_base == 'Bullish' %}🟢{% elif momentum == 'Weakening' %}🟡{% elif mom_base == 'Neutral' %}🔵{% elif mom_base == 'Bearish' %}🔴{% else %}⚪{% endif %}{% if mom_warn %} ⚠️{% endif %} {{ momentum }}
+                        {% if mom_warn %}⚠️ {% endif %}{{ momentum }}
                     </span>
                     {% else %}—{% endif %}
                 </td>
@@ -296,9 +290,6 @@
             case 'symbol': return row.dataset.symbol || '';
             case 'category': return entry.category || '';
             case 'score': return entry.quality_score || 0;
-            case 'dividend_yield': return metrics.dividend_yield || 0;
-            case 'dividend_growth_cagr': return metrics.dividend_cagr_5y || 0;
-            case 'years_of_growth': return metrics.years_consecutive_increases || 0;
             case 'technical_timing_score': return technicals.score || 0;
             case 'entry_tag': return entry.entry_tag || '';
             case 'momentum': return entry.momentum || '';
