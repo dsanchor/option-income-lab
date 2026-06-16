@@ -25,6 +25,17 @@
 <!-- Watchlist table -->
 <div class="card">
 {% if symbols %}
+<!-- Signal Filters -->
+<div style="padding:0.75rem 1.25rem; border-bottom:1px solid var(--border);">
+    <div class="filter-pills" id="signal-filter-pills" data-value="">
+        <button type="button" class="pill active" data-value="">All</button>
+        <button type="button" class="pill" data-value="ideal-puts" title="Entry: Strong Buy/Buy + Momentum: Bullish — confluent setup for selling puts">Ideal Puts</button>
+        <button type="button" class="pill" data-value="ideal-calls" title="Entry: Hold/Wait + Momentum: Weakening/Bearish/Neutral — ideal for covered calls">Ideal Calls</button>
+        <button type="button" class="pill" data-value="accumulate" title="Entry: Accumulate + Momentum: Bullish/Neutral — small DCA, not urgent">Accumulate</button>
+        <button type="button" class="pill" data-value="no-puts" title="Entry: Strong Buy/Buy + Momentum: Bearish — falling knife, do NOT sell puts">⚠️ No Puts</button>
+        <button type="button" class="pill" data-value="no-calls" title="Entry: Wait + Momentum: Bullish — runaway bull, do NOT sell calls">⚠️ No Calls</button>
+    </div>
+</div>
 <div class="table-wrap">
     <table class="dgi-table" id="symbolsTable">
         <thead>
@@ -314,6 +325,55 @@
                 return parseFloat(peCell ? peCell.dataset.value : '0') || 0;
             default: return '';
         }
+    }
+
+    // ── Signal Filters ──
+    var signalPills = document.querySelectorAll('#signal-filter-pills .pill');
+    signalPills.forEach(function(pill) {
+        pill.addEventListener('click', function() {
+            signalPills.forEach(function(p) { p.classList.remove('active'); });
+            pill.classList.add('active');
+            applySignalFilter(pill.dataset.value);
+        });
+    });
+
+    function applySignalFilter(filter) {
+        var tbody = document.querySelector('#symbolsTable tbody');
+        if (!tbody) return;
+        var rows = Array.from(tbody.querySelectorAll('tr'));
+        var shown = 0;
+        rows.forEach(function(row) {
+            var entry = {};
+            try { entry = JSON.parse(row.getAttribute('data-entry') || '{}'); } catch(e) {}
+            var entryTag = (entry.entry_tag || '').toLowerCase();
+            var momentum = (entry.momentum || '').toLowerCase();
+            var visible = true;
+
+            if (filter === 'ideal-puts') {
+                var goodEntry = (entryTag === 'strong buy' || entryTag === 'buy');
+                var goodMom = momentum.indexOf('bullish') >= 0;
+                visible = goodEntry && goodMom;
+            } else if (filter === 'ideal-calls') {
+                var callEntry = (entryTag === 'hold' || entryTag === 'wait');
+                var callMom = (momentum.indexOf('weakening') >= 0 || momentum.indexOf('bearish') >= 0 || momentum === 'neutral');
+                visible = callEntry && callMom;
+            } else if (filter === 'accumulate') {
+                var accEntry = (entryTag === 'accumulate');
+                var accMom = (momentum.indexOf('bullish') >= 0 || momentum === 'neutral');
+                visible = accEntry && accMom;
+            } else if (filter === 'no-puts') {
+                var noPutEntry = (entryTag === 'strong buy' || entryTag === 'buy');
+                var noPutMom = momentum.indexOf('bearish') >= 0;
+                visible = noPutEntry && noPutMom;
+            } else if (filter === 'no-calls') {
+                var noCallEntry = (entryTag === 'wait');
+                var noCallMom = momentum.indexOf('bullish') >= 0;
+                visible = noCallEntry && noCallMom;
+            }
+
+            row.style.display = visible ? '' : 'none';
+            if (visible) shown++;
+        });
     }
 
     // ── Detail Modal (same as DGI Screener) ──
