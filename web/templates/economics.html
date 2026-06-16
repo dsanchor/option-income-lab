@@ -179,12 +179,12 @@
     </div>
 </div>
 
-<div class="card economics-filters-card">
-    <div class="card-header">
-        <h2>Filters</h2>
+<div class="card economics-filters-card" style="margin-bottom:1rem;">
+    <div class="card-header" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;padding:1rem 1.25rem;" onclick="toggleEconFilters()">
+        <h2 style="margin:0;font-size:1.1rem;">Filters</h2>
         <span class="card-badge" id="summary-total-positions">0 positions</span>
     </div>
-    <div class="economics-filters">
+    <div id="econFilterPanel" class="economics-filters">
         <div class="economics-filter-block">
             <label class="economics-filter-label" for="economics-year">Year</label>
             <select id="economics-year" class="filter-select">
@@ -237,7 +237,7 @@
             </div>
         </div>
     </div>
-    <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;padding:0 1.25rem 1rem;">
+    <div id="econFilterApplyRow" style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;padding:0 1.25rem 1rem;">
         <button id="economics-apply" class="btn-sm" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:0.4rem 0.75rem;border-radius:var(--radius);cursor:pointer;">Apply</button>
     </div>
 </div>
@@ -338,6 +338,15 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+function toggleEconFilters() {
+    var panel = document.getElementById('econFilterPanel');
+    var applyRow = document.getElementById('econFilterApplyRow');
+    var isVisible = panel.style.display !== 'none';
+    panel.style.display = isVisible ? 'none' : 'block';
+    if (applyRow) applyRow.style.display = isVisible ? 'none' : 'flex';
+}
+</script>
 <script>
 (() => {
     const state = {
