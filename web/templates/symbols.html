@@ -23,9 +23,10 @@
 </div>
 
 <!-- Watchlist table -->
-<div class="card" style="overflow-x:auto;">
+<div class="card">
 {% if symbols %}
-    <table class="table dgi-table" id="symbolsTable">
+<div class="table-wrap">
+    <table class="dgi-table" id="symbolsTable">
         <thead>
             <tr>
                 <th class="sortable" data-col="symbol" data-type="str">Symbol <span class="sort-indicator">⇅</span></th>
@@ -109,6 +110,7 @@
             {% endfor %}
         </tbody>
     </table>
+</div>
 {% else %}
     <p class="empty-state" style="padding:2rem; text-align:center;">No symbols configured. Add your first symbol above.</p>
 {% endif %}
