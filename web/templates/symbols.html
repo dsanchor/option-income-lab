@@ -23,14 +23,14 @@
 </div>
 
 <!-- Watchlist table -->
-<div class="card">
 {% if symbols %}
+<div class="card" style="margin-bottom:1rem;">
 <!-- Signal Filters -->
 <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;padding:1rem 1.25rem;">
     <h2 style="margin:0;font-size:1.1rem;">Filters</h2>
     <span id="signalFilterCount" style="font-size:0.9rem;color:var(--text-muted);">{{ symbols|length }} symbols</span>
 </div>
-<div style="padding:0.75rem 1.25rem; border-bottom:1px solid var(--border);">
+<div style="padding:0.75rem 1.25rem;">
     <div class="filter-pills" id="signal-filter-pills" data-value="">
         <button type="button" class="pill active" data-value="">All</button>
         <button type="button" class="pill" data-value="ideal-puts" title="(SB/Buy + Bullish/Neutral/Weakening) or (any + Oversold) — confluent setup for selling puts">Ideal Puts</button>
@@ -40,6 +40,9 @@
         <button type="button" class="pill" data-value="no-calls" title="Wait + Bullish (pure) — runaway bull without exhaustion signal">⚠️ No Calls</button>
     </div>
 </div>
+</div>
+
+<div class="card">
 <div class="table-wrap">
     <table class="dgi-table" id="symbolsTable">
         <thead>
@@ -126,10 +129,12 @@
         </tbody>
     </table>
 </div>
-{% else %}
-    <p class="empty-state" style="padding:2rem; text-align:center;">No symbols configured. Add your first symbol above.</p>
-{% endif %}
 </div>
+{% else %}
+<div class="card">
+    <p class="empty-state" style="padding:2rem; text-align:center;">No symbols configured. Add your first symbol above.</p>
+</div>
+{% endif %}
 
 <!-- Detail Modal -->
 <div class="modal-overlay" id="wlDetailModal" style="display:none;">
