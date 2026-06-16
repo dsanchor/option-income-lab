@@ -636,7 +636,7 @@ class CosmosDBService:
         if ttl_seconds is not None:
             doc["ttl"] = ttl_seconds
 
-        return self.container.create_item(doc)
+        return self.container.upsert_item(doc)
 
     def mark_as_alert(self, symbol: str, activity_id: str,
                       alert_data: dict) -> dict:
