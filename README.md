@@ -807,15 +807,17 @@ Each watchlist symbol gets a **Momentum** signal computed by the Portfolio Enric
 
 ### Signal Filters (Watchlist UI)
 
-The watchlist provides predefined filter pills combining Entry (technical timing) + Momentum for actionable categories:
+The watchlist provides predefined filter pills combining Entry (technical timing) + Momentum for actionable categories. RSI extremes (oversold/overextended) act as independent signals:
 
-| Filter | Entry | Momentum | Action |
-|--------|-------|----------|--------|
-| **Ideal Puts** | Strong Buy / Buy | Bullish | Confluent — sell puts with confidence |
-| **Ideal Calls** | Hold / Wait | Weakening / Bearish / Neutral | Sell covered calls |
-| **Accumulate** | Accumulate | Bullish / Neutral | Small DCA add |
-| **No Puts** | Strong Buy / Buy | Bearish | Falling knife — don't sell puts |
-| **No Calls** | Wait | Bullish | Runaway — don't sell calls |
+| Filter | Logic | Action |
+|--------|-------|--------|
+| **Ideal Puts** | (SB/Buy + Bullish/Neutral/Weakening) OR (any + Oversold) | Sell puts with confidence |
+| **Ideal Calls** | (Hold/Wait + Weakening/Bearish/Neutral) OR (any + Overextended) | Sell covered calls |
+| **Accumulate** | Accumulate + Bullish/Neutral | Small DCA add |
+| **No Puts** | SB/Buy + Bearish (pure) | Falling knife — don't sell puts |
+| **No Calls** | Wait + Bullish (pure) | Runaway — don't sell calls |
+
+**RSI extreme handling:** Oversold (RSI < 30) signals probable bounce → routed to Ideal Puts regardless of Entry. Overextended (RSI > 70) signals probable pullback → routed to Ideal Calls regardless of Entry. No Puts and No Calls only match pure momentum (without RSI modifiers).
 
 ## Buy Tracker
 
@@ -944,11 +946,11 @@ stock-options-manager/
 - **Symbol Detail** (`/symbols/{symbol}`) — Full detail page for a symbol: expandable positions with source traceability, editable notes field, Close/Roll/Delete actions, activities, alerts, and "Open Position from Alert" / "Roll Position from Alert" buttons on activity detail. Features a **play button** (▶) for running individual symbol analysis on demand. **Generate Report** and **Chat** buttons are aligned right; watchlist toggles are aligned left. Activities support confidence and agent-type filtering. WAIT activities with MODERATE or STRONG supervisor opinions display a 🤔 indicator icon. Activity detail includes collapsible "Supervisor" and "Alpha Advisor" panels with color-coded badges showing audit findings and aggressive alternatives.
 - **Symbols Watchlist** (`/symbols`) — Central watchlist management page showing all tracked symbols with enrichment data. Columns: Symbol, Category, DGI Score, Tech Timing, Entry (technical timing tag), Momentum (directional signal), Price, Shares (inline editable), In Calls, Put Exposure ($committed if assigned). Features **signal filter pills** for actionable categories:
   - **All** — Show everything
-  - **Ideal Puts** — Entry Strong Buy/Buy + Momentum Bullish (confluent setup for selling puts)
-  - **Ideal Calls** — Entry Hold/Wait + Momentum Weakening/Bearish/Neutral (ideal for covered calls)
-  - **Accumulate** — Entry Accumulate + Momentum Bullish/Neutral (small DCA)
-  - **⚠️ No Puts** — Entry Strong Buy/Buy + Momentum Bearish (falling knife — do NOT sell puts)
-  - **⚠️ No Calls** — Entry Wait + Momentum Bullish (runaway — do NOT sell calls)
+  - **Ideal Puts** — (SB/Buy + Bullish/Neutral/Weakening) or (any + Oversold)
+  - **Ideal Calls** — (Hold/Wait + Weakening/Bearish/Neutral) or (any + Overextended)
+  - **Accumulate** — Accumulate + Bullish/Neutral (small DCA)
+  - **⚠️ No Puts** — SB/Buy + Bearish pure (falling knife)
+  - **⚠️ No Calls** — Wait + Bullish pure (runaway)
 - **Symbol Report** (`/symbols/{symbol}/report`) — Dedicated report display page showing the latest generated report for a symbol (technical analysis, dividends, options chain, risk assessment, and recommendations).
 - **Symbol Chat** (`/symbols/{symbol}/chat`) — Per-symbol chat page with a context selection screen before starting the conversation. Pre-loads market data via the yfinance provider for faster responses. Supports open call and open put analysis contexts.
 - **Fetch Preview** (`/symbols/{symbol}/fetch-preview`) — Debug page showing raw market data for each resource (overview, technicals, forecast, options chain) with fetch timing and size.
