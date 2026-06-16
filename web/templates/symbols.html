@@ -33,7 +33,7 @@
 <div style="padding:0.75rem 1.25rem; border-bottom:1px solid var(--border);">
     <div class="filter-pills" id="signal-filter-pills" data-value="">
         <button type="button" class="pill active" data-value="">All</button>
-        <button type="button" class="pill" data-value="ideal-puts" title="(SB/Buy + Bullish) or (SB/Buy + Oversold) — confluent setup for selling puts">Ideal Puts</button>
+        <button type="button" class="pill" data-value="ideal-puts" title="(SB/Buy + Bullish/Neutral/Weakening) or (any + Oversold) — confluent setup for selling puts">Ideal Puts</button>
         <button type="button" class="pill" data-value="ideal-calls" title="(Hold/Wait + Weakening/Bearish/Neutral) or (any + Overextended) — ideal for covered calls">Ideal Calls</button>
         <button type="button" class="pill" data-value="accumulate" title="Accumulate + Bullish/Neutral — small DCA, not urgent">Accumulate</button>
         <button type="button" class="pill" data-value="no-puts" title="SB/Buy + Bearish (pure) — falling knife without oversold bounce signal">⚠️ No Puts</button>
@@ -363,10 +363,10 @@
             var isNeutral = (momentum === 'neutral');
 
             if (filter === 'ideal-puts') {
-                // (SB/B + Bullish pure) OR (SB/B + Bearish oversold)
-                visible = (isSBorBuy && isBullishPure) || (isSBorBuy && isOversold);
+                // (SB/B + Bullish/Neutral/Weakening) OR (any + Oversold)
+                visible = (isSBorBuy && (isBullishPure || isNeutral || isWeakening)) || isOversold;
             } else if (filter === 'ideal-calls') {
-                // (Hold/Wait + Weakening/Bearish pure/Neutral) OR (any + overextended)
+                // (Hold/Wait + Weakening/Bearish pure/Neutral) OR (any + Overextended)
                 visible = (isHoldOrWait && (isWeakening || isBearishPure || isNeutral)) || isOverextended;
             } else if (filter === 'accumulate') {
                 var accEntry = (entryTag === 'accumulate');
