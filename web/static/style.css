@@ -1183,6 +1183,13 @@ input:checked + .slider::before { transform: translateX(16px); background: #fff;
 .badge-entry-hold       { background: rgba(251,191,36,0.2);  color: #fbbf24; }
 .badge-entry-wait       { background: rgba(239,68,68,0.15);  color: #ef4444; }
 
+/* Momentum badges */
+.badge-momentum-bullish    { background: rgba(16,185,129,0.2);  color: #10b981; }
+.badge-momentum-weakening  { background: rgba(251,191,36,0.2);  color: #fbbf24; }
+.badge-momentum-neutral    { background: rgba(96,165,250,0.2);  color: #60a5fa; }
+.badge-momentum-bearish    { background: rgba(239,68,68,0.2);   color: #ef4444; }
+.badge-momentum-unknown    { background: rgba(141,150,158,0.2); color: var(--text-muted); }
+
 .actions-cell { white-space: nowrap; display: flex; gap: 0.3rem; }
 .btn-dgi-add { font-size: 0.75rem; }
 

@@ -132,6 +132,22 @@ def analyze_single_symbol(symbol: str, filters: dict = None) -> dict:
     else:
         entry_tag = "Wait"
 
+    # Momentum (directional signal for options)
+    sma_50 = technicals.get("sma_50", 0)
+    sma_200 = technicals.get("sma_200", 0)
+    price = metrics.get("current_price", 0)
+    if sma_50 and sma_200 and price:
+        if sma_50 > sma_200 and price > sma_50:
+            momentum = "Bullish"
+        elif sma_50 > sma_200 and price <= sma_50:
+            momentum = "Weakening"
+        elif sma_50 <= sma_200 and price >= sma_50:
+            momentum = "Neutral"
+        else:
+            momentum = "Bearish"
+    else:
+        momentum = "Unknown"
+
     category = dgi_metrics.categorize_stock(metrics)
     passes_filters = dgi_metrics.passes_minimum_filters(metrics, filters)
     filter_details = dgi_metrics.filter_detail(metrics, filters)
@@ -144,6 +160,7 @@ def analyze_single_symbol(symbol: str, filters: dict = None) -> dict:
         "quality_score": quality_score,
         "quality_detail": quality_detail,
         "entry_tag": entry_tag,
+        "momentum": momentum,
         "category": category,
         "has_dividends": has_dividends,
         "passes_minimum_filters": passes_filters,
@@ -313,6 +330,22 @@ async def run_dgi_screener(config, cosmos) -> dict:
                             symbol,
                             " | ".join(f"{k}={v:.2f}" for k, v in components.items()))
 
+            # Momentum (directional signal for options)
+            sma_50 = technicals.get("sma_50", 0)
+            sma_200 = technicals.get("sma_200", 0)
+            price = metrics.get("current_price", 0)
+            if sma_50 and sma_200 and price:
+                if sma_50 > sma_200 and price > sma_50:
+                    momentum = "Bullish"
+                elif sma_50 > sma_200 and price <= sma_50:
+                    momentum = "Weakening"
+                elif sma_50 <= sma_200 and price >= sma_50:
+                    momentum = "Neutral"
+                else:
+                    momentum = "Bearish"
+            else:
+                momentum = "Unknown"
+
             candidates.append({
                 "symbol": symbol,
                 "metrics": metrics,
@@ -320,6 +353,7 @@ async def run_dgi_screener(config, cosmos) -> dict:
                 "quality_score": round(quality, 2),
                 "quality_detail": quality_detail,
                 "entry_tag": entry_tag,
+                "momentum": momentum,
             })
 
         except Exception as e:

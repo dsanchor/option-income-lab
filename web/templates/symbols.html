@@ -29,13 +29,14 @@
         <thead>
             <tr>
                 <th class="sortable" data-col="symbol" data-type="str">Symbol <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="category" data-type="str">Category <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="category" data-type="str" title="Based on dividend history: Aristocrat (≥25y+yield≥2%), Rising Star (CAGR≥10%+≥5y), Compounder (≥15y+CAGR≥7%), High Yield (yield≥4%), Balanced (default)">Category <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="score" data-type="num">Quality Score <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="dividend_yield" data-type="num">Div Yield % <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="dividend_growth_cagr" data-type="num">Div Growth CAGR % <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="years_of_growth" data-type="num">Years <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="technical_timing_score" data-type="num">Timing <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="entry_tag" data-type="str">Entry <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="entry_tag" data-type="str" title="Based on technical timing score: Strong Buy (≥70), Buy (≥50), Accumulate (≥35), Hold (≥20), Wait (<20). Higher = more oversold/undervalued">Entry <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="momentum" data-type="str" title="Directional trend for options: Bullish (sell Puts safely), Weakening (caution with Calls), Bearish (sell Calls safely), Neutral (range-bound strategies)">Momentum <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="current_price" data-type="num">Price <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="shares" data-type="num">Shares <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="in_calls" data-type="num">In Calls <span class="sort-indicator">⇅</span></th>
@@ -52,6 +53,8 @@
             {% set score_class = 'score-high' if score >= 70 else ('score-medium' if score >= 40 else 'score-low') %}
             {% set tag = enr.entry_tag | default('—') %}
             {% set tag_lower = tag | lower | replace(' ', '-') %}
+            {% set momentum = enr.momentum | default('') %}
+            {% set mom_lower = momentum | lower %}
             {% set entry_data = enr | tojson | e if enr else '{}' %}
             {% set total_shares = sym.total_shares | default(0) %}
             {% set in_calls = sym._in_calls | default(0) %}
@@ -59,7 +62,7 @@
                 <td><strong>{{ sym.symbol }}</strong></td>
                 <td>
                     {% if enr.category %}
-                    <span class="badge badge-cat-{{ cat_lower }}">{{ enr.category }}</span>
+                    <span class="badge badge-cat-{{ cat_lower }}" title="{% if enr.category == 'Aristocrat' %}≥25 years dividend growth + yield ≥2%{% elif enr.category == 'Rising Star' %}CAGR ≥10% + ≥5 years growth{% elif enr.category == 'Compounder' %}≥15 years + CAGR ≥7%{% elif enr.category == 'High Yield' %}Dividend yield ≥4%{% else %}Balanced — meets basic criteria{% endif %}">{{ enr.category }}</span>
                     {% else %}—{% endif %}
                 </td>
                 <td class="mono">
@@ -74,7 +77,14 @@
                 <td class="mono">{% if metrics.dividend_cagr_5y is defined and metrics.dividend_cagr_5y %}{{ "%.1f" | format(metrics.dividend_cagr_5y * 100) }}%{% else %}—{% endif %}</td>
                 <td class="mono">{{ metrics.years_consecutive_increases | default('—') }}</td>
                 <td class="mono">{% if technicals.score is defined %}{{ "%.1f" | format(technicals.score) }}{% else %}—{% endif %}</td>
-                <td>{% if enr.entry_tag %}<span class="badge badge-entry-{{ tag_lower }}">{{ tag }}</span>{% else %}—{% endif %}</td>
+                <td>{% if enr.entry_tag %}<span class="badge badge-entry-{{ tag_lower }}" title="{% if tag == 'Strong Buy' %}Timing ≥70 — strong oversold signal, ideal entry{% elif tag == 'Buy' %}Timing ≥50 — good entry opportunity{% elif tag == 'Accumulate' %}Timing ≥35 — acceptable to accumulate{% elif tag == 'Hold' %}Timing ≥20 — hold existing, avoid new entries{% else %}Timing <20 — overbought, wait for pullback{% endif %}">{{ tag }}</span>{% else %}—{% endif %}</td>
+                <td>
+                    {% if momentum %}
+                    <span class="badge badge-momentum-{{ mom_lower }}" title="{% if momentum == 'Bullish' %}SMA50 > SMA200, price above both — uptrend. Puts safe, Calls risky (may get assigned){% elif momentum == 'Weakening' %}SMA50 > SMA200 but price dropping below SMA50 — trend losing steam. Caution with Puts{% elif momentum == 'Neutral' %}Price between SMAs, no clear trend — range-bound strategies (iron condors, strangles){% elif momentum == 'Bearish' %}SMA50 < SMA200, price below both — downtrend. Calls safe, Puts risky{% else %}Insufficient data{% endif %}">
+                        {% if momentum == 'Bullish' %}🟢{% elif momentum == 'Weakening' %}🟡{% elif momentum == 'Neutral' %}🔵{% elif momentum == 'Bearish' %}🔴{% else %}⚪{% endif %} {{ momentum }}
+                    </span>
+                    {% else %}—{% endif %}
+                </td>
                 <td class="mono">{% if metrics.current_price %}${{ "%.2f" | format(metrics.current_price) }}{% else %}—{% endif %}</td>
                 <td class="mono shares-cell" data-symbol="{{ sym.symbol }}" data-total="{{ total_shares }}">
                     <span class="shares-display" title="Click to edit total shares">
@@ -289,6 +299,7 @@
             case 'years_of_growth': return metrics.years_consecutive_increases || 0;
             case 'technical_timing_score': return technicals.score || 0;
             case 'entry_tag': return entry.entry_tag || '';
+            case 'momentum': return entry.momentum || '';
             case 'current_price': return metrics.current_price || 0;
             case 'shares':
                 var sharesCell = row.querySelector('.shares-cell');
