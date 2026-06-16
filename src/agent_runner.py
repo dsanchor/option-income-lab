@@ -1203,12 +1203,12 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
             _skip_reviews = agent_type in ("buy_tracker",)
             supervisor_view = None
             alpha_view = None
+            prolonged_wait = False
 
             if not _skip_reviews:
                 alpha_chain_text = self._build_alpha_options_chain(data, agent_type)
                 market_data = self._build_market_data_block(data, symbol, exchange)
                 alpha_market_data = self._build_market_data_block(data, symbol, exchange, options_chain_text=alpha_chain_text)
-                prolonged_wait = False
 
                 if is_alert:
                     alert_activity = activity_payload.get("activity", "ALERT")
