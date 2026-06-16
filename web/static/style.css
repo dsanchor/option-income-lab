@@ -339,8 +339,8 @@ h1, h2, h3, h4, h5, h6 {
 
 /* ── Tables ── */
 .table-wrap { overflow-x: auto; }
-.table-wrap table { width: max-content; min-width: 100%; }
-.table-wrap th, .table-wrap td { white-space: nowrap; }
+.agent-card table { width: max-content; min-width: 100%; }
+.agent-card th, .agent-card td { white-space: nowrap; }
 table { width: 100%; border-collapse: collapse; }
 thead th {
     text-align: left;
