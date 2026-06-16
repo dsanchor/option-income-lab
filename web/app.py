@@ -3476,8 +3476,9 @@ async def trigger_portfolio_enrichment(request: Request):
 
     def _run():
         try:
+            import asyncio
             from src.portfolio_enrichment import run_portfolio_enrichment
-            run_portfolio_enrichment(cosmos)
+            asyncio.run(run_portfolio_enrichment(cosmos))
             state_ref["last_result"] = {"status": "ok"}
         except Exception as e:
             state_ref["last_result"] = {"status": "error", "error": str(e)}
