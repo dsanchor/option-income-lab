@@ -261,6 +261,10 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
                      - opened_dt.astimezone(timezone.utc).date()).days,
                     0,
                 )
+                # Cap at expiration date to avoid inflated days when
+                # position is closed late (after expiration)
+                if expiration_dt and days_to_expiration > 0:
+                    days_held = min(days_held, days_to_expiration)
 
             position_data = {
                 "symbol": symbol,
@@ -726,6 +730,8 @@ async def api_update_symbol(request: Request, symbol: str):
             doc["exchange"] = body["exchange"].strip().upper()
         if "telegram_notifications_enabled" in body:
             doc["telegram_notifications_enabled"] = bool(body["telegram_notifications_enabled"])
+        if "total_shares" in body:
+            doc["total_shares"] = int(body["total_shares"])
 
         doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
         updated = cosmos.container.replace_item(item=doc["id"], body=doc)
@@ -1629,10 +1635,12 @@ async def symbols_page(request: Request):
     cosmos = getattr(request.app.state, "cosmos", None)
     symbols = cosmos.list_symbols() if cosmos else []
     for s in symbols:
-        s["_active_count"] = len(
-            [p for p in s.get("positions", [])
-             if p.get("status") == "active"]
-        )
+        active_positions = [p for p in s.get("positions", [])
+                           if p.get("status") == "active"]
+        s["_active_count"] = len(active_positions)
+        s["_shares_in_use"] = len(active_positions) * 100
+        s["_in_calls"] = sum(100 for p in active_positions
+                            if p.get("option_type") == "call")
     # Sort by enrichment quality_score descending (enriched first)
     symbols.sort(
         key=lambda s: (s.get("enrichment", {}) or {}).get("quality_score", -1),

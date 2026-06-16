@@ -37,7 +37,8 @@
                 <th class="sortable" data-col="technical_timing_score" data-type="num">Timing <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="entry_tag" data-type="str">Entry <span class="sort-indicator">⇅</span></th>
                 <th class="sortable" data-col="current_price" data-type="num">Price <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="active_positions" data-type="num">Active Pos. <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="shares" data-type="num">Shares <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="in_calls" data-type="num">In Calls <span class="sort-indicator">⇅</span></th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -52,6 +53,8 @@
             {% set tag = enr.entry_tag | default('—') %}
             {% set tag_lower = tag | lower | replace(' ', '-') %}
             {% set entry_data = enr | tojson | e if enr else '{}' %}
+            {% set total_shares = sym.total_shares | default(0) %}
+            {% set in_calls = sym._in_calls | default(0) %}
             <tr class="dgi-row" data-entry='{{ entry_data }}' data-symbol="{{ sym.symbol }}">
                 <td><strong>{{ sym.symbol }}</strong></td>
                 <td>
@@ -73,7 +76,18 @@
                 <td class="mono">{% if technicals.score is defined %}{{ "%.1f" | format(technicals.score) }}{% else %}—{% endif %}</td>
                 <td>{% if enr.entry_tag %}<span class="badge badge-entry-{{ tag_lower }}">{{ tag }}</span>{% else %}—{% endif %}</td>
                 <td class="mono">{% if metrics.current_price %}${{ "%.2f" | format(metrics.current_price) }}{% else %}—{% endif %}</td>
-                <td class="mono">{{ sym._active_count }}</td>
+                <td class="mono shares-cell" data-symbol="{{ sym.symbol }}" data-total="{{ total_shares }}">
+                    <span class="shares-display" title="Click to edit total shares">
+                        {% if total_shares > 0 %}{{ total_shares }}{% else %}<span style="color:var(--text-muted);">—</span>{% endif %}
+                    </span>
+                    <input type="number" class="shares-input" min="0" step="100" value="{{ total_shares }}"
+                           style="display:none; width:70px; padding:0.2rem 0.4rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                </td>
+                <td class="mono">
+                    {% if in_calls > 0 %}
+                    <span class="{{ 'text-warning' if total_shares > 0 and in_calls >= total_shares else '' }}">{{ in_calls }}</span>
+                    {% else %}—{% endif %}
+                </td>
                 <td class="actions-cell">
                     <a href="/symbols/{{ sym.symbol }}" class="btn-sm" title="Symbol details">Details</a>
                     <button class="btn-sm btn-danger" data-delete-symbol="{{ sym.symbol }}" title="Delete {{ sym.symbol }}">Delete</button>
@@ -172,6 +186,63 @@
         });
     });
 
+    // ── Inline Editable Shares ──
+    document.querySelectorAll('.shares-cell').forEach(function(cell) {
+        var display = cell.querySelector('.shares-display');
+        var input = cell.querySelector('.shares-input');
+        var symbol = cell.dataset.symbol;
+
+        display.style.cursor = 'pointer';
+        display.addEventListener('click', function(e) {
+            e.stopPropagation();
+            display.style.display = 'none';
+            input.style.display = 'inline-block';
+            input.focus();
+            input.select();
+        });
+
+        input.addEventListener('blur', function() { saveShares(); });
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); saveShares(); }
+            if (e.key === 'Escape') { cancelEdit(); }
+        });
+        input.addEventListener('click', function(e) { e.stopPropagation(); });
+
+        function cancelEdit() {
+            input.value = cell.dataset.total;
+            input.style.display = 'none';
+            display.style.display = '';
+        }
+
+        async function saveShares() {
+            var newVal = parseInt(input.value) || 0;
+            input.style.display = 'none';
+            display.style.display = '';
+
+            if (newVal == cell.dataset.total) return;
+
+            try {
+                var res = await fetch('/api/symbols/' + symbol, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ total_shares: newVal })
+                });
+                if (res.ok) {
+                    cell.dataset.total = newVal;
+                    if (newVal > 0) {
+                        display.innerHTML = String(newVal);
+                    } else {
+                        display.innerHTML = '<span style="color:var(--text-muted);">—</span>';
+                    }
+                } else {
+                    input.value = cell.dataset.total;
+                }
+            } catch(e) {
+                input.value = cell.dataset.total;
+            }
+        }
+    });
+
     // ── Sortable Columns ──
     var currentSort = { col: 'score', dir: 'desc' };
     document.querySelectorAll('#symbolsTable th.sortable').forEach(function(th) {
@@ -219,9 +290,12 @@
             case 'technical_timing_score': return technicals.score || 0;
             case 'entry_tag': return entry.entry_tag || '';
             case 'current_price': return metrics.current_price || 0;
-            case 'active_positions':
-                var cells = row.querySelectorAll('td');
-                return parseInt(cells[cells.length - 2].textContent) || 0;
+            case 'shares':
+                var sharesCell = row.querySelector('.shares-cell');
+                return parseInt(sharesCell ? sharesCell.dataset.total : '0') || 0;
+            case 'in_calls':
+                var callsCell = row.querySelectorAll('td');
+                return parseInt(callsCell[callsCell.length - 2].textContent) || 0;
             default: return '';
         }
     }
@@ -290,7 +364,6 @@
             return;
         }
 
-        // Overview (same fields as DGI minus rank/days_on_list/first_appeared)
         var topFields = { quality_score: entry.quality_score, category: entry.category, entry_tag: entry.entry_tag };
         html += buildSection('Overview', topFields);
 
@@ -432,7 +505,7 @@
         document.querySelectorAll('.dgi-row').forEach(function(row) {
             row.style.cursor = 'pointer';
             row.addEventListener('click', function(e) {
-                if (e.target.closest('.actions-cell')) return;
+                if (e.target.closest('.actions-cell') || e.target.closest('.shares-cell')) return;
                 try {
                     var entry = JSON.parse(row.getAttribute('data-entry'));
                     openDetail(entry, row.dataset.symbol);
