@@ -302,49 +302,43 @@
                     <small style="display:block; margin-top:0.3rem; color:var(--text-muted); font-size:0.75rem;">Number of top-scoring stocks to include in the DGI list (default: 40)</small>
                 </div>
             </div>
-        </div>
-    </div>
 
-    <!-- Portfolio Enrichment Scheduler -->
-    <div class="card settings-card">
-        <div class="card-header">
-            <h2>📊 Portfolio Enrichment</h2>
-            <span class="badge badge-{{ 'wait' if pe_enabled else 'sell' }}">
-                {{ '✅ Enabled' if pe_enabled else '❌ Disabled' }}
-            </span>
-        </div>
-        <div class="card-body">
-            <div style="margin-bottom:1rem;">
-                <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
-                    <input type="checkbox" name="pe_enabled" value="true" {{ 'checked' if pe_enabled }}>
-                    <span style="font-size:0.9rem;">Enable portfolio enrichment scheduler</span>
-                </label>
-                <small style="display:block; margin-top:0.3rem; margin-left:1.5rem; color:var(--text-muted); font-size:0.75rem;">
-                    Periodically enrich portfolio symbols with quality scores, dividend metrics, and technicals.
-                </small>
-            </div>
+            <!-- Watchlist Enrichment Section -->
+            <div style="margin-top:1.5rem;">
+                <h3 style="font-size:0.95rem; font-weight:600; margin:0 0 0.75rem 0; padding-bottom:0.5rem; border-bottom:1px solid var(--border); color:var(--text);">Watchlist Enrichment</h3>
+                
+                <div style="margin-bottom:1rem;">
+                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                        <input type="checkbox" name="pe_enabled" value="true" {{ 'checked' if pe_enabled }}>
+                        <span style="font-size:0.9rem;">Enable watchlist enrichment scheduler</span>
+                    </label>
+                    <small style="display:block; margin-top:0.3rem; margin-left:1.5rem; color:var(--text-muted); font-size:0.75rem;">
+                        Periodically enrich watchlist symbols with quality scores, dividend metrics, and technicals.
+                    </small>
+                </div>
 
-            <div style="margin-bottom:0.75rem;">
-                <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
-                    Cron Expression
-                    <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to run portfolio enrichment (uses main scheduler timezone)">ⓘ</span>
-                </label>
-                <input type="text" name="pe_cron" value="{{ pe_cron }}" placeholder="0 9-17 * * 1-5" spellcheck="false"
-                       style="width:100%; padding:0.6rem 0.8rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
-                <small style="display:block; margin-top:0.3rem; color:var(--text-muted); font-size:0.75rem;">Example: <code>0 9-17 * * 1-5</code> = hourly 9 AM–5 PM weekdays</small>
-            </div>
+                <div style="margin-bottom:0.75rem;">
+                    <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
+                        Cron Expression
+                        <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to run watchlist enrichment (uses main scheduler timezone)">ⓘ</span>
+                    </label>
+                    <input type="text" name="pe_cron" value="{{ pe_cron }}" placeholder="0 9-17 * * 1-5" spellcheck="false"
+                           style="width:100%; padding:0.6rem 0.8rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                    <small style="display:block; margin-top:0.3rem; color:var(--text-muted); font-size:0.75rem;">Example: <code>0 9-17 * * 1-5</code> = hourly 9 AM–5 PM weekdays</small>
+                </div>
 
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
-                <div>
-                    <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
-                    <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
-                        {{ pe_next_run or "N/A" }}
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
+                    <div>
+                        <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                            {{ pe_next_run or "N/A" }}
+                        </div>
                     </div>
                 </div>
-            </div>
 
-            <button type="button" class="btn btn-primary" id="btnRunPortfolioEnrichment" style="margin-top:0.75rem;">▶ Run Now</button>
-            <span id="peRunStatus" class="mono" style="margin-left:0.75rem; font-size:0.85rem;"></span>
+                <button type="button" class="btn btn-primary" id="btnRunPortfolioEnrichment" style="margin-top:0.75rem;">▶ Run Now</button>
+                <span id="peRunStatus" class="mono" style="margin-left:0.75rem; font-size:0.85rem;"></span>
+            </div>
         </div>
     </div>
 
