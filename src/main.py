@@ -252,27 +252,24 @@ class OptionsAgentScheduler:
         print(f"# Starting scheduled agent run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'#'*70}\n")
         
-        try:
-            cosmos = self.cosmos
-            ctx = self.context_provider
-            runner = self.runner
-            config = self.config
+        cosmos = self.cosmos
+        ctx = self.context_provider
+        runner = self.runner
+        config = self.config
 
-            # Run covered call agent
-            await run_covered_call_analysis(config, runner, cosmos, ctx)
-            
-            # Run cash secured put agent
-            await run_cash_secured_put_analysis(config, runner, cosmos, ctx)
+        agents = [
+            ("covered_call", run_covered_call_analysis),
+            ("cash_secured_put", run_cash_secured_put_analysis),
+            ("buy_tracker", run_buy_tracker_analysis),
+            ("open_call_monitor", run_open_call_monitor),
+            ("open_put_monitor", run_open_put_monitor),
+        ]
 
-            # Run buy tracker agent
-            await run_buy_tracker_analysis(config, runner, cosmos, ctx)
-
-            # Run open position monitors
-            await run_open_call_monitor(config, runner, cosmos, ctx)
-            await run_open_put_monitor(config, runner, cosmos, ctx)
-            
-        except Exception as e:
-            print(f"ERROR during agent execution: {str(e)}")
+        for agent_name, agent_func in agents:
+            try:
+                await agent_func(config, runner, cosmos, ctx)
+            except Exception as e:
+                print(f"ERROR running {agent_name}: {str(e)}")
         
         tz = pytz.timezone(self.config.timezone)
         now_tz = datetime.now(tz)
