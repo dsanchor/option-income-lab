@@ -79,18 +79,18 @@
     <table class="dgi-table" id="dgiTable">
         <thead>
             <tr>
-                <th class="sortable" data-col="rank" data-type="num"># <span class="sort-indicator">▲</span></th>
-                <th class="sortable" data-col="symbol" data-type="str">Symbol <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="category" data-type="str">Category <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="score" data-type="num">Quality Score <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="dividend_yield" data-type="num">Div Yield % <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="dividend_growth_cagr" data-type="num">Div Growth CAGR % <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="years_of_growth" data-type="num">Years <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="days_on_list" data-type="num">Days on List <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="technical_timing_score" data-type="num">Timing <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="entry_tag" data-type="str">Entry <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="current_price" data-type="num">Price <span class="sort-indicator">⇅</span></th>
-                <th>Actions</th>
+                <th class="sortable" data-col="rank" data-type="num">#<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="symbol" data-type="str">Symbol<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="category" data-type="str">Category<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="score" data-type="num">Quality Score<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="dividend_yield" data-type="num">Div Yield %<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="dividend_growth_cagr" data-type="num">Div Growth CAGR %<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="years_of_growth" data-type="num">Years<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="days_on_list" data-type="num">Days on List<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="technical_timing_score" data-type="num">Timing<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="entry_tag" data-type="str">Entry<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="current_price" data-type="num">Price<span class="sort-indicator"></span></th>
+                <th></th>
             </tr>
         </thead>
         <tbody>
@@ -686,7 +686,7 @@
             currentSort = { col: col, asc: asc };
 
             // Update indicators
-            headers.forEach(function(h) { h.classList.remove('sort-active'); h.querySelector('.sort-indicator').textContent = '⇅'; });
+            headers.forEach(function(h) { h.classList.remove('sort-active'); h.querySelector('.sort-indicator').textContent = ''; });
             th.classList.add('sort-active');
             th.querySelector('.sort-indicator').textContent = asc ? '▲' : '▼';
 

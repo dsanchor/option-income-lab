@@ -47,16 +47,16 @@
     <table class="dgi-table" id="symbolsTable">
         <thead>
             <tr>
-                <th class="sortable" data-col="symbol" data-type="str">Symbol <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="category" data-type="str" title="Based on dividend history: Aristocrat (≥25y+yield≥2%), Rising Star (CAGR≥10%+≥5y), Compounder (≥15y+CAGR≥7%), High Yield (yield≥4%), Balanced (default)">Category <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="score" data-type="num">DGI Score <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="technical_timing_score" data-type="num">Tech Timing <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="entry_tag" data-type="str" title="Based on technical timing score: Strong Buy (≥70), Buy (≥50), Accumulate (≥35), Hold (≥20), Wait (<20). Higher = more oversold/undervalued">Entry <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="momentum" data-type="str" title="Directional signal for options selling. Based on SMA50/SMA200 + RSI + ADX. ADX<20 forces Neutral. Extreme RSI adds warning (overextended/oversold)">Momentum <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="current_price" data-type="num">Price <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="shares" data-type="num">Shares <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="in_calls" data-type="num">In Calls <span class="sort-indicator">⇅</span></th>
-                <th class="sortable" data-col="put_exposure" data-type="num" title="Capital committed if assigned: active put contracts × strike × 100">Puts $ <span class="sort-indicator">⇅</span></th>
+                <th class="sortable" data-col="symbol" data-type="str">Symbol<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="category" data-type="str" title="Based on dividend history: Aristocrat (≥25y+yield≥2%), Rising Star (CAGR≥10%+≥5y), Compounder (≥15y+CAGR≥7%), High Yield (yield≥4%), Balanced (default)">Category<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="score" data-type="num">DGI Score<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="technical_timing_score" data-type="num">Tech Timing<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="entry_tag" data-type="str" title="Based on technical timing score: Strong Buy (≥70), Buy (≥50), Accumulate (≥35), Hold (≥20), Wait (<20). Higher = more oversold/undervalued">Entry<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="momentum" data-type="str" title="Directional signal for options selling. Based on SMA50/SMA200 + RSI + ADX. ADX<20 forces Neutral. Extreme RSI adds warning (overextended/oversold)">Momentum<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="current_price" data-type="num">Price<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="shares" data-type="num">Shares<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="in_calls" data-type="num">In Calls<span class="sort-indicator"></span></th>
+                <th class="sortable" data-col="put_exposure" data-type="num" title="Capital committed if assigned: active put contracts × strike × 100">Puts $<span class="sort-indicator"></span></th>
                 <th></th>
             </tr>
         </thead>
@@ -292,7 +292,7 @@
                 currentSort.dir = type === 'num' ? 'desc' : 'asc';
             }
             sortTable(col, type, currentSort.dir);
-            document.querySelectorAll('#symbolsTable .sort-indicator').forEach(function(s) { s.textContent = '⇅'; });
+            document.querySelectorAll('#symbolsTable .sort-indicator').forEach(function(s) { s.textContent = ''; });
             th.querySelector('.sort-indicator').textContent = currentSort.dir === 'asc' ? '▲' : '▼';
         });
     });
