@@ -302,41 +302,30 @@ class OptionsAgentScheduler:
         _run_async(self._run_options_chain_fetch_async())
     
     async def _run_options_chain_fetch_async(self):
-        """Fetch all market data for all symbols via yfinance (pre-warm cache)."""
+        """Refresh options chain cache for all symbols (yfinance + TradingView merge)."""
         options_chain_config = self.config.config.get('options_chain_scheduler', {})
         if not options_chain_config.get('enabled', True):
             print("⏭️  Options chain scheduler disabled in config")
             return
         
-        from .yfinance_data_provider import get_shared_provider
+        from .options_chain_cache import get_options_chain_cache
         
         tz = pytz.timezone(self.config.timezone)
         now_tz = datetime.now(tz)
         print(f"\n{'~'*70}")
-        print(f"📈 Market Data Fetcher - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"📈 Options Chain Cache Refresh - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'~'*70}\n")
         
         symbols = self.cosmos.list_symbols()
+        symbol_names = [s["symbol"] for s in symbols]
         
-        print(f"Fetching market data for {len(symbols)} symbols...")
-        success_count = 0
-        error_count = 0
+        print(f"Refreshing options chain cache for {len(symbol_names)} symbols...")
         
-        provider = get_shared_provider(getattr(self.config, 'yfinance_config', None))
-        for sym_doc in symbols:
-            symbol = sym_doc["symbol"]
-            
-            try:
-                data = await provider.fetch_all(symbol, force_refresh=True)
-                oc = data.get("options_chain", "")
-                success_count += 1
-                print(f"  ✓ {symbol}: {len(oc)} chars options chain cached")
-            except Exception as e:
-                error_count += 1
-                print(f"  ✗ {symbol}: {str(e)}")
+        cache = get_options_chain_cache()
+        stats = await cache.refresh_all(symbol_names)
         
         print(f"\n{'~'*70}")
-        print(f"Market Data Fetch Complete: {success_count} success, {error_count} errors")
+        print(f"Options Chain Cache Refresh Complete: {stats['success']} success, {stats['errors']} errors")
         print(f"{'~'*70}\n")
     
     def run_dgi_screener_job(self):

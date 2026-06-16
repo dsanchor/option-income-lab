@@ -15,15 +15,15 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from src.greeks_calculator import GreeksCalculator
-from src.market_hours import is_us_market_open
+from src.options_chain_cache import get_options_chain_cache
 from src.technicals_calculator import TechnicalsCalculator
 from src.yfinance_fetcher import YFinanceFetcher
 
 logger = logging.getLogger(__name__)
 
 # In-memory cache of the last yfinance options chain per symbol.
-# Populated when market is open; used to merge with TradingView fallback
-# data (which only covers ~5 nearest expirations) when market is closed.
+# DEPRECATED: replaced by centralized OptionsChainCache (src/options_chain_cache.py).
+# Kept only for backward-compat reference; no longer populated.
 _chain_cache: dict[str, dict] = {}
 
 try:
@@ -472,155 +472,13 @@ class YFinanceDataProvider:
     # ------------------------------------------------------------------
     def _build_options_chain(self, ticker, current_price: Optional[float],
                              symbol: str) -> str:
-        """Build options chain JSON string with Greeks.
+        """Get options chain from the centralized cache.
 
-        Uses yfinance when the US market is open.  Falls back to
-        TradingView Playwright scraping when the market is closed (yfinance
-        returns zeroed bid/ask/IV during off-hours).
+        The cache handles the load procedure (yfinance + TradingView merge)
+        transparently on miss. TTL is 30 minutes.
         """
-        market_open = is_us_market_open()
-
-        if not market_open:
-            logger.info(
-                "%s: US market CLOSED — attempting TradingView Playwright fallback "
-                "for options chain", symbol,
-            )
-            try:
-                import asyncio
-                from src.tv_options_chain_fetcher import fetch_tv_options_chain
-
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as pool:
-                        tv_result = pool.submit(
-                            asyncio.run, fetch_tv_options_chain(symbol)
-                        ).result(timeout=60)
-                else:
-                    tv_result = asyncio.run(fetch_tv_options_chain(symbol))
-
-                # Check if we actually got data
-                has_data = bool(tv_result.get("calls") or tv_result.get("puts"))
-                if has_data:
-                    tv_result["market_status"] = "closed"
-
-                    # Merge: overlay TV expirations on top of cached yfinance data
-                    cached = _chain_cache.get(symbol)
-                    if cached:
-                        tv_call_count = len(tv_result.get("calls", {}))
-                        tv_put_count = len(tv_result.get("puts", {}))
-                        merged = {
-                            "symbol": symbol,
-                            "timestamp": tv_result.get("timestamp", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")),
-                            "market_status": "closed",
-                            "calls": dict(cached.get("calls", {})),
-                            "puts": dict(cached.get("puts", {})),
-                        }
-                        # TV expirations overwrite matching cached expirations
-                        for exp_key, strikes in tv_result.get("calls", {}).items():
-                            merged["calls"][exp_key] = strikes
-                        for exp_key, strikes in tv_result.get("puts", {}).items():
-                            merged["puts"][exp_key] = strikes
-                        tv_result = merged
-                        logger.info(
-                            "%s: TradingView data merged with cached yfinance data — "
-                            "total %d call exp, %d put exp (TV contributed %d/%d)",
-                            symbol,
-                            len(merged["calls"]),
-                            len(merged["puts"]),
-                            tv_call_count,
-                            tv_put_count,
-                        )
-                    else:
-                        logger.info(
-                            "%s: TradingView fallback successful (no cache to merge) — "
-                            "%d call expirations, %d put expirations",
-                            symbol,
-                            len(tv_result.get("calls", {})),
-                            len(tv_result.get("puts", {})),
-                        )
-                    return json.dumps(tv_result, default=str)
-                else:
-                    logger.warning(
-                        "%s: TradingView fallback returned empty chain — "
-                        "falling through to yfinance", symbol,
-                    )
-            except Exception as exc:
-                logger.error(
-                    "%s: TradingView Playwright fallback failed: %s — "
-                    "falling through to yfinance (zeros expected)", symbol, exc,
-                )
-
-        # ------ Primary path: yfinance ------
-        result = {
-            "symbol": symbol,
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "market_status": "open" if market_open else "closed",
-            "calls": {},
-            "puts": {},
-        }
-
-        if current_price is None:
-            logger.warning("%s: no current price, skipping options chain", symbol)
-            return json.dumps(result)
-
-        try:
-            expirations = ticker.options
-        except Exception as exc:
-            logger.error("%s: failed to fetch options expirations: %s", symbol, exc)
-            return json.dumps(result)
-
-        if not expirations:
-            logger.info("%s: no options expirations available", symbol)
-            return json.dumps(result)
-
-        now = datetime.now(timezone.utc)
-
-        for exp_date_str in expirations:
-            try:
-                exp_date = datetime.strptime(exp_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            except ValueError:
-                continue
-
-            dte = (exp_date - now).days
-            if dte < 0:
-                continue
-
-            exp_key = exp_date.strftime("%Y%m%d")
-            T = max(dte / 365.0, 1e-10)
-
-            try:
-                chain = ticker.option_chain(exp_date_str)
-            except Exception as exc:
-                logger.warning("%s: failed to fetch chain for %s: %s",
-                               symbol, exp_date_str, exc)
-                continue
-
-            calls_dict = self._process_option_df(
-                chain.calls, "call", exp_key, current_price, T
-            )
-            puts_dict = self._process_option_df(
-                chain.puts, "put", exp_key, current_price, T
-            )
-
-            if calls_dict:
-                result["calls"][exp_key] = calls_dict
-            if puts_dict:
-                result["puts"][exp_key] = puts_dict
-
-        logger.info(
-            "%s: options chain built via yfinance (market_status=%s)",
-            symbol, result["market_status"],
-        )
-
-        # Cache yfinance result when market is open for later merge with TV fallback
-        if market_open and (result.get("calls") or result.get("puts")):
-            import copy
-            _chain_cache[symbol] = copy.deepcopy(result)
-            logger.debug("%s: cached yfinance chain (%d call exp, %d put exp)",
-                         symbol, len(result.get("calls", {})), len(result.get("puts", {})))
-
-        return json.dumps(result, default=str)
+        cache = get_options_chain_cache()
+        return cache.get_or_load(symbol)
 
     def _process_option_df(self, df: pd.DataFrame, option_type: str,
                            exp_key: str, current_price: float,

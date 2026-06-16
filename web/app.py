@@ -797,7 +797,7 @@ async def api_add_position(request: Request, symbol: str):
                 premium = None
             if premium is not None:
                 if source is None:
-                    source = {"premium": premium}
+                    source = {"source_type": "manual", "premium": premium}
                 else:
                     source["premium"] = premium
 
@@ -1001,7 +1001,7 @@ async def api_manual_roll_position(request: Request, symbol: str,
                 premium = None
             if premium is not None:
                 if source is None:
-                    source = {"premium": premium}
+                    source = {"source_type": "manual", "premium": premium}
                 else:
                     source["premium"] = premium
 
@@ -1184,27 +1184,28 @@ async def api_dps_analysis(request: Request, symbol: str, position_id: str):
         snapshots = cosmos.get_position_snapshots(symbol, position_id, limit=20)
         snapshots.reverse()
 
-        # Fetch live options chain
+        # Fetch options chain from centralized cache
+        from src.options_chain_cache import get_options_chain_cache
+        chain_cache = get_options_chain_cache()
+        chain_json = await chain_cache.get_or_load_async(symbol)
+
+        # Get current price from yf_provider (overview data)
         yf_provider = getattr(request.app.state, "yf_provider", None)
-        if yf_provider is None:
-            return JSONResponse({"error": "Data provider unavailable"}, status_code=503)
-
-        data = await yf_provider.fetch_all(symbol, force_refresh=True)
-        chain_json = data.get("options_chain", "{}")
-
-        # Get current price from the data
-        import json as _json
-        overview = data.get("overview", "{}")
-        if isinstance(overview, str):
-            try:
-                overview = _json.loads(overview)
-            except (ValueError, TypeError):
-                overview = {}
-        fundamentals = overview.get("fundamentals", {})
-        price_field = fundamentals.get("current_price", {})
-        underlying_price = price_field.get("value") if isinstance(price_field, dict) else price_field
-        if underlying_price is not None:
-            underlying_price = float(underlying_price)
+        underlying_price = None
+        if yf_provider is not None:
+            import json as _json
+            data = await yf_provider.fetch_all(symbol)
+            overview = data.get("overview", "{}")
+            if isinstance(overview, str):
+                try:
+                    overview = _json.loads(overview)
+                except (ValueError, TypeError):
+                    overview = {}
+            fundamentals = overview.get("fundamentals", {})
+            price_field = fundamentals.get("current_price", {})
+            underlying_price = price_field.get("value") if isinstance(price_field, dict) else price_field
+            if underlying_price is not None:
+                underlying_price = float(underlying_price)
 
         # Run DPS
         from src.dps_scorer import run_dps_analysis

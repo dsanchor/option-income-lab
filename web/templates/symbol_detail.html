@@ -198,7 +198,7 @@
                                 </div>
                                 <div class="roll-msg" style="display:none; margin-top:0.5rem; padding:0.5rem 0.75rem; border-radius:6px; font-size:0.9rem;"></div>
                             </div>
-                            {% if pos.source %}
+                            {% if pos.source and pos.source.agent_type %}
                             <h4 style="margin:0 0 0.75rem; color:var(--text, #ffffff);">📊 {{ "Created manually (last alert information attached)" if pos.source.source_type == "manual_with_alert" else "Opened from alert" }}</h4>
                             <div class="detail-grid">
                                 <div class="detail-field">

@@ -46,13 +46,16 @@ async def run_dps_cron(cosmos, yf_provider) -> dict:
 
         # Fetch data once per symbol
         try:
-            data = await yf_provider.fetch_all(symbol, force_refresh=True)
+            data = await yf_provider.fetch_all(symbol)
         except Exception as exc:
             logger.warning("DPS cron: Failed to fetch data for %s: %s", symbol, exc)
             failed += len(active_positions)
             continue
 
-        chain_json = data.get("options_chain", "{}")
+        # Get options chain from centralized cache
+        from src.options_chain_cache import get_options_chain_cache
+        chain_cache = get_options_chain_cache()
+        chain_json = await chain_cache.get_or_load_async(symbol)
 
         # Get underlying price
         overview = data.get("overview", "{}")
