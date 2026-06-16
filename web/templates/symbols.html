@@ -22,7 +22,7 @@
     <div id="addSymbolSuccess" class="alert alert-success" style="display:none; margin:0.75rem 1.25rem;"></div>
 </div>
 
-<!-- Portfolio table -->
+<!-- Watchlist table -->
 <div class="card" style="overflow-x:auto;">
 {% if symbols %}
     <table class="table dgi-table" id="symbolsTable">
@@ -53,7 +53,7 @@
             {% set tag_lower = tag | lower | replace(' ', '-') %}
             {% set entry_data = enr | tojson | e if enr else '{}' %}
             <tr class="dgi-row" data-entry='{{ entry_data }}' data-symbol="{{ sym.symbol }}">
-                <td><strong><a href="#" class="sym-detail-link" data-symbol="{{ sym.symbol }}">{{ sym.symbol }}</a></strong></td>
+                <td><strong>{{ sym.symbol }}</strong></td>
                 <td>
                     {% if enr.category %}
                     <span class="badge badge-cat-{{ cat_lower }}">{{ enr.category }}</span>
@@ -88,17 +88,17 @@
 </div>
 
 <!-- Detail Modal -->
-<div class="modal-overlay" id="portfolioDetailModal" style="display:none;">
+<div class="modal-overlay" id="wlDetailModal" style="display:none;">
     <div class="modal-content" style="max-width:700px;">
         <div class="modal-header">
-            <h3 id="portfolioDetailTitle">Stock Detail</h3>
-            <button class="modal-close" id="portfolioDetailClose">&times;</button>
+            <h3 id="wlDetailTitle">Stock Detail</h3>
+            <button class="modal-close" id="wlDetailClose">&times;</button>
         </div>
-        <div id="portfolioDetailBody"></div>
-        <div id="portfolioRadarChartContainer" style="margin:1rem 1.25rem 1.25rem; display:none;">
+        <div id="wlDetailBody"></div>
+        <div id="wlRadarChartContainer" style="margin:1rem 1.25rem 0;">
             <h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.5rem;">Score Contribution</h4>
             <div style="background:var(--bg-input);border-radius:var(--radius);padding:0.75rem 1rem;max-width:500px;margin:0 auto;">
-                <canvas id="portfolioRadarChart" height="300"></canvas>
+                <canvas id="wlRadarChart" height="300"></canvas>
             </div>
         </div>
     </div>
@@ -106,7 +106,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
 (function() {
     var _radarChart = null;
@@ -153,7 +153,8 @@
 
     // ── Delete Symbol ──
     document.querySelectorAll('[data-delete-symbol]').forEach(function(btn) {
-        btn.addEventListener('click', async function() {
+        btn.addEventListener('click', async function(e) {
+            e.stopPropagation();
             var sym = this.dataset.deleteSymbol;
             if (!confirm('Delete ' + sym + ' and ALL its data (activities, alerts, positions)? This cannot be undone.')) return;
 
@@ -225,11 +226,11 @@
         }
     }
 
-    // ── Detail Modal ──
-    var modal = document.getElementById('portfolioDetailModal');
-    var modalTitle = document.getElementById('portfolioDetailTitle');
-    var modalBody = document.getElementById('portfolioDetailBody');
-    var modalClose = document.getElementById('portfolioDetailClose');
+    // ── Detail Modal (same as DGI Screener) ──
+    var modal = document.getElementById('wlDetailModal');
+    var modalTitle = document.getElementById('wlDetailTitle');
+    var modalBody = document.getElementById('wlDetailBody');
+    var modalClose = document.getElementById('wlDetailClose');
 
     function fmtVal(v) {
         if (v === null || v === undefined) return '—';
@@ -282,17 +283,18 @@
         var html = '';
 
         if (!entry || !entry.quality_score) {
-            html = '<div style="padding:1.5rem;text-align:center;color:var(--text-muted);">No enrichment data available yet. Run portfolio enrichment to populate.</div>';
+            html = '<div style="padding:1.5rem;text-align:center;color:var(--text-muted);">No enrichment data available yet. Run watchlist enrichment to populate.</div>';
             modalBody.innerHTML = html;
-            document.getElementById('portfolioRadarChartContainer').style.display = 'none';
+            document.getElementById('wlRadarChartContainer').style.display = 'none';
             modal.style.display = 'flex';
             return;
         }
 
+        // Overview (same fields as DGI minus rank/days_on_list/first_appeared)
         var topFields = { quality_score: entry.quality_score, category: entry.category, entry_tag: entry.entry_tag };
         html += buildSection('Overview', topFields);
 
-        // Filter Status
+        // Filter Status (identical to DGI Screener)
         if (entry.filter_detail && entry.filter_detail.checks) {
             var fd = entry.filter_detail;
             var passAll = fd.passes_all;
@@ -300,6 +302,7 @@
             filterHtml += '<h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.5rem;">'
                 + (passAll ? '✅' : '⚠️') + ' Filter Status</h4>';
             filterHtml += '<div style="background:var(--bg-input);border-radius:var(--radius);padding:0.75rem 1rem;">';
+
             var checks = fd.checks;
             var filterKeys = Object.keys(checks);
             for (var fi = 0; fi < filterKeys.length; fi++) {
@@ -309,6 +312,7 @@
                 var color = fc.passes ? 'var(--text)' : 'var(--red, #ef4444)';
                 var actualFmt = typeof fc.actual === 'number' ? fc.actual.toLocaleString(undefined, {maximumFractionDigits:4}) : String(fc.actual);
                 var threshFmt = typeof fc.threshold === 'number' ? fc.threshold.toLocaleString(undefined, {maximumFractionDigits:4}) : String(fc.threshold);
+
                 if (fk === 'min_yield' || fk === 'max_payout' || fk === 'min_growth') {
                     actualFmt = (fc.actual * 100).toFixed(2) + '%';
                     threshFmt = (fc.threshold * 100).toFixed(2) + '%';
@@ -321,6 +325,7 @@
                     actualFmt = Math.round(fc.actual) + ' yrs';
                     threshFmt = Math.round(fc.threshold) + ' yrs';
                 }
+
                 filterHtml += '<div style="display:flex;justify-content:space-between;align-items:center;padding:0.3rem 0;'
                     + (fi < filterKeys.length - 1 ? 'border-bottom:1px solid var(--border);' : '')
                     + 'color:' + color + ';">';
@@ -328,6 +333,7 @@
                 filterHtml += '<span style="font-family:var(--font-mono);font-size:0.85rem;">' + actualFmt + ' <span style="color:var(--text-muted);font-size:0.8rem;">' + fc.op + ' ' + threshFmt + '</span></span>';
                 filterHtml += '</div>';
             }
+
             filterHtml += '</div></div>';
             html += filterHtml;
         }
@@ -336,11 +342,12 @@
         if (entry.technicals) html += buildSection('Technical Timing', entry.technicals);
         modalBody.innerHTML = html;
 
+        // Show modal BEFORE chart creation so canvas has dimensions
         modal.style.display = 'flex';
 
-        // Radar chart
-        var radarCanvas = document.getElementById('portfolioRadarChart');
-        var radarContainer = document.getElementById('portfolioRadarChartContainer');
+        // Radar chart — Score Contribution (identical to DGI Screener)
+        var radarCanvas = document.getElementById('wlRadarChart');
+        var radarContainer = document.getElementById('wlRadarChartContainer');
         if (_radarChart) { _radarChart.destroy(); _radarChart = null; }
 
         var qd = entry.quality_detail;
@@ -364,35 +371,48 @@
                         borderColor: 'rgba(59, 130, 246, 0.8)',
                         pointBackgroundColor: 'rgba(59, 130, 246, 1)',
                         pointBorderColor: '#fff',
-                        pointRadius: 4
+                        pointHoverBackgroundColor: '#fff',
+                        pointHoverBorderColor: 'rgba(59, 130, 246, 1)',
+                        borderWidth: 2
                     }, {
-                        label: 'Minimum',
+                        label: 'Mínimo (65)',
                         data: radarMin,
                         fill: false,
-                        borderColor: 'rgba(239, 68, 68, 0.4)',
-                        borderDash: [5, 5],
-                        pointRadius: 0
+                        borderColor: 'rgba(239, 68, 68, 0.85)',
+                        borderWidth: 1.5,
+                        borderDash: [6, 4],
+                        pointRadius: 2,
+                        pointBackgroundColor: 'rgba(239, 68, 68, 0.85)',
+                        pointBorderColor: 'rgba(239, 68, 68, 0.85)'
                     }, {
-                        label: 'Ideal',
+                        label: 'Ideal (80)',
                         data: radarIdeal,
                         fill: false,
-                        borderColor: 'rgba(34, 197, 94, 0.4)',
-                        borderDash: [3, 3],
-                        pointRadius: 0
+                        borderColor: 'rgba(34, 197, 94, 0.85)',
+                        borderWidth: 1.5,
+                        borderDash: [6, 4],
+                        pointRadius: 2,
+                        pointBackgroundColor: 'rgba(34, 197, 94, 0.85)',
+                        pointBorderColor: 'rgba(34, 197, 94, 0.85)'
                     }]
                 },
                 options: {
                     responsive: true,
                     scales: {
                         r: {
-                            beginAtZero: true, max: 100,
-                            ticks: { display: false },
-                            grid: { color: 'rgba(128,128,128,0.15)' },
-                            pointLabels: { font: { size: 11 }, color: 'var(--text-muted)' }
+                            beginAtZero: true,
+                            max: 100,
+                            ticks: { stepSize: 20, color: '#999', backdropColor: 'transparent' },
+                            grid: { color: 'rgba(255,255,255,0.08)' },
+                            angleLines: { color: 'rgba(255,255,255,0.08)' },
+                            pointLabels: { color: '#ccc', font: { size: 12 } }
                         }
                     },
                     plugins: {
-                        legend: { position: 'bottom', labels: { font: { size: 11 }, usePointStyle: true } }
+                        legend: {
+                            display: true,
+                            labels: { color: '#ccc', boxWidth: 14, font: { size: 11 } }
+                        }
                     }
                 }
             });
@@ -401,24 +421,23 @@
         }
     }
 
-    // Click on symbol name → open detail modal
-    document.querySelectorAll('.sym-detail-link').forEach(function(link) {
-        link.addEventListener('click', function(e) {
-            e.preventDefault();
-            var row = this.closest('tr');
-            var entry = {};
-            try { entry = JSON.parse(row.getAttribute('data-entry') || '{}'); } catch(err) {}
-            openDetail(entry, this.dataset.symbol);
-        });
-    });
+    function closeDetail() { modal.style.display = 'none'; }
 
-    // Close modal
-    if (modalClose) {
-        modalClose.addEventListener('click', function() { modal.style.display = 'none'; });
-    }
+    // Row click opens detail modal (same as DGI Screener)
     if (modal) {
-        modal.addEventListener('click', function(e) {
-            if (e.target === modal) modal.style.display = 'none';
+        modalClose.addEventListener('click', closeDetail);
+        modal.addEventListener('click', function(e) { if (e.target === modal) closeDetail(); });
+        document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeDetail(); });
+
+        document.querySelectorAll('.dgi-row').forEach(function(row) {
+            row.style.cursor = 'pointer';
+            row.addEventListener('click', function(e) {
+                if (e.target.closest('.actions-cell')) return;
+                try {
+                    var entry = JSON.parse(row.getAttribute('data-entry'));
+                    openDetail(entry, row.dataset.symbol);
+                } catch(err) { console.error('Failed to parse entry data', err); }
+            });
         });
     }
 })();
