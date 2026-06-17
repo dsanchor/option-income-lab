@@ -1354,6 +1354,37 @@ tbody tr:hover { background: var(--bg-hover); }
 }
 .chip-link:hover { background: var(--bg-hover); text-decoration: none; }
 
+/* ── Symbol link in tables ── */
+.symbol-link {
+    color: var(--accent);
+    text-decoration: none;
+}
+.symbol-link:hover {
+    text-decoration: underline;
+}
+
+/* ── Summary grid (symbol detail) ── */
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+}
+.summary-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+.summary-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+.summary-value {
+    font-size: 1rem;
+}
+
 /* ── Toggle & chip groups (symbol detail) ── */
 .watchlist-toggles {
     display: flex;

@@ -43,7 +43,10 @@
 </div>
 
 <div class="card">
-<div class="card-header"><h2>Symbols{% if last_update_ts %} <span class="card-badge">last update {{ last_update_ts | time_ago }}</span>{% endif %}</h2></div>
+<div class="card-header">
+    <h2>Symbols{% if last_update_ts %} <span class="card-badge">last update {{ last_update_ts | time_ago }}</span>{% endif %}</h2>
+    <input type="text" id="symbolSearchFilter" placeholder="Search symbol…" class="input-field" style="width:180px; margin:0;">
+</div>
 <div class="table-wrap">
     <table class="data-table" id="symbolsTable">
         <thead>
@@ -80,7 +83,7 @@
             {% set in_calls = sym._in_calls | default(0) %}
             {% set put_exposure = sym._put_exposure | default(0) %}
             <tr class="dgi-row" data-entry='{{ entry_data }}' data-symbol="{{ sym.symbol }}">
-                <td><strong>{{ sym.symbol }}</strong></td>
+                <td><a href="/symbols/{{ sym.symbol }}" class="symbol-link"><strong>{{ sym.symbol }}</strong></a></td>
                 <td>
                     {% if enr.category %}
                     <span class="badge badge-cat-{{ cat_lower }}" title="{% if enr.category == 'Aristocrat' %}≥25 years dividend growth + yield ≥2%{% elif enr.category == 'Rising Star' %}CAGR ≥10% + ≥5 years growth{% elif enr.category == 'Compounder' %}≥15 years + CAGR ≥7%{% elif enr.category == 'High Yield' %}Dividend yield ≥4%{% else %}Balanced — meets basic criteria{% endif %}">{{ enr.category }}</span>
@@ -343,54 +346,76 @@
         pill.addEventListener('click', function() {
             signalPills.forEach(function(p) { p.classList.remove('active'); });
             pill.classList.add('active');
-            applySignalFilter(pill.dataset.value);
+            applyAllFilters();
         });
     });
 
     function applySignalFilter(filter) {
+        applyAllFilters();
+    }
+
+    // ── Symbol Search Filter ──
+    var searchInput = document.getElementById('symbolSearchFilter');
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            applyAllFilters();
+        });
+    }
+
+    function applyAllFilters() {
         var tbody = document.querySelector('#symbolsTable tbody');
         if (!tbody) return;
         var rows = Array.from(tbody.querySelectorAll('tr'));
+        var searchTerm = (searchInput ? searchInput.value.trim().toUpperCase() : '');
+        var activePill = document.querySelector('#signal-filter-pills .pill.active');
+        var filter = activePill ? activePill.dataset.value : '';
         var shown = 0;
+
         rows.forEach(function(row) {
-            var entry = {};
-            try { entry = JSON.parse(row.getAttribute('data-entry') || '{}'); } catch(e) {}
-            var entryTag = (entry.entry_tag || '').toLowerCase();
-            var momentum = (entry.momentum || '').toLowerCase();
-            var visible = true;
+            var sym = (row.dataset.symbol || '').toUpperCase();
+            var matchesSearch = !searchTerm || sym.indexOf(searchTerm) !== -1;
 
-            var isSBorBuy = (entryTag === 'strong buy' || entryTag === 'buy');
-            var isHoldOrWait = (entryTag === 'hold' || entryTag === 'wait');
-            var isBullishPure = (momentum === 'bullish');
-            var isOverextended = (momentum === 'bullish (overextended)');
-            var isBearishPure = (momentum === 'bearish');
-            var isOversold = (momentum === 'bearish (oversold)');
-            var isWeakening = (momentum === 'weakening');
-            var isNeutral = (momentum === 'neutral');
+            var matchesSignal = true;
+            if (filter) {
+                var entry = {};
+                try { entry = JSON.parse(row.getAttribute('data-entry') || '{}'); } catch(e) {}
+                var entryTag = (entry.entry_tag || '').toLowerCase();
+                var momentum = (entry.momentum || '').toLowerCase();
+                var isSBorBuy = (entryTag === 'strong buy' || entryTag === 'buy');
+                var isHoldOrWait = (entryTag === 'hold' || entryTag === 'wait');
+                var isBullishPure = (momentum === 'bullish');
+                var isOverextended = (momentum === 'bullish (overextended)');
+                var isBearishPure = (momentum === 'bearish');
+                var isOversold = (momentum === 'bearish (oversold)');
+                var isWeakening = (momentum === 'weakening');
+                var isNeutral = (momentum === 'neutral');
 
-            if (filter === 'ideal-puts') {
-                // (SB/B + Bullish/Neutral/Weakening) OR (any + Oversold)
-                visible = (isSBorBuy && (isBullishPure || isNeutral || isWeakening)) || isOversold;
-            } else if (filter === 'ideal-calls') {
-                // (Hold/Wait + Weakening/Bearish pure/Neutral) OR (any + Overextended)
-                visible = (isHoldOrWait && (isWeakening || isBearishPure || isNeutral)) || isOverextended;
-            } else if (filter === 'accumulate') {
-                var accEntry = (entryTag === 'accumulate');
-                visible = accEntry && (isBullishPure || isNeutral);
-            } else if (filter === 'no-puts') {
-                // SB/B + Bearish pure (falling knife, no oversold bounce)
-                visible = isSBorBuy && isBearishPure;
-            } else if (filter === 'no-calls') {
-                // Wait + Bullish pure (runaway, no exhaustion)
-                visible = (entryTag === 'wait') && isBullishPure;
+                if (filter === 'ideal-puts') {
+                    matchesSignal = (isSBorBuy && (isBullishPure || isNeutral || isWeakening)) || isOversold;
+                } else if (filter === 'ideal-calls') {
+                    matchesSignal = (isHoldOrWait && (isWeakening || isBearishPure || isNeutral)) || isOverextended;
+                } else if (filter === 'accumulate') {
+                    matchesSignal = (entryTag === 'accumulate') && (isBullishPure || isNeutral);
+                } else if (filter === 'no-puts') {
+                    matchesSignal = isSBorBuy && isBearishPure;
+                } else if (filter === 'no-calls') {
+                    matchesSignal = (entryTag === 'wait') && isBullishPure;
+                }
             }
 
+            var visible = matchesSearch && matchesSignal;
             row.style.display = visible ? '' : 'none';
             if (visible) shown++;
         });
+
         var countEl = document.getElementById('signalFilterCount');
         if (countEl) {
-            countEl.textContent = filter ? ('Showing ' + shown + ' of ' + rows.length) : (rows.length + ' symbols');
+            var total = rows.length;
+            if (searchTerm || filter) {
+                countEl.textContent = 'Showing ' + shown + ' of ' + total;
+            } else {
+                countEl.textContent = total + ' symbols';
+            }
         }
     }
 
@@ -599,7 +624,7 @@
         document.querySelectorAll('.dgi-row').forEach(function(row) {
             row.style.cursor = 'pointer';
             row.addEventListener('click', function(e) {
-                if (e.target.closest('.actions-cell') || e.target.closest('.shares-cell')) return;
+                if (e.target.closest('.actions-cell') || e.target.closest('.shares-cell') || e.target.closest('.symbol-link')) return;
                 try {
                     var entry = JSON.parse(row.getAttribute('data-entry'));
                     openDetail(entry, row.dataset.symbol);
