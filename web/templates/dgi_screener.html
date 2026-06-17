@@ -75,7 +75,9 @@
     </div>
 </div>
 
-<div class="card"><div class="table-wrap">
+<div class="card">
+<div class="card-header"><h2>Top 20 DGI Candidates</h2></div>
+<div class="table-wrap">
     <table class="dgi-table" id="dgiTable">
         <thead>
             <tr>
@@ -120,7 +122,6 @@
                 <td><span class="badge badge-entry-{{ tag_lower }}">{{ tag }}</span></td>
                 <td class="mono">${{ "%.2f" | format(metrics.current_price | default(0)) }}</td>
                 <td class="actions-cell">
-                    <button class="btn-trigger-row btn-dgi-analyze" data-symbol="{{ entry.symbol }}" title="Analyze {{ entry.symbol }} in Quick Analysis chat">▶</button>
                     <button class="btn-trigger-row btn-dgi-add" data-symbol="{{ entry.symbol }}" data-exchange="{{ entry.exchange | default('NYSE') }}" data-mode="csp" title="Add {{ entry.symbol }} with CSP enabled">CSP</button>
                     <button class="btn-trigger-row btn-dgi-add" data-symbol="{{ entry.symbol }}" data-exchange="{{ entry.exchange | default('NYSE') }}" data-mode="buy" title="Add {{ entry.symbol }} with Buy Tracker enabled">TBuy</button>
                 </td>
@@ -314,28 +315,6 @@
     };
 
     /* ── Quick Analysis (CSP) per row — redirects to chat page ── */
-    document.querySelectorAll('.btn-dgi-analyze').forEach(function(btn) {
-        btn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            var symbol = btn.dataset.symbol;
-            
-            // Get exchange from the row's data-entry JSON
-            var row = btn.closest('tr');
-            var entry = null;
-            try {
-                entry = JSON.parse(row.getAttribute('data-entry'));
-            } catch (err) {
-                console.error('Failed to parse entry data', err);
-            }
-            
-            var market = entry ? (entry.exchange || 'NYSE') : 'NYSE';
-            
-            // Redirect to chat in quick-analysis mode with put pre-selected
-            window.location.href = '/chat?mode=quick-analysis&symbol=' + encodeURIComponent(symbol) + 
-                                    '&market=' + encodeURIComponent(market) + '&option_type=put';
-        });
-    });
-
     /* ── Add to watchlist with CSP or Buy Tracker enabled ── */
     document.querySelectorAll('.btn-dgi-add').forEach(function(btn) {
         btn.addEventListener('click', function(e) {
