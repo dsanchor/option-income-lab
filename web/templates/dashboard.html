@@ -133,8 +133,8 @@
                         {% if row.dps_score is not none %}
                         <strong style="color: {{ 'var(--accent-green)' if row.dps_score >= 70 else ('var(--accent-orange)' if row.dps_score >= 50 else 'var(--accent-red)') }}">{{ row.dps_score }}</strong>
                         <span style="font-size:0.72rem; color:var(--text-muted); margin-left:3px;">
-                            {% if row.dps_delta_7d is not none %}<span style="color:{{ 'var(--accent-green)' if row.dps_delta_7d > 0 else ('var(--accent-red)' if row.dps_delta_7d < 0 else 'var(--text-muted)') }}" title="7-day change">{{ "%+d" | format(row.dps_delta_7d) }}</span>{% endif %}
-                            {% if row.dps_delta_1d is not none %}<span style="color:{{ 'var(--accent-green)' if row.dps_delta_1d > 0 else ('var(--accent-red)' if row.dps_delta_1d < 0 else 'var(--text-muted)') }}" title="1-day change">/{{ "%+d" | format(row.dps_delta_1d) }}</span>{% endif %}
+                            {% if row.dps_delta_1d is not none %}<span style="color:{{ 'var(--accent-green)' if row.dps_delta_1d > 0 else ('var(--accent-red)' if row.dps_delta_1d < 0 else 'var(--text-muted)') }}" title="1-day change">{{ "%+d" | format(row.dps_delta_1d) }}</span>{% endif %}
+                            {% if row.dps_delta_7d is not none %}<span style="color:{{ 'var(--accent-green)' if row.dps_delta_7d > 0 else ('var(--accent-red)' if row.dps_delta_7d < 0 else 'var(--text-muted)') }}" title="7-day change">/{{ "%+d" | format(row.dps_delta_7d) }}</span>{% endif %}
                         </span>
                         {% else %}—{% endif %}
                     </td>
