@@ -95,7 +95,6 @@
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>Symbol</th>
                     <th title="Based on dividend history: Aristocrat (≥25y+yield≥2%), Rising Star (CAGR≥10%+≥5y), Compounder (≥15y+CAGR≥7%), High Yield (yield≥4%), Balanced (default)">Category</th>
                     <th>DGI Score</th>
                     <th>Tech Timing</th>
@@ -108,8 +107,7 @@
                 </tr>
             </thead>
             <tbody>
-                <tr>
-                    <td><strong>{{ symbol_doc.symbol }}</strong></td>
+                <tr id="summaryRow" style="cursor:pointer;" data-entry='{{ enr | tojson | e if enr else "{}" }}'>
                     <td>
                         {% if enr.category %}
                         <span class="badge badge-cat-{{ cat_lower }}" title="{% if enr.category == 'Aristocrat' %}≥25 years dividend growth + yield ≥2%{% elif enr.category == 'Rising Star' %}CAGR ≥10% + ≥5 years growth{% elif enr.category == 'Compounder' %}≥15 years + CAGR ≥7%{% elif enr.category == 'High Yield' %}Dividend yield ≥4%{% else %}Balanced — meets basic criteria{% endif %}">{{ enr.category }}</span>
@@ -689,9 +687,24 @@
     <p class="empty-state">No activities yet for this symbol.</p>
     {% endif %}
 </div>
-{% endblock %}
 
-{% block scripts %}
+<!-- Summary Detail Modal -->
+<div class="modal-overlay" id="summaryDetailModal" style="display:none;">
+    <div class="modal-content" style="max-width:700px;">
+        <div class="modal-header">
+            <h3 id="summaryDetailTitle">Stock Detail</h3>
+            <button class="modal-close" id="summaryDetailClose">&times;</button>
+        </div>
+        <div id="summaryDetailBody"></div>
+        <div id="summaryRadarChartContainer" style="margin:1rem 1.25rem 0;">
+            <h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.5rem;">Score Contribution</h4>
+            <div style="background:var(--bg-input);border-radius:var(--radius);padding:0.75rem 1rem;max-width:500px;margin:0 auto;">
+                <canvas id="summaryRadarChart" height="300"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
 <script>
 (function() {
     var SYMBOL = '{{ symbol_doc.symbol }}';
@@ -1732,6 +1745,192 @@
                 }, 3000);
             });
         });
+    }
+
+    // ── Summary Detail Modal ──
+    var _summaryRadarChart = null;
+    var summaryModal = document.getElementById('summaryDetailModal');
+    var summaryModalTitle = document.getElementById('summaryDetailTitle');
+    var summaryModalBody = document.getElementById('summaryDetailBody');
+    var summaryModalClose = document.getElementById('summaryDetailClose');
+
+    function fmtVal(v) {
+        if (v === null || v === undefined) return '—';
+        if (typeof v === 'number') return v.toLocaleString(undefined, { maximumFractionDigits: 4 });
+        return String(v);
+    }
+
+    function buildSection(title, obj) {
+        if (!obj || typeof obj !== 'object') return '';
+        var html = '<div style="margin-bottom:1.25rem;">';
+        html += '<h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.5rem;">' + title + '</h4>';
+        html += '<div style="background:var(--bg-input);border-radius:var(--radius);padding:0.75rem 1rem;">';
+        html += '<div class="modal-grid">';
+        var keys = Object.keys(obj);
+        for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            var v = obj[k];
+            if (v && typeof v === 'object' && !Array.isArray(v)) {
+                html += '</div></div>';
+                html += buildSection(title + ' › ' + k.replace(/_/g, ' '), v);
+                html += '<div style="background:var(--bg-input);border-radius:var(--radius);padding:0 1rem;"><div class="modal-grid">';
+                continue;
+            }
+            var label = k.replace(/_/g, ' ');
+            var displayVal;
+            if (typeof v === 'number' && (k === 'payout_ratio' || k === 'dividend_yield' || k === 'dividend_cagr_5y' || k === 'roe')) {
+                displayVal = (v * 100).toFixed(k === 'payout_ratio' ? 1 : 2) + '%';
+            } else if (k === 'debt_to_equity' && typeof v === 'number') {
+                displayVal = v.toFixed(2);
+            } else if (k === 'market_cap' && typeof v === 'number' && v >= 1e9) {
+                displayVal = '$' + (v / 1e9).toFixed(2) + 'B';
+            } else if (k === 'market_cap' && typeof v === 'number' && v >= 1e6) {
+                displayVal = '$' + (v / 1e6).toFixed(2) + 'M';
+            } else if (k === 'current_price' && typeof v === 'number') {
+                displayVal = '$' + v.toFixed(2);
+            } else {
+                displayVal = fmtVal(v);
+            }
+            html += '<div class="modal-field" style="margin-bottom:0.4rem;">';
+            html += '<label>' + label + '</label>';
+            html += '<div style="font-family:var(--font-mono);font-size:0.9rem;">' + displayVal + '</div>';
+            html += '</div>';
+        }
+        html += '</div></div></div>';
+        return html;
+    }
+
+    function openSummaryDetail(entry) {
+        summaryModalTitle.textContent = SYMBOL + ' — Detail';
+        var html = '';
+
+        if (!entry || !entry.quality_score) {
+            html = '<div style="padding:1.5rem;text-align:center;color:var(--text-muted);">No enrichment data available yet. Run watchlist enrichment to populate.</div>';
+            summaryModalBody.innerHTML = html;
+            document.getElementById('summaryRadarChartContainer').style.display = 'none';
+            summaryModal.style.display = 'flex';
+            return;
+        }
+
+        var topFields = { quality_score: entry.quality_score, category: entry.category, entry_tag: entry.entry_tag };
+        html += buildSection('Overview', topFields);
+
+        if (entry.filter_detail && entry.filter_detail.checks) {
+            var fd = entry.filter_detail;
+            var passAll = fd.passes_all;
+            var filterHtml = '<div style="margin-bottom:1.25rem;">';
+            filterHtml += '<h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.5rem;">'
+                + (passAll ? '✅' : '⚠️') + ' Filter Status</h4>';
+            filterHtml += '<div style="background:var(--bg-input);border-radius:var(--radius);padding:0.75rem 1rem;">';
+            var checks = fd.checks;
+            var filterKeys = Object.keys(checks);
+            for (var fi = 0; fi < filterKeys.length; fi++) {
+                var fk = filterKeys[fi];
+                var fc = checks[fk];
+                var icon = fc.passes ? '✅' : '❌';
+                var color = fc.passes ? 'var(--text)' : 'var(--red, #ef4444)';
+                var actualFmt = typeof fc.actual === 'number' ? fc.actual.toLocaleString(undefined, {maximumFractionDigits:4}) : String(fc.actual);
+                var threshFmt = typeof fc.threshold === 'number' ? fc.threshold.toLocaleString(undefined, {maximumFractionDigits:4}) : String(fc.threshold);
+                if (fk === 'min_yield' || fk === 'max_payout' || fk === 'min_growth') {
+                    actualFmt = (fc.actual * 100).toFixed(2) + '%';
+                    threshFmt = (fc.threshold * 100).toFixed(2) + '%';
+                }
+                if (fk === 'min_market_cap') {
+                    actualFmt = '$' + (fc.actual / 1e9).toFixed(1) + 'B';
+                    threshFmt = '$' + (fc.threshold / 1e9).toFixed(1) + 'B';
+                }
+                if (fk === 'min_years') {
+                    actualFmt = Math.round(fc.actual) + ' yrs';
+                    threshFmt = Math.round(fc.threshold) + ' yrs';
+                }
+                filterHtml += '<div style="display:flex;justify-content:space-between;align-items:center;padding:0.3rem 0;'
+                    + (fi < filterKeys.length - 1 ? 'border-bottom:1px solid var(--border);' : '')
+                    + 'color:' + color + ';">';
+                filterHtml += '<span>' + icon + ' ' + fc.label + '</span>';
+                filterHtml += '<span style="font-family:var(--font-mono);font-size:0.85rem;">' + actualFmt + ' <span style="color:var(--text-muted);font-size:0.8rem;">' + fc.op + ' ' + threshFmt + '</span></span>';
+                filterHtml += '</div>';
+            }
+            filterHtml += '</div></div>';
+            html += filterHtml;
+        }
+
+        if (entry.metrics) html += buildSection('Fundamentals', entry.metrics);
+        if (entry.technicals) html += buildSection('Technical Timing', entry.technicals);
+        summaryModalBody.innerHTML = html;
+        summaryModal.style.display = 'flex';
+
+        // Radar chart
+        var radarCanvas = document.getElementById('summaryRadarChart');
+        var radarContainer = document.getElementById('summaryRadarChartContainer');
+        if (_summaryRadarChart) { _summaryRadarChart.destroy(); _summaryRadarChart = null; }
+
+        var qd = entry.quality_detail;
+        if (qd && typeof qd === 'object') {
+            radarContainer.style.display = '';
+            var labels = []; var values = []; var maxVals = [];
+            var qdKeys = Object.keys(qd);
+            for (var qi = 0; qi < qdKeys.length; qi++) {
+                var qk = qdKeys[qi];
+                var qv = qd[qk];
+                if (qv && typeof qv === 'object' && 'score' in qv) {
+                    labels.push(qk.replace(/_/g, ' '));
+                    values.push(qv.score || 0);
+                    maxVals.push(qv.max || qv.weight || 25);
+                }
+            }
+            if (labels.length > 0) {
+                _summaryRadarChart = new Chart(radarCanvas.getContext('2d'), {
+                    type: 'radar',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            { label: 'Score', data: values, backgroundColor: 'rgba(99,102,241,0.25)', borderColor: 'rgba(99,102,241,0.8)', pointBackgroundColor: 'rgba(99,102,241,1)', borderWidth: 2 },
+                            { label: 'Max', data: maxVals, backgroundColor: 'rgba(255,255,255,0.03)', borderColor: 'rgba(255,255,255,0.15)', borderDash: [4,4], pointRadius: 0, borderWidth: 1 }
+                        ]
+                    },
+                    options: {
+                        scales: {
+                            r: {
+                                beginAtZero: true,
+                                max: 100,
+                                ticks: { stepSize: 20, color: '#999', backdropColor: 'transparent' },
+                                grid: { color: 'rgba(255,255,255,0.08)' },
+                                angleLines: { color: 'rgba(255,255,255,0.08)' },
+                                pointLabels: { color: '#ccc', font: { size: 12 } }
+                            }
+                        },
+                        plugins: {
+                            legend: {
+                                display: true,
+                                labels: { color: '#ccc', boxWidth: 14, font: { size: 11 } }
+                            }
+                        }
+                    }
+                });
+            } else {
+                radarContainer.style.display = 'none';
+            }
+        } else {
+            radarContainer.style.display = 'none';
+        }
+    }
+
+    function closeSummaryDetail() { summaryModal.style.display = 'none'; }
+
+    if (summaryModal) {
+        summaryModalClose.addEventListener('click', closeSummaryDetail);
+        summaryModal.addEventListener('click', function(e) { if (e.target === summaryModal) closeSummaryDetail(); });
+        document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeSummaryDetail(); });
+
+        var summaryRow = document.getElementById('summaryRow');
+        if (summaryRow) {
+            summaryRow.addEventListener('click', function() {
+                try {
+                    var entry = JSON.parse(summaryRow.getAttribute('data-entry'));
+                    openSummaryDetail(entry);
+                } catch(err) { console.error('Failed to parse entry data', err); }
+            });
+        }
     }
 
 })();
