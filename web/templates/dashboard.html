@@ -83,7 +83,6 @@
                     <th>Expiry</th>
                     <th class="num">Premium</th>
                     {% endif %}
-                    <th>Flags</th>
                     <th></th>
                 </tr>
             </thead>
@@ -107,7 +106,7 @@
                         {% if row.recent_activities %}
                         {% for act in row.recent_activities %}
                             {% if not loop.first %}<span class="trend-arrow">›</span>{% endif %}
-                            <a href="/activities/{{ act.id }}" class="badge badge-{{ act.activity | lower if act.activity else 'info' }}" title="{{ act.timestamp[:16] }}">{{ act.activity or "N/A" }}</a>
+                            <a href="/activities/{{ act.id }}" class="badge badge-{{ act.activity | lower if act.activity else 'info' }}" title="{{ act.reason if act.reason else act.timestamp[:16] }}">{{ act.activity or "N/A" }}</a>
                         {% endfor %}
                         {% else %}—{% endif %}
                     </td>
@@ -120,7 +119,7 @@
                     </td>
                     <td>
                         {% if row.assignment_risk %}
-                        <span class="badge badge-risk-{{ row.assignment_risk | lower }}">{{ row.assignment_risk }}</span>
+                        <span class="badge badge-risk-{{ row.assignment_risk | lower }}" title="{{ (row.risk_flags or []) | join(', ') }}">{{ row.assignment_risk }}</span>
                         {% else %}—{% endif %}
                     </td>
                     <td class="num metric-value">{{ "%.2f" | format(row.delta) if row.delta is not none else "—" }}</td>
@@ -152,11 +151,6 @@
                     <td class="num metric-value">{{ "$%.2f" | format(row.premium) if row.premium else "—" }}</td>
                     {% endif %}
                     {% endif %}
-                    <td><div class="flags-wrap">
-                        {% for flag in (row.risk_flags or []) %}
-                        <span class="flag">{{ flag }}</span>
-                        {% endfor %}</div>
-                    </td>
                     <td>
                         <button class="btn-trigger-row" data-agent="{{ agent.key }}" data-symbol="{{ row.symbol }}" title="Run analysis for {{ row.symbol }}">▶</button>
                     </td>

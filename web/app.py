@@ -12,7 +12,6 @@ from pathlib import Path
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-import pytz
 import yaml
 from croniter import croniter
 from fastapi import FastAPI, Request, Query
@@ -442,36 +441,19 @@ def _clean_doc(doc: dict) -> dict:
     return {k: v for k, v in doc.items() if k not in _COSMOS_SYSTEM_KEYS}
 
 
-def _format_time_dual_tz(dt: datetime, tz_str: str) -> str:
-    """Format datetime showing both configured timezone and UTC.
-    
-    Args:
-        dt: timezone-aware datetime object
-        tz_str: configured timezone string (e.g., 'America/New_York')
-    
-    Returns:
-        Formatted string: "YYYY-MM-DD HH:MM TZ (HH:MM UTC)"
-    """
+def _local_now() -> datetime:
+    return datetime.now().astimezone()
+
+
+def _format_time(dt: datetime) -> str:
+    """Format datetime in the system local timezone."""
     if dt is None:
         return ""
     
     try:
-        # Ensure dt is timezone-aware
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        
-        # Convert to configured timezone
-        tz = pytz.timezone(tz_str)
-        dt_tz = dt.astimezone(tz)
-        
-        # Convert to UTC
-        dt_utc = dt.astimezone(timezone.utc)
-        
-        # Format: "2026-04-01 08:00 PST (16:00 UTC)"
-        tz_abbr = dt_tz.strftime("%Z")
-        formatted = f"{dt_tz.strftime('%Y-%m-%d %H:%M')} {tz_abbr} ({dt_utc.strftime('%H:%M')} UTC)"
-        
-        return formatted
+        return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
     except Exception:
         return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else ""
 
@@ -1405,6 +1387,7 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
                     "activity": a.get("activity", "N/A"),
                     "timestamp": a.get("timestamp", ""),
                     "id": a.get("id", ""),
+                    "reason": a.get("reason", ""),
                 }
                 for a in recent_by_key.get(key, [])
             ]
@@ -2533,42 +2516,41 @@ async def activity_detail_page(request: Request, activity_id: str):
 # Settings - Split Views
 # ===========================================================================
 
-@app.get("/settings/config", response_class=HTMLResponse)
-async def settings_config_page(request: Request):
-    """Configuration page — Scheduler and Telegram."""
-    cosmos = getattr(request.app.state, "cosmos", None)
-    
-    # Try CosmosDB first, fall back to config.yaml
+def _build_settings_config_context(
+    request: Request,
+    cosmos,
+    saved: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Build template context for the configuration settings page."""
     cosmos_settings = _load_settings_from_cosmos(cosmos)
     if cosmos_settings:
         config = cosmos_settings
     else:
         config = _load_config()
-    
+
     cron_expr = config.get("scheduler", {}).get("cron", "0 14-21/2 * * 1-5")
-    timezone = config.get("scheduler", {}).get("timezone", "America/New_York")
     telegram_cfg = config.get("telegram", {})
     telegram_enabled = telegram_cfg.get("enabled", False)
     telegram_bot_token = telegram_cfg.get("bot_token", "")
     telegram_chat_id = telegram_cfg.get("chat_id", "")
-    
+
     # Summary agent settings
     summary_cfg = config.get("summary_agent", {})
     summary_enabled = summary_cfg.get("enabled", True)
     summary_cron = summary_cfg.get("cron", "0 8 * * *")
     summary_activity_count = summary_cfg.get("activity_count", 3)
-    
+
     # Options chain scheduler settings
     options_chain_cfg = config.get("options_chain_scheduler", {})
     options_chain_enabled = options_chain_cfg.get("enabled", True)
     options_chain_cron = options_chain_cfg.get("cron", "0 * * * *")
-    
+
     # DGI screener settings
     dgi_cfg = config.get("dgi_screener", {})
     dgi_enabled = dgi_cfg.get("enabled", True)
     dgi_cron = dgi_cfg.get("cron", "0 6 * * 1-5")
     dgi_top_n = dgi_cfg.get("top_n", 40)
-    
+
     # Banner agent settings
     banner_cfg = config.get("banner_agent", {})
     banner_enabled = banner_cfg.get("enabled", True)
@@ -2590,16 +2572,10 @@ async def settings_config_page(request: Request):
         telegram_bot_token = _resolve_env(telegram_bot_token)
     if telegram_chat_id.startswith("${"):
         telegram_chat_id = _resolve_env(telegram_chat_id)
-    
-    # Calculate scheduler times for Monitoring Agent
-    try:
-        tz = pytz.timezone(timezone)
-    except Exception:
-        tz = pytz.timezone("America/New_York")
-    
+
     monitoring_last_run = ""
     monitoring_next_run = ""
-    
+
     # Get last run from most recent activity
     if cosmos:
         try:
@@ -2611,54 +2587,54 @@ async def settings_config_page(request: Request):
                         last_run_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
                         if last_run_dt.tzinfo is None:
                             last_run_dt = last_run_dt.replace(tzinfo=timezone.utc)
-                        monitoring_last_run = _format_time_dual_tz(last_run_dt, timezone)
+                        monitoring_last_run = _format_time(last_run_dt)
                     except Exception:
                         pass
         except Exception:
             pass
-    
+
     # Calculate next run from cron
     if cron_expr:
         try:
-            now_tz = datetime.now(tz)
+            now_tz = _local_now()
             cron = croniter(cron_expr, now_tz)
             next_run_dt = cron.get_next(datetime)
-            monitoring_next_run = _format_time_dual_tz(next_run_dt, timezone)
+            monitoring_next_run = _format_time(next_run_dt)
         except Exception:
             monitoring_next_run = "Invalid cron"
-    
+
     # Calculate scheduler times for Summarization Agent
     summary_last_run = ""
     summary_next_run = ""
-    
+
     # For summary agent, we'd need to track summary-specific runs
     # For now, we'll just calculate next run from cron
     if summary_cron:
         try:
-            now_tz = datetime.now(tz)
+            now_tz = _local_now()
             cron = croniter(summary_cron, now_tz)
             next_run_dt = cron.get_next(datetime)
-            summary_next_run = _format_time_dual_tz(next_run_dt, timezone)
+            summary_next_run = _format_time(next_run_dt)
         except Exception:
             summary_next_run = "Invalid cron"
-    
+
     # Calculate scheduler times for Options Chain Scheduler
     options_chain_last_run = ""
     options_chain_next_run = ""
-    
+
     if options_chain_cron:
         try:
-            now_tz = datetime.now(tz)
+            now_tz = _local_now()
             cron = croniter(options_chain_cron, now_tz)
             next_run_dt = cron.get_next(datetime)
-            options_chain_next_run = _format_time_dual_tz(next_run_dt, timezone)
+            options_chain_next_run = _format_time(next_run_dt)
         except Exception:
             options_chain_next_run = "Invalid cron"
-    
+
     # Calculate scheduler times for DGI Screener
     dgi_last_run = ""
     dgi_next_run = ""
-    
+
     if cosmos:
         try:
             dgi_entries = cosmos.get_dgi_top()
@@ -2666,38 +2642,38 @@ async def settings_config_page(request: Request):
             if timestamps:
                 latest = max(timestamps)
                 last_dt = datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
-                dgi_last_run = _format_time_dual_tz(last_dt, timezone)
+                dgi_last_run = _format_time(last_dt)
         except Exception:
             pass
-    
+
     if dgi_cron:
         try:
-            now_tz = datetime.now(tz)
+            now_tz = _local_now()
             cron = croniter(dgi_cron, now_tz)
             next_run_dt = cron.get_next(datetime)
-            dgi_next_run = _format_time_dual_tz(next_run_dt, timezone)
+            dgi_next_run = _format_time(next_run_dt)
         except Exception:
             dgi_next_run = "Invalid cron"
-    
+
     # Calculate scheduler times for Banner Agent
     banner_last_run = ""
     banner_next_run = ""
-    
+
     if cosmos:
         try:
             banner_doc = cosmos.get_banner()
             if banner_doc and banner_doc.get("generated_at"):
                 last_dt = datetime.fromisoformat(str(banner_doc["generated_at"]).replace("Z", "+00:00"))
-                banner_last_run = _format_time_dual_tz(last_dt, timezone)
+                banner_last_run = _format_time(last_dt)
         except Exception:
             pass
-    
+
     if banner_cron:
         try:
-            now_tz = datetime.now(tz)
+            now_tz = _local_now()
             cron = croniter(banner_cron, now_tz)
             next_run_dt = cron.get_next(datetime)
-            banner_next_run = _format_time_dual_tz(next_run_dt, timezone)
+            banner_next_run = _format_time(next_run_dt)
         except Exception:
             banner_next_run = "Invalid cron"
 
@@ -2705,10 +2681,10 @@ async def settings_config_page(request: Request):
     calendar_next_run = ""
     if calendar_cron:
         try:
-            now_tz = datetime.now(tz)
+            now_tz = _local_now()
             cron = croniter(calendar_cron, now_tz)
             next_run_dt = cron.get_next(datetime)
-            calendar_next_run = _format_time_dual_tz(next_run_dt, timezone)
+            calendar_next_run = _format_time(next_run_dt)
         except Exception:
             calendar_next_run = "Invalid cron"
 
@@ -2716,17 +2692,18 @@ async def settings_config_page(request: Request):
     pe_next_run = ""
     if pe_cron:
         try:
-            now_tz = datetime.now(tz)
+            now_tz = _local_now()
             cron = croniter(pe_cron, now_tz)
             next_run_dt = cron.get_next(datetime)
-            pe_next_run = _format_time_dual_tz(next_run_dt, timezone)
+            pe_next_run = _format_time(next_run_dt)
         except Exception:
             pe_next_run = "Invalid cron"
-    
-    return templates.TemplateResponse("settings_config.html", {
+
+    return {
         "request": request,
+        "saved": saved or [],
+        "server_time": _format_time(_local_now()),
         "cron_expr": cron_expr,
-        "timezone": timezone,
         "telegram_enabled": telegram_enabled,
         "telegram_bot_token": telegram_bot_token,
         "telegram_chat_id": telegram_chat_id,
@@ -2758,7 +2735,17 @@ async def settings_config_page(request: Request):
         "pe_enabled": pe_enabled,
         "pe_cron": pe_cron,
         "pe_next_run": pe_next_run,
-    })
+    }
+
+
+@app.get("/settings/config", response_class=HTMLResponse)
+async def settings_config_page(request: Request):
+    """Configuration page — Scheduler and Telegram."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    return templates.TemplateResponse(
+        "settings_config.html",
+        _build_settings_config_context(request, cosmos),
+    )
 
 
 @app.post("/settings/config", response_class=HTMLResponse)
@@ -2770,7 +2757,6 @@ async def settings_config_save(request: Request):
 
     # Cron schedule
     new_cron = str(form.get("cron_expr", "")).strip()
-    new_timezone = str(form.get("timezone", "America/New_York")).strip()
     if new_cron:
         try:
             croniter(new_cron)
@@ -2779,19 +2765,17 @@ async def settings_config_save(request: Request):
             if cosmos:
                 cosmos_settings = _load_settings_from_cosmos(cosmos) or {}
                 cosmos_settings.setdefault("scheduler", {})["cron"] = new_cron
-                cosmos_settings.setdefault("scheduler", {})["timezone"] = new_timezone
                 _save_settings_to_cosmos(cosmos, cosmos_settings)
             
             # Also update config.yaml for backward compat
             config = _load_config()
             config.setdefault("scheduler", {})["cron"] = new_cron
-            config.setdefault("scheduler", {})["timezone"] = new_timezone
             _write_config(config)
             saved.append("Cron schedule")
 
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
-                scheduler.reschedule(new_cron, new_timezone)
+                scheduler.reschedule(new_cron)
         except (ValueError, KeyError):
             pass
 
@@ -3019,84 +3003,10 @@ async def settings_config_save(request: Request):
         except (ValueError, KeyError):
             pass
 
-    # Re-read final state for display
-    cosmos_settings = _load_settings_from_cosmos(cosmos)
-    if cosmos_settings:
-        config = cosmos_settings
-    else:
-        config = _load_config()
-    
-    cron_expr = config.get("scheduler", {}).get("cron", "0 14-21/2 * * 1-5")
-    timezone = config.get("scheduler", {}).get("timezone", "America/New_York")
-    telegram_cfg = config.get("telegram", {})
-    tg_enabled = telegram_cfg.get("enabled", False)
-    tg_bot_token = telegram_cfg.get("bot_token", "")
-    tg_chat_id = telegram_cfg.get("chat_id", "")
-    if tg_bot_token.startswith("${"):
-        tg_bot_token = _resolve_env(tg_bot_token)
-    if tg_chat_id.startswith("${"):
-        tg_chat_id = _resolve_env(tg_chat_id)
-    
-    # Summary agent settings
-    summary_cfg = config.get("summary_agent", {})
-    sum_enabled = summary_cfg.get("enabled", True)
-    sum_cron = summary_cfg.get("cron", "0 8 * * *")
-    sum_activity_count = summary_cfg.get("activity_count", 3)
-    
-    # Options chain scheduler settings
-    options_chain_cfg = config.get("options_chain_scheduler", {})
-    oc_enabled = options_chain_cfg.get("enabled", True)
-    oc_cron = options_chain_cfg.get("cron", "0 * * * *")
-
-    # DGI screener settings
-    dgi_cfg = config.get("dgi_screener", {})
-    dgi_en = dgi_cfg.get("enabled", True)
-    dgi_cr = dgi_cfg.get("cron", "0 6 * * 1-5")
-    dgi_tn = dgi_cfg.get("top_n", 40)
-
-    # Banner agent settings
-    banner_cfg = config.get("banner_agent", {})
-    ban_enabled = banner_cfg.get("enabled", True)
-    ban_cron = banner_cfg.get("cron", "0 5 * * *")
-    ban_max_items = banner_cfg.get("max_items", 10)
-
-    # Calendar sync settings
-    cal_cfg = config.get("calendar_sync", {})
-    cal_enabled = cal_cfg.get("enabled", True)
-    cal_cron = cal_cfg.get("cron", "0 5 * * 1-5")
-
-    # Portfolio enrichment settings
-    pe_cfg_save = config.get("portfolio_enrichment", {})
-    pe_en = pe_cfg_save.get("enabled", True)
-    pe_cr = pe_cfg_save.get("cron", "0 9-17 * * 1-5")
-
-    return templates.TemplateResponse("settings_config.html", {
-        "request": request,
-        "cron_expr": cron_expr,
-        "timezone": timezone,
-        "saved": saved,
-        "telegram_enabled": tg_enabled,
-        "telegram_bot_token": tg_bot_token,
-        "telegram_chat_id": tg_chat_id,
-        "summary_enabled": sum_enabled,
-        "summary_cron": sum_cron,
-        "summary_activity_count": sum_activity_count,
-        "options_chain_enabled": oc_enabled,
-        "options_chain_cron": oc_cron,
-        "dgi_enabled": dgi_en,
-        "dgi_cron": dgi_cr,
-        "dgi_top_n": dgi_tn,
-        "dgi_symbols": dgi_cfg.get("symbols", ""),
-        "banner_enabled": ban_enabled,
-        "banner_cron": ban_cron,
-        "banner_max_items": ban_max_items,
-        "calendar_enabled": cal_enabled,
-        "calendar_cron": cal_cron,
-        "calendar_next_run": "",
-        "pe_enabled": pe_en,
-        "pe_cron": pe_cr,
-        "pe_next_run": "",
-    })
+    return templates.TemplateResponse(
+        "settings_config.html",
+        _build_settings_config_context(request, cosmos, saved=saved),
+    )
 
 
 @app.get("/settings/runtime", response_class=HTMLResponse)
@@ -3115,20 +3025,14 @@ async def settings_runtime_page(request: Request):
     cosmos_settings = _load_settings_from_cosmos(cosmos)
     config = cosmos_settings if cosmos_settings else _load_config()
     cron_expr = config.get("scheduler", {}).get("cron", "")
-    scheduler_tz_str = config.get("scheduler", {}).get("timezone", "America/New_York")
-    try:
-        scheduler_tz = pytz.timezone(scheduler_tz_str)
-    except Exception:
-        scheduler_tz = pytz.timezone("America/New_York")
-        scheduler_tz_str = "America/New_York"
 
     next_run = ""
     if cron_expr:
         try:
-            now_tz = datetime.now(scheduler_tz)
+            now_tz = _local_now()
             cron = croniter(cron_expr, now_tz)
             next_run_dt = cron.get_next(datetime)
-            next_run = _format_time_dual_tz(next_run_dt, scheduler_tz_str)
+            next_run = _format_time(next_run_dt)
         except Exception:
             next_run = "Invalid cron"
 
@@ -3143,7 +3047,7 @@ async def settings_runtime_page(request: Request):
                         last_run_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
                         if last_run_dt.tzinfo is None:
                             last_run_dt = last_run_dt.replace(tzinfo=timezone.utc)
-                        last_run = _format_time_dual_tz(last_run_dt, scheduler_tz_str)
+                        last_run = _format_time(last_run_dt)
                     except Exception:
                         last_run = timestamp_str[:19]
         except Exception:
@@ -3685,9 +3589,7 @@ async def dgi_page(request: Request):
                 last_dt = datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
                 if last_dt.tzinfo is None:
                     last_dt = last_dt.replace(tzinfo=timezone.utc)
-                config = _load_config()
-                tz_str = config.get("scheduler", {}).get("timezone", "America/New_York")
-                last_run = _format_time_dual_tz(last_dt, tz_str)
+                last_run = _format_time(last_dt)
             except Exception:
                 last_run = str(latest) if timestamps else ""
 
@@ -3695,14 +3597,12 @@ async def dgi_page(request: Request):
     config = _load_config()
     dgi_cfg = config.get("dgi_screener", {})
     dgi_cron_expr = dgi_cfg.get("cron", "0 6 * * 1-5")
-    tz_str = config.get("scheduler", {}).get("timezone", "America/New_York")
     if dgi_cfg.get("enabled", True) and dgi_cron_expr:
         try:
-            tz = pytz.timezone(tz_str)
-            now_tz = datetime.now(tz)
+            now_tz = _local_now()
             cron = croniter(dgi_cron_expr, now_tz)
             next_run_dt = cron.get_next(datetime)
-            next_run = _format_time_dual_tz(next_run_dt, tz_str)
+            next_run = _format_time(next_run_dt)
         except Exception:
             next_run = "Invalid cron"
 
