@@ -96,15 +96,15 @@
             <thead>
                 <tr>
                     <th>Symbol</th>
-                    <th>Category</th>
+                    <th title="Based on dividend history: Aristocrat (≥25y+yield≥2%), Rising Star (CAGR≥10%+≥5y), Compounder (≥15y+CAGR≥7%), High Yield (yield≥4%), Balanced (default)">Category</th>
                     <th>DGI Score</th>
                     <th>Tech Timing</th>
-                    <th>Entry</th>
-                    <th>Momentum</th>
+                    <th title="Based on technical timing score: Strong Buy (≥70), Buy (≥50), Accumulate (≥35), Hold (≥20), Wait (<20). Higher = more oversold/undervalued">Entry</th>
+                    <th title="Directional signal for options selling. Based on SMA50/SMA200 + RSI + ADX. ADX<20 forces Neutral. Extreme RSI adds warning (overextended/oversold)">Momentum</th>
                     <th>Price</th>
                     <th>Shares</th>
                     <th>In Calls</th>
-                    <th>Puts $</th>
+                    <th title="Capital committed if assigned: active put contracts × strike × 100">Puts $</th>
                 </tr>
             </thead>
             <tbody>
@@ -112,7 +112,7 @@
                     <td><strong>{{ symbol_doc.symbol }}</strong></td>
                     <td>
                         {% if enr.category %}
-                        <span class="badge badge-cat-{{ cat_lower }}">{{ enr.category }}</span>
+                        <span class="badge badge-cat-{{ cat_lower }}" title="{% if enr.category == 'Aristocrat' %}≥25 years dividend growth + yield ≥2%{% elif enr.category == 'Rising Star' %}CAGR ≥10% + ≥5 years growth{% elif enr.category == 'Compounder' %}≥15 years + CAGR ≥7%{% elif enr.category == 'High Yield' %}Dividend yield ≥4%{% else %}Balanced — meets basic criteria{% endif %}">{{ enr.category }}</span>
                         {% else %}—{% endif %}
                     </td>
                     <td class="mono">
@@ -124,10 +124,10 @@
                         {% else %}—{% endif %}
                     </td>
                     <td class="mono">{% if technicals.score is defined %}{{ "%.1f" | format(technicals.score) }}{% else %}—{% endif %}</td>
-                    <td>{% if enr.entry_tag %}<span class="badge badge-entry-{{ tag_lower }}">{{ tag }}</span>{% else %}—{% endif %}</td>
+                    <td>{% if enr.entry_tag %}<span class="badge badge-entry-{{ tag_lower }}" title="{% if tag == 'Strong Buy' %}Timing ≥70 — strong oversold signal, ideal entry{% elif tag == 'Buy' %}Timing ≥50 — good entry opportunity{% elif tag == 'Accumulate' %}Timing ≥35 — acceptable to accumulate{% elif tag == 'Hold' %}Timing ≥20 — hold existing, avoid new entries{% else %}Timing <20 — overbought, wait for pullback{% endif %}">{{ tag }}</span>{% else %}—{% endif %}</td>
                     <td>
                         {% if momentum %}
-                        <span class="badge badge-momentum-{{ mom_lower }}">
+                        <span class="badge badge-momentum-{{ mom_lower }}" title="{% if mom_base == 'Bullish' and not mom_warn %}SMA50 > SMA200, price above both — uptrend. Sell Puts: ✅ safe | Sell Calls: ⚠️ assignment risk{% elif momentum == 'Bullish (overextended)' %}Bullish BUT RSI > 70 (overbought) — may reverse soon. Sell Puts: ⚠️ possible drop | Sell Calls: ✅ good timing{% elif momentum == 'Weakening' %}SMA50 > SMA200 but price dropping below SMA50 — losing steam. Sell Calls: ✅ ideal | Sell Puts: ⚠️ caution{% elif momentum == 'Neutral' %}ADX < 20 or no clear trend — range-bound. Sell Puts: ✅ | Sell Calls: ✅ (premium decays){% elif mom_base == 'Bearish' and not mom_warn %}SMA50 < SMA200, price below both — downtrend. Sell Calls: ✅ safe | Sell Puts: ❌ assignment risk{% elif momentum == 'Bearish (oversold)' %}Bearish BUT RSI < 30 (oversold) — may bounce soon. Sell Calls: ⚠️ possible bounce | Sell Puts: ✅ good timing{% else %}Insufficient data{% endif %}">
                             {% if mom_warn %}⚠️ {% endif %}{{ momentum }}
                         </span>
                         {% else %}—{% endif %}
