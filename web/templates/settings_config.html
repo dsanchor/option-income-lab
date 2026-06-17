@@ -19,24 +19,26 @@
         <div class="card-header">
             <h2>⏰ Scheduler</h2>
         </div>
-        <p class="hint">Configure agent schedules and timezone. All cron expressions use the same timezone setting.</p>
+        <p class="hint">Configure agent schedules. All cron expressions run in the server's local system timezone.</p>
         <div style="padding: 0.75rem 1.25rem;">
-            <!-- Common Timezone -->
             <div style="margin-bottom:1.5rem;">
-                <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
-                    Timezone 
-                    <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="Timezone for all cron schedule execution">ⓘ</span>
+                <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.5rem;">
+                    Timezone Reference
                 </label>
-                <select name="timezone" 
-                        style="width:100%; padding:0.6rem 0.8rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-size:0.9rem; border-radius:var(--radius); cursor:pointer;">
-                    <option value="America/New_York" {{ 'selected' if timezone == 'America/New_York' }}>America/New York (EST/EDT)</option>
-                    <option value="America/Chicago" {{ 'selected' if timezone == 'America/Chicago' }}>America/Chicago (CST/CDT)</option>
-                    <option value="America/Los_Angeles" {{ 'selected' if timezone == 'America/Los_Angeles' }}>America/Los Angeles (PST/PDT)</option>
-                    <option value="Europe/Madrid" {{ 'selected' if timezone == 'Europe/Madrid' }}>Europe/Madrid (CET/CEST)</option>
-                    <option value="Europe/London" {{ 'selected' if timezone == 'Europe/London' }}>Europe/London (GMT/BST)</option>
-                    <option value="UTC" {{ 'selected' if timezone == 'UTC' }}>UTC</option>
-                    <option value="Asia/Tokyo" {{ 'selected' if timezone == 'Asia/Tokyo' }}>Asia/Tokyo (JST)</option>
-                </select>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
+                    <div>
+                        <label style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.3rem;">Server Time</label>
+                        <div style="padding:0.6rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                            {{ server_time }}
+                        </div>
+                    </div>
+                    <div>
+                        <label style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.3rem;">Browser Time</label>
+                        <div id="browserTimeDisplay" style="padding:0.6rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                            Loading...
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Monitoring Agent Section -->
@@ -93,7 +95,7 @@
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
                             Cron Expression
-                            <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to send daily summaries (uses main scheduler timezone)">ⓘ</span>
+                            <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to send daily summaries">ⓘ</span>
                         </label>
                         <input type="text" name="summary_cron" value="{{ summary_cron }}" placeholder="0 8 * * *" spellcheck="false"
                                style="width:100%; padding:0.6rem 0.8rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
@@ -150,7 +152,7 @@
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
                             Cron Expression
-                            <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to generate the dashboard banner (uses main scheduler timezone)">ⓘ</span>
+                            <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to generate the dashboard banner">ⓘ</span>
                         </label>
                         <input type="text" name="banner_cron" value="{{ banner_cron }}" placeholder="0 5 * * *" spellcheck="false"
                                style="width:100%; padding:0.6rem 0.8rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
@@ -206,7 +208,7 @@
                 <div style="margin-bottom:1rem;">
                     <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
                         Cron Schedule
-                        <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to sync calendar data (uses main scheduler timezone)">ⓘ</span>
+                        <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to sync calendar data">ⓘ</span>
                     </label>
                     <input type="text" name="calendar_cron" value="{{ calendar_cron }}" placeholder="0 5 * * 1-5" spellcheck="false"
                         style="width:100%; max-width:300px; padding:0.5rem 0.8rem; border-radius:var(--radius); border:1px solid var(--border); background:var(--bg-input); color:var(--text); font-family:var(--font-mono); font-size:0.85rem;">
@@ -246,7 +248,7 @@
                 <div style="margin-bottom:0.75rem;">
                     <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
                         Cron Expression
-                        <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to fetch options chain data (uses main scheduler timezone)">ⓘ</span>
+                        <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to fetch options chain data">ⓘ</span>
                     </label>
                     <input type="text" name="options_chain_cron" value="{{ options_chain_cron }}" placeholder="0 * * * *" spellcheck="false"
                            style="width:100%; padding:0.6rem 0.8rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
@@ -293,7 +295,7 @@
                 <div style="margin-bottom:0.75rem;">
                     <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
                         Cron Expression
-                        <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to run the DGI screener (uses main scheduler timezone)">ⓘ</span>
+                        <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to run the DGI screener">ⓘ</span>
                     </label>
                     <input type="text" name="dgi_cron" value="{{ dgi_cron }}" placeholder="0 6 * * 1-5" spellcheck="false"
                            style="width:100%; padding:0.6rem 0.8rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
@@ -344,7 +346,7 @@
                 <div style="margin-bottom:0.75rem;">
                     <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
                         Cron Expression
-                        <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to run watchlist enrichment (uses main scheduler timezone)">ⓘ</span>
+                        <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to run watchlist enrichment">ⓘ</span>
                     </label>
                     <input type="text" name="pe_cron" value="{{ pe_cron }}" placeholder="0 9-17 * * 1-5" spellcheck="false"
                            style="width:100%; padding:0.6rem 0.8rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
@@ -411,6 +413,18 @@
 {% block scripts %}
 <script>
 (function() {
+    var browserTimeDisplay = document.getElementById('browserTimeDisplay');
+    if (browserTimeDisplay) {
+        var now = new Date();
+        var offsetMin = -now.getTimezoneOffset();
+        var sign = offsetMin >= 0 ? '+' : '-';
+        var absH = Math.floor(Math.abs(offsetMin) / 60);
+        var absM = Math.abs(offsetMin) % 60;
+        var utcLabel = 'UTC' + sign + String(absH).padStart(2,'0') + ':' + String(absM).padStart(2,'0');
+        var tzName = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+        browserTimeDisplay.textContent = now.toLocaleString() + ' (' + (tzName ? tzName + ' / ' : '') + utcLabel + ')';
+    }
+
     var testBtn = document.getElementById('btnTestTelegram');
     var testStatus = document.getElementById('telegramTestStatus');
     if (testBtn) {
