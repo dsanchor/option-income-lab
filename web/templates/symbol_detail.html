@@ -25,30 +25,30 @@
       </script>
     </div>
     
-    <div class="watchlist-toggles" style="display:flex; gap:1.5rem; align-items:center; margin-top:0.5rem; flex-wrap:wrap; justify-content:space-between;">
-        <div style="display:flex; gap:1.5rem; align-items:center; flex-wrap:wrap;">
-            <span style="display:flex; align-items:center; gap:0.4rem;">
+    <div class="watchlist-toggles">
+        <div class="toggle-group">
+            <span class="toggle-item">
                 <label class="switch">
                     <input type="checkbox" id="toggle-cc" {% if symbol_doc.watchlist.covered_call %}checked{% endif %}>
                     <span class="slider"></span>
                 </label>
                 <span>Call Watchlist</span>
             </span>
-            <span style="display:flex; align-items:center; gap:0.4rem;">
+            <span class="toggle-item">
                 <label class="switch">
                     <input type="checkbox" id="toggle-csp" {% if symbol_doc.watchlist.cash_secured_put %}checked{% endif %}>
                     <span class="slider"></span>
                 </label>
                 <span>Put Watchlist</span>
             </span>
-            <span style="display:flex; align-items:center; gap:0.4rem;">
+            <span class="toggle-item">
                 <label class="switch">
                     <input type="checkbox" id="toggle-bt" {% if symbol_doc.watchlist.buy_tracker %}checked{% endif %}>
                     <span class="slider"></span>
                 </label>
                 <span>Buy Tracker</span>
             </span>
-            <span style="display:flex; align-items:center; gap:0.4rem;">
+            <span class="toggle-item">
                 <label class="switch">
                     <input type="checkbox" id="toggle-notifications" {% if symbol_doc.telegram_notifications_enabled is not defined or symbol_doc.telegram_notifications_enabled %}checked{% endif %}>
                     <span class="slider"></span>
@@ -56,22 +56,18 @@
                 <span>Notifications</span>
             </span>
         </div>
-        <div style="display:flex; gap:0.75rem; align-items:center;">
-            <a href="/symbols/{{ symbol_doc.symbol }}/options-chain" class="switch-link" style="display:inline-flex; align-items:center; gap:0.4rem; text-decoration:none; color:inherit; padding:0.2rem 0.6rem; border-radius:16px; background:rgba(255,255,255,0.06); border:1px solid var(--border, #2d2d35); transition:background 0.2s;">
-                <span style="font-size:0.9rem;">📈</span>
-                <span>Option Chain</span>
+        <div class="chip-group">
+            <a href="/symbols/{{ symbol_doc.symbol }}/options-chain" class="chip-link">
+                <span>📈</span> Option Chain
             </a>
-            <a href="/symbols/{{ symbol_doc.symbol }}/chat" class="switch-link" style="display:inline-flex; align-items:center; gap:0.4rem; text-decoration:none; color:inherit; padding:0.2rem 0.6rem; border-radius:16px; background:rgba(255,255,255,0.06); border:1px solid var(--border, #2d2d35); transition:background 0.2s;">
-                <span style="font-size:0.9rem;">💬</span>
-                <span>Chat</span>
+            <a href="/symbols/{{ symbol_doc.symbol }}/chat" class="chip-link">
+                <span>💬</span> Chat
             </a>
-            <a href="/symbols/{{ symbol_doc.symbol }}/report" class="switch-link" style="display:inline-flex; align-items:center; gap:0.4rem; text-decoration:none; color:inherit; padding:0.2rem 0.6rem; border-radius:16px; background:rgba(255,255,255,0.06); border:1px solid var(--border, #2d2d35); transition:background 0.2s;">
-                <span style="font-size:0.9rem;">📊</span>
-                <span>Report</span>
+            <a href="/symbols/{{ symbol_doc.symbol }}/report" class="chip-link">
+                <span>📊</span> Report
             </a>
-            <a href="/symbols/{{ symbol_doc.symbol }}/technical-analysis" class="switch-link" style="display:inline-flex; align-items:center; gap:0.4rem; text-decoration:none; color:inherit; padding:0.2rem 0.6rem; border-radius:16px; background:rgba(255,255,255,0.06); border:1px solid var(--border, #2d2d35); transition:background 0.2s;">
-                <span style="font-size:0.9rem;">🔬</span>
-                <span>Technical Analysis</span>
+            <a href="/symbols/{{ symbol_doc.symbol }}/technical-analysis" class="chip-link">
+                <span>🔬</span> Technical Analysis
             </a>
         </div>
     </div>

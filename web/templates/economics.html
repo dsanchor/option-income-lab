@@ -7,153 +7,6 @@
     <div class="subtitle">Premium, buybacks, net income, and options RoC analytics across all symbols.</div>
 </div>
 
-<style>
-    .economics-filters {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.75rem;
-        align-items: center;
-        padding: 1rem 1.25rem 1.25rem;
-    }
-    .economics-filter-block {
-        display: flex;
-        flex-direction: column;
-        gap: 0.35rem;
-    }
-    .economics-filter-label {
-        font-size: 0.72rem;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--text-muted);
-    }
-    .economics-summary-card .summary-value.positive { color: var(--accent-green); }
-    .economics-summary-card .summary-value.negative { color: var(--accent-red); }
-    .economics-summary-card .summary-value.warning { color: var(--accent-orange); }
-    .economics-chart-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-        gap: 1rem;
-        padding: 1rem 1.25rem 1.25rem;
-    }
-    .economics-chart-panel {
-        background: rgba(255,255,255,0.02);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        padding: 1rem;
-        min-height: 320px;
-    }
-    .economics-chart-panel h3 {
-        font-size: 0.95rem;
-        margin-bottom: 0.75rem;
-    }
-    .economics-chart-panel canvas {
-        width: 100% !important;
-        height: 240px !important;
-    }
-    .economics-details summary {
-        list-style: none;
-        padding: 1rem 1.25rem;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        color: var(--text);
-    }
-    .economics-details summary::-webkit-details-marker { display: none; }
-    .economics-details summary::after {
-        content: "▾";
-        color: var(--text-muted);
-        transition: transform 0.2s ease;
-    }
-    .economics-details:not([open]) summary::after { transform: rotate(-90deg); }
-    .economics-table-empty {
-        padding: 1.5rem 1rem;
-        text-align: center;
-        color: var(--text-muted);
-    }
-    .sortable {
-        cursor: pointer;
-        user-select: none;
-    }
-    .sortable.active {
-        color: var(--accent-blue);
-    }
-    .sort-indicator {
-        margin-left: 0.25rem;
-        font-size: 0.7rem;
-        opacity: 0.7;
-    }
-    @media (max-width: 768px) {
-        .economics-filters {
-            align-items: stretch;
-        }
-        .economics-filter-block,
-        .economics-filter-block .filter-select,
-        .economics-filter-block .filter-pills,
-        #economics-apply {
-            width: 100%;
-        }
-    }
-    .economics-filters-card {
-        overflow: visible;
-    }
-    .dropdown-multi {
-        position: relative;
-        display: inline-block;
-    }
-    .dropdown-multi-btn {
-        background: var(--surface-alt, rgba(255,255,255,0.06));
-        border: 1px solid var(--border, #2d2d35);
-        border-radius: 6px;
-        color: var(--text, #fff);
-        padding: 0.4rem 0.75rem;
-        font-size: 0.85rem;
-        cursor: pointer;
-        min-width: 120px;
-        text-align: left;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    .dropdown-multi-btn:hover {
-        border-color: var(--accent-blue, #494fdf);
-    }
-    .dropdown-multi-menu {
-        display: none;
-        position: absolute;
-        top: calc(100% + 4px);
-        left: 0;
-        z-index: 100;
-        background: var(--surface, #1c1c24);
-        border: 1px solid var(--border, #2d2d35);
-        border-radius: 8px;
-        padding: 0.5rem;
-        min-width: 140px;
-        max-height: 240px;
-        overflow-y: auto;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-    }
-    .dropdown-multi.open .dropdown-multi-menu {
-        display: block;
-    }
-    .dropdown-multi-menu label {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.3rem 0.5rem;
-        border-radius: 4px;
-        font-size: 0.85rem;
-        color: var(--text, #fff);
-        cursor: pointer;
-        white-space: nowrap;
-    }
-    .dropdown-multi-menu label:hover {
-        background: rgba(255,255,255,0.06);
-    }
-    .dropdown-multi-menu input[type="checkbox"] {
-        accent-color: var(--accent-blue, #494fdf);
-    }
-</style>
-
 <div id="economics-error" class="alert alert-error" style="display:none;"></div>
 
 <div class="summary-row" id="economics-summary">
@@ -179,9 +32,9 @@
     </div>
 </div>
 
-<div class="card economics-filters-card" style="margin-bottom:1rem;">
-    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;padding:1rem 1.25rem;">
-        <h2 style="margin:0;font-size:1.1rem;">Filters</h2>
+<div class="card economics-filters-card">
+    <div class="card-header">
+        <h2>Filters</h2>
         <span class="card-badge" id="summary-total-positions">0 positions</span>
     </div>
     <div class="economics-filters">
@@ -237,8 +90,8 @@
             </div>
         </div>
     </div>
-    <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;padding:0 1.25rem 1rem;">
-        <button id="economics-apply" class="btn-sm" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:0.4rem 0.75rem;border-radius:var(--radius);cursor:pointer;">Apply</button>
+    <div class="filter-actions">
+        <button id="economics-apply" class="btn-sm">Apply</button>
     </div>
 </div>
 
@@ -312,7 +165,7 @@
         <span class="card-badge" id="positions-detail-count">0 rows</span>
     </summary>
     <div class="table-wrap">
-        <table>
+        <table class="data-table">
             <thead>
                 <tr>
                     <th class="sortable" data-sort-key="symbol">Symbol<span class="sort-indicator"></span></th>

@@ -215,12 +215,12 @@ h1, h2, h3, h4, h5, h6 {
 .summary-card-market { display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .market-dot { font-size: 1.8rem; line-height: 1; }
 .summary-card-market.market-open .market-dot { color: var(--accent-green); }
-.summary-card-market.market-closed .market-dot { color: #e74c3c; }
+.summary-card-market.market-closed .market-dot { color: var(--accent-red); }
 .summary-card-market.market-unknown .market-dot { color: var(--text-muted); }
 .summary-card-chain { display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .chain-dot { font-size: 1.8rem; line-height: 1; }
 .summary-card-chain.chain-primary .chain-dot { color: var(--accent-green); }
-.summary-card-chain.chain-secondary .chain-dot { color: #e74c3c; }
+.summary-card-chain.chain-secondary .chain-dot { color: var(--accent-red); }
 .summary-card-chain.chain-unknown .chain-dot { color: var(--text-muted); }
 .summary-card-action {
     display: flex;
@@ -419,12 +419,12 @@ tbody td:last-child, thead th:last-child { text-align: right; width: 1%; white-s
 .confidence-medium { color: var(--accent-orange); }
 .confidence-low { color: var(--accent-red); }
 
-.risk-rating { font-size: 0.75rem; padding: 2px 8px; border-radius: 4px; font-weight: 600; white-space: nowrap; }
-.risk-rating-low { background: #1a7f37; color: #fff; }
-.risk-rating-moderate { background: #9a6700; color: #fff; }
-.risk-rating-elevated { background: #bc4c00; color: #fff; }
-.risk-rating-high { background: #cf222e; color: #fff; }
-.risk-rating-very-high { background: #82071e; color: #fff; }
+.risk-rating { font-size: 0.75rem; padding: 2px 8px; border-radius: var(--radius-pill); font-weight: 600; white-space: nowrap; }
+.risk-rating-low { background: rgba(0,168,126,0.2); color: var(--accent-green); }
+.risk-rating-moderate { background: rgba(236,126,0,0.2); color: var(--accent-orange); }
+.risk-rating-elevated { background: rgba(236,126,0,0.3); color: var(--accent-orange); }
+.risk-rating-high { background: rgba(226,59,74,0.2); color: var(--accent-red); }
+.risk-rating-very-high { background: rgba(226,59,74,0.35); color: var(--accent-red); }
 
 .flags-wrap {
     display: flex;
@@ -1020,7 +1020,6 @@ input:checked + .slider::before { transform: translateX(16px); background: #fff;
 .alpha-risk { font-size: 0.85rem; color: var(--accent-orange); margin-bottom: 0.3rem; }
 
 .review-action { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
-.btn-sm { padding: 8px 20px; font-size: 0.85rem; }
 
 /* ── Recommendation Modal ── */
 .modal-overlay {
@@ -1203,11 +1202,192 @@ input:checked + .slider::before { transform: translateX(16px); background: #fff;
 .score-medium .score-bar-fill { background: var(--accent-orange); }
 .score-low    .score-bar-fill { background: var(--accent-red); }
 
-.dgi-table th.sortable { cursor: pointer; user-select: none; }
-.dgi-table th.sortable:hover { color: var(--accent-blue); }
-.dgi-table th .sort-indicator { font-size: 0.65rem; margin-left: 0.25rem; opacity: 0.5; }
-.dgi-table th.sort-active .sort-indicator { opacity: 1; color: var(--accent-blue); }
-.dgi-table th, .dgi-table td { padding: 0.5rem 0.6rem; }
+/* ── Sortable table columns (global) ── */
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--accent-blue); }
+th .sort-indicator { font-size: 0.65rem; margin-left: 0.25rem; opacity: 0.5; }
+th.sort-active .sort-indicator { opacity: 1; color: var(--accent-blue); }
+
+/* Compact data table cells */
+.data-table th, .data-table td { padding: 0.5rem 0.6rem; }
+
+/* Zebra striping for cleaner row readability */
+tbody tr:nth-child(even) { background: rgba(255,255,255,0.015); }
+tbody tr:hover { background: var(--bg-hover); }
+
+/* ── Economics ── */
+.economics-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    padding: 1rem 1.25rem 1.25rem;
+}
+.economics-filter-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+.economics-filter-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+.economics-summary-card .summary-value.positive { color: var(--accent-green); }
+.economics-summary-card .summary-value.negative { color: var(--accent-red); }
+.economics-summary-card .summary-value.warning { color: var(--accent-orange); }
+.economics-chart-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+    padding: 1rem 1.25rem 1.25rem;
+}
+.economics-chart-panel {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem;
+    min-height: 320px;
+}
+.economics-chart-panel h3 { font-size: 0.95rem; margin-bottom: 0.75rem; }
+.economics-chart-panel canvas { width: 100% !important; height: 240px !important; }
+.economics-details summary {
+    list-style: none;
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--text);
+}
+.economics-details summary::-webkit-details-marker { display: none; }
+.economics-details summary::after {
+    content: "▾";
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+}
+.economics-details:not([open]) summary::after { transform: rotate(-90deg); }
+.economics-table-empty {
+    padding: 1.5rem 1rem;
+    text-align: center;
+    color: var(--text-muted);
+}
+.economics-filters-card { overflow: visible; }
+
+/* ── Multi-select dropdown ── */
+.dropdown-multi { position: relative; display: inline-block; }
+.dropdown-multi-btn {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    min-width: 120px;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.dropdown-multi-btn:hover { border-color: var(--accent-blue); }
+.dropdown-multi-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 100;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.5rem;
+    min-width: 140px;
+    max-height: 240px;
+    overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.dropdown-multi.open .dropdown-multi-menu { display: block; }
+.dropdown-multi-menu label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    color: var(--text);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.dropdown-multi-menu label:hover { background: rgba(255,255,255,0.06); }
+.dropdown-multi-menu input[type="checkbox"] { accent-color: var(--accent-blue); }
+
+/* ── Filter action row ── */
+.filter-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.75rem;
+}
+
+/* ── DGI Screener action buttons ── */
+.dgi-actions {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 1.5rem;
+}
+
+/* ── Symbol detail link chips ── */
+.chip-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    text-decoration: none;
+    color: inherit;
+    padding: 0.2rem 0.6rem;
+    border-radius: var(--radius-pill);
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+    transition: background 0.2s;
+    font-size: 0.9rem;
+}
+.chip-link:hover { background: var(--bg-hover); text-decoration: none; }
+
+/* ── Toggle & chip groups (symbol detail) ── */
+.watchlist-toggles {
+    display: flex;
+    gap: 1.5rem;
+    align-items: center;
+    margin-top: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: space-between;
+}
+.toggle-group { display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; }
+.toggle-item { display: flex; align-items: center; gap: 0.4rem; }
+.chip-group { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+
+/* ── Filter panel (DGI screener / watchlist) ── */
+.filter-panel { padding: 1rem 1.25rem; }
+.filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1.25rem;
+}
+.filter-label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+.filter-label-value { color: var(--text); font-weight: 500; }
+
+@media (max-width: 768px) {
+    .economics-filters { align-items: stretch; }
+    .economics-filter-block,
+    .economics-filter-block .filter-select,
+    .economics-filter-block .filter-pills { width: 100%; }
+}
 
 /* ── Range Slider Styling ── */
 .range-slider {

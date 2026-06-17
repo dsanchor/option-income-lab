@@ -7,19 +7,19 @@
     <p class="subtitle">Top Dividend Growth Stocks</p>
 </div>
 
-<div style="margin-bottom:1.5rem; display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
+<div class="dgi-actions">
     <button class="btn-trigger" id="btnRunDgi" onclick="triggerDgi()">
         🔄 Run DGI Screener
     </button>
-    <button class="btn-trigger" id="btnAnalyzeSymbol" onclick="showSymbolInput()" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text);">
+    <button class="btn-trigger" id="btnAnalyzeSymbol" onclick="showSymbolInput()">
         🔍 Analyze Symbol
     </button>
     <form id="symbolInputForm" action="/dgi/analyze/" method="get" style="display:none; align-items:center; gap:0.5rem;" onsubmit="return navigateToAnalysis(event)">
         <input type="text" id="analyzeSymbolInput" placeholder="Enter symbol (e.g. AAPL)" maxlength="10"
-               style="padding:0.5rem 0.75rem; border-radius:var(--radius); border:1px solid var(--border); background:var(--bg-input); color:var(--text); font-family:var(--font-mono); font-size:0.9rem; width:160px; text-transform:uppercase;"
+               class="input-field mono" style="width:160px; text-transform:uppercase;"
                autofocus>
-        <button type="submit" class="btn-trigger" style="padding:0.5rem 1rem;">Go</button>
-        <button type="button" class="btn-trigger" style="padding:0.5rem 0.75rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted);" onclick="hideSymbolInput()">✕</button>
+        <button type="submit" class="btn-trigger">Go</button>
+        <button type="button" class="btn-sm" onclick="hideSymbolInput()">✕</button>
     </form>
 </div>
 
@@ -29,35 +29,35 @@
 
 {% if top20 %}
 <!-- Filter Panel -->
-<div class="card" style="margin-bottom:1rem;">
-    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;padding:1rem 1.25rem;">
-        <h2 style="margin:0;font-size:1.1rem;">Filters</h2>
-        <span id="filterCount" style="font-size:0.9rem;color:var(--text-muted);">Showing {{ top20|length }} of {{ top20|length }}</span>
+<div class="card">
+    <div class="card-header">
+        <h2>Filters</h2>
+        <span id="filterCount" class="card-badge">Showing {{ top20|length }} of {{ top20|length }}</span>
     </div>
-    <div id="filterPanel" style="padding:1rem 1.25rem;">
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:1.25rem;">
+    <div class="filter-panel">
+        <div class="filter-grid">
             <div>
-                <label style="display:block;margin-bottom:0.5rem;font-size:0.85rem;color:var(--text-muted);">Quality Score ≥ <span id="qsVal" style="color:var(--text);font-weight:500;">0</span></label>
+                <label class="filter-label">Quality Score ≥ <span id="qsVal" class="filter-label-value">0</span></label>
                 <input type="range" min="0" max="100" value="0" id="filterQS" oninput="applyFilters()" class="range-slider">
             </div>
             <div>
-                <label style="display:block;margin-bottom:0.5rem;font-size:0.85rem;color:var(--text-muted);">Div Yield ≥ <span id="dyVal" style="color:var(--text);font-weight:500;">0.0%</span></label>
+                <label class="filter-label">Div Yield ≥ <span id="dyVal" class="filter-label-value">0.0%</span></label>
                 <input type="range" min="0" max="100" value="0" id="filterDY" oninput="applyFilters()" class="range-slider">
             </div>
             <div>
-                <label style="display:block;margin-bottom:0.5rem;font-size:0.85rem;color:var(--text-muted);">Div Growth ≥ <span id="dgVal" style="color:var(--text);font-weight:500;">0%</span></label>
+                <label class="filter-label">Div Growth ≥ <span id="dgVal" class="filter-label-value">0%</span></label>
                 <input type="range" min="0" max="100" value="0" id="filterDG" oninput="applyFilters()" class="range-slider">
             </div>
             <div>
-                <label style="display:block;margin-bottom:0.5rem;font-size:0.85rem;color:var(--text-muted);">Years ≥ <span id="yearsVal" style="color:var(--text);font-weight:500;">0</span></label>
+                <label class="filter-label">Years ≥ <span id="yearsVal" class="filter-label-value">0</span></label>
                 <input type="range" min="0" max="100" value="0" id="filterYears" oninput="applyFilters()" class="range-slider">
             </div>
             <div>
-                <label style="display:block;margin-bottom:0.5rem;font-size:0.85rem;color:var(--text-muted);">Timing ≥ <span id="timingVal" style="color:var(--text);font-weight:500;">0</span></label>
+                <label class="filter-label">Timing ≥ <span id="timingVal" class="filter-label-value">0</span></label>
                 <input type="range" min="0" max="100" value="0" id="filterTiming" oninput="applyFilters()" class="range-slider">
             </div>
-            <div style="grid-column: span 1;">
-                <label style="display:block;margin-bottom:0.5rem;font-size:0.85rem;color:var(--text-muted);">💲 Price: <span id="priceMinVal" style="color:var(--text);font-weight:500;">$0</span> – <span id="priceMaxVal" style="color:var(--text);font-weight:500;">$1000</span></label>
+            <div>
+                <label class="filter-label">💲 Price: <span id="priceMinVal" class="filter-label-value">$0</span> – <span id="priceMaxVal" class="filter-label-value">$1000</span></label>
                 <div class="dual-range-wrap">
                     <div class="dual-range-track"></div>
                     <div class="dual-range-fill" id="priceRangeFill"></div>
@@ -68,9 +68,9 @@
                 </div>
             </div>
         </div>
-        <div style="margin-top:0.75rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
-            <button onclick="applyBeastsFilter()" class="btn-sm" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:0.4rem 0.75rem;border-radius:var(--radius);cursor:pointer;">🐂 Beasts</button>
-            <button onclick="resetFilters()" class="btn-sm" style="background:var(--bg-input);border:1px solid var(--border);color:var(--text);padding:0.4rem 0.75rem;border-radius:var(--radius);cursor:pointer;">Reset Filters</button>
+        <div class="filter-actions">
+            <button onclick="applyBeastsFilter()" class="btn-sm">🐂 Beasts</button>
+            <button onclick="resetFilters()" class="btn-sm">Reset Filters</button>
         </div>
     </div>
 </div>
@@ -78,7 +78,7 @@
 <div class="card">
 <div class="card-header"><h2>Top DGI Candidates</h2></div>
 <div class="table-wrap">
-    <table class="dgi-table" id="dgiTable">
+    <table class="data-table" id="dgiTable">
         <thead>
             <tr>
                 <th class="sortable" data-col="rank" data-type="num">#<span class="sort-indicator"></span></th>
@@ -154,8 +154,8 @@
 </div>
 
 {% else %}
-<div class="card" style="padding:2rem; text-align:center; color:var(--text-muted);">
-    <p>No DGI screening results yet. Run the screener to populate this table.</p>
+<div class="card">
+    <p class="empty-state">No DGI screening results yet. Run the screener to populate this table.</p>
 </div>
 {% endif %}
 {% endblock %}
