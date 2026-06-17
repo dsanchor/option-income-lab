@@ -1448,14 +1448,28 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
                     # Find position_id from sym_cfg
                     ptype = "call" if agent_key == "open_call_monitor" else "put"
                     sym_c = sym_cfg_map.get(base_symbol, {})
+                    key_strike_str = parts[1] if len(parts) > 1 else ""
+                    key_exp = parts[2] if len(parts) > 2 else ""
+                    try:
+                        key_strike_f = float(key_strike_str)
+                    except (ValueError, TypeError):
+                        key_strike_f = None
                     for p in sym_c.get("positions", []):
-                        if (p.get("status") == "active" and p["type"] == ptype
-                                and str(p.get("strike")) == str(parts[1] if len(parts) > 1 else "")
-                                and p.get("expiration") == (parts[2] if len(parts) > 2 else "")):
+                        if p.get("status") != "active" or p["type"] != ptype:
+                            continue
+                        # Compare strikes as floats to avoid "48.5" != "48.50"
+                        try:
+                            p_strike_f = float(p.get("strike", ""))
+                        except (ValueError, TypeError):
+                            p_strike_f = None
+                        strike_match = (key_strike_f is not None
+                                        and p_strike_f is not None
+                                        and abs(key_strike_f - p_strike_f) < 0.001)
+                        if strike_match and p.get("expiration") == key_exp:
                             pos_id = p.get("position_id")
                             break
                     if pos_id and cosmos:
-                        snaps = cosmos.get_position_snapshots(base_symbol, pos_id, limit=50)
+                        snaps = cosmos.get_position_snapshots(base_symbol, pos_id, limit=200)
                         # P&L from most recent snapshot
                         if snaps:
                             row["pnl_pct"] = snaps[0].get("pnl_pct")
@@ -1483,8 +1497,10 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
                                 row["dps_delta_7d"] = dps_snaps[0]["dps_score"] - snap_7d["dps_score"]
                             if snap_1d:
                                 row["dps_delta_1d"] = dps_snaps[0]["dps_score"] - snap_1d["dps_score"]
-                except Exception:
-                    pass
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "DPS delta lookup failed for %s: %s", key, e)
             else:
                 dec = latest_by_key.get(key, {})
                 if agent_key == "buy_tracker":
