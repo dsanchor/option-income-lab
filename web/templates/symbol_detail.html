@@ -77,7 +77,6 @@
 {% set enr = symbol_doc.enrichment | default({}) or {} %}
 {% set metrics = enr.metrics | default({}) %}
 {% set technicals = enr.technicals | default({}) %}
-{% if enr.quality_score is defined and enr.quality_score %}
 {% set score = enr.quality_score | default(0) %}
 {% set score_class = 'score-high' if score >= 70 else ('score-medium' if score >= 40 else 'score-low') %}
 {% set tag = enr.entry_tag | default('—') %}
@@ -88,44 +87,60 @@
 {% set mom_warn = '(overextended)' in momentum or '(oversold)' in momentum %}
 {% set cat_lower = (enr.category | default('') | lower | replace(' ', '-')) or 'none' %}
 {% set total_shares = symbol_doc.total_shares | default(0) %}
+{% set in_calls = summary_in_calls | default(0) %}
+{% set put_exposure = summary_put_exposure | default(0) %}
 <div class="card">
     <div class="card-header"><h2>Summary</h2></div>
-    <div class="summary-grid">
-        <div class="summary-item">
-            <span class="summary-label">Price</span>
-            <span class="summary-value mono">{% if metrics.current_price %}${{ "%.2f" | format(metrics.current_price) }}{% else %}—{% endif %}</span>
-        </div>
-        <div class="summary-item">
-            <span class="summary-label">Category</span>
-            <span class="summary-value">{% if enr.category %}<span class="badge badge-cat-{{ cat_lower }}">{{ enr.category }}</span>{% else %}—{% endif %}</span>
-        </div>
-        <div class="summary-item">
-            <span class="summary-label">DGI Score</span>
-            <span class="summary-value mono {{ score_class }}">{{ "%.1f" | format(score) }}</span>
-        </div>
-        <div class="summary-item">
-            <span class="summary-label">Tech Timing</span>
-            <span class="summary-value mono">{% if technicals.score is defined %}{{ "%.1f" | format(technicals.score) }}{% else %}—{% endif %}</span>
-        </div>
-        <div class="summary-item">
-            <span class="summary-label">Entry</span>
-            <span class="summary-value">{% if enr.entry_tag %}<span class="badge badge-entry-{{ tag_lower }}">{{ tag }}</span>{% else %}—{% endif %}</span>
-        </div>
-        <div class="summary-item">
-            <span class="summary-label">Momentum</span>
-            <span class="summary-value">{% if momentum %}<span class="badge badge-momentum-{{ mom_lower }}">{% if mom_warn %}⚠️ {% endif %}{{ momentum }}</span>{% else %}—{% endif %}</span>
-        </div>
-        <div class="summary-item">
-            <span class="summary-label">Shares</span>
-            <span class="summary-value mono">{% if total_shares > 0 %}{{ total_shares }}{% else %}—{% endif %}</span>
-        </div>
-        <div class="summary-item">
-            <span class="summary-label">Div Yield</span>
-            <span class="summary-value mono">{% if metrics.dividend_yield %}{{ "%.2f" | format(metrics.dividend_yield * 100) }}%{% else %}—{% endif %}</span>
-        </div>
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Category</th>
+                    <th>DGI Score</th>
+                    <th>Tech Timing</th>
+                    <th>Entry</th>
+                    <th>Momentum</th>
+                    <th>Price</th>
+                    <th>Shares</th>
+                    <th>In Calls</th>
+                    <th>Puts $</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>{{ symbol_doc.symbol }}</strong></td>
+                    <td>
+                        {% if enr.category %}
+                        <span class="badge badge-cat-{{ cat_lower }}">{{ enr.category }}</span>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="mono">
+                        {% if score > 0 %}
+                        <span class="{{ score_class }}">
+                            <span class="score-bar"><span class="score-bar-fill" style="width:{{ score }}%"></span></span>
+                            {{ "%.1f" | format(score) }}
+                        </span>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="mono">{% if technicals.score is defined %}{{ "%.1f" | format(technicals.score) }}{% else %}—{% endif %}</td>
+                    <td>{% if enr.entry_tag %}<span class="badge badge-entry-{{ tag_lower }}">{{ tag }}</span>{% else %}—{% endif %}</td>
+                    <td>
+                        {% if momentum %}
+                        <span class="badge badge-momentum-{{ mom_lower }}">
+                            {% if mom_warn %}⚠️ {% endif %}{{ momentum }}
+                        </span>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="mono">{% if metrics.current_price %}${{ "%.2f" | format(metrics.current_price) }}{% else %}—{% endif %}</td>
+                    <td class="mono">{% if total_shares > 0 %}{{ total_shares }}{% else %}—{% endif %}</td>
+                    <td class="mono">{% if in_calls > 0 %}{{ in_calls }}{% else %}—{% endif %}</td>
+                    <td class="mono">{% if put_exposure > 0 %}${{ "{:,.0f}".format(put_exposure) }}{% else %}—{% endif %}</td>
+                </tr>
+            </tbody>
+        </table>
     </div>
 </div>
-{% endif %}
 
 <!-- Positions -->
 <div class="card">

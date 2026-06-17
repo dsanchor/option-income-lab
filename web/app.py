@@ -1892,6 +1892,15 @@ async def symbol_detail_page(request: Request, symbol: str):
                 "timestamp": alt.get("timestamp"),
             }
 
+    # Compute summary stats for the symbol detail summary table
+    active_positions = [p for p in doc.get("positions", [])
+                        if p.get("status") == "active"]
+    summary_in_calls = sum(100 for p in active_positions if p.get("type") == "call")
+    summary_put_exposure = sum(
+        float(p.get("strike", 0)) * 100
+        for p in active_positions if p.get("type") == "put"
+    )
+
     return templates.TemplateResponse("symbol_detail.html", {
         "request": request,
         "symbol_doc": doc,
@@ -1899,6 +1908,8 @@ async def symbol_detail_page(request: Request, symbol: str):
         "alerts": alerts,
         "latest_sell_alerts": latest_sell_alerts,
         "agent_types": AGENT_TYPES,
+        "summary_in_calls": summary_in_calls,
+        "summary_put_exposure": summary_put_exposure,
     })
 
 
