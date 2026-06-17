@@ -4,8 +4,7 @@ import signal
 import asyncio
 import asyncio.base_subprocess
 import gc
-from datetime import datetime
-import pytz
+from datetime import datetime, timezone
 
 from croniter import croniter
 
@@ -65,6 +64,11 @@ def _run_async(coro):
             loop.close()
 
 
+def _now_local():
+    """Return the current local timezone-aware datetime."""
+    return datetime.now().astimezone()
+
+
 class OptionsAgentScheduler:
     """Main scheduler for cron-based options agent execution."""
     
@@ -84,11 +88,9 @@ class OptionsAgentScheduler:
         self._last_config_reload = None
         self._config_reload_interval = 60  # seconds
     
-    def reschedule(self, new_cron: str, new_timezone: str = None):
-        """Update cron expression and/or timezone. The run loop will pick it up on next iteration."""
+    def reschedule(self, new_cron: str):
+        """Update cron expression. The run loop will pick it up on next iteration."""
         self.config.cron_expression = new_cron
-        if new_timezone:
-            self.config.timezone = new_timezone
         self._cron_changed = True
     
     def reschedule_summary(self, new_cron: str):
@@ -170,7 +172,7 @@ class OptionsAgentScheduler:
         )
         
         print(f"Scheduler configured with cron: {self.config.cron_expression}")
-        print(f"Scheduler timezone: {self.config.timezone}")
+        print(f"System timezone: {self.config.timezone}")
         
         # Log summary agent configuration
         summary_config = self.config.config.get('summary_agent', {})
@@ -182,7 +184,6 @@ class OptionsAgentScheduler:
         print(f"  Enabled: {summary_enabled}")
         if summary_enabled:
             print(f"  Cron: {summary_cron}")
-            print(f"  Timezone: {self.config.timezone}")
             print(f"  Activity count: {summary_activity_count}")
         else:
             print(f"  Status: Disabled in config")
@@ -196,7 +197,6 @@ class OptionsAgentScheduler:
         print(f"  Enabled: {options_chain_enabled}")
         if options_chain_enabled:
             print(f"  Cron: {options_chain_cron}")
-            print(f"  Timezone: {self.config.timezone}")
         else:
             print(f"  Status: Disabled in config")
         
@@ -209,7 +209,6 @@ class OptionsAgentScheduler:
         print(f"  Enabled: {dgi_enabled}")
         if dgi_enabled:
             print(f"  Cron: {dgi_cron}")
-            print(f"  Timezone: {self.config.timezone}")
         else:
             print(f"  Status: Disabled in config")
 
@@ -222,7 +221,6 @@ class OptionsAgentScheduler:
         print(f"  Enabled: {banner_enabled}")
         if banner_enabled:
             print(f"  Cron: {banner_cron}")
-            print(f"  Timezone: {self.config.timezone}")
             print(f"  Model: {self.config.model_for('banner')}")
             print(f"  Max items: {banner_max_items}")
         else:
@@ -236,7 +234,6 @@ class OptionsAgentScheduler:
         print(f"  Enabled: {calendar_enabled}")
         if calendar_enabled:
             print(f"  Cron: {calendar_cron}")
-            print(f"  Timezone: {self.config.timezone}")
         else:
             print(f"  Status: Disabled in config")
     
@@ -246,8 +243,7 @@ class OptionsAgentScheduler:
     
     async def _run_all_agents_async(self):
         """Execute all agents asynchronously."""
-        tz = pytz.timezone(self.config.timezone)
-        now_tz = datetime.now(tz)
+        now_tz = _now_local()
         print(f"\n{'#'*70}")
         print(f"# Starting scheduled agent run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'#'*70}\n")
@@ -271,8 +267,7 @@ class OptionsAgentScheduler:
             except Exception as e:
                 print(f"ERROR running {agent_name}: {str(e)}")
         
-        tz = pytz.timezone(self.config.timezone)
-        now_tz = datetime.now(tz)
+        now_tz = _now_local()
         print(f"\n{'#'*70}")
         print(f"# Completed scheduled agent run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'#'*70}\n")
@@ -288,8 +283,7 @@ class OptionsAgentScheduler:
             print("⏭️  Summary agent disabled in config")
             return
         
-        tz = pytz.timezone(self.config.timezone)
-        now_tz = datetime.now(tz)
+        now_tz = _now_local()
         print(f"\n{'='*70}")
         print(f"📊 Summary Agent - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'='*70}\n")
@@ -315,8 +309,7 @@ class OptionsAgentScheduler:
         
         from .options_chain_cache import get_options_chain_cache
         
-        tz = pytz.timezone(self.config.timezone)
-        now_tz = datetime.now(tz)
+        now_tz = _now_local()
         print(f"\n{'~'*70}")
         print(f"📈 Options Chain Cache Refresh - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'~'*70}\n")
@@ -344,8 +337,7 @@ class OptionsAgentScheduler:
             print("⏭️  DGI Screener disabled in config")
             return
         
-        tz = pytz.timezone(self.config.timezone)
-        now_tz = datetime.now(tz)
+        now_tz = _now_local()
         print(f"\n{'+'*70}")
         print(f"🔍 DGI Screener - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'+'*70}\n")
@@ -371,8 +363,7 @@ class OptionsAgentScheduler:
 
         from .portfolio_enrichment import run_portfolio_enrichment
 
-        tz = pytz.timezone(self.config.timezone)
-        now_tz = datetime.now(tz)
+        now_tz = _now_local()
         print(f"\n{'📊'*1}{'='*68}")
         print(f"📊 Portfolio Enrichment - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'='*70}\n")
@@ -395,8 +386,7 @@ class OptionsAgentScheduler:
             print("⏭️  Dashboard banner agent disabled in config")
             return
 
-        tz = pytz.timezone(self.config.timezone)
-        now_tz = datetime.now(tz)
+        now_tz = _now_local()
         print(f"\n{'*'*70}")
         print(f"📰 Dashboard Banner Agent - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'*'*70}\n")
@@ -419,8 +409,7 @@ class OptionsAgentScheduler:
             print("⏭️  Calendar sync disabled in config")
             return
 
-        tz = pytz.timezone(self.config.timezone)
-        now_tz = datetime.now(tz)
+        now_tz = _now_local()
         print(f"\n{'📅'*35}")
         print(f"📅 Calendar Sync - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'📅'*35}\n")
@@ -480,7 +469,7 @@ class OptionsAgentScheduler:
         self.running = False
     
     def _reload_config_from_cosmos(self):
-        """Reload settings from CosmosDB and detect changes to cron/timezone.
+        """Reload settings from CosmosDB and detect cron changes.
         
         This method is called periodically to pick up configuration changes
         made through the web UI without requiring a scheduler restart.
@@ -495,24 +484,14 @@ class OptionsAgentScheduler:
             summary_cron_changed = False
             options_chain_cron_changed = False
             banner_cron_changed = False
-            timezone_changed = False
             
             # Check scheduler settings
             scheduler_settings = cosmos_settings.get('scheduler', {})
             new_cron = scheduler_settings.get('cron')
-            new_timezone = scheduler_settings.get('timezone')
             
             if new_cron and new_cron != self.config.cron_expression:
                 self.config.cron_expression = new_cron
                 main_cron_changed = True
-            
-            if new_timezone and new_timezone != self.config.timezone:
-                old_timezone = self.config.timezone
-                self.config.timezone = new_timezone
-                timezone_changed = True
-                # If timezone changed, recalculate both schedules
-                if not main_cron_changed:
-                    main_cron_changed = True
             
             # Check summary agent settings
             summary_settings = cosmos_settings.get('summary_agent', {})
@@ -591,8 +570,6 @@ class OptionsAgentScheduler:
             # Set flags for the main loop to pick up
             if main_cron_changed:
                 self._cron_changed = True
-                if timezone_changed:
-                    print(f"✓ Config reloaded from CosmosDB: timezone changed to {new_timezone}")
                 if new_cron:
                     print(f"✓ Config reloaded from CosmosDB: monitor cron changed to {new_cron}")
             
@@ -675,8 +652,7 @@ class OptionsAgentScheduler:
         
         self.setup()
         
-        tz = pytz.timezone(self.config.timezone)
-        now_tz = datetime.now(tz)
+        now_tz = _now_local()
         
         # Initialize main scheduler cron
         cron = croniter(self.config.cron_expression, now_tz)
@@ -820,12 +796,10 @@ class OptionsAgentScheduler:
             # Check if main cron was updated from the web UI
             if self._cron_changed:
                 self._cron_changed = False
-                tz = pytz.timezone(self.config.timezone)
-                now_tz = datetime.now(tz)
+                now_tz = _now_local()
                 cron = croniter(self.config.cron_expression, now_tz)
                 next_run = cron.get_next(datetime)
                 print(f"Monitor agents cron rescheduled to: {self.config.cron_expression}")
-                print(f"Timezone: {self.config.timezone}")
                 print(f"Next scheduled run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
             
             # Check if summary cron was updated from the web UI
@@ -834,8 +808,7 @@ class OptionsAgentScheduler:
                 summary_config = self.config.config.get('summary_agent', {})
                 summary_cron_expr = summary_config.get('cron', '0 8 * * *')
                 try:
-                    tz = pytz.timezone(self.config.timezone)
-                    now_tz = datetime.now(tz)
+                    now_tz = _now_local()
                     summary_cron = croniter(summary_cron_expr, now_tz)
                     summary_next_run = summary_cron.get_next(datetime)
                     summary_enabled = summary_config.get('enabled', True)
@@ -851,8 +824,7 @@ class OptionsAgentScheduler:
                 options_chain_config = self.config.config.get('options_chain_scheduler', {})
                 options_chain_cron_expr = options_chain_config.get('cron', '0 * * * *')
                 try:
-                    tz = pytz.timezone(self.config.timezone)
-                    now_tz = datetime.now(tz)
+                    now_tz = _now_local()
                     options_chain_cron = croniter(options_chain_cron_expr, now_tz)
                     options_chain_next_run = options_chain_cron.get_next(datetime)
                     options_chain_enabled = options_chain_config.get('enabled', True)
@@ -868,8 +840,7 @@ class OptionsAgentScheduler:
                 dgi_config = self.config.config.get('dgi_screener', {})
                 dgi_cron_expr = dgi_config.get('cron', '0 6 * * 1-5')
                 try:
-                    tz = pytz.timezone(self.config.timezone)
-                    now_tz = datetime.now(tz)
+                    now_tz = _now_local()
                     dgi_cron = croniter(dgi_cron_expr, now_tz)
                     dgi_next_run = dgi_cron.get_next(datetime)
                     dgi_enabled = dgi_config.get('enabled', True)
@@ -885,8 +856,7 @@ class OptionsAgentScheduler:
                 banner_config = self.config.config.get('banner_agent', {})
                 banner_cron_expr = banner_config.get('cron', '0 5 * * *')
                 try:
-                    tz = pytz.timezone(self.config.timezone)
-                    now_tz = datetime.now(tz)
+                    now_tz = _now_local()
                     banner_cron = croniter(banner_cron_expr, now_tz)
                     banner_next_run = banner_cron.get_next(datetime)
                     banner_enabled = banner_config.get('enabled', True)
@@ -902,8 +872,7 @@ class OptionsAgentScheduler:
                 calendar_config = self.config.config.get('calendar_sync', {})
                 calendar_cron_expr = calendar_config.get('cron', '0 5 * * 1-5')
                 try:
-                    tz = pytz.timezone(self.config.timezone)
-                    now_tz = datetime.now(tz)
+                    now_tz = _now_local()
                     calendar_cron = croniter(calendar_cron_expr, now_tz)
                     calendar_next_run = calendar_cron.get_next(datetime)
                     calendar_enabled = calendar_config.get('enabled', True)
@@ -918,8 +887,7 @@ class OptionsAgentScheduler:
                 pe_config = self.config.config.get('portfolio_enrichment', {})
                 pe_cron_expr = pe_config.get('cron', '0 9-17 * * 1-5')
                 try:
-                    tz = pytz.timezone(self.config.timezone)
-                    now_tz = datetime.now(tz)
+                    now_tz = _now_local()
                     pe_cron = croniter(pe_cron_expr, now_tz)
                     pe_next_run = pe_cron.get_next(datetime)
                     pe_enabled = pe_config.get('enabled', True)
@@ -929,7 +897,7 @@ class OptionsAgentScheduler:
                     print(f"⚠️  Invalid portfolio enrichment cron expression '{pe_cron_expr}': {e}")
                     pe_enabled = False
 
-            now_tz = datetime.now(tz)
+            now_tz = _now_local()
             
             # Check main scheduler
             if now_tz >= next_run:

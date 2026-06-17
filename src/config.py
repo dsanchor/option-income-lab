@@ -1,7 +1,8 @@
 import os
 import re
+import time
+from datetime import datetime
 import yaml
-import pytz
 from typing import Any, Dict
 
 from .llm import LlmConfig
@@ -161,21 +162,15 @@ class Config:
 
     @property
     def timezone(self) -> str:
-        tz_str = self.config.get('scheduler', {}).get('timezone', 'America/New_York')
-        try:
-            pytz.timezone(tz_str)
-            return tz_str
-        except pytz.exceptions.UnknownTimeZoneError:
-            print(f"WARNING: Invalid timezone '{tz_str}', falling back to 'America/New_York'")
-            return 'America/New_York'
-
-    @timezone.setter
-    def timezone(self, value: str):
-        try:
-            pytz.timezone(value)
-            self.config['scheduler']['timezone'] = value
-        except pytz.exceptions.UnknownTimeZoneError:
-            raise ValueError(f"Invalid timezone: {value}")
+        tzinfo = datetime.now().astimezone().tzinfo
+        if tzinfo is None:
+            return time.tzname[0] if time.tzname else 'local'
+        return (
+            getattr(tzinfo, 'key', None)
+            or getattr(tzinfo, 'zone', None)
+            or tzinfo.tzname(None)
+            or str(tzinfo)
+        )
 
     # ── Context ────────────────────────────────────────────────────────
 

@@ -474,7 +474,32 @@ def _json_pretty(value: Any) -> str:
 templates.env.filters["json_pretty"] = _json_pretty
 
 
-# ── Startup — initialise CosmosDB ─────────────────────────────────────────
+def _time_ago(ts_str: str) -> str:
+    """Convert ISO timestamp to 'Xh Ym ago' format."""
+    if not ts_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - dt.astimezone(timezone.utc)
+        total_minutes = int(delta.total_seconds() // 60)
+        if total_minutes < 0:
+            return "just now"
+        hours = total_minutes // 60
+        minutes = total_minutes % 60
+        if hours > 0 and minutes > 0:
+            return f"{hours}h {minutes}m ago"
+        elif hours > 0:
+            return f"{hours}h ago"
+        elif minutes > 0:
+            return f"{minutes}m ago"
+        else:
+            return "just now"
+    except (ValueError, TypeError):
+        return ""
+
+templates.env.filters["time_ago"] = _time_ago
 
 async def init_cosmos(app_instance):
     """Initialise CosmosDB on the given FastAPI app. Safe to call from
@@ -1378,6 +1403,13 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
             acts.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
             recent_by_key[k] = acts[:1]
 
+        # Most recent activity timestamp for this agent (for "last update X ago")
+        agent_last_ts = ""
+        if agent_acts:
+            agent_last_ts = max(
+                (a.get("timestamp", "") for a in agent_acts), default=""
+            )
+
         rows = []
         for key, group in groups.items():
             # Extract the base symbol from the key for linking
@@ -1526,6 +1558,7 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
             "rows": rows,
             "totals": total_counts,
             "is_position_monitor": is_pm,
+            "last_update_ts": agent_last_ts,
         })
 
     return agent_tables, grand_totals
@@ -1649,9 +1682,15 @@ async def symbols_page(request: Request):
         key=lambda s: (s.get("enrichment", {}) or {}).get("quality_score", -1),
         reverse=True,
     )
+    # Most recent enrichment timestamp for "last update" display
+    enrichment_ts = max(
+        ((s.get("enrichment") or {}).get("last_updated", "") for s in symbols),
+        default=""
+    )
     return templates.TemplateResponse("symbols.html", {
         "request": request,
         "symbols": symbols,
+        "last_update_ts": enrichment_ts,
     })
 
 
@@ -3581,11 +3620,13 @@ async def dgi_page(request: Request):
             error = f"Failed to load DGI data: {e}"
 
     # Determine last run from the most recent last_updated timestamp
+    dgi_last_update_ts = ""
     if top_entries:
         timestamps = [e.get("last_updated", "") for e in top_entries if e.get("last_updated")]
         if timestamps:
             try:
                 latest = max(timestamps)
+                dgi_last_update_ts = str(latest)
                 last_dt = datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
                 if last_dt.tzinfo is None:
                     last_dt = last_dt.replace(tzinfo=timezone.utc)
@@ -3611,6 +3652,7 @@ async def dgi_page(request: Request):
         "top20": top_entries,
         "last_run": last_run,
         "next_run": next_run,
+        "last_update_ts": dgi_last_update_ts,
         "error": error,
     })
 

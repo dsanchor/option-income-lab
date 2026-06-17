@@ -51,7 +51,7 @@
 {% for agent in agent_tables %}
 <div class="card agent-card">
     <div class="card-header">
-        <h2>{{ agent.label }}</h2>
+        <h2>{{ agent.label }}{% if agent.last_update_ts %} <span class="card-badge">last update {{ agent.last_update_ts | time_ago }}</span>{% endif %}</h2>
         <div style="display:flex; align-items:center; gap:0.5rem;">
             <button class="btn-trigger" data-agent="{{ agent.key }}" title="Run this agent now">▶ Run Analysis</button>
         </div>
