@@ -90,9 +90,6 @@
             </div>
         </div>
     </div>
-    <div class="filter-actions">
-        <button id="economics-apply" class="btn-sm">Apply</button>
-    </div>
 </div>
 
 <div class="card">
@@ -275,9 +272,9 @@
         menu.addEventListener('click', e => e.stopPropagation());
     });
 
-    // Update labels on checkbox change
-    monthDropdown.addEventListener('change', () => updateDropdownLabel(monthDropdown, 'All Months'));
-    symbolDropdown.addEventListener('change', () => updateDropdownLabel(symbolDropdown, 'All Symbols'));
+    // Update labels on checkbox change and auto-apply
+    monthDropdown.addEventListener('change', () => { updateDropdownLabel(monthDropdown, 'All Months'); fetchEconomics(); });
+    symbolDropdown.addEventListener('change', () => { updateDropdownLabel(symbolDropdown, 'All Symbols'); fetchEconomics(); });
 
     function syncUrl() {
         const params = new URLSearchParams();
@@ -548,10 +545,11 @@
             } else {
                 state.status = value;
             }
+            fetchEconomics();
         });
     });
 
-    document.getElementById('economics-apply').addEventListener('click', fetchEconomics);
+    yearSelect.addEventListener('change', fetchEconomics);
 
     document.querySelectorAll('[data-sort-key]').forEach((header) => {
         header.addEventListener('click', () => {
