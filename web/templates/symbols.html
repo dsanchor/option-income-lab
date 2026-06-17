@@ -24,13 +24,13 @@
 
 <!-- Watchlist table -->
 {% if symbols %}
-<div class="card" style="margin-bottom:1rem;">
+<div class="card">
 <!-- Signal Filters -->
-<div class="card-header" style="display:flex;justify-content:space-between;align-items:center;padding:1rem 1.25rem;">
-    <h2 style="margin:0;font-size:1.1rem;">Filters</h2>
-    <span id="signalFilterCount" style="font-size:0.9rem;color:var(--text-muted);">{{ symbols|length }} symbols</span>
+<div class="card-header">
+    <h2>Filters</h2>
+    <span id="signalFilterCount" class="card-badge">{{ symbols|length }} symbols</span>
 </div>
-<div style="padding:0.75rem 1.25rem;">
+<div class="filter-panel">
     <div class="filter-pills" id="signal-filter-pills" data-value="">
         <button type="button" class="pill active" data-value="">All</button>
         <button type="button" class="pill" data-value="ideal-puts" title="(SB/Buy + Bullish/Neutral/Weakening) or (any + Oversold) — confluent setup for selling puts">Ideal Puts</button>
@@ -45,7 +45,7 @@
 <div class="card">
 <div class="card-header"><h2>Symbols</h2></div>
 <div class="table-wrap">
-    <table class="dgi-table" id="symbolsTable">
+    <table class="data-table" id="symbolsTable">
         <thead>
             <tr>
                 <th class="sortable" data-col="symbol" data-type="str">Symbol<span class="sort-indicator"></span></th>
