@@ -441,6 +441,10 @@ def _clean_doc(doc: dict) -> dict:
     return {k: v for k, v in doc.items() if k not in _COSMOS_SYSTEM_KEYS}
 
 
+def _sort_by_updated_at_desc(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(items, key=lambda item: item.get("updated_at", ""), reverse=True)
+
+
 def _local_now() -> datetime:
     return datetime.now().astimezone()
 
@@ -1262,6 +1266,213 @@ async def api_dps_analysis(request: Request, symbol: str, position_id: str):
 
 
 # ===========================================================================
+# REST API — Action Plans
+# ===========================================================================
+
+_PLAN_TYPES = {"sell_put", "sell_call", "buy_shares", "roll", "close", "other"}
+_PLAN_STATUSES = {"planned", "active", "completed", "cancelled"}
+_PLAN_PRIORITIES = {"high", "medium", "low"}
+
+
+@app.get("/api/plans")
+async def api_list_plans(request: Request,
+                         status: Optional[str] = Query(default=None),
+                         symbol: Optional[str] = Query(default=None)):
+    try:
+        cosmos = _get_cosmos(request)
+        normalized_status = status.strip().lower() if status else None
+        normalized_symbol = symbol.strip().upper() if symbol else None
+
+        if normalized_status and normalized_status not in _PLAN_STATUSES:
+            return JSONResponse(
+                {"error": "status must be 'planned', 'active', 'completed', or 'cancelled'"},
+                status_code=400,
+            )
+
+        plans = cosmos.get_plans(symbol=normalized_symbol, status=normalized_status)
+        return JSONResponse([_clean_doc(plan) for plan in plans])
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/symbols/{symbol}/plans")
+async def api_list_symbol_plans(request: Request, symbol: str):
+    try:
+        cosmos = _get_cosmos(request)
+        symbol = symbol.upper()
+        if not cosmos.get_symbol(symbol):
+            return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
+        plans = cosmos.get_plans(symbol=symbol)
+        return JSONResponse([_clean_doc(plan) for plan in plans])
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/symbols/{symbol}/plans")
+async def api_create_plan(request: Request, symbol: str):
+    try:
+        cosmos = _get_cosmos(request)
+        symbol = symbol.upper()
+        if not cosmos.get_symbol(symbol):
+            return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
+
+        body = await request.json()
+        title = body.get("title", "")
+        objective = body.get("objective", "")
+        conditions = body.get("conditions", "")
+        plan_type = str(body.get("plan_type", "other")).strip().lower()
+        status = str(body.get("status", "planned")).strip().lower()
+        priority = str(body.get("priority", "medium")).strip().lower()
+
+        if not isinstance(title, str) or not title.strip():
+            return JSONResponse({"error": "title is required"}, status_code=400)
+        if objective is not None and not isinstance(objective, str):
+            return JSONResponse({"error": "objective must be a string"}, status_code=400)
+        if conditions is not None and not isinstance(conditions, str):
+            return JSONResponse({"error": "conditions must be a string"}, status_code=400)
+        if plan_type not in _PLAN_TYPES:
+            return JSONResponse(
+                {"error": "plan_type must be 'sell_put', 'sell_call', 'buy_shares', 'roll', 'close', or 'other'"},
+                status_code=400,
+            )
+        if status not in _PLAN_STATUSES:
+            return JSONResponse(
+                {"error": "status must be 'planned', 'active', 'completed', or 'cancelled'"},
+                status_code=400,
+            )
+        if priority not in _PLAN_PRIORITIES:
+            return JSONResponse(
+                {"error": "priority must be 'high', 'medium', or 'low'"},
+                status_code=400,
+            )
+
+        doc = cosmos.create_plan(symbol, {
+            "title": title.strip(),
+            "objective": objective.strip() if isinstance(objective, str) else "",
+            "plan_type": plan_type,
+            "status": status,
+            "priority": priority,
+            "conditions": conditions.strip() if isinstance(conditions, str) else "",
+            "agent_notes": body.get("agent_notes", []) if isinstance(body.get("agent_notes"), list) else [],
+        })
+        return JSONResponse(_clean_doc(doc), status_code=201)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/symbols/{symbol}/plans/{plan_id}")
+async def api_get_plan(request: Request, symbol: str, plan_id: str):
+    try:
+        cosmos = _get_cosmos(request)
+        doc = cosmos.get_plan(symbol.upper(), plan_id)
+        if not doc:
+            return JSONResponse({"error": f"Plan {plan_id} not found"}, status_code=404)
+        return JSONResponse(_clean_doc(doc))
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.put("/api/symbols/{symbol}/plans/{plan_id}")
+async def api_update_plan(request: Request, symbol: str, plan_id: str):
+    try:
+        cosmos = _get_cosmos(request)
+        body = await request.json()
+        updates = {}
+
+        if "title" in body:
+            if not isinstance(body["title"], str) or not body["title"].strip():
+                return JSONResponse({"error": "title must be a non-empty string"}, status_code=400)
+            updates["title"] = body["title"].strip()
+        if "objective" in body:
+            if not isinstance(body["objective"], str):
+                return JSONResponse({"error": "objective must be a string"}, status_code=400)
+            updates["objective"] = body["objective"].strip()
+        if "conditions" in body:
+            if not isinstance(body["conditions"], str):
+                return JSONResponse({"error": "conditions must be a string"}, status_code=400)
+            updates["conditions"] = body["conditions"].strip()
+        if "plan_type" in body:
+            plan_type = str(body["plan_type"]).strip().lower()
+            if plan_type not in _PLAN_TYPES:
+                return JSONResponse(
+                    {"error": "plan_type must be 'sell_put', 'sell_call', 'buy_shares', 'roll', 'close', or 'other'"},
+                    status_code=400,
+                )
+            updates["plan_type"] = plan_type
+        if "status" in body:
+            status = str(body["status"]).strip().lower()
+            if status not in _PLAN_STATUSES:
+                return JSONResponse(
+                    {"error": "status must be 'planned', 'active', 'completed', or 'cancelled'"},
+                    status_code=400,
+                )
+            updates["status"] = status
+        if "priority" in body:
+            priority = str(body["priority"]).strip().lower()
+            if priority not in _PLAN_PRIORITIES:
+                return JSONResponse(
+                    {"error": "priority must be 'high', 'medium', or 'low'"},
+                    status_code=400,
+                )
+            updates["priority"] = priority
+        if "agent_notes" in body:
+            if not isinstance(body["agent_notes"], list):
+                return JSONResponse({"error": "agent_notes must be a list"}, status_code=400)
+            updates["agent_notes"] = body["agent_notes"]
+
+        doc = cosmos.update_plan(symbol.upper(), plan_id, updates)
+        return JSONResponse(_clean_doc(doc))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.delete("/api/symbols/{symbol}/plans/{plan_id}")
+async def api_delete_plan(request: Request, symbol: str, plan_id: str):
+    try:
+        cosmos = _get_cosmos(request)
+        cosmos.delete_plan(symbol.upper(), plan_id)
+        return JSONResponse({"status": "deleted", "id": plan_id, "symbol": symbol.upper()})
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/symbols/{symbol}/plans/{plan_id}/notes")
+async def api_add_plan_note(request: Request, symbol: str, plan_id: str):
+    try:
+        cosmos = _get_cosmos(request)
+        body = await request.json()
+        note = body.get("note", "")
+        if not isinstance(note, str) or not note.strip():
+            return JSONResponse({"error": "note is required"}, status_code=400)
+        doc = cosmos.add_plan_note(symbol.upper(), plan_id, note.strip())
+        return JSONResponse(_clean_doc(doc))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ===========================================================================
 # REST API — Data Views
 # ===========================================================================
 
@@ -1659,6 +1870,26 @@ async def economics_page(request: Request):
 
 
 # ===========================================================================
+# Page Routes — Plans
+# ===========================================================================
+
+@app.get("/plans", response_class=HTMLResponse)
+async def plans_page(request: Request):
+    cosmos = getattr(request.app.state, "cosmos", None)
+    symbols = cosmos.list_symbols() if cosmos else []
+    plans = _sort_by_updated_at_desc(cosmos.get_plans() if cosmos else [])
+    return templates.TemplateResponse("plans.html", {
+        "request": request,
+        "plans": plans,
+        "symbols": sorted(
+            s.get("symbol", "")
+            for s in symbols
+            if s.get("symbol")
+        ),
+    })
+
+
+# ===========================================================================
 # Page Routes — Symbols
 # ===========================================================================
 
@@ -1822,6 +2053,7 @@ async def symbol_detail_page(request: Request, symbol: str):
     doc = cosmos.get_symbol(symbol.upper())
     if not doc:
         return HTMLResponse(f"Symbol {symbol} not found", status_code=404)
+    plans = _sort_by_updated_at_desc(cosmos.get_plans(symbol.upper()))
 
     # Gather recent activities AND alerts across all agent types (unified list)
     activities: List[Dict] = []
@@ -1906,6 +2138,7 @@ async def symbol_detail_page(request: Request, symbol: str):
         "symbol_doc": doc,
         "activities": activities,
         "alerts": alerts,
+        "plans": plans,
         "latest_sell_alerts": latest_sell_alerts,
         "agent_types": AGENT_TYPES,
         "summary_in_calls": summary_in_calls,

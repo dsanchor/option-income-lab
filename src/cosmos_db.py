@@ -243,6 +243,101 @@ class CosmosDBService:
                 filtered.append(doc)
         return filtered
 
+    # ── Action Plans ────────────────────────────────────────────────────
+
+    def create_plan(self, symbol: str, plan_data: dict) -> dict:
+        """Create an action plan for a symbol."""
+        if self.get_symbol(symbol) is None:
+            raise ValueError(f"Symbol {symbol} not found")
+
+        now = datetime.utcnow().isoformat() + "Z"
+        doc = {
+            "id": f"plan_{uuid4()}",
+            "doc_type": "action_plan",
+            "symbol": symbol,
+            "title": plan_data.get("title", ""),
+            "objective": plan_data.get("objective", ""),
+            "plan_type": plan_data.get("plan_type", "other"),
+            "status": plan_data.get("status", "planned"),
+            "priority": plan_data.get("priority", "medium"),
+            "conditions": plan_data.get("conditions", ""),
+            "agent_notes": plan_data.get("agent_notes", []),
+            "created_at": now,
+            "updated_at": now,
+        }
+        return self.container.create_item(doc)
+
+    def get_plans(self, symbol: str = None, status: str = None) -> list[dict]:
+        """List plans. Optional filters by symbol and/or status."""
+        conditions = ["c.doc_type = 'action_plan'"]
+        parameters: list[dict] = []
+
+        if symbol:
+            conditions.append("c.symbol = @symbol")
+            parameters.append({"name": "@symbol", "value": symbol})
+        if status:
+            conditions.append("c.status = @status")
+            parameters.append({"name": "@status", "value": status})
+
+        query = f"SELECT * FROM c WHERE {' AND '.join(conditions)}"
+        query_kwargs = {
+            "query": query,
+            "parameters": parameters,
+        }
+        if symbol:
+            query_kwargs["partition_key"] = symbol
+        else:
+            query_kwargs["enable_cross_partition_query"] = True
+
+        plans = list(self.container.query_items(**query_kwargs))
+        plans.sort(key=lambda plan: plan.get("updated_at", ""), reverse=True)
+        return plans
+
+    def get_plan(self, symbol: str, plan_id: str) -> Optional[dict]:
+        """Get a single plan by ID."""
+        try:
+            doc = self.container.read_item(item=plan_id, partition_key=symbol)
+        except CosmosResourceNotFoundError:
+            return None
+        if doc.get("doc_type") != "action_plan":
+            return None
+        return doc
+
+    def update_plan(self, symbol: str, plan_id: str, updates: dict) -> dict:
+        """Update plan fields (title, objective, status, etc.)."""
+        doc = self.get_plan(symbol, plan_id)
+        if doc is None:
+            raise ValueError(f"Plan {plan_id} not found")
+
+        immutable_fields = {"id", "doc_type", "symbol", "created_at"}
+        for key, value in updates.items():
+            if key in immutable_fields:
+                continue
+            doc[key] = value
+
+        doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        return self.container.replace_item(item=doc["id"], body=doc)
+
+    def delete_plan(self, symbol: str, plan_id: str) -> None:
+        """Delete a plan."""
+        if self.get_plan(symbol, plan_id) is None:
+            raise ValueError(f"Plan {plan_id} not found")
+        self.container.delete_item(item=plan_id, partition_key=symbol)
+
+    def add_plan_note(self, symbol: str, plan_id: str, note: str) -> dict:
+        """Append an agent note to the plan."""
+        doc = self.get_plan(symbol, plan_id)
+        if doc is None:
+            raise ValueError(f"Plan {plan_id} not found")
+
+        timestamp = datetime.utcnow().isoformat() + "Z"
+        doc.setdefault("agent_notes", []).append({
+            "timestamp": timestamp,
+            "note": note,
+        })
+        doc["updated_at"] = timestamp
+        return self.container.replace_item(item=doc["id"], body=doc)
+
     # ── Position Management ────────────────────────────────────────────
 
     @staticmethod
