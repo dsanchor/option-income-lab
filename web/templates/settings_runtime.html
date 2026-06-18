@@ -4,50 +4,55 @@
 {% block content %}
 <div class="page-header">
     <h1>📊 Runtime Stats</h1>
-    <p class="subtitle">Agent runs and fetch performance metrics.</p>
+    <p class="subtitle">Cache status, agent performance, and data fetch metrics.</p>
 </div>
 
-<!-- Option Chain Source -->
+<!-- Options Chain Cache -->
 <div class="card settings-card">
     <div class="card-header">
-        <h2>🔗 Primary Option Chain Source</h2>
+        <h2>🗄️ Options Chain Cache</h2>
     </div>
     <div style="padding: 0.75rem 1.25rem;">
-        <div class="summary-card summary-card-chain {{ 'chain-primary' if chain_source == 'yfinance' else ('chain-secondary' if chain_source == 'tradingview' else 'chain-unknown') }}" style="border:none; box-shadow:none; padding:0.5rem 0;">
-            <span class="chain-dot">●</span>
-            <div class="summary-label" style="margin-top:0.4rem; font-size:0.95rem;">
-                {% if chain_source == 'yfinance' %}
-                    yfinance <span style="color:var(--text-muted); font-size:0.8rem;">(primary source — live data)</span>
-                {% elif chain_source == 'tradingview' %}
-                    TradingView <span style="color:var(--text-muted); font-size:0.8rem;">(secondary source — Playwright fallback)</span>
-                {% else %}
-                    Unknown <span style="color:var(--text-muted); font-size:0.8rem;">(could not determine data source)</span>
-                {% endif %}
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Scheduler Status -->
-<div class="card settings-card">
-    <div class="card-header">
-        <h2>⏰ Scheduler Status</h2>
-    </div>
-    <div style="padding: 0.75rem 1.25rem;">
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
+        {% if cache_stats and cache_stats.entries_count is defined %}
+        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:1rem; margin-bottom:1rem;">
             <div>
-                <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Last Run</label>
-                <div style="padding:0.5rem 0.8rem; background:var(--bg-input, var(--bg)); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
-                    {{ last_run or "Never" }}
-                </div>
+                <span style="font-size:0.75rem; text-transform:uppercase; color:var(--text-muted);">TTL</span>
+                <div class="mono" style="font-size:1.1rem;">{{ (cache_stats.ttl_seconds / 60) | int }}m</div>
             </div>
             <div>
-                <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
-                <div style="padding:0.5rem 0.8rem; background:var(--bg-input, var(--bg)); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
-                    {{ next_run or "N/A" }}
-                </div>
+                <span style="font-size:0.75rem; text-transform:uppercase; color:var(--text-muted);">Cached Symbols</span>
+                <div class="mono" style="font-size:1.1rem;">{{ cache_stats.entries_count }}</div>
             </div>
         </div>
+        {% if cache_stats.entries %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Age</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for sym, info in cache_stats.entries.items() %}
+                <tr>
+                    <td><strong>{{ sym }}</strong></td>
+                    <td class="mono">{{ (info.age_seconds / 60) | round(1) }}m</td>
+                    <td>
+                        {% if info.expired %}
+                        <span class="badge" style="background:var(--red, #ef4444); color:#fff;">Expired</span>
+                        {% else %}
+                        <span class="badge" style="background:var(--green, #00a87e); color:#fff;">Fresh</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        {% else %}
+        <div style="color: var(--text-muted);">Cache empty — entries will appear after first options chain request.</div>
+        {% endif %}
     </div>
 </div>
 
@@ -58,10 +63,10 @@
     </div>
     {% if telemetry_stats and telemetry_stats.get('agent_run') %}
     <div style="padding: 0.75rem 1.25rem;">
-        <table class="table">
+        <table class="data-table">
             <thead>
                 <tr>
-                    <th>Agent Type</th>
+                    <th>Agent</th>
                     <th>Today</th>
                     <th>7 Days</th>
                     <th>30 Days</th>
@@ -76,10 +81,8 @@
                     {% for period in ['today', '7d', '30d'] %}
                     <td class="mono">
                         {% if ag.get(period, {}).get('count', 0) > 0 %}
-                        {{ ag[period]['avg_duration'] }}s ({{ ag[period]['count'] }} runs)
-                        {% else %}
-                        —
-                        {% endif %}
+                        {{ ag[period]['avg_duration'] }}s <span style="color:var(--text-muted); font-size:0.8rem;">({{ ag[period]['count'] }}×)</span>
+                        {% else %}—{% endif %}
                     </td>
                     {% endfor %}
                 </tr>
@@ -89,27 +92,27 @@
         </table>
     </div>
     {% else %}
-    <div style="padding: 0.75rem 1.25rem; color: var(--text-muted, #8d969e);">
+    <div style="padding: 0.75rem 1.25rem; color: var(--text-muted);">
         No agent run data yet. Stats will appear after agent runs.
     </div>
     {% endif %}
 </div>
 
-<!-- Fetch Stats -->
+<!-- Data Fetch Stats -->
 <div class="card settings-card">
     <div class="card-header">
         <h2>📡 Data Fetch Stats</h2>
     </div>
     {% if telemetry_stats and telemetry_stats.get('tv_fetch') %}
     <div style="padding: 0.75rem 1.25rem;">
-        <table class="table">
+        <table class="data-table">
             <thead>
                 <tr>
                     <th>Resource</th>
-                    <th>Today (Avg)</th>
-                    <th>7 Days (Avg)</th>
-                    <th>30 Days (Avg)</th>
-                    <th>Errors</th>
+                    <th>Today</th>
+                    <th>7 Days</th>
+                    <th>30 Days</th>
+                    <th>Success Rate</th>
                 </tr>
             </thead>
             <tbody>
@@ -121,23 +124,19 @@
                     {% for period in ['today', '7d', '30d'] %}
                     <td class="mono">
                         {% if rs.get(period, {}).get('count', 0) > 0 %}
-                        {{ rs[period]['avg_duration'] }}s / {{ "{:,.0f}".format(rs[period]['avg_size']) }}
-                        {% else %}
-                        —
-                        {% endif %}
+                        {{ rs[period]['avg_duration'] }}s <span style="color:var(--text-muted); font-size:0.8rem;">({{ rs[period]['count'] }}×)</span>
+                        {% else %}—{% endif %}
                     </td>
                     {% endfor %}
                     <td class="mono">
-                        {% set today_errors = rs.get('today', {}).get('error_count', 0) %}
-                        {% set week_errors = rs.get('7d', {}).get('error_count', 0) %}
-                        {% set month_errors = rs.get('30d', {}).get('error_count', 0) %}
-                        {% if today_errors > 0 or week_errors > 0 or month_errors > 0 %}
-                        <span style="color: #e23b4a;">
-                            {{ today_errors }} / {{ week_errors }} / {{ month_errors }}
+                        {% set total_30d = rs.get('30d', {}).get('count', 0) %}
+                        {% set errors_30d = rs.get('30d', {}).get('error_count', 0) %}
+                        {% if total_30d > 0 %}
+                        {% set rate = ((total_30d - errors_30d) / total_30d * 100) | round(1) %}
+                        <span style="color: {{ 'var(--green, #00a87e)' if rate >= 95 else ('var(--yellow, #f59e0b)' if rate >= 80 else 'var(--red, #ef4444)') }};">
+                            {{ rate }}%
                         </span>
-                        {% else %}
-                        <span style="color: #00a87e;">0 / 0 / 0</span>
-                        {% endif %}
+                        {% else %}—{% endif %}
                     </td>
                 </tr>
                 {% endif %}
@@ -146,9 +145,41 @@
         </table>
     </div>
     {% else %}
-    <div style="padding: 0.75rem 1.25rem; color: var(--text-muted, #8d969e);">
+    <div style="padding: 0.75rem 1.25rem; color: var(--text-muted);">
         No fetch data yet. Stats will appear after data fetches.
     </div>
     {% endif %}
 </div>
+
+<!-- Recent Fetch Errors -->
+{% if recent_errors %}
+<div class="card settings-card">
+    <div class="card-header">
+        <h2>⚠️ Recent Fetch Errors</h2>
+        <span class="card-badge">Last {{ recent_errors | length }}</span>
+    </div>
+    <div style="padding: 0.75rem 1.25rem;">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Symbol</th>
+                    <th>Resource</th>
+                    <th>Duration</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for err in recent_errors %}
+                <tr>
+                    <td class="mono">{{ err.timestamp[:16] | replace('T', ' ') }}</td>
+                    <td><strong>{{ err.symbol }}</strong></td>
+                    <td>{{ err.resource | replace('_', ' ') | title }}</td>
+                    <td class="mono">{{ err.duration_seconds | round(1) }}s</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
 {% endblock %}

@@ -3061,63 +3061,35 @@ async def settings_config_save(request: Request):
 
 @app.get("/settings/runtime", response_class=HTMLResponse)
 async def settings_runtime_page(request: Request):
-    """Runtime stats page — Agent runs and fetch statistics."""
+    """Runtime stats page — Agent runs, cache, and fetch statistics."""
     cosmos = getattr(request.app.state, "cosmos", None)
     
     telemetry_stats = {}
+    recent_errors = []
     if cosmos:
         try:
             telemetry_stats = cosmos.get_telemetry_stats()
         except Exception:
             pass
-
-    # Compute last_run / next_run for scheduler status
-    cosmos_settings = _load_settings_from_cosmos(cosmos)
-    config = cosmos_settings if cosmos_settings else _load_config()
-    cron_expr = config.get("scheduler", {}).get("cron", "")
-
-    next_run = ""
-    if cron_expr:
         try:
-            now_tz = _local_now()
-            cron = croniter(cron_expr, now_tz)
-            next_run_dt = cron.get_next(datetime)
-            next_run = _format_time(next_run_dt)
-        except Exception:
-            next_run = "Invalid cron"
-
-    last_run = ""
-    if cosmos:
-        try:
-            all_activities = cosmos.get_all_activities(limit=1)
-            if all_activities:
-                timestamp_str = all_activities[0].get("timestamp", "")
-                if timestamp_str:
-                    try:
-                        last_run_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                        if last_run_dt.tzinfo is None:
-                            last_run_dt = last_run_dt.replace(tzinfo=timezone.utc)
-                        last_run = _format_time(last_run_dt)
-                    except Exception:
-                        last_run = timestamp_str[:19]
+            recent_errors = cosmos.get_recent_fetch_errors(limit=10)
         except Exception:
             pass
 
-    # Determine primary options chain source based on market hours
-    market_open = is_us_market_open()
-    if market_open is True:
-        chain_source = "yfinance"
-    elif market_open is False:
-        chain_source = "tradingview"
-    else:
-        chain_source = "unknown"
+    # Options chain cache stats
+    cache_stats = {}
+    try:
+        from src.options_chain_cache import get_options_chain_cache
+        cache = get_options_chain_cache()
+        cache_stats = cache.stats()
+    except Exception:
+        pass
 
     return templates.TemplateResponse("settings_runtime.html", {
         "request": request,
         "telemetry_stats": telemetry_stats,
-        "last_run": last_run,
-        "next_run": next_run,
-        "chain_source": chain_source,
+        "cache_stats": cache_stats,
+        "recent_errors": recent_errors,
     })
 
 

@@ -1147,6 +1147,25 @@ class CosmosDBService:
             logger.warning("Telemetry stats query failed: %s", exc)
             return {}
 
+    def get_recent_fetch_errors(self, limit: int = 10) -> list:
+        """Get most recent data fetch errors for display."""
+        if self.telemetry_container is None:
+            return []
+        try:
+            query = (
+                "SELECT c.symbol, c.resource, c.timestamp, c.duration_seconds "
+                "FROM c WHERE c.metric_type = 'tv_fetch' AND c.error = true "
+                "ORDER BY c.timestamp DESC OFFSET 0 LIMIT @limit"
+            )
+            docs = list(self.telemetry_container.query_items(
+                query=query,
+                parameters=[{"name": "@limit", "value": limit}],
+                enable_cross_partition_query=True,
+            ))
+            return docs
+        except Exception:
+            return []
+
     # ── Settings Management ────────────────────────────────────────────
 
     def get_settings(self) -> dict:
