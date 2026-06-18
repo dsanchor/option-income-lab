@@ -3741,6 +3741,41 @@ async def trigger_portfolio_enrichment(request: Request):
     return JSONResponse({"status": "triggered", "agent_type": "portfolio_enrichment"})
 
 
+@app.post("/api/trigger/plan_monitor")
+async def trigger_plan_monitor(request: Request):
+    """Manually trigger plan monitor for all planned action plans."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    if cosmos is None:
+        return JSONResponse({"error": "CosmosDB not available"}, status_code=503)
+
+    state_ref = getattr(request.app.state, "_pm_status", None)
+    if state_ref is None:
+        state_ref = {"running": False, "last_result": None}
+        request.app.state._pm_status = state_ref
+
+    if state_ref.get("running"):
+        return JSONResponse({"error": "Plan monitor already running"}, status_code=409)
+
+    state_ref["running"] = True
+    scheduler = getattr(request.app.state, "scheduler", None)
+
+    def _run():
+        try:
+            import asyncio
+            if scheduler:
+                asyncio.run(scheduler._run_plan_monitor_async())
+                state_ref["last_result"] = {"status": "ok"}
+            else:
+                state_ref["last_result"] = {"status": "error", "error": "Scheduler not available"}
+        except Exception as e:
+            state_ref["last_result"] = {"status": "error", "error": str(e)}
+        finally:
+            state_ref["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return JSONResponse({"status": "triggered", "agent_type": "plan_monitor"})
+
+
 @app.post("/api/trigger/options_chain")
 async def trigger_options_chain(request: Request):
     """Manually trigger options chain cache refresh for all symbols."""

@@ -404,12 +404,17 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Run Now button -->
+                <div style="margin-top:0.75rem;">
+                    <button type="button" class="btn btn-primary" id="btnRunPlanMonitor" style="font-size:0.85rem; padding:0.4rem 1rem;">▶ Run Now</button>
+                    <span id="planMonitorRunStatus" class="mono" style="margin-left:0.75rem; font-size:0.85rem;"></span>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- Telegram Notifications -->
-    <div class="card settings-card">
         <div class="card-header">
             <h2>📬 Telegram Notifications</h2>
             <span class="badge badge-{{ 'wait' if telegram_enabled else 'sell' }}">
@@ -553,7 +558,30 @@
         });
     }
 
-    // Run Now — Monitoring Agent (all agents)
+    // Run Now — Plan Monitor
+    var pmBtn = document.getElementById('btnRunPlanMonitor');
+    var pmStatus = document.getElementById('planMonitorRunStatus');
+    if (pmBtn) {
+        pmBtn.addEventListener('click', async function() {
+            pmBtn.disabled = true;
+            pmStatus.textContent = '⏳ Running...';
+            try {
+                var res = await fetch('/api/trigger/plan_monitor', { method: 'POST' });
+                var data = await res.json();
+                if (res.ok) {
+                    pmStatus.textContent = '✅ Triggered!';
+                } else {
+                    pmStatus.textContent = '❌ ' + (data.error || 'Failed');
+                }
+            } catch(e) {
+                pmStatus.textContent = '❌ ' + e.message;
+            } finally {
+                pmBtn.disabled = false;
+                setTimeout(function() { pmStatus.textContent = ''; }, 8000);
+            }
+        });
+    }
+
     var monBtn = document.getElementById('btnRunMonitoring');
     var monStatus = document.getElementById('monitoringRunStatus');
     if (monBtn) {

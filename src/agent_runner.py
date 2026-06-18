@@ -2406,7 +2406,7 @@ Respond in the required JSON format only."""
             alert_level = "info"
 
         recommended_status_change = parsed.get("recommended_status_change")
-        if recommended_status_change not in (None, "active", "completed"):
+        if recommended_status_change not in (None, "completed"):
             recommended_status_change = None
 
         output = {
