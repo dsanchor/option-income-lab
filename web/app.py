@@ -1269,7 +1269,7 @@ async def api_dps_analysis(request: Request, symbol: str, position_id: str):
 # REST API — Action Plans
 # ===========================================================================
 
-_PLAN_TYPES = {"sell_put", "sell_call", "buy_shares", "roll", "close", "other"}
+_PLAN_TYPES = {"sell_put", "sell_call", "buy_shares", "sell_shares", "roll", "close", "other"}
 _PLAN_STATUSES = {"planned", "active", "completed", "cancelled"}
 _PLAN_PRIORITIES = {"high", "medium", "low"}
 
@@ -1336,7 +1336,7 @@ async def api_create_plan(request: Request, symbol: str):
             return JSONResponse({"error": "conditions must be a string"}, status_code=400)
         if plan_type not in _PLAN_TYPES:
             return JSONResponse(
-                {"error": "plan_type must be 'sell_put', 'sell_call', 'buy_shares', 'roll', 'close', or 'other'"},
+                {"error": "plan_type must be 'sell_put', 'sell_call', 'buy_shares', 'sell_shares', 'roll', 'close', or 'other'"},
                 status_code=400,
             )
         if status not in _PLAN_STATUSES:
@@ -1405,7 +1405,7 @@ async def api_update_plan(request: Request, symbol: str, plan_id: str):
             plan_type = str(body["plan_type"]).strip().lower()
             if plan_type not in _PLAN_TYPES:
                 return JSONResponse(
-                    {"error": "plan_type must be 'sell_put', 'sell_call', 'buy_shares', 'roll', 'close', or 'other'"},
+                    {"error": "plan_type must be 'sell_put', 'sell_call', 'buy_shares', 'sell_shares', 'roll', 'close', or 'other'"},
                     status_code=400,
                 )
             updates["plan_type"] = plan_type

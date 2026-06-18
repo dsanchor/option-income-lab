@@ -43,6 +43,7 @@ Rules:
 - For sell_put/sell_call plans: check if the target strike exists in options chain and report premium
 - For roll plans: check current position status and available alternatives
 - For buy_shares plans: check price targets and entry timing signals
+- For sell_shares plans: check price targets, profit levels, and exit timing signals
 - Keep notes under 200 words
 - Always include current price and key indicator values
 - Reference previous notes if tracking a trend
