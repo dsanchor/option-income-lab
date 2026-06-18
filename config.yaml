@@ -48,6 +48,11 @@ summary_agent:
   cron: "0 8 * * *"  # 8 AM daily (America/New_York timezone)
   activity_count: 3  # Latest N activities per symbol
 
+plan_monitor:
+  enabled: true
+  cron: "0 4,16 * * 1-5"  # 4 AM and 4 PM weekdays (America/New_York)
+  model: "gpt-5.4-mini"
+
 banner_agent:
   enabled: true
   cron: "0 5 * * *"  # 5 AM daily

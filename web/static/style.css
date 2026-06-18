@@ -1187,6 +1187,16 @@ input:checked + .slider::before { transform: translateX(16px); background: #fff;
 .badge-momentum-bearish    { background: rgba(239,68,68,0.2);   color: #ef4444; }
 .badge-momentum-unknown    { background: rgba(141,150,158,0.2); color: var(--text-muted); }
 
+/* ── Plan badges ── */
+.badge-status-planned    { background: rgba(141,150,158,0.2); color: var(--text-muted); }
+.badge-status-active     { background: rgba(96,165,250,0.2);  color: #60a5fa; }
+.badge-status-completed  { background: rgba(16,185,129,0.2);  color: #10b981; }
+.badge-status-cancelled  { background: rgba(239,68,68,0.15);  color: #ef4444; }
+.badge-priority-high     { background: rgba(239,68,68,0.2);   color: #ef4444; }
+.badge-priority-medium   { background: rgba(251,191,36,0.2);  color: #fbbf24; }
+.badge-priority-low      { background: rgba(141,150,158,0.2); color: var(--text-muted); }
+.badge-plan-type         { background: rgba(99,102,241,0.2);  color: #818cf8; }
+
 .actions-cell { white-space: nowrap; display: flex; gap: 0.3rem; }
 .btn-dgi-add { font-size: 0.75rem; }
 

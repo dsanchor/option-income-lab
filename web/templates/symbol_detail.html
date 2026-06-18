@@ -140,6 +140,73 @@
     </div>
 </div>
 
+<!-- Action Plans -->
+<div class="card">
+    <div class="card-header">
+        <h2>Action Plans</h2>
+        <span class="card-badge">{{ plans | length }} plans</span>
+    </div>
+    {% if plans %}
+    <div class="table-wrap">
+        <table class="data-table" id="symbolPlansTable">
+            <thead>
+                <tr>
+                    <th>Title</th>
+                    <th>Type</th>
+                    <th>Priority</th>
+                    <th>Status</th>
+                    <th>Last Note</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for plan in plans %}
+                {% set last_note = plan.agent_notes[-1] if plan.agent_notes else none %}
+                <tr>
+                    <td>
+                        <span class="plan-title-detail" style="cursor:pointer;" data-plan-id="{{ plan.id }}" data-symbol="{{ plan.symbol }}">{{ plan.title }}</span>
+                    </td>
+                    <td><span class="badge badge-plan-type">{{ plan.plan_type | replace('_', ' ') | title }}</span></td>
+                    <td><span class="badge badge-priority-{{ plan.priority }}">{{ plan.priority | title }}</span></td>
+                    <td><span class="badge badge-status-{{ plan.status }}">{{ plan.status | title }}</span></td>
+                    <td style="max-width:250px;">
+                        {% if last_note %}
+                        <span style="font-size:0.85rem; color:var(--text-muted);" title="{{ last_note.note }}">
+                            {{ last_note.note[:80] }}{% if last_note.note | length > 80 %}…{% endif %}
+                        </span>
+                        {% else %}<span style="color:var(--text-muted);">—</span>{% endif %}
+                    </td>
+                    <td class="actions-cell">
+                        {% if plan.status == 'planned' %}
+                        <button class="btn-sm" data-plan-status="{{ plan.id }}" data-symbol="{{ plan.symbol }}" data-status="active" title="Start">▶</button>
+                        {% elif plan.status == 'active' %}
+                        <button class="btn-sm" data-plan-status="{{ plan.id }}" data-symbol="{{ plan.symbol }}" data-status="completed" title="Complete">✓</button>
+                        {% endif %}
+                        {% if plan.status != 'cancelled' and plan.status != 'completed' %}
+                        <button class="btn-sm btn-danger" data-plan-status="{{ plan.id }}" data-symbol="{{ plan.symbol }}" data-status="cancelled" title="Cancel">✕</button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="empty-state" style="padding:1.5rem; text-align:center;">No action plans. <a href="/plans" style="color:var(--accent);">Create one →</a></p>
+    {% endif %}
+</div>
+
+<!-- Plan Detail Modal (symbol detail) -->
+<div class="modal-overlay" id="planDetailModalSD" style="display:none;">
+    <div class="modal-content" style="max-width:700px;">
+        <div class="modal-header">
+            <h3 id="planDetailTitleSD">Plan Detail</h3>
+            <button class="modal-close" id="planDetailCloseSD">&times;</button>
+        </div>
+        <div id="planDetailBodySD"></div>
+    </div>
+</div>
+
 <!-- Positions -->
 <div class="card">
     <div class="card-header">
@@ -1748,6 +1815,85 @@
             });
         });
     }
+
+    // ── Action Plans (symbol detail) ──
+    // Status change buttons
+    document.querySelectorAll('[data-plan-status]').forEach(function(btn) {
+        btn.addEventListener('click', async function(e) {
+            e.stopPropagation();
+            var planId = this.dataset.planStatus;
+            var symbol = this.dataset.symbol;
+            var newStatus = this.dataset.status;
+            if (newStatus === 'cancelled' && !confirm('Cancel this plan?')) return;
+            try {
+                var res = await fetch('/api/symbols/' + symbol + '/plans/' + planId, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ status: newStatus })
+                });
+                if (res.ok) { window.location.reload(); }
+                else { var d = await res.json(); alert('Error: ' + (d.error || 'Failed')); }
+            } catch(e) { alert('Network error: ' + e.message); }
+        });
+    });
+
+    // Plan detail modal
+    var planModalSD = document.getElementById('planDetailModalSD');
+    var planTitleSD = document.getElementById('planDetailTitleSD');
+    var planBodySD = document.getElementById('planDetailBodySD');
+    var planCloseSD = document.getElementById('planDetailCloseSD');
+
+    function closePlanModalSD() { planModalSD.style.display = 'none'; }
+    if (planCloseSD) planCloseSD.addEventListener('click', closePlanModalSD);
+    if (planModalSD) planModalSD.addEventListener('click', function(e) { if (e.target === planModalSD) closePlanModalSD(); });
+
+    document.querySelectorAll('.plan-title-detail').forEach(function(el) {
+        el.addEventListener('click', async function(e) {
+            e.stopPropagation();
+            var planId = this.dataset.planId;
+            var symbol = this.dataset.symbol;
+            try {
+                var res = await fetch('/api/symbols/' + symbol + '/plans/' + planId);
+                if (!res.ok) return;
+                var plan = await res.json();
+                planTitleSD.textContent = plan.symbol + ' — ' + plan.title;
+                var html = '<div style="padding:1rem 1.25rem;">';
+                html += '<div class="modal-grid">';
+                html += '<div class="modal-field"><label>Type</label><div>' + (plan.plan_type || '').replace(/_/g, ' ') + '</div></div>';
+                html += '<div class="modal-field"><label>Priority</label><div>' + (plan.priority || '') + '</div></div>';
+                html += '<div class="modal-field"><label>Status</label><div>' + (plan.status || '') + '</div></div>';
+                html += '<div class="modal-field"><label>Created</label><div style="font-family:var(--font-mono);font-size:0.85rem;">' + (plan.created_at || '').slice(0,16).replace('T',' ') + '</div></div>';
+                html += '</div>';
+                if (plan.objective) {
+                    html += '<div style="margin-top:1rem;"><h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.4rem;">Objective</h4>';
+                    html += '<div style="background:var(--bg-input);border-radius:var(--radius);padding:0.75rem 1rem;font-size:0.9rem;white-space:pre-wrap;">' + plan.objective + '</div></div>';
+                }
+                if (plan.conditions) {
+                    html += '<div style="margin-top:1rem;"><h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.4rem;">Conditions</h4>';
+                    html += '<div style="background:var(--bg-input);border-radius:var(--radius);padding:0.75rem 1rem;font-size:0.9rem;white-space:pre-wrap;">' + plan.conditions + '</div></div>';
+                }
+                var notes = plan.agent_notes || [];
+                if (notes.length > 0) {
+                    html += '<div style="margin-top:1.25rem;"><h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.5rem;">Agent Notes</h4>';
+                    for (var i = notes.length - 1; i >= 0; i--) {
+                        var n = notes[i];
+                        var alertIcon = n.alert_level === 'action_recommended' ? '⚡ ' : (n.alert_level === 'info' ? 'ℹ️ ' : '');
+                        var borderColor = n.alert_level === 'action_recommended' ? 'var(--yellow, #f59e0b)' : (n.alert_level === 'info' ? 'var(--accent)' : 'var(--border)');
+                        html += '<div style="background:var(--bg-input);border-radius:var(--radius);padding:0.6rem 1rem;margin-bottom:0.5rem;border-left:3px solid ' + borderColor + ';">';
+                        html += '<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.25rem;">' + (n.timestamp || '').slice(0,16).replace('T',' ') + '</div>';
+                        html += '<div style="font-size:0.9rem;">' + alertIcon + (n.note || '') + '</div>';
+                        html += '</div>';
+                    }
+                    html += '</div>';
+                } else {
+                    html += '<div style="margin-top:1.25rem;color:var(--text-muted);font-size:0.9rem;">No agent notes yet.</div>';
+                }
+                html += '</div>';
+                planBodySD.innerHTML = html;
+                planModalSD.style.display = 'flex';
+            } catch(err) { console.error('Failed to load plan', err); }
+        });
+    });
 
     // ── Summary Detail Modal ──
     var _summaryRadarChart = null;

@@ -235,6 +235,23 @@ class Config:
         """Number of recent activities per symbol to analyze (default: 3)."""
         return int(self.config.get('summary_agent', {}).get('activity_count', 3))
 
+    # ── Plan Monitor ────────────────────────────────────────────────────
+
+    @property
+    def plan_monitor_enabled(self) -> bool:
+        """Whether the plan monitor is enabled (default: True)."""
+        return bool(self.config.get('plan_monitor', {}).get('enabled', True))
+
+    @property
+    def plan_monitor_cron(self) -> str:
+        """Plan monitor cron expression (default: '0 4,16 * * 1-5')."""
+        return str(self.config.get('plan_monitor', {}).get('cron', '0 4,16 * * 1-5'))
+
+    @property
+    def plan_monitor_model(self) -> str:
+        """Plan monitor model (default: 'gpt-5.4-mini')."""
+        return str(self.config.get('plan_monitor', {}).get('model', 'gpt-5.4-mini'))
+
     # ── Options Chain Scheduler ────────────────────────────────────────
 
     @property

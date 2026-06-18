@@ -80,6 +80,7 @@ class OptionsAgentScheduler:
         self.context_provider = None
         self._cron_changed = False
         self._summary_cron_changed = False
+        self._plan_monitor_cron_changed = False
         self._options_chain_cron_changed = False
         self._dgi_screener_cron_changed = False
         self._banner_cron_changed = False
@@ -99,6 +100,13 @@ class OptionsAgentScheduler:
         summary_config['cron'] = new_cron
         self.config.config['summary_agent'] = summary_config
         self._summary_cron_changed = True
+
+    def reschedule_plan_monitor(self, new_cron: str):
+        """Update plan monitor cron expression. The run loop will pick it up on next iteration."""
+        plan_monitor_config = self.config.config.get('plan_monitor', {})
+        plan_monitor_config['cron'] = new_cron
+        self.config.config['plan_monitor'] = plan_monitor_config
+        self._plan_monitor_cron_changed = True
     
     def reschedule_options_chain(self, new_cron: str):
         """Update options chain scheduler cron expression. The run loop will pick it up on next iteration."""
@@ -169,6 +177,7 @@ class OptionsAgentScheduler:
             llm=self.config.llm_config(),
             model=self.config.model_deployment,
             telegram_notifier=telegram_notifier,
+            plan_monitor_model=self.config.plan_monitor_model,
         )
         
         print(f"Scheduler configured with cron: {self.config.cron_expression}")
@@ -185,6 +194,19 @@ class OptionsAgentScheduler:
         if summary_enabled:
             print(f"  Cron: {summary_cron}")
             print(f"  Activity count: {summary_activity_count}")
+        else:
+            print(f"  Status: Disabled in config")
+
+        plan_monitor_config = self.config.config.get('plan_monitor', {})
+        plan_monitor_enabled = plan_monitor_config.get('enabled', True)
+        plan_monitor_cron = plan_monitor_config.get('cron', '0 4,16 * * 1-5')
+        plan_monitor_model = plan_monitor_config.get('model', 'gpt-5.4-mini')
+
+        print(f"\nPlan Monitor Configuration:")
+        print(f"  Enabled: {plan_monitor_enabled}")
+        if plan_monitor_enabled:
+            print(f"  Cron: {plan_monitor_cron}")
+            print(f"  Model: {plan_monitor_model}")
         else:
             print(f"  Status: Disabled in config")
         
@@ -295,6 +317,62 @@ class OptionsAgentScheduler:
             activity_count=activity_count,
             model=self.config.model_for('summary'),
         )
+
+    def run_plan_monitor_job(self):
+        """Execute plan monitor (bridges async to sync for scheduler)."""
+        _run_async(self._run_plan_monitor_async())
+
+    async def _run_plan_monitor_async(self):
+        """Run plan monitor if enabled in config."""
+        plan_monitor_config = self.config.config.get('plan_monitor', {})
+        if not plan_monitor_config.get('enabled', True):
+            print("⏭️  Plan monitor disabled in config")
+            return
+        self.runner._plan_monitor_model = plan_monitor_config.get('model', 'gpt-5.4-mini')
+
+        now_tz = _now_local()
+        print(f"\n{'📝'*35}")
+        print(f"📝 Plan Monitor - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"{'📝'*35}\n")
+
+        plans = [
+            plan for plan in self.cosmos.get_plans()
+            if str(plan.get('status', '')).lower() in {'planned', 'active'}
+        ]
+        if not plans:
+            print("ℹ️  Plan monitor: no planned or active plans found")
+            return
+
+        success = 0
+        errors = 0
+        for plan in plans:
+            symbol = str(plan.get('symbol') or '').upper()
+            plan_id = plan.get('id')
+            title = plan.get('title', '')
+            if not symbol or not plan_id:
+                errors += 1
+                print(f"  ✗ Skipping invalid plan record: {title or '(untitled)'}")
+                continue
+
+            symbol_doc = self.cosmos.get_symbol(symbol)
+            if symbol_doc is None:
+                errors += 1
+                print(f"  ✗ {symbol}: symbol config not found for plan {title or plan_id}")
+                continue
+
+            try:
+                result = await self.runner.run_plan_monitor(plan, symbol_doc, self.cosmos)
+                success += 1
+                print(
+                    f"  ✓ {symbol} | {title or plan_id} | "
+                    f"alert={result.get('alert_level', 'none')} | "
+                    f"conditions_met={result.get('conditions_met', False)}"
+                )
+            except Exception as e:
+                errors += 1
+                print(f"  ✗ {symbol} | {title or plan_id}: {e}")
+
+        print(f"\nPlan Monitor Complete: {success} success, {errors} errors, {len(plans)} plans processed")
     
     def run_options_chain_fetch_job(self):
         """Execute options chain fetch job (bridges async to sync for scheduler)."""
@@ -482,6 +560,7 @@ class OptionsAgentScheduler:
             # Track if we need to update anything
             main_cron_changed = False
             summary_cron_changed = False
+            plan_monitor_cron_changed = False
             options_chain_cron_changed = False
             banner_cron_changed = False
             
@@ -576,10 +655,32 @@ class OptionsAgentScheduler:
             if summary_cron_changed:
                 self._summary_cron_changed = True
                 print(f"✓ Config reloaded from CosmosDB: summary cron changed to {new_summary_cron}")
+
+            # Check plan monitor settings
+            plan_monitor_settings = cosmos_settings.get('plan_monitor', {})
+            new_plan_monitor_cron = plan_monitor_settings.get('cron')
+            current_plan_monitor_cron = self.config.config.get('plan_monitor', {}).get('cron', '0 4,16 * * 1-5')
+
+            if new_plan_monitor_cron and new_plan_monitor_cron != current_plan_monitor_cron:
+                if 'plan_monitor' not in self.config.config:
+                    self.config.config['plan_monitor'] = {}
+                self.config.config['plan_monitor']['cron'] = new_plan_monitor_cron
+                plan_monitor_cron_changed = True
+
+            if plan_monitor_settings:
+                if 'plan_monitor' not in self.config.config:
+                    self.config.config['plan_monitor'] = {}
+                for key in ['enabled', 'model']:
+                    if key in plan_monitor_settings:
+                        self.config.config['plan_monitor'][key] = plan_monitor_settings[key]
             
             if options_chain_cron_changed:
                 self._options_chain_cron_changed = True
                 print(f"✓ Config reloaded from CosmosDB: options chain cron changed to {new_options_chain_cron}")
+
+            if plan_monitor_cron_changed:
+                self._plan_monitor_cron_changed = True
+                print(f"✓ Config reloaded from CosmosDB: plan monitor cron changed to {new_plan_monitor_cron}")
             
             if dgi_cron_changed:
                 self._dgi_screener_cron_changed = True
@@ -664,6 +765,13 @@ class OptionsAgentScheduler:
         summary_cron_expr = summary_config.get('cron', '0 8 * * *')
         summary_next_run = None
         summary_cron = None
+
+        # Initialize plan monitor cron (if enabled)
+        plan_monitor_config = self.config.config.get('plan_monitor', {})
+        plan_monitor_enabled = plan_monitor_config.get('enabled', True)
+        plan_monitor_cron_expr = plan_monitor_config.get('cron', '0 4,16 * * 1-5')
+        plan_monitor_next_run = None
+        plan_monitor_cron = None
         
         # Initialize options chain scheduler cron (if enabled)
         options_chain_config = self.config.config.get('options_chain_scheduler', {})
@@ -717,6 +825,15 @@ class OptionsAgentScheduler:
                 print(f"⚠️  Invalid options chain cron expression '{options_chain_cron_expr}': {e}")
                 print(f"⚠️  Options chain scheduling disabled")
                 options_chain_enabled = False
+
+        if plan_monitor_enabled:
+            try:
+                plan_monitor_cron = croniter(plan_monitor_cron_expr, now_tz)
+                plan_monitor_next_run = plan_monitor_cron.get_next(datetime)
+            except (ValueError, KeyError) as e:
+                print(f"⚠️  Invalid plan monitor cron expression '{plan_monitor_cron_expr}': {e}")
+                print(f"⚠️  Plan monitor scheduling disabled")
+                plan_monitor_enabled = False
         
         if dgi_enabled:
             try:
@@ -760,6 +877,10 @@ class OptionsAgentScheduler:
             print(f"Summary Agent         - Next run: {summary_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         else:
             print(f"Summary Agent         - Disabled")
+        if plan_monitor_enabled and plan_monitor_next_run:
+            print(f"Plan Monitor          - Next run: {plan_monitor_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        else:
+            print(f"Plan Monitor          - Disabled")
         if options_chain_enabled and options_chain_next_run:
             print(f"Options Chain Fetcher - Next run: {options_chain_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         else:
@@ -817,6 +938,21 @@ class OptionsAgentScheduler:
                 except (ValueError, KeyError) as e:
                     print(f"⚠️  Invalid summary agent cron expression '{summary_cron_expr}': {e}")
                     summary_enabled = False
+
+            if self._plan_monitor_cron_changed:
+                self._plan_monitor_cron_changed = False
+                plan_monitor_config = self.config.config.get('plan_monitor', {})
+                plan_monitor_cron_expr = plan_monitor_config.get('cron', '0 4,16 * * 1-5')
+                try:
+                    now_tz = _now_local()
+                    plan_monitor_cron = croniter(plan_monitor_cron_expr, now_tz)
+                    plan_monitor_next_run = plan_monitor_cron.get_next(datetime)
+                    plan_monitor_enabled = plan_monitor_config.get('enabled', True)
+                    print(f"Plan monitor cron rescheduled to: {plan_monitor_cron_expr}")
+                    print(f"Next scheduled run: {plan_monitor_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
+                except (ValueError, KeyError) as e:
+                    print(f"⚠️  Invalid plan monitor cron expression '{plan_monitor_cron_expr}': {e}")
+                    plan_monitor_enabled = False
             
             # Check if options chain cron was updated from the web UI
             if self._options_chain_cron_changed:
@@ -911,6 +1047,12 @@ class OptionsAgentScheduler:
                 summary_next_run = summary_cron.get_next(datetime)
                 print(f"Summary Agent  - Next run: {summary_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
             
+            # Check options chain scheduler
+            if plan_monitor_enabled and plan_monitor_next_run and now_tz >= plan_monitor_next_run:
+                self.run_plan_monitor_job()
+                plan_monitor_next_run = plan_monitor_cron.get_next(datetime)
+                print(f"Plan Monitor          - Next run: {plan_monitor_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
+
             # Check options chain scheduler
             if options_chain_enabled and options_chain_next_run and now_tz >= options_chain_next_run:
                 self.run_options_chain_fetch_job()

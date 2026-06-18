@@ -2823,6 +2823,11 @@ def _build_settings_config_context(
     summary_cron = summary_cfg.get("cron", "0 8 * * *")
     summary_activity_count = summary_cfg.get("activity_count", 3)
 
+    # Plan monitor settings
+    plan_monitor_cfg = config.get("plan_monitor", {})
+    plan_monitor_enabled = plan_monitor_cfg.get("enabled", True)
+    plan_monitor_cron = plan_monitor_cfg.get("cron", "0 4,16 * * 1-5")
+
     # Options chain scheduler settings
     options_chain_cfg = config.get("options_chain_scheduler", {})
     options_chain_enabled = options_chain_cfg.get("enabled", True)
@@ -2900,6 +2905,35 @@ def _build_settings_config_context(
             summary_next_run = _format_time(next_run_dt)
         except Exception:
             summary_next_run = "Invalid cron"
+
+    # Calculate scheduler times for Plan Monitor
+    plan_monitor_last_run = ""
+    plan_monitor_next_run = ""
+
+    if cosmos:
+        try:
+            plans = cosmos.get_plans()
+            note_timestamps = [
+                note.get("timestamp", "")
+                for plan in plans
+                for note in plan.get("agent_notes", [])
+                if isinstance(note, dict) and note.get("timestamp")
+            ]
+            if note_timestamps:
+                latest = max(note_timestamps)
+                last_dt = datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
+                plan_monitor_last_run = _format_time(last_dt)
+        except Exception:
+            pass
+
+    if plan_monitor_cron:
+        try:
+            now_tz = _local_now()
+            cron = croniter(plan_monitor_cron, now_tz)
+            next_run_dt = cron.get_next(datetime)
+            plan_monitor_next_run = _format_time(next_run_dt)
+        except Exception:
+            plan_monitor_next_run = "Invalid cron"
 
     # Calculate scheduler times for Options Chain Scheduler
     options_chain_last_run = ""
@@ -2997,6 +3031,10 @@ def _build_settings_config_context(
         "monitoring_next_run": monitoring_next_run,
         "summary_last_run": summary_last_run,
         "summary_next_run": summary_next_run,
+        "plan_monitor_enabled": plan_monitor_enabled,
+        "plan_monitor_cron": plan_monitor_cron,
+        "plan_monitor_last_run": plan_monitor_last_run,
+        "plan_monitor_next_run": plan_monitor_next_run,
         "options_chain_enabled": options_chain_enabled,
         "options_chain_cron": options_chain_cron,
         "options_chain_last_run": options_chain_last_run,
@@ -3125,6 +3163,33 @@ async def settings_config_save(request: Request):
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
                 scheduler.reschedule_summary(summary_cron)
+        except (ValueError, KeyError):
+            pass
+
+    # Plan monitor settings
+    plan_monitor_enabled = form.get("plan_monitor_enabled") == "true"
+    plan_monitor_cron = str(form.get("plan_monitor_cron", "0 4,16 * * 1-5")).strip()
+
+    if plan_monitor_cron:
+        try:
+            croniter(plan_monitor_cron)
+            if cosmos:
+                cosmos_settings = _load_settings_from_cosmos(cosmos) or {}
+                cosmos_settings.setdefault("plan_monitor", {})
+                cosmos_settings["plan_monitor"]["enabled"] = plan_monitor_enabled
+                cosmos_settings["plan_monitor"]["cron"] = plan_monitor_cron
+                _save_settings_to_cosmos(cosmos, cosmos_settings)
+
+            config = _load_config()
+            config.setdefault("plan_monitor", {})
+            config["plan_monitor"]["enabled"] = plan_monitor_enabled
+            config["plan_monitor"]["cron"] = plan_monitor_cron
+            _write_config(config)
+            saved.append("Plan monitor")
+
+            scheduler = getattr(request.app.state, "scheduler", None)
+            if scheduler is not None:
+                scheduler.reschedule_plan_monitor(plan_monitor_cron)
         except (ValueError, KeyError):
             pass
 

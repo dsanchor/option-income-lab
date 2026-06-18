@@ -69,7 +69,8 @@ class AgentRunner:
     SUPERVISOR_COOLDOWN = 3  # WAITs between repeated supervisor/alpha reviews
     
     def __init__(self, llm: LlmConfig, model: str, telegram_notifier=None,
-                 project_endpoint: str = None, api_key: str = None):
+                 project_endpoint: str = None, api_key: str = None,
+                 plan_monitor_model: str = None):
         """Initialize the agent runner.
 
         Args:
@@ -83,6 +84,7 @@ class AgentRunner:
             llm = LlmConfig(provider='azure', api_key=api_key, endpoint=project_endpoint)
         self._llm = llm
         self._default_model = model
+        self._plan_monitor_model = plan_monitor_model or "gpt-5.4-mini"
         self._clients: Dict[str, object] = {}
         self.telegram_notifier = telegram_notifier
 
@@ -277,6 +279,30 @@ class AgentRunner:
             stripped = line.strip()
             if stripped.startswith("SUMMARY:"):
                 return stripped
+        return None
+
+    @staticmethod
+    def _try_extract_any_json_object(response_text: str) -> Optional[Dict]:
+        """Try to parse the first JSON object from a response."""
+        if not response_text:
+            return None
+
+        candidates = [(response_text or "").strip()]
+        fenced = re.findall(r'```json\s*\n(.*?)```', response_text, re.DOTALL)
+        candidates.extend(block.strip() for block in fenced if block.strip())
+
+        start = response_text.find("{")
+        end = response_text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            candidates.append(response_text[start:end + 1].strip())
+
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(parsed, dict):
+                return parsed
         return None
 
     def _extract_activity_line(self, symbol: str, response_text: str) -> Tuple[str, Optional[Dict]]:
@@ -2265,6 +2291,135 @@ Output your activity in the required JSON format. Use the timestamp above in you
             })
         except Exception:
             logger.debug("Telemetry write skipped for %s", symbol)
+
+    async def run_plan_monitor(self, plan: dict, symbol_doc: dict, cosmos) -> dict:
+        """Run plan monitor agent for a single action plan."""
+        from .options_chain_cache import get_options_chain_cache
+        from .plan_monitor_instructions import get_plan_monitor_instructions
+
+        symbol = str(symbol_doc.get("symbol") or plan.get("symbol") or "").upper()
+        if not symbol:
+            raise ValueError("Plan monitor requires a symbol")
+
+        plan_id = str(plan.get("id") or "")
+        if not plan_id:
+            raise ValueError("Plan monitor requires a plan id")
+        plan_type = str(plan.get("plan_type") or "").strip().lower()
+        active_positions = [
+            position for position in symbol_doc.get("positions", [])
+            if position.get("status") == "active"
+        ]
+        previous_notes = [
+            {
+                "timestamp": note.get("timestamp"),
+                "note": note.get("note"),
+            }
+            for note in plan.get("agent_notes", [])[-5:]
+            if isinstance(note, dict)
+        ]
+
+        enrichment = symbol_doc.get("enrichment") or {}
+        enrichment_context = {
+            "price": (enrichment.get("metrics") or {}).get("current_price"),
+            "momentum": enrichment.get("momentum"),
+            "entry_tag": enrichment.get("entry_tag"),
+            "dgi_score": enrichment.get("quality_score"),
+            "technicals": enrichment.get("technicals", {}),
+            "full_enrichment": enrichment,
+        }
+
+        option_type = None
+        if "sell_put" in plan_type:
+            option_type = "put"
+        elif "sell_call" in plan_type:
+            option_type = "call"
+        elif "roll" in plan_type:
+            active_types = {
+                str(position.get("type", "")).lower()
+                for position in active_positions
+                if position.get("type")
+            }
+            if len(active_types) == 1:
+                only_type = next(iter(active_types))
+                if only_type in {"call", "put"}:
+                    option_type = only_type
+
+        options_chain_text = "(not relevant for this plan type)"
+        if option_type or "roll" in plan_type:
+            try:
+                raw_chain = await get_options_chain_cache().get_or_load_async(symbol)
+                options_chain_text = self._format_options_chain(
+                    raw_chain,
+                    symbol,
+                    option_type=option_type,
+                )
+            except Exception as exc:
+                logger.warning("Plan monitor options chain fetch failed for %s: %s", symbol, exc)
+                options_chain_text = json.dumps({"error": str(exc)})
+
+        prompt = f"""Analyze this action plan for {symbol}.
+
+## ACTION PLAN
+```json
+{json.dumps({
+    "id": plan_id,
+    "symbol": symbol,
+    "title": plan.get("title", ""),
+    "objective": plan.get("objective", ""),
+    "conditions": plan.get("conditions", ""),
+    "type": plan.get("plan_type", "other"),
+    "status": plan.get("status", "planned"),
+    "priority": plan.get("priority", "medium"),
+    "previous_notes": previous_notes,
+}, indent=2, default=str)}
+```
+
+## SYMBOL ENRICHMENT
+```json
+{json.dumps(enrichment_context, indent=2, default=str)}
+```
+
+## ACTIVE POSITIONS
+```json
+{json.dumps(active_positions, indent=2, default=str)}
+```
+
+## OPTIONS CHAIN
+{options_chain_text}
+
+Respond in the required JSON format only."""
+
+        agent = Agent(
+            client=self._get_client(self._plan_monitor_model),
+            name="PlanMonitorAgent",
+            instructions=get_plan_monitor_instructions(),
+        )
+        result = await agent.run(prompt)
+        response_text = result.text or str(result)
+        parsed = self._try_extract_any_json_object(response_text)
+        if parsed is None:
+            raise ValueError(f"Plan monitor returned invalid JSON for {symbol}: {response_text[:300]}")
+
+        note = str(parsed.get("note", "")).strip()
+        alert_level = str(parsed.get("alert_level", "none")).strip().lower()
+        if alert_level not in {"none", "info", "action_recommended"}:
+            alert_level = "info"
+
+        recommended_status_change = parsed.get("recommended_status_change")
+        if recommended_status_change not in (None, "active", "completed"):
+            recommended_status_change = None
+
+        output = {
+            "note": note,
+            "alert_level": alert_level,
+            "conditions_met": bool(parsed.get("conditions_met", False)),
+            "recommended_status_change": recommended_status_change,
+            "symbol": symbol,
+            "plan_id": plan_id,
+        }
+
+        cosmos.add_plan_note(symbol, plan_id, note)
+        return output
 
     async def run_summary_agent(
         self,
