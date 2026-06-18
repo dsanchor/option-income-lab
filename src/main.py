@@ -337,10 +337,10 @@ class OptionsAgentScheduler:
 
         plans = [
             plan for plan in self.cosmos.get_plans()
-            if str(plan.get('status', '')).lower() in {'planned', 'active'}
+            if str(plan.get('status', '')).lower() == 'planned'
         ]
         if not plans:
-            print("ℹ️  Plan monitor: no planned or active plans found")
+            print("ℹ️  Plan monitor: no planned plans found")
             return
 
         success = 0

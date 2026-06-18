@@ -178,11 +178,7 @@
                     </td>
                     <td class="actions-cell">
                         {% if plan.status == 'planned' %}
-                        <button class="btn-sm" data-plan-status="{{ plan.id }}" data-symbol="{{ plan.symbol }}" data-status="active" title="Start">▶</button>
-                        {% elif plan.status == 'active' %}
                         <button class="btn-sm" data-plan-status="{{ plan.id }}" data-symbol="{{ plan.symbol }}" data-status="completed" title="Complete">✓</button>
-                        {% endif %}
-                        {% if plan.status != 'cancelled' and plan.status != 'completed' %}
                         <button class="btn-sm btn-danger" data-plan-status="{{ plan.id }}" data-symbol="{{ plan.symbol }}" data-status="cancelled" title="Cancel">✕</button>
                         {% endif %}
                     </td>

@@ -30,7 +30,7 @@ Respond with ONLY a JSON block:
   "note": "Brief analysis with specific data points (price, RSI, momentum, etc.)",
   "alert_level": "none" | "info" | "action_recommended",
   "conditions_met": true | false,
-  "recommended_status_change": null | "active" | "completed"
+  "recommended_status_change": null | "completed"
 }
 ```
 
@@ -39,7 +39,7 @@ Rules:
 - "alert_level": "info" = notable movement toward/away from conditions
 - "alert_level": "action_recommended" = conditions met, user should act
 - "conditions_met": true when plan conditions match current data
-- "recommended_status_change": suggest "active" if planned→conditions met, "completed" if objective achieved
+- "recommended_status_change": suggest "completed" if objective achieved, otherwise null
 - For sell_put/sell_call plans: check if the target strike exists in options chain and report premium
 - For roll plans: check current position status and available alternatives
 - For buy_shares plans: check price targets and entry timing signals

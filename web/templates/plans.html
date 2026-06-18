@@ -71,7 +71,6 @@
         <div class="filter-pills" id="status-filter-pills" data-value="">
             <button type="button" class="pill active" data-value="">All</button>
             <button type="button" class="pill" data-value="planned">Planned</button>
-            <button type="button" class="pill" data-value="active">Active</button>
             <button type="button" class="pill" data-value="completed">Completed</button>
             <button type="button" class="pill" data-value="cancelled">Cancelled</button>
         </div>
@@ -124,11 +123,7 @@
                     <td class="mono" style="font-size:0.85rem;">{{ plan.updated_at[:10] if plan.updated_at else '—' }}</td>
                     <td class="actions-cell">
                         {% if plan.status == 'planned' %}
-                        <button class="btn-sm" data-set-status="{{ plan.id }}" data-symbol="{{ plan.symbol }}" data-status="active" title="Start">▶</button>
-                        {% elif plan.status == 'active' %}
                         <button class="btn-sm" data-set-status="{{ plan.id }}" data-symbol="{{ plan.symbol }}" data-status="completed" title="Complete">✓</button>
-                        {% endif %}
-                        {% if plan.status != 'cancelled' and plan.status != 'completed' %}
                         <button class="btn-sm btn-danger" data-set-status="{{ plan.id }}" data-symbol="{{ plan.symbol }}" data-status="cancelled" title="Cancel">✕</button>
                         {% endif %}
                     </td>
