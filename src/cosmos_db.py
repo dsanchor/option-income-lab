@@ -324,17 +324,24 @@ class CosmosDBService:
             raise ValueError(f"Plan {plan_id} not found")
         self.container.delete_item(item=plan_id, partition_key=symbol)
 
-    def add_plan_note(self, symbol: str, plan_id: str, note: str) -> dict:
+    def add_plan_note(self, symbol: str, plan_id: str, note: str,
+                      alert_level: str = "none", conditions_met: bool = False,
+                      recommended_status_change: str = None) -> dict:
         """Append an agent note to the plan."""
         doc = self.get_plan(symbol, plan_id)
         if doc is None:
             raise ValueError(f"Plan {plan_id} not found")
 
         timestamp = datetime.utcnow().isoformat() + "Z"
-        doc.setdefault("agent_notes", []).append({
+        entry = {
             "timestamp": timestamp,
             "note": note,
-        })
+            "alert_level": alert_level,
+            "conditions_met": conditions_met,
+        }
+        if recommended_status_change:
+            entry["recommended_status_change"] = recommended_status_change
+        doc.setdefault("agent_notes", []).append(entry)
         doc["updated_at"] = timestamp
         return self.container.replace_item(item=doc["id"], body=doc)
 

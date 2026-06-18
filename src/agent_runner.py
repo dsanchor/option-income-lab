@@ -2418,7 +2418,12 @@ Respond in the required JSON format only."""
             "plan_id": plan_id,
         }
 
-        cosmos.add_plan_note(symbol, plan_id, note)
+        cosmos.add_plan_note(
+            symbol, plan_id, note,
+            alert_level=alert_level,
+            conditions_met=output["conditions_met"],
+            recommended_status_change=recommended_status_change,
+        )
         return output
 
     async def run_summary_agent(
