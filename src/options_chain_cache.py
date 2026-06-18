@@ -329,34 +329,47 @@ class OptionsChainCache:
 
         added_strikes = 0
         overwritten_strikes = 0
+        skipped_strikes = 0
 
         # Merge calls
         for exp_key, strikes in overlay_calls.items():
             if exp_key not in merged["calls"]:
                 merged["calls"][exp_key] = {}
             for strike_key, contract in strikes.items():
-                if strike_key in merged["calls"][exp_key]:
-                    overwritten_strikes += 1
+                existing = merged["calls"][exp_key].get(strike_key)
+                if existing is not None:
+                    # Only overwrite if overlay has non-zero bid or ask
+                    if contract.get("bid", 0) > 0 or contract.get("ask", 0) > 0:
+                        overwritten_strikes += 1
+                        merged["calls"][exp_key][strike_key] = contract
+                    else:
+                        skipped_strikes += 1
                 else:
                     added_strikes += 1
-                merged["calls"][exp_key][strike_key] = contract
+                    merged["calls"][exp_key][strike_key] = contract
 
         # Merge puts
         for exp_key, strikes in overlay_puts.items():
             if exp_key not in merged["puts"]:
                 merged["puts"][exp_key] = {}
             for strike_key, contract in strikes.items():
-                if strike_key in merged["puts"][exp_key]:
-                    overwritten_strikes += 1
+                existing = merged["puts"][exp_key].get(strike_key)
+                if existing is not None:
+                    # Only overwrite if overlay has non-zero bid or ask
+                    if contract.get("bid", 0) > 0 or contract.get("ask", 0) > 0:
+                        overwritten_strikes += 1
+                        merged["puts"][exp_key][strike_key] = contract
+                    else:
+                        skipped_strikes += 1
                 else:
                     added_strikes += 1
-                merged["puts"][exp_key][strike_key] = contract
+                    merged["puts"][exp_key][strike_key] = contract
 
-        if added_strikes > 0 or overwritten_strikes > 0:
+        if added_strikes > 0 or overwritten_strikes > 0 or skipped_strikes > 0:
             logger.info(
                 "%s: merge complete — %d strikes added from TradingView, "
-                "%d strikes overwritten",
-                symbol, added_strikes, overwritten_strikes,
+                "%d strikes overwritten, %d strikes skipped (overlay had zero bid/ask)",
+                symbol, added_strikes, overwritten_strikes, skipped_strikes,
             )
 
         return merged

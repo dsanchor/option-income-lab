@@ -129,8 +129,23 @@ def _parse_tv_to_yfinance_format(
                 continue
 
             option_type = f[opt_type_idx]
-            expiration = str(f[exp_idx]) if f[exp_idx] is not None else None
-            if not expiration or option_type not in ("call", "put"):
+            raw_exp = f[exp_idx]
+            if raw_exp is None or option_type not in ("call", "put"):
+                continue
+            # Normalize expiration to YYYYMMDD to match yfinance keys
+            try:
+                raw_exp_val = float(raw_exp)
+                if raw_exp_val > 1e9:
+                    # Unix timestamp — convert to YYYYMMDD
+                    expiration = datetime.fromtimestamp(raw_exp_val, tz=timezone.utc).strftime("%Y%m%d")
+                elif raw_exp_val > 19000000:
+                    # Already YYYYMMDD as a number
+                    expiration = str(int(raw_exp_val))
+                else:
+                    expiration = str(raw_exp)
+            except (ValueError, TypeError, OSError):
+                expiration = str(raw_exp)
+            if not expiration:
                 continue
 
             def _get(key: str, _f=f, _idx_map=idx_map):
