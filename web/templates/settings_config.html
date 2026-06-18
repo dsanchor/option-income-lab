@@ -365,6 +365,46 @@
                     <span id="peRunStatus" class="mono" style="margin-left:0.75rem; font-size:0.85rem;"></span>
                 </div>
             </div>
+
+            <!-- Plan Monitor Section -->
+            <div style="margin-top:1.5rem;">
+                <h3 style="font-size:0.95rem; font-weight:600; margin:0 0 0.75rem 0; padding-bottom:0.5rem; border-bottom:1px solid var(--border); color:var(--text);">Plan Monitor</h3>
+                
+                <div style="margin-bottom:1rem;">
+                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                        <input type="checkbox" name="plan_monitor_enabled" value="true" {{ 'checked' if plan_monitor_enabled }}>
+                        <span style="font-size:0.9rem;">Enable plan monitor agent</span>
+                    </label>
+                    <small style="display:block; margin-top:0.3rem; margin-left:1.5rem; color:var(--text-muted); font-size:0.75rem;">
+                        Monitors action plans and adds agent notes based on current market data. Uses gpt-5.4-mini.
+                    </small>
+                </div>
+
+                <div style="margin-bottom:0.75rem;">
+                    <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
+                        Cron Expression
+                        <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to run the plan monitor">ⓘ</span>
+                    </label>
+                    <input type="text" name="plan_monitor_cron" value="{{ plan_monitor_cron }}" placeholder="0 4,16 * * 1-5" spellcheck="false"
+                           style="width:100%; padding:0.6rem 0.8rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                    <small style="display:block; margin-top:0.3rem; color:var(--text-muted); font-size:0.75rem;">Default: <code>0 4,16 * * 1-5</code> = 4 AM and 4 PM weekdays</small>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
+                    <div>
+                        <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Last Run</label>
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                            {{ plan_monitor_last_run or "Never" }}
+                        </div>
+                    </div>
+                    <div>
+                        <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                            {{ plan_monitor_next_run or "N/A" }}
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
