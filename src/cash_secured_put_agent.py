@@ -46,6 +46,7 @@ async def run_cash_secured_put_analysis(config, runner: AgentRunner,
 
     provider = get_shared_provider(getattr(config, 'yfinance_config', None))
     for sym_doc in csp_symbols:
+        category = (sym_doc.get("enrichment") or {}).get("category", "Balanced")
         await runner.run_symbol_agent(
             name="CashSecuredPutAgent",
             instructions=TV_CASH_SECURED_PUT_INSTRUCTIONS,
@@ -59,6 +60,7 @@ async def run_cash_secured_put_analysis(config, runner: AgentRunner,
             model=config.model_for('analysis'),
             supervisor_model=config.model_for('supervisor'),
             alpha_model=config.model_for('alpha'),
+            symbol_category=category,
         )
 
     print(f"\n{'='*60}")

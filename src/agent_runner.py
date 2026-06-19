@@ -127,6 +127,36 @@ class AgentRunner:
                 skill_paths=paths,
             )
         return self._skills_providers[cache_key]
+
+    # Category-to-skill mapping for watchlist agents
+    _CATEGORY_SKILL_MAP = {
+        "covered_call": {
+            "aristocrat": "cc-aristocrat",
+            "rising star": "cc-rising-star",
+            "compounder": "cc-compounder",
+            "high yield": "cc-high-yield",
+            "balanced": "cc-balanced",
+        },
+        "cash_secured_put": {
+            "aristocrat": "csp-aristocrat",
+            "rising star": "csp-rising-star",
+            "compounder": "csp-compounder",
+            "high yield": "csp-high-yield",
+            "balanced": "csp-balanced",
+        },
+    }
+
+    def _resolve_category_skill(self, agent_type: str, category: str | None) -> str | None:
+        """Resolve the category-specific skill name for a given agent type."""
+        type_map = self._CATEGORY_SKILL_MAP.get(agent_type)
+        if not type_map:
+            return None
+        cat_key = (category or "balanced").lower().strip()
+        skill_name = type_map.get(cat_key, type_map.get("balanced"))
+        # Verify the skill directory exists
+        if skill_name and (self._skills_dir / skill_name).exists():
+            return skill_name
+        return None
     
     # ── Options chain formatting ────────────────────────────────────────
 
@@ -1109,6 +1139,7 @@ Provide your alpha advisor analysis in the JSON format specified above."""
         model: str = None,
         supervisor_model: str = None,
         alpha_model: str = None,
+        symbol_category: str = None,
     ):
         """Run agent analysis for a single symbol.
 
@@ -1139,6 +1170,8 @@ Provide your alpha advisor analysis in the JSON format specified above."""
             data = await fetcher.fetch_all(symbol, force_refresh=True)
 
             message = f"""Analyze {symbol} (exchange: {exchange}).
+Category: {(symbol_category or "Balanced").replace("_", " ").title()}
+→ Load the **category-params** skill for category-specific thresholds. All base rules (earnings gate, DTE ≤ 45, etc.) still apply — the category skill ONLY adjusts delta ranges, premium minimums, and IV requirements.
 
 === PRE-FETCHED MARKET DATA ===
 
@@ -1165,7 +1198,12 @@ Previous activities for {symbol}:
 Current UTC timestamp: {analysis_ts}
 All market data has been pre-fetched above. Do NOT use any browser tools — analyze the data provided and output your activity in the required JSON format. Use the timestamp above in your JSON output; do NOT generate your own."""
 
-            _skills = self._get_skills_provider(["earnings-gate-sell", "data-source", "risk-flags"])
+            # Resolve category-specific skill based on agent type and symbol category
+            _category_skill = self._resolve_category_skill(agent_type, symbol_category)
+            _skill_names = ["earnings-gate-sell", "data-source", "risk-flags"]
+            if _category_skill:
+                _skill_names.append(_category_skill)
+            _skills = self._get_skills_provider(_skill_names)
             agent = Agent(
                 client=self._get_client(model),
                 name=name,
