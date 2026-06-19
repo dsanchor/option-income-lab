@@ -78,21 +78,41 @@ def analyze_single_symbol(symbol: str, filters: dict = None) -> dict:
     years = dgi_metrics.calculate_years_consecutive_increases(dividends) if has_dividends else 0
     cagr = dgi_metrics.calculate_dividend_cagr(dividends) if has_dividends else 0.0
 
-    # yfinance dividendYield is ALWAYS percentage-form (0.88 = 0.88%, 2.42 = 2.42%)
-    # Convert to decimal (0.0088, 0.0242) for internal use.
-    raw_yield = info.get("dividendYield") or 0
-    raw_yield = raw_yield / 100.0
+    # Dividend yield: prefer dividendYield (percentage-form, e.g. 2.64 = 2.64%),
+    # fall back to trailingAnnualDividendYield (already decimal, e.g. 0.0609 = 6.09%).
+    raw_yield = info.get("dividendYield")
+    if raw_yield is not None and raw_yield > 0:
+        # dividendYield is percentage-form → convert to decimal
+        raw_yield = raw_yield / 100.0
+    else:
+        # Fallback: trailingAnnualDividendYield is already decimal
+        raw_yield = info.get("trailingAnnualDividendYield") or 0
+
+    # Payout ratio: prefer payoutRatio, fall back to computed from dividends/EPS
+    payout = info.get("payoutRatio")
+    if payout is None or payout == 0:
+        div_rate = info.get("trailingAnnualDividendRate") or 0
+        eps = info.get("trailingEps") or info.get("epsTrailingTwelveMonths") or 0
+        payout = (div_rate / eps) if eps > 0 and div_rate > 0 else 0
+
+    # Debt/Equity: prefer debtToEquity, fall back to computed from balance sheet
+    raw_de = info.get("debtToEquity")
+    if raw_de is None:
+        total_debt = info.get("totalDebt") or 0
+        equity = info.get("totalStockholderEquity") or info.get("stockholdersEquity")
+        if equity and equity > 0 and total_debt > 0:
+            raw_de = (total_debt / equity) * 100  # same scale as yfinance debtToEquity
+        else:
+            raw_de = 0
 
     metrics = {
         "dividend_yield": raw_yield,
         "dividend_cagr_5y": cagr,
         "years_consecutive_increases": years,
-        "payout_ratio": info.get("payoutRatio") or 0,
+        "payout_ratio": payout,
         "pe_ratio": info.get("trailingPE") or 0,
         "forward_pe": info.get("forwardPE") or 0,
-        "debt_to_equity": (info.get("debtToEquity") or 0) / 100
-        if info.get("debtToEquity") and info["debtToEquity"] > 10
-        else (info.get("debtToEquity") or 0),
+        "debt_to_equity": raw_de / 100 if raw_de > 10 else raw_de,
         "roe": info.get("returnOnEquity") or 0,
         "market_cap": info.get("marketCap") or 0,
         "current_price": info.get("currentPrice")
