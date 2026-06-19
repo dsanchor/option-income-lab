@@ -442,8 +442,9 @@ A separate, centralized **Options Chain Cache** (`src/options_chain_cache.py`) p
 
 **Load procedure (on miss or hourly cron refresh):**
 1. Fetch from **yfinance** — all expirations with computed Greeks (delta, gamma, theta, vega)
-2. Fetch from **TradingView** — overlay: overwrites matching strikes, adds missing ones
-3. Store merged result in cache with **30-minute TTL**
+2. Fetch from **TradingView** — overlay: overwrites matching strikes (only when TradingView has non-zero bid/ask), adds missing ones
+3. **Normalize expiration keys** — TradingView returns Unix timestamps while yfinance uses YYYYMMDD format; keys are normalized to YYYYMMDD before merging
+4. Store merged result in cache with **30-minute TTL**
 
 **Design rationale:**
 - yfinance occasionally misses strikes that TradingView has (observed with VZ $48.5 strike)
@@ -703,6 +704,11 @@ Stocks must pass all filters before scoring:
 
 The DGI Screener uses **yfinance** as its primary data source — the same provider used by the trading agents. Stock fundamentals, dividend history, and technical indicators are sourced from Yahoo Finance via the `yfinance` Python package. Additionally, **stockanalysis.com** is scraped as a supplementary data source via `requests` + `BeautifulSoup` (`stockanalysis_fetcher.py`). The primary value-add is the authoritative **Growth Years** (consecutive years of dividend increases), which is always preferred over Yahoo's calculated value. Other dividend metrics (yield, payout ratio, dividend growth CAGR) are used as fallback when Yahoo Finance returns zero or missing data. An in-memory cache avoids redundant requests within the same screener run.
 
+**yfinance field fallbacks:** yfinance returns `None` for key fields (`dividendYield`, `payoutRatio`, `debtToEquity`) on many symbols (MO, PEP, JNJ, etc.). The screener uses automatic fallbacks:
+- `dividendYield` → `trailingAnnualDividendYield` (already decimal, no conversion needed)
+- `payoutRatio` → computed from `trailingAnnualDividendRate / trailingEps`
+- `debtToEquity` → computed from `totalDebt / totalStockholderEquity`
+
 ### Storage
 
 DGI Screener results are stored in the CosmosDB `dgi_screener` container (partition key: `/symbol`) with two document types:
@@ -859,6 +865,71 @@ Any ONE of these forces WAIT regardless of score:
 | Output | Strong Buy / Buy / Accumulate / Hold / Wait | STRONG_BUY / BUY / WAIT |
 | When they diverge | Normal — Entry may say "Strong Buy" while Buy Tracker says "WAIT" (e.g., earnings tomorrow) |
 
+## Category-Based Strategy Skills
+
+Sell-side agents (Covered Call and Cash-Secured Put) apply **category-specific parameter skills** that adapt trading thresholds to each stock's DGI category. The category is read from the symbol's enrichment data and the matching skill is loaded automatically alongside the base skills (earnings gate, data source, risk flags).
+
+**All base rules remain enforced** — earnings gate, DTE ≤ 45 hard cap, fundamental checks, and WAIT triggers. Category skills ONLY adjust delta ranges, premium minimums, IV requirements, and market state guidance.
+
+### Parameter Summary
+
+**Covered Call skills** (`src/skills/cc-{category}/`):
+
+| Category | Delta Range | Min Premium (30-45 DTE) | IV Requirement | Key Behavior |
+|---|---|---|---|---|
+| **Aristocrat** | 0.20–0.30 | ≥ 0.5% | None (low IV is structural) | Total return = premium + dividend; uptrend is normal |
+| **Compounder** | 0.15–0.25 | ≥ 0.6% | IV Rank ≥ 30 | Protect growth upside; WAIT on strong momentum |
+| **Rising Star** | 0.10–0.20 | ≥ 0.8% | IV Rank ≥ 40 | Very selective; WAIT during breakouts |
+| **High Yield** | 0.25–0.35 | ≥ 0.8% | IV Rank ≥ 30 | Aggressive income; critical ex-div awareness |
+| **Balanced** | 0.20–0.30 | ≥ 0.8% | IV Rank ≥ 35 | Standard defaults |
+
+**Cash-Secured Put skills** (`src/skills/csp-{category}/`):
+
+| Category | Delta Range | Min Premium (30-45 DTE) | IV Requirement | Key Behavior |
+|---|---|---|---|---|
+| **Aristocrat** | -0.25 to -0.35 | ≥ 0.8% | None (low IV is structural) | Assignment = owning a top-tier stock at discount |
+| **Compounder** | -0.20 to -0.30 | ≥ 1.0% | IV Rank ≥ 30 | Buy-the-dip entries; pullbacks in uptrend |
+| **Rising Star** | -0.15 to -0.25 | ≥ 1.2% | IV Rank ≥ 40 | Conservative; only at strong support + oversold |
+| **High Yield** | -0.25 to -0.35 | ≥ 1.0% | IV Rank ≥ 25 | Extra fundamental scrutiny (payout, debt) |
+| **Balanced** | -0.20 to -0.30 | ≥ 1.2% | IV Rank ≥ 35 | Standard defaults |
+
+### How It Works
+
+1. **Portfolio Enrichment** computes the symbol's DGI category (Aristocrat, Compounder, etc.)
+2. When the agent runs, `covered_call_agent.py` / `cash_secured_put_agent.py` reads `enrichment.category` from the symbol document
+3. `agent_runner.py` resolves the matching skill (e.g., `cc-aristocrat` for a Covered Call on an Aristocrat stock)
+4. The skill is loaded alongside `earnings-gate-sell`, `data-source`, and `risk-flags`
+5. The agent's prompt includes the category label — the agent loads the skill and applies its adjusted thresholds
+6. The agent evaluates market state (RSI, trend, IV) in real-time with fresh data, then applies category-specific guidance
+
+## Action Plans
+
+Action plans are user-created trading intentions tracked against live market data. Users create plans via the web UI (`/plans`) specifying a symbol, objective, conditions, and plan type.
+
+### Plan Types
+
+| Type | Description |
+|------|-------------|
+| `sell_put` | Plan to sell a cash-secured put |
+| `sell_call` | Plan to sell a covered call |
+| `buy_shares` | Plan to buy shares |
+| `sell_shares` | Plan to sell shares |
+| `roll` | Plan to roll an existing position |
+| `close` | Plan to close a position |
+| `other` | Custom plan type |
+
+### Plan Monitor Agent
+
+The Plan Monitor agent (`src/plan_monitor_instructions.py`) evaluates active plans against current market data on a cron schedule (default: `0 4,16 * * 1-5` — twice daily on weekdays). It only analyzes plans with `"planned"` status.
+
+**Input:** The plan (title, objective, conditions, type, status, notes), symbol enrichment data (price, momentum, entry tag, DGI score, technicals), active positions, and options chain data.
+
+**Output:** A JSON object with:
+- `note` — Brief analysis with specific data points
+- `alert_level` — `none` / `info` / `action_recommended`
+- `conditions_met` — Whether plan conditions match current data
+- `recommended_status_change` — `null` or `"completed"`
+
 ## Project Structure
 
 ```
@@ -901,7 +972,17 @@ stock-options-manager/
 │   │   ├── roll-economics/SKILL.md          # Premium-First Roll Policy (3-tier hierarchy)
 │   │   ├── data-source/SKILL.md             # Yahoo Finance data format guide
 │   │   ├── risk-flags/SKILL.md              # Risk flag taxonomy
-│   │   └── activity-log/SKILL.md            # Previous activity log interpretation
+│   │   ├── activity-log/SKILL.md            # Previous activity log interpretation
+│   │   ├── cc-aristocrat/SKILL.md           # Covered call params for Aristocrat stocks
+│   │   ├── cc-compounder/SKILL.md           # Covered call params for Compounder stocks
+│   │   ├── cc-rising-star/SKILL.md          # Covered call params for Rising Star stocks
+│   │   ├── cc-high-yield/SKILL.md           # Covered call params for High Yield stocks
+│   │   ├── cc-balanced/SKILL.md             # Covered call params for Balanced stocks
+│   │   ├── csp-aristocrat/SKILL.md          # Cash-secured put params for Aristocrat stocks
+│   │   ├── csp-compounder/SKILL.md          # Cash-secured put params for Compounder stocks
+│   │   ├── csp-rising-star/SKILL.md         # Cash-secured put params for Rising Star stocks
+│   │   ├── csp-high-yield/SKILL.md          # Cash-secured put params for High Yield stocks
+│   │   └── csp-balanced/SKILL.md            # Cash-secured put params for Balanced stocks
 │   ├── dgi_screener.py                   # DGI Screener pipeline
 │   ├── dgi_metrics.py                    # DGI metric calculations (quality score, RSI, ADX, technical timing)
 │   ├── portfolio_enrichment.py           # Watchlist enrichment (DGI scores, momentum, technicals → CosmosDB)
@@ -1534,6 +1615,16 @@ agent = Agent(
 | `data-source` | Yahoo Finance data format guide | All agents |
 | `risk-flags` | Risk flag taxonomy | Assessment + Roll agents |
 | `activity-log` | Previous activity log interpretation | Assessment agents |
+| `cc-aristocrat` | Covered call params for Aristocrat stocks | Covered call watcher |
+| `cc-compounder` | Covered call params for Compounder stocks | Covered call watcher |
+| `cc-rising-star` | Covered call params for Rising Star stocks | Covered call watcher |
+| `cc-high-yield` | Covered call params for High Yield stocks | Covered call watcher |
+| `cc-balanced` | Covered call params for Balanced stocks | Covered call watcher |
+| `csp-aristocrat` | CSP params for Aristocrat stocks | CSP watcher |
+| `csp-compounder` | CSP params for Compounder stocks | CSP watcher |
+| `csp-rising-star` | CSP params for Rising Star stocks | CSP watcher |
+| `csp-high-yield` | CSP params for High Yield stocks | CSP watcher |
+| `csp-balanced` | CSP params for Balanced stocks | CSP watcher |
 
 **Benefits:**
 - **Reduced token cost** — Skills only loaded when the agent needs them (progressive disclosure)
@@ -1551,6 +1642,7 @@ Each agent has its own instruction file returning a system prompt string:
 - `open_put_assessment_instructions.py` — Open put Phase 1 (assessment)
 - `open_put_roll_instructions.py` — Open put Phase 2 (roll management)
 - `buy_tracker_instructions.py` — Buy tracker (informational, no supervisor/alpha review)
+- `plan_monitor_instructions.py` — Plan monitor (evaluates action plans against market data)
 - `supervisor_instructions.py` — Quality auditor (9 playbooks × 4 agent contexts)
 - `alpha_instructions.py` — Alpha Advisor (aggressive perspective)
 
