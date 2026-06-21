@@ -269,7 +269,7 @@
                     </td>
                     <td><span class="badge badge-{{ 'wait' if pos.status == 'active' else ('roll' if pos.status == 'rolled' else 'info') }}">{{ pos.status }}</span></td>
                     <td class="mono">{{ pos.opened_at[:10] if pos.opened_at else "—" }}</td>
-                    <td class="pos-notes-cell" data-pos-id="{{ pos.position_id }}" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                    <td class="pos-notes-cell" data-pos-id="{{ pos.position_id }}" style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
                         <span class="notes-display" title="Click to edit">{{ pos.notes or "—" }}</span>
                         <div class="notes-edit" style="display:none;">
                             <textarea class="input-field notes-input" rows="2" style="width:100%; min-width:140px; resize:vertical; font-size:0.85rem;">{{ pos.notes or "" }}</textarea>
