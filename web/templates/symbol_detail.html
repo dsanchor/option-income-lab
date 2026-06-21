@@ -207,8 +207,20 @@
 <div class="card">
     <div class="card-header">
         <h2>Positions</h2>
-        <div style="display:flex; align-items:center; gap:0.5rem;">
-            <span class="card-badge">{{ symbol_doc.positions | length }} total</span>
+        <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+            <div class="filter-pills" id="pos-status-filter">
+                <button class="pill active" data-status="">All</button>
+                <button class="pill" data-status="active">Active</button>
+                <button class="pill" data-status="rolled">Rolled</button>
+                <button class="pill" data-status="closed">Closed</button>
+            </div>
+            <div class="filter-pills" id="pos-date-filter">
+                <button class="pill active" data-days="">All</button>
+                <button class="pill" data-days="15">15d</button>
+                <button class="pill" data-days="30">1m</button>
+                <button class="pill" data-days="365">1y</button>
+            </div>
+            <span class="card-badge" id="pos-count-badge">{{ symbol_doc.positions | length }} total</span>
             {% set active_positions = symbol_doc.positions | selectattr('status', 'equalto', 'active') | list %}
             {% if active_positions %}
             {% set has_calls = active_positions | selectattr('type', 'equalto', 'call') | list | length > 0 %}
@@ -239,8 +251,8 @@
                 </tr>
             </thead>
             <tbody>
-                {% for pos in symbol_doc.positions %}
-                <tr class="pos-row {% if pos.status != 'active' %}row-muted{% endif %}" data-pos-idx="{{ loop.index0 }}" style="cursor:pointer;">
+                {% for pos in symbol_doc.positions | reverse %}
+                <tr class="pos-row {% if pos.status != 'active' %}row-muted{% endif %}" data-pos-idx="{{ loop.index0 }}" data-pos-status="{{ pos.status }}" data-pos-opened="{{ pos.opened_at[:10] if pos.opened_at else '' }}" style="cursor:pointer;">
                     <td class="pos-chevron" style="text-align:center; color:var(--text-muted, #8d969e);">▸</td>
                     <td><span class="badge badge-{{ 'sell' if pos.type == 'call' else 'info' }}">{{ pos.type | upper }}</span></td>
                     <td class="mono">${{ pos.strike }}</td>
@@ -1372,6 +1384,55 @@
             }
         });
     }
+
+    // ── Position filters ──
+    (function() {
+        var statusFilter = '';
+        var daysFilter = '';
+
+        function applyPosFilters() {
+            var now = new Date();
+            var rows = document.querySelectorAll('tr.pos-row');
+            var visible = 0;
+            rows.forEach(function(row) {
+                var detailRow = document.querySelector('tr.pos-detail-row[data-pos-idx="' + row.dataset.posIdx + '"]');
+                var show = true;
+                // Status filter
+                if (statusFilter && row.dataset.posStatus !== statusFilter) show = false;
+                // Date filter
+                if (show && daysFilter) {
+                    var opened = row.dataset.posOpened;
+                    if (!opened) { show = false; }
+                    else {
+                        var diff = (now - new Date(opened)) / 86400000;
+                        if (diff > parseInt(daysFilter)) show = false;
+                    }
+                }
+                row.style.display = show ? '' : 'none';
+                if (detailRow) detailRow.style.display = 'none';
+                if (show) visible++;
+            });
+            var badge = document.getElementById('pos-count-badge');
+            if (badge) badge.textContent = visible + ' / ' + rows.length;
+        }
+
+        document.querySelectorAll('#pos-status-filter .pill').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                this.parentElement.querySelectorAll('.pill').forEach(function(p) { p.classList.remove('active'); });
+                this.classList.add('active');
+                statusFilter = this.dataset.status;
+                applyPosFilters();
+            });
+        });
+        document.querySelectorAll('#pos-date-filter .pill').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                this.parentElement.querySelectorAll('.pill').forEach(function(p) { p.classList.remove('active'); });
+                this.classList.add('active');
+                daysFilter = this.dataset.days;
+                applyPosFilters();
+            });
+        });
+    })();
 
     // Expandable position rows
     document.querySelectorAll('tr.pos-row').forEach(function(row) {
