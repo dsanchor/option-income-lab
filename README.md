@@ -108,6 +108,8 @@ Positions are managed via the web dashboard or API. Each position is stored with
 
 **Two-phase pipeline:** Position monitors use a two-phase architecture. **Phase 1 (Assessment)** evaluates assignment risk and produces a structured handoff JSON if action is needed. **Phase 2 (Roll Management)** receives the handoff plus a filtered options chain (see below) and selects specific roll targets (strike/expiration) with full roll economics (buyback cost, new premium, net credit/debit).
 
+**Category-aware delta targets:** Roll agents receive the symbol's DGI category (Aristocrat, Compounder, Rising Star, High Yield, Balanced) and use category-specific delta ranges when selecting roll targets. This ensures roll strikes align with the same risk profile used when the position was originally opened — e.g., a Rising Star CC rolls to delta 0.10–0.20 (protecting upside), while a High Yield CC rolls to 0.25–0.35 (maximizing premium). The category context is injected into the Phase 2 prompt alongside the roll candidates table.
+
 #### Options Chain Filter Pipeline
 
 Before Phase 2 receives the options chain, a 4-stage filter pipeline narrows it to relevant contracts:
@@ -304,27 +306,38 @@ The Supervisor Agent is a separate LLM instance that audits every actionable tra
 | SELL | IV rank reality check, earnings proximity, technical headwinds, premium adequacy with benchmarks |
 | NOT_NOW | Support/resistance alignment, elevated IV, opportunity cost accumulation |
 
-### Alpha Advisor Agent (Aggressive Perspective)
+### Alpha Advisor Agent (Parameter Relaxation)
 
-The Alpha Advisor is a separate LLM instance that provides alternative, more aggressive viewpoints on trading decisions. It complements the conservative primary agents by suggesting higher-premium alternatives **only when technically justified** — it does NOT replace the conservative recommendation.
+The Alpha Advisor is a separate LLM instance that identifies the **single blocking parameter** behind a WAIT decision and offers the best possible trade relaxing only that constraint. It does NOT replace the conservative recommendation — it provides a data-driven alternative when a trade was "almost good enough."
 
 **When it runs:** Same triggers as the Supervisor (alerts, prolonged WAITs, on-demand). Runs in parallel with the Supervisor as Phase 3b.
 
 **Philosophy:**
-- **Not a contrarian:** It agrees with the trade direction but suggests bolder parameters
-- **Data-driven only:** Every suggestion must cite specific technical/quantitative evidence
-- **NONE is valid:** If the conservative choice is already excellent, it says so — not every trade has a better aggressive version
-- **Risk transparency:** Every alternative clearly states the additional risk vs. the conservative choice
+- **Diagnostic first:** Identifies exactly which parameter blocked the trade (premium, IV, delta, technical, DTE)
+- **Minimal relaxation:** Only bends ONE constraint — all other rules remain enforced
+- **NONE is valid:** If no safe relaxation exists, it says so — not every WAIT has a viable alternative
+- **Trade-off transparency:** Every alternative clearly states what is being sacrificed
+
+**Relaxable parameters:**
+- `premium_below_category_minimum` — Premium below the category skill threshold
+- `iv_below_category_threshold` — IV Rank below category requirement
+- `delta_outside_category_range` — Delta outside the category's preferred range
+- `technical_borderline` — RSI/momentum slightly outside ideal
+- `dte_below_ideal` — DTE acceptable but shorter than preferred
+
+**Hard gates (never relaxed):** Earnings within window, DTE > 45, fundamental quality failures, free-fall conditions (RSI < 25 + negative momentum), delta > 0.50.
 
 **Output schema:**
 ```json
 {
   "opportunity_strength": "STRONG | MODERATE | NONE",
+  "relaxed_parameter": "premium_below_category_minimum | iv_below_category_threshold | delta_outside_category_range | technical_borderline | dte_below_ideal | none",
   "alternative": {
-    "action": "What the aggressive alternative recommends",
+    "action": "What the relaxed alternative recommends",
     "rationale": "Technical/quantitative evidence supporting this",
-    "additional_risk": "Extra risk vs. conservative choice",
-    "premium_comparison": "Conservative: $X (Y%/mo) vs. Aggressive: $A (B%/mo)",
+    "parameter_detail": "Category min 0.8%, best available 0.65% (19% gap)",
+    "trade_off": "Lower premium yield trades X for Y",
+    "premium_comparison": "Category target: $X (Y%/mo) vs. Relaxed: $A (B%/mo)",
     "strike": 55.0,
     "expiration": "2026-07-18",
     "premium": 2.10,
@@ -337,24 +350,17 @@ The Alpha Advisor is a separate LLM instance that provides alternative, more agg
 
 The `strike`, `expiration`, `premium`, `delta`, and `dte` fields are optional — included when the Alpha Advisor suggests a specific alternative contract (MODERATE/STRONG), omitted for NONE results. Values must come from the actual options chain, never invented.
 
-**What it suggests (examples):**
-- **SELL:** Closer strike with higher delta (0.30 vs. 0.20) for 3x more premium, when support levels justify it
-- **ROLL:** Shorter DTE for faster theta decay and capital efficiency
-- **WAIT:** Early close + re-entry at a fresher strike for more premium
-- **NOT_NOW:** Entry despite neutral technicals when IV rank is high enough to compensate
-
 **Safety constraints:**
 - Never suggests delta > 0.50 (stays in premium-selling territory)
 - Never violates the 45 DTE maximum rule
 - Never suggests entering before earnings if the primary agent rejected for that reason
-- Only suggests aggressive alternatives when premium improvement is significant (>50% more) AND technically supported
-- Always includes `premium_comparison` so the trader sees the exact trade-off
+- Relaxation must still produce a mathematically sound trade (positive expected value)
 
 **Prolonged WAIT detection (shared with Supervisor):**
-When a symbol or position has 5+ consecutive WAIT decisions (`PROLONGED_WAIT_THRESHOLD = 5`), both the Supervisor and Alpha Advisor are triggered. The Supervisor checks if continued waiting is losing opportunities; the Alpha Advisor checks if an aggressive entry or adjustment could work. A cooldown of 3 WAITs (`SUPERVISOR_COOLDOWN = 3`) prevents repeated reviews — after a review, at least 3 more WAITs must occur before triggering again.
+When a symbol or position has 5+ consecutive WAIT decisions (`PROLONGED_WAIT_THRESHOLD = 5`), both the Supervisor and Alpha Advisor are triggered. The Supervisor checks if continued waiting is losing opportunities; the Alpha Advisor checks if relaxing a single parameter could unlock a viable entry. A cooldown of 3 WAITs (`SUPERVISOR_COOLDOWN = 3`) prevents repeated reviews — after a review, at least 3 more WAITs must occur before triggering again.
 
 **Web dashboard integration:**
-- **Activity detail page**: Two collapsible panels — "Supervisor" (🛡️) with color-coded badges (🟢 WEAK, 🟡 MODERATE, 🔴 STRONG) and "Alpha Advisor" (🔍) with opportunity badges (🟢 NONE, 🔵 MODERATE, 🔵 STRONG). Supervisor panel always appears when a `supervisor_view` exists — WEAK panels auto-collapse on page load, MODERATE/STRONG start expanded. Alpha Advisor panels show trade details (strike, expiration, premium, delta, DTE) when alternatives are suggested.
+- **Activity detail page**: Two collapsible panels — "Supervisor" (🛡️) with color-coded badges (🟢 WEAK, 🟡 MODERATE, 🔴 STRONG) and "Alpha Advisor" (🔍) with opportunity badges (🟢 NONE, 🔵 MODERATE, 🔵 STRONG). Supervisor panel always appears when a `supervisor_view` exists — WEAK panels auto-collapse on page load, MODERATE/STRONG start expanded. Alpha Advisor panels show the relaxed parameter as an orange badge and trade details (strike, expiration, premium, delta, DTE) when alternatives are suggested.
 - **Dashboard & symbol detail**: 🤔 indicator icon on WAIT activities that have MODERATE or STRONG supervisor opinions (STRONG gets a pulse animation)
 
 ### Position Lifecycle
@@ -901,10 +907,11 @@ Sell-side agents (Covered Call and Cash-Secured Put) apply **category-specific p
 4. The skill is loaded alongside `earnings-gate-sell`, `data-source`, and `risk-flags`
 5. The agent's prompt includes the category label — the agent loads the skill and applies its adjusted thresholds
 6. The agent evaluates market state (RSI, trend, IV) in real-time with fresh data, then applies category-specific guidance
+7. **Roll alignment:** When an open position needs rolling, the monitor agents pass the symbol's category to the roll management phase, which receives category-specific delta targets (e.g., Rising Star CC → 0.10–0.20) ensuring roll strikes match the original entry risk profile
 
 ## Action Plans
 
-Action plans are user-created trading intentions tracked against live market data. Users create plans via the web UI (`/plans`) specifying a symbol, objective, conditions, and plan type.
+Action plans are user-created trading intentions tracked against live market data. Users create plans via the web UI (`/plans`) specifying a symbol, objective, conditions, and plan type. The "New Plan" form is **collapsed by default** and expandable on click, keeping the plans list clean.
 
 ### Plan Types
 
