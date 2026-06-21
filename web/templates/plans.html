@@ -9,10 +9,11 @@
 
 <!-- Create Plan -->
 <div class="card">
-    <div class="card-header">
+    <div class="card-header" onclick="toggleNewPlan()" style="cursor:pointer; user-select:none;">
         <h2>New Plan</h2>
+        <span id="newPlanToggle" style="margin-left:auto; color:var(--text-muted); font-size:0.8rem; transition:transform 0.2s; display:inline-block;">▶</span>
     </div>
-    <div style="padding: 0.75rem 1.25rem;">
+    <div id="newPlanBody" style="display:none; padding: 0.75rem 1.25rem;">
         <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:0.75rem; margin-bottom:0.75rem;">
             <div>
                 <label class="filter-label">Symbol</label>
@@ -153,6 +154,16 @@
 {% block scripts %}
 <script>
 (function() {
+    // ── Toggle New Plan form ──
+    window.toggleNewPlan = function() {
+        var body = document.getElementById('newPlanBody');
+        var toggle = document.getElementById('newPlanToggle');
+        var visible = body.style.display !== 'none';
+        body.style.display = visible ? 'none' : 'block';
+        toggle.textContent = visible ? '▶' : '▼';
+        toggle.style.transform = visible ? '' : 'rotate(0deg)';
+    };
+
     // ── Create Plan ──
     document.getElementById('btnCreatePlan').addEventListener('click', async function() {
         var symbol = document.getElementById('planSymbol').value;
