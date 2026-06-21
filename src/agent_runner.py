@@ -157,6 +157,42 @@ class AgentRunner:
         if skill_name and (self._skills_dir / skill_name).exists():
             return skill_name
         return None
+
+    # Category delta ranges for roll target alignment
+    _CATEGORY_DELTA_RANGES = {
+        "call": {
+            "aristocrat":   (0.20, 0.30),
+            "compounder":   (0.15, 0.25),
+            "rising star":  (0.10, 0.20),
+            "high yield":   (0.25, 0.35),
+            "balanced":     (0.20, 0.30),
+        },
+        "put": {
+            "aristocrat":   (0.25, 0.35),
+            "compounder":   (0.20, 0.30),
+            "rising star":  (0.15, 0.25),
+            "high yield":   (0.25, 0.35),
+            "balanced":     (0.20, 0.30),
+        },
+    }
+
+    @classmethod
+    def _get_category_delta_context(cls, position_type: str, category: str | None) -> str:
+        """Build a category-aware delta guidance block for roll agents."""
+        cat_key = (category or "balanced").lower().strip()
+        type_key = position_type.lower()
+        ranges = cls._CATEGORY_DELTA_RANGES.get(type_key, {})
+        delta_range = ranges.get(cat_key, ranges.get("balanced", (0.20, 0.30)))
+        cat_label = (category or "Balanced").replace("_", " ").title()
+        return (
+            f"\nCATEGORY-AWARE DELTA TARGETS:\n"
+            f"This stock is categorized as **{cat_label}**. "
+            f"When selecting roll targets, prefer |delta| {delta_range[0]:.2f}–{delta_range[1]:.2f} "
+            f"(aligned with the entry parameters used when this position was opened). "
+            f"These replace the generic 0.25–0.30 delta guidance. "
+            f"All other roll economics rules (premium-first policy, tier thresholds, "
+            f"earnings constraints, DTE ≤ 45) remain unchanged.\n"
+        )
     
     # ── Options chain formatting ────────────────────────────────────────
 
@@ -1593,6 +1629,7 @@ Analyze the position risk and output your response in the required JSON format. 
         analysis_ts: str,
         full_symbol: str,
         model: str = None,
+        category_delta_context: str = "",
     ) -> Tuple[str, Optional[Dict]]:
         """Run Phase 2 — roll management agent.
 
@@ -1604,7 +1641,7 @@ Analyze the position risk and output your response in the required JSON format. 
 
         message = f"""POSITION ASSESSMENT RESULT:
 {phase1_text}
-
+{category_delta_context}
 ROLL CANDIDATES:
 {filtered_chain_text}
 
@@ -1744,6 +1781,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
         roll_model: str = None,
         supervisor_model: str = None,
         alpha_model: str = None,
+        symbol_category: str = None,
     ):
         """Run position monitor for a single open position (2-phase).
 
@@ -1920,6 +1958,11 @@ Output your activity in the required JSON format. Use the timestamp above in you
                     )
 
                 try:
+                    # Build category-aware delta guidance for the roll agent
+                    _cat_delta_ctx = self._get_category_delta_context(
+                        position_type, symbol_category
+                    ) if symbol_category else ""
+
                     phase2_response, phase2_json = await self._run_roll_management(
                         name=name,
                         roll_instructions=roll_instructions,
@@ -1928,6 +1971,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         analysis_ts=analysis_ts,
                         full_symbol=symbol,
                         model=roll_model,
+                        category_delta_context=_cat_delta_ctx,
                     )
                     # Use Phase 2 output as the final result
                     response_text = phase2_response

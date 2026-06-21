@@ -55,6 +55,7 @@ async def run_open_put_monitor(config, runner: AgentRunner,
 
     provider = get_shared_provider(getattr(config, 'yfinance_config', None))
     for sym_doc in put_symbols:
+        _category = sym_doc.get("enrichment", {}).get("category")
         for pos in sym_doc["_active_positions"]:
             await runner.run_position_monitor(
                 name="OpenPutMonitor",
@@ -72,6 +73,7 @@ async def run_open_put_monitor(config, runner: AgentRunner,
                 roll_model=config.model_for('monitor_roll'),
                 supervisor_model=config.model_for('supervisor'),
                 alpha_model=config.model_for('alpha'),
+                symbol_category=_category,
             )
 
     print(f"\n{'='*60}")
