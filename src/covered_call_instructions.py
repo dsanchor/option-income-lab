@@ -154,13 +154,13 @@ The agent synthesizes all gathered data into a comprehensive analysis:
 ### Key Metrics to Evaluate
 
 **Implied Volatility (IV) Analysis:**
-- **IV Rank**: (Current IV - 52-week IV Low) / (52-week IV High - 52-week IV Low) × 100
-  - Target: IV Rank > 50 (preferably > 70 for optimal premium)
-  - Below 30: Premium likely too low, WAIT
-- **IV Percentile**: Percentage of days in past year when IV was lower than today
-  - Target: IV Percentile > 60 for attractive premium
+- **IV Assessment**: Use current ATM IV% from the options chain as the primary volatility measure
+  - Higher IV = better premiums for sellers
+  - Compare IV across strikes and expirations to assess relative richness
+  - Note: IV Rank/Percentile thresholds are defined per category in the category-params skill — do NOT apply a universal IV minimum here
 - **Current IV vs HV (Historical Volatility)**: 
   - Ideal: IV > HV (options are "expensive" relative to realized volatility)
+  - If IV data is limited, use pivot point spread as volatility proxy
 
 **Option Greeks:**
 - **Delta**: Probability of finishing in-the-money
@@ -219,21 +219,17 @@ The agent synthesizes all gathered data into a comprehensive analysis:
 
 ### SELL Alert Requirements (ALL must be met):
 
-1. **Volatility Check**: 
-   - IV Rank ≥ 50 OR IV Percentile ≥ 60
-   - IV > Historical Volatility
-
-2. **Greeks Check**:
-   - Delta between 0.20-0.35 for selected strike
+1. **Greeks Check**:
+   - Delta between 0.20-0.35 for selected strike (adjusted by category-params skill)
    - Theta ≥ $0.05/day
-   - Premium ≥ 1% of stock price (for 30-45 DTE)
+   - Premium meets the minimum defined in the category-params skill for this stock's category
 
-3. **Technical Check**:
+2. **Technical Check**:
    - Price NOT in strong uptrend (avoid price > 20MA > 50MA with rising momentum)
    - Strike at or above nearest resistance level
    - NOT breaking out of consolidation pattern
 
-4. **Calendar Check** — ⚠️ **enforced by the MANDATORY EARNINGS GATE** (already run as pre-check):
+3. **Calendar Check** — ⚠️ **enforced by the MANDATORY EARNINGS GATE** (already run as pre-check):
    - The Earnings Gate has already determined if this position is allowed. If you reached this point, the gate did not BLOCK.
    - Verify the `earnings_gate_result` in your `earnings_analysis` object matches the action you're taking.
    - If gate returned `ALLOWED`: include `risk_flags: ["earnings_approaching"]` as applicable
@@ -246,26 +242,17 @@ The agent synthesizes all gathered data into a comprehensive analysis:
      - AVOID: Ex-div within DTE with strike <10% OTM (HIGH early assignment risk)
      - NEVER: Ex-div within 5 days of expiration with ITM strike (near-certain assignment)
 
-5. **Sentiment Check**:
-   - No recent insider buying surge (last 7 days)
-   - Google Trends not spiking (increase < 50% vs 30-day avg)
-   - Analyst upgrades not clustered in last 7 days
-
-6. **Risk/Reward Check**:
-   - Premium ≥ 1.0% of current stock price for 30-45 DTE
-   - Annualized return ≥ 12% if repeated monthly
+4. **Risk/Reward Check**:
    - Comfortable with assignment at strike price
+   - Premium adequacy per category-params skill thresholds
 
 ### WAIT Alert Triggers (ANY triggers wait):
 
-1. **IV Too Low**: IV Rank < 30 AND IV Percentile < 40
-2. **Earnings Risk**: Earnings Gate returned BLOCKED (earnings <7 days away, or option expiration spans earnings without sufficient buffer — see MANDATORY EARNINGS GATE above)
-3. **Explosive Breakout**: Price gapping above resistance with >2x average volume (NOT a normal uptrend — only an explosive gap/breakout triggers WAIT)
-4. **Catalyst Pending**: FDA approval, merger closing, product launch within DTE
-5. **Insider Activity**: Significant insider buying in last 7 days
-6. **Poor Premium**: Premium < 0.6% of stock price for 30-45 DTE
-7. **Trend Spike**: Google Trends showing >50% surge in interest
-8. ⛔ **No Eligible Expiration ≤ 45 DTE**: If no expiration with DTE ≤ 45 passes all criteria (earnings gate, Greeks, premium threshold), output WAIT. NEVER extend to >45 DTE to find a qualifying expiration.
+1. **Earnings Risk**: Earnings Gate returned BLOCKED (earnings <7 days away, or option expiration spans earnings without sufficient buffer — see MANDATORY EARNINGS GATE above)
+2. **Explosive Breakout**: Price gapping above resistance with >2x average volume (NOT a normal uptrend — only an explosive gap/breakout triggers WAIT)
+3. **Catalyst Pending**: FDA approval, merger closing, product launch within DTE
+4. **Category-Params Violation**: Premium or IV below the minimum thresholds defined in the loaded category-params skill
+5. ⛔ **No Eligible Expiration ≤ 45 DTE**: If no expiration with DTE ≤ 45 passes all criteria (earnings gate, Greeks, category premium threshold), output WAIT. NEVER extend to >45 DTE to find a qualifying expiration.
 
 **NOTE on uptrends:** A steady uptrend (price > 20MA > 50MA) is NOT a reason to WAIT. Covered calls are designed to work in uptrends — simply select a higher strike (above resistance) to participate in gains. Only an explosive breakout (gap + extreme volume) warrants WAIT.
 
@@ -338,9 +325,9 @@ Every output MUST include a `risk_rating` (integer 0-10) and a `risk_rating_brea
 **Score each dimension 0-2 (0 = low risk, 1 = moderate, 2 = high risk). Sum all 5 = risk_rating.**
 
 ### Dimension 1: Volatility Risk (0-2)
-- **0**: IV Rank ≥ 60, IV > HV by ≥5pts, stable IV environment
-- **1**: IV Rank 30-59, or IV ≈ HV, or IV recently spiked/crushed
-- **2**: IV Rank < 30, or IV < HV significantly, or post-crush low-premium environment
+- **0**: IV elevated vs historical range, premium well above category minimum, stable IV environment
+- **1**: IV moderate, premium near category minimum, or IV recently spiked/crushed
+- **2**: IV depressed, premium below category minimum, or post-crush low-premium environment
 
 ### Dimension 2: Assignment Risk (0-2)
 - **0**: Delta ≤ 0.22, strike well above resistance, deep OTM
@@ -357,10 +344,11 @@ Every output MUST include a `risk_rating` (integer 0-10) and a `risk_rating_brea
 - **1**: Earnings Gate = ALLOWED (15-30 days, safe buffer), or minor catalyst uncertainty
 - **2**: Earnings Gate = ALLOWED_WITH_CAUTION or BLOCKED, ex-div conflict, catalyst within DTE
 
-### Dimension 5: Sentiment Risk (0-2)
-- **0**: No insider buying surge, stable analyst consensus, no trend spikes
-- **1**: Minor insider activity, or one analyst upgrade, or slight Google Trends increase
-- **2**: Clustered analyst upgrades, significant insider buying, or Google Trends spike >50%
+### Dimension 5: Sentiment Risk (0-2) — SOFT SIGNAL
+This dimension uses available sentiment data as a soft signal. It does NOT block SELL decisions — it only adjusts risk_rating. If data is unavailable, default to 0.
+- **0**: Stable analyst consensus, no unusual activity detected, or data unavailable (default)
+- **1**: Minor analyst upgrades clustering, or slight unusual interest in the stock
+- **2**: Clustered analyst upgrades + significant insider buying + abnormal interest signals (when data available)
 
 **Interpretation guide:**
 - **0-2**: Low risk — strong setup, high conviction

@@ -189,11 +189,10 @@ The agent synthesizes all gathered data into a comprehensive analysis:
   - Not facing existential disruption
 
 **Implied Volatility (IV) Analysis:**
-- **IV Rank**: (Current IV - 52-week IV Low) / (52-week IV High - 52-week IV Low) × 100
-  - Target: IV Rank > 50 (preferably > 60 for optimal premium)
-  - Below 40: Premium likely insufficient, WAIT
-- **IV Percentile**: Percentage of days in past year when IV was lower
-  - Target: IV Percentile > 50 for attractive premium
+- **IV Assessment**: Use current IV% from the options chain as the primary volatility measure
+  - Higher IV = better premiums for put sellers
+  - Compare IV across strikes and expirations to assess relative richness
+  - Note: IV Rank/Percentile thresholds are defined per category in the category-params skill — do NOT apply a universal IV minimum here
 - **Put/Call IV Skew**: 
   - Puts typically have higher IV than calls (volatility skew)
   - Elevated put skew = fear premium = good for put sellers
@@ -278,23 +277,18 @@ The agent synthesizes all gathered data into a comprehensive analysis:
    - Strong or improving competitive position
    - No existential threats (regulatory, disruption, bankruptcy risk)
 
-2. **Volatility Check**:
-   - IV Rank ≥ 50 OR IV Percentile ≥ 50
-   - Put IV elevated relative to recent range
-   - Premium ≥ 1.5% of strike price for 30-45 DTE
-
-3. **Technical Setup**:
+2. **Technical Setup**:
    - Strike price AT or BELOW identified support level
    - Current price showing oversold characteristics (RSI < 40, or at Bollinger lower band)
    - NOT in free-fall (avoid "catching falling knife")
    - Ideally: Recent selloff stabilizing with decreasing downside momentum
 
-4. **Greeks Check**:
-   - Delta between -0.20 and -0.35 for selected strike
+3. **Greeks Check**:
+   - Delta between -0.20 and -0.35 for selected strike (adjusted by category-params skill)
    - Theta ≥ $0.05/day
-   - Premium represents ≥ 2% discount to current price if assigned
+   - Premium meets the minimum defined in the category-params skill for this stock's category
 
-5. **Calendar Check** — ⚠️ **enforced by the MANDATORY EARNINGS GATE** (already run as pre-check):
+4. **Calendar Check** — ⚠️ **enforced by the MANDATORY EARNINGS GATE** (already run as pre-check):
    - The Earnings Gate has already determined if this position is allowed. If you reached this point, the gate did not BLOCK.
    - Verify the `earnings_gate_result` in your `earnings_analysis` object matches the action you're taking.
    - If gate returned `ALLOWED`: include `risk_flags: ["earnings_approaching"]` as applicable
@@ -303,16 +297,9 @@ The agent synthesizes all gathered data into a comprehensive analysis:
    - If after earnings: Ideal, any reasonable timeframe works
    - No known negative catalysts (litigation, regulatory decisions) within DTE
 
-6. **Sentiment/Institutional Check**:
-   - Institutional ownership stable or increasing
-   - Recent insider buying (not selling) if any insider activity
-   - Analyst ratings not being downgraded en masse
-   - Not a top loser with no clear reason (sector vs. idiosyncratic)
-
-7. **Risk/Reward Check**:
-   - Premium ≥ 1.5% of strike price for 30-45 DTE
-   - Annualized return ≥ 18% if repeated monthly
+5. **Risk/Reward Check**:
    - Effective purchase price (strike - premium) attractive entry point
+   - Premium adequacy per category-params skill thresholds
 
 ### WAIT Alert Triggers (ANY triggers wait):
 
@@ -322,35 +309,23 @@ The agent synthesizes all gathered data into a comprehensive analysis:
    - Major competitive threat emerging
    - You would NOT want to own the stock at strike price
 
-2. **IV Too Low**: 
-   - IV Rank < 30 AND IV Percentile < 30
-   - Premium < 0.9% of strike price
-
-3. **Technical Warning**:
+2. **Technical Warning**:
    - Price in free-fall with accelerating downside momentum
    - Breaking major support levels with high volume
    - No clear support level nearby AND stock is NOT a dividend aristocrat (10+ years growth, yield >2.5%)
 
-4. **Catalyst Risk**:
+3. **Catalyst Risk**:
    - Earnings Gate returned BLOCKED (earnings <7 days away, or option expiration spans earnings without sufficient buffer — see MANDATORY EARNINGS GATE above)
    - FDA decision, litigation outcome, regulatory ruling within DTE
    - Merger deal pending that could break
 
-5. **Insider/Institutional Flight**:
-   - Heavy recent insider selling
-   - Major institutional holders reducing positions
-   - Analyst downgrades clustering
+4. **Category-Params Violation**: Premium or IV below the minimum thresholds defined in the loaded category-params skill
 
-6. **Poor Risk/Reward**:
-   - Premium < 0.9% of strike price
-   - Strike price not attractive as an entry point
-   - Better opportunities available in other stocks
-
-7. **Market Environment**:
+5. **Market Environment**:
    - Extreme market fear (Fear & Greed < 15) with potential for systemic cascade
    - Sector-wide collapse without clear stabilization
 
-8. ⛔ **No Eligible Expiration ≤ 45 DTE**: If no expiration with DTE ≤ 45 passes all criteria (earnings gate, Greeks, premium threshold, support levels), output WAIT. NEVER extend to >45 DTE to find a qualifying expiration.
+6. ⛔ **No Eligible Expiration ≤ 45 DTE**: If no expiration with DTE ≤ 45 passes all criteria (earnings gate, Greeks, category premium threshold, support levels), output WAIT. NEVER extend to >45 DTE to find a qualifying expiration.
 
 **NOTE on DGI-quality stocks:** For dividend aristocrats (10+ consecutive years of dividend growth, yield >2.5%), the dividend floor provides fundamental support. You do NOT need textbook-perfect technical support levels to justify a CSP — the stock's income quality and history of recovering IS the support. Evaluate these stocks more on fundamentals + premium adequacy than on chart patterns.
 
@@ -447,19 +422,20 @@ Every output MUST include a `risk_rating` (integer 0-10) and a `risk_rating_brea
 - **2**: Support breaking, free-fall/accelerating downside, no clear support, strike above support level
 
 ### Dimension 3: Volatility Risk (0-2)
-- **0**: IV Rank ≥ 60, premium ≥ 2% of strike, elevated vs historical — excellent premium capture
-- **1**: IV Rank 45-59, premium 0.9-2% of strike, adequate but not ideal
-- **2**: IV Rank < 30, premium < 0.9%, IV crushed or insufficient for acceptable return
+- **0**: IV elevated vs historical range, premium well above category minimum — excellent premium capture
+- **1**: IV moderate, premium near category minimum, adequate but not ideal
+- **2**: IV depressed, premium below category minimum, insufficient for acceptable return
 
 ### Dimension 4: Calendar Risk (0-2)
 - **0**: Earnings Gate = IDEAL (post-earnings) or OPEN_NORMALLY, no catalysts, clean calendar
 - **1**: Earnings Gate = ALLOWED (15-30 days, safe buffer), or minor catalyst uncertainty
 - **2**: Earnings Gate = ALLOWED_WITH_CAUTION or BLOCKED, pending negative catalyst, litigation/regulatory risk
 
-### Dimension 5: Sentiment Risk (0-2)
-- **0**: Institutional ownership stable/increasing, insider buying, analyst consensus positive
-- **1**: Mixed signals — some insider selling offset by buying, neutral analyst consensus
-- **2**: Heavy insider selling, institutional flight, clustered analyst downgrades, sector collapse
+### Dimension 5: Sentiment Risk (0-2) — SOFT SIGNAL
+This dimension uses available sentiment data as a soft signal. It does NOT block SELL decisions — it only adjusts risk_rating. If data is unavailable, default to 0.
+- **0**: Analyst consensus stable or positive, no unusual activity detected, or data unavailable (default)
+- **1**: Mixed analyst signals, or minor insider selling, or neutral-to-negative sentiment shift
+- **2**: Clustered analyst downgrades + heavy insider selling + institutional flight (when data available)
 
 **Interpretation guide:**
 - **0-2**: Low risk — strong setup, high conviction
