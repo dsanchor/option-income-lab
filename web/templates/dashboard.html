@@ -191,11 +191,17 @@
                 <option value="medium">Medium</option>
                 <option value="low">Low</option>
             </select>
+            <select id="activity-decision-filter" class="filter-select">
+                <option value="">All Decisions</option>
+                <option value="wait">Wait</option>
+                <option value="sell">Sell</option>
+                <option value="alpha">Alpha Executed</option>
+            </select>
         </div>
     </div>
     <div class="activity-feed">
         {% for item in activity %}
-        <div class="activity-item clickable-row" data-timestamp="{{ item.timestamp[:19] }}" data-symbol="{{ item.symbol }}" data-agent-type="{{ item._agent_key | default('', true) }}" data-confidence="{{ item.confidence | default('', true) }}" data-activity-id="{{ item.id }}" data-href="/activities/{{ item.id }}">
+        <div class="activity-item clickable-row" data-timestamp="{{ item.timestamp[:19] }}" data-symbol="{{ item.symbol }}" data-agent-type="{{ item._agent_key | default('', true) }}" data-confidence="{{ item.confidence | default('', true) }}" data-decision="{{ item.activity | lower if item.activity else '' }}" data-has-alpha="{{ 'yes' if item.alpha_view and item.alpha_view.opportunity_strength in ['MODERATE', 'STRONG'] else '' }}" data-activity-id="{{ item.id }}" data-href="/activities/{{ item.id }}">
             <div class="activity-time">{{ item.timestamp[:19] }}</div>
             {% if item.is_alert %}
             <span class="alert-indicator" title="Alert">📢</span>

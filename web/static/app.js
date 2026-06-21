@@ -164,6 +164,8 @@ function applyDashboardFilters() {
     const selectedAgent = agentSelect ? agentSelect.value : '';
     const confSelect = document.getElementById('activity-confidence-filter');
     const selectedConf = confSelect ? confSelect.value : '';
+    const decisionSelect = document.getElementById('activity-decision-filter');
+    const selectedDecision = decisionSelect ? decisionSelect.value : '';
     const cutoff = cutoffDate(days);
     
     document.querySelectorAll('.activity-feed .activity-item').forEach(item => {
@@ -171,11 +173,21 @@ function applyDashboardFilters() {
         const sym = item.dataset.symbol || '';
         const agent = (item.dataset.agentType || '').trim();
         const conf = (item.dataset.confidence || '').trim();
+        const decision = (item.dataset.decision || '').trim();
+        const hasAlpha = item.dataset.hasAlpha || '';
         const timeOk = ts >= cutoff;
         const symOk = !selectedSymbol || sym === selectedSymbol;
         const agentOk = !selectedAgent || agent === selectedAgent.trim();
         const confOk = !selectedConf || conf === selectedConf;
-        item.style.display = (timeOk && symOk && agentOk && confOk) ? '' : 'none';
+        let decisionOk = true;
+        if (selectedDecision === 'alpha') {
+            decisionOk = hasAlpha === 'yes';
+        } else if (selectedDecision === 'sell') {
+            decisionOk = decision === 'sell';
+        } else if (selectedDecision === 'wait') {
+            decisionOk = decision === 'wait';
+        }
+        item.style.display = (timeOk && symOk && agentOk && confOk && decisionOk) ? '' : 'none';
     });
 }
 
@@ -255,6 +267,12 @@ if (symAgentFilter) {
 const dashConfFilter = document.getElementById('activity-confidence-filter');
 if (dashConfFilter) {
     dashConfFilter.addEventListener('change', applyDashboardFilters);
+}
+
+// Decision filter on dashboard
+const dashDecisionFilter = document.getElementById('activity-decision-filter');
+if (dashDecisionFilter) {
+    dashDecisionFilter.addEventListener('change', applyDashboardFilters);
 }
 
 // Confidence filter on symbol detail
