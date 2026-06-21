@@ -1030,11 +1030,17 @@ Provide your alpha advisor analysis in the JSON format specified above."""
                 )
                 return None
 
-            required = {"opportunity_strength", "alternative"}
+            required = {"opportunity_strength", "alternative", "relaxed_parameter"}
             missing = required - set(alpha_data.keys())
             if missing:
                 logger.warning("Alpha Advisor JSON missing fields: %s", missing)
-                return None
+                # Backwards-compat: fill defaults for new fields if missing
+                if "relaxed_parameter" in missing:
+                    alpha_data["relaxed_parameter"] = "none"
+                    alpha_data.setdefault("parameter_detail", "")
+                    missing.discard("relaxed_parameter")
+                if missing:
+                    return None
 
             # Derive one_liner if the LLM omitted it
             if "one_liner" not in alpha_data:
@@ -1051,9 +1057,10 @@ Provide your alpha advisor analysis in the JSON format specified above."""
             alpha_data["opportunity_strength"] = strength
 
             logger.info(
-                "Alpha Advisor for %s: opportunity=%s one_liner=%s",
+                "Alpha Advisor for %s: opportunity=%s relaxed=%s one_liner=%s",
                 activity_payload.get("symbol", "?"),
                 strength,
+                alpha_data.get("relaxed_parameter", "none"),
                 str(alpha_data.get("one_liner", ""))[:80],
             )
             return alpha_data

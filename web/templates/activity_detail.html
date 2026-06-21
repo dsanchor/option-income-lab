@@ -214,15 +214,21 @@
         <span class="review-icon">🔍</span>
         <span class="review-title">Alpha Advisor</span>
         <span class="review-badge badge-alpha-{{ av.opportunity_strength|lower }}">
-            {% if av.opportunity_strength|upper == 'NONE' %}Conservative is optimal
-            {% elif av.opportunity_strength|upper == 'MODERATE' %}Alternative available
-            {% elif av.opportunity_strength|upper == 'STRONG' %}Strong opportunity
+            {% if av.opportunity_strength|upper == 'NONE' %}No safe relaxation
+            {% elif av.opportunity_strength|upper == 'MODERATE' %}Relaxed alternative
+            {% elif av.opportunity_strength|upper == 'STRONG' %}Near-threshold alternative
             {% else %}{{ av.opportunity_strength }}
             {% endif %}
         </span>
         <span class="review-toggle" id="alpha-toggle">▼</span>
     </div>
     <div class="review-body" id="alpha-body">
+        {% if av.relaxed_parameter and av.relaxed_parameter != 'none' %}
+        <div style="margin-bottom: 8px; padding: 6px 10px; background: rgba(255,165,0,0.1); border-left: 3px solid orange; border-radius: 4px; font-size: 0.9em;">
+            🔓 <strong>Relaxed:</strong> {{ av.relaxed_parameter | replace('_', ' ') | title }}
+            {% if av.parameter_detail %} — {{ av.parameter_detail }}{% endif %}
+        </div>
+        {% endif %}
         {% if av.alternative %}
         <div class="alpha-alternative">
             {% if av.alternative.action %}
@@ -244,16 +250,18 @@
                 {% if av.alternative.delta %} · Δ {{ av.alternative.delta }}{% endif %}
             </div>
             {% endif %}
-            {% if av.alternative.additional_risk %}
+            {% if av.alternative.trade_off %}
+            <div class="alpha-risk">⚖️ Trade-off: {{ av.alternative.trade_off }}</div>
+            {% elif av.alternative.additional_risk %}
             <div class="alpha-risk">⚠️ Risk: {{ av.alternative.additional_risk }}</div>
             {% endif %}
         </div>
         {% endif %}
         <div class="review-verdict">
             {% if av.opportunity_strength|upper == 'NONE' %}
-            ✅ <strong>Conservative choice is already optimal</strong>{% if av.one_liner %} — <em>{{ av.one_liner }}</em>{% endif %}
+            ✅ <strong>No safe parameter relaxation available</strong>{% if av.one_liner %} — <em>{{ av.one_liner }}</em>{% endif %}
             {% else %}
-            🔍 <strong>Aggressive alternative</strong>{% if av.one_liner %} — <em>{{ av.one_liner }}</em>{% endif %}
+            🔓 <strong>Parameter relaxation alternative</strong>{% if av.one_liner %} — <em>{{ av.one_liner }}</em>{% endif %}
             {% endif %}
         </div>
         {% if av.opportunity_strength|upper in ('STRONG', 'MODERATE') %}
