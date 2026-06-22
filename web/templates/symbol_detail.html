@@ -267,7 +267,12 @@
                         <span class="badge badge-moneyness-{{ pos._moneyness | lower | replace(' ', '-') }}">{{ pos._moneyness }}</span>
                         {% else %}—{% endif %}
                     </td>
-                    <td><span class="badge badge-{{ 'wait' if pos.status == 'active' else ('roll' if pos.status == 'rolled' else 'info') }}">{{ pos.status }}</span></td>
+                    <td>
+                        <span class="badge badge-{{ 'wait' if pos.status == 'active' else ('roll' if pos.status == 'rolled' else 'info') }}">{{ pos.status }}</span>
+                        {% if pos.close_reason and pos.status == 'closed' %}
+                        <span class="badge badge-{{ 'sell' if pos.close_reason == 'assigned' else 'info' }}" style="font-size:0.65rem;">{{ pos.close_reason }}</span>
+                        {% endif %}
+                    </td>
                     <td class="mono">{{ pos.opened_at[:10] if pos.opened_at else "—" }}</td>
                     <td class="pos-notes-cell" data-pos-id="{{ pos.position_id }}" style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
                         <span class="notes-display" title="Click to edit">{{ pos.notes or "—" }}</span>
@@ -281,7 +286,7 @@
                     </td>
                     <td style="text-align:right; white-space:nowrap;">
                         {% if pos.status == 'active' %}
-                        <button class="btn-sm" data-close-pos="{{ pos.position_id }}">Close</button>
+                        <button class="btn-sm" data-close-pos="{{ pos.position_id }}">Close ▾</button>
                         <button class="btn-sm" data-roll-pos="{{ pos.position_id }}" data-pos-idx="{{ loop.index0 }}">Roll</button>
                         {% endif %}
                     </td>
@@ -1317,9 +1322,16 @@
         btn.addEventListener('click', async function(e) {
             e.stopPropagation();
             var posId = this.dataset.closePos;
-            if (!confirm('Close this position?')) return;
+            var reason = prompt('Close reason?\n\n1 — Expired\n2 — Assigned\n3 — Manual close\n\nEnter 1, 2 or 3:');
+            if (reason === null) return;
+            var reasonMap = { '1': 'expired', '2': 'assigned', '3': 'manual' };
+            var closeReason = reasonMap[reason.trim()] || 'manual';
             try {
-                var res = await fetch('/api/symbols/' + SYMBOL + '/positions/' + encodeURIComponent(posId) + '/close', { method: 'PUT' });
+                var res = await fetch('/api/symbols/' + SYMBOL + '/positions/' + encodeURIComponent(posId) + '/close', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ close_reason: closeReason })
+                });
                 if (res.ok) {
                     window.location.reload();
                 } else {

@@ -1072,7 +1072,13 @@ async def api_manual_roll_position(request: Request, symbol: str,
 async def api_close_position(request: Request, symbol: str, position_id: str):
     try:
         cosmos = _get_cosmos(request)
-        doc = cosmos.close_position(symbol.upper(), position_id)
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        close_reason = body.get("close_reason", "manual")
+        doc = cosmos.close_position(symbol.upper(), position_id, close_reason=close_reason)
         return JSONResponse(_clean_doc(doc))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=404)

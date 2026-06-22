@@ -431,8 +431,8 @@ class CosmosDBService:
         doc["updated_at"] = now
         return self.container.replace_item(item=doc["id"], body=doc)
 
-    def close_position(self, symbol: str, position_id: str) -> dict:
-        """Mark a position as closed."""
+    def close_position(self, symbol: str, position_id: str, close_reason: str = "manual") -> dict:
+        """Mark a position as closed with a reason (expired, assigned, manual)."""
         doc = self.get_symbol(symbol)
         if doc is None:
             raise ValueError(f"Symbol {symbol} not found")
@@ -446,6 +446,7 @@ class CosmosDBService:
                     return doc
                 pos["status"] = "closed"
                 pos["closed_at"] = datetime.utcnow().isoformat() + "Z"
+                pos["close_reason"] = close_reason
                 found = True
                 # Don't break - handle any duplicate IDs if they exist
         
