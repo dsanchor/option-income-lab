@@ -1914,6 +1914,10 @@ async def symbols_page(request: Request):
             float(p.get("strike", 0)) * 100
             for p in active_positions if p.get("type") == "put"
         )
+        s["_call_exposure"] = sum(
+            float(p.get("strike", 0)) * 100
+            for p in active_positions if p.get("type") == "call"
+        )
     # Sort by enrichment quality_score descending (enriched first)
     symbols.sort(
         key=lambda s: (s.get("enrichment", {}) or {}).get("quality_score", -1),
@@ -1924,10 +1928,16 @@ async def symbols_page(request: Request):
         ((s.get("enrichment") or {}).get("last_updated", "") for s in symbols),
         default=""
     )
+    # Aggregate exposure totals
+    total_call_exposure = sum(s.get("_call_exposure", 0) for s in symbols)
+    total_put_exposure = sum(s.get("_put_exposure", 0) for s in symbols)
+
     return templates.TemplateResponse("symbols.html", {
         "request": request,
         "symbols": symbols,
         "last_update_ts": enrichment_ts,
+        "total_call_exposure": total_call_exposure,
+        "total_put_exposure": total_put_exposure,
     })
 
 

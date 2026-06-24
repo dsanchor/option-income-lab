@@ -5,6 +5,10 @@
 <div class="page-header">
     <h1>Watchlist</h1>
     <p class="subtitle">Your watchlist symbols with quality metrics and dividend analysis.</p>
+    <div style="display:flex; gap:1.5rem; margin-top:0.5rem;">
+        <span style="font-size:0.9rem; color:var(--text-muted, #8d969e);">📞 Calls exposure: <strong style="color:var(--text, #fff);">${{ "{:,.0f}".format(total_call_exposure) }}</strong></span>
+        <span style="font-size:0.9rem; color:var(--text-muted, #8d969e);">🔒 Puts committed: <strong style="color:var(--text, #fff);">${{ "{:,.0f}".format(total_put_exposure) }}</strong></span>
+    </div>
 </div>
 
 <!-- Add Symbol form -->
