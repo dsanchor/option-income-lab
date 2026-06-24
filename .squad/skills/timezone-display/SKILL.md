@@ -12,7 +12,7 @@ tools:
 
 ## Context
 When displaying timestamps in a web dashboard where:
-- Backend operates in a configured timezone (e.g., scheduler runs in America/New_York)
+- Backend operates in a configured timezone (e.g., scheduler runs in UTC)
 - Users may be in different timezones globally
 - Need to show times clearly without confusion
 
@@ -24,9 +24,9 @@ This pattern provides dual-timezone display: primary (configured TZ) + secondary
 Backend provides:
 ```python
 {
-    "timestamp": "2024-03-20 14:30:00 EST",  # Human-readable fallback
-    "timestamp_iso": "2024-03-20T14:30:00-04:00",  # ISO 8601 with timezone
-    "timezone": "America/New_York"  # IANA timezone name
+    "timestamp": "2024-03-20 14:30:00 UTC",  # Human-readable fallback
+    "timestamp_iso": "2024-03-20T14:30:00+00:00",  # ISO 8601 with timezone
+    "timezone": "UTC"  # IANA timezone name
 }
 ```
 

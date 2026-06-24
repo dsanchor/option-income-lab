@@ -600,7 +600,7 @@ An optional daily summary agent that sends a Telegram notification with a digest
 
 ### Features
 
-- **Daily Summaries** — Automatically runs on a configurable schedule (default: 8 AM, America/New_York timezone)
+- **Daily Summaries** — Automatically runs on a configurable schedule (default: 8 AM UTC)
 - **Per-Symbol Activity Digest** — Summarizes the N most recent activities for each tracked symbol (configurable, default: 3)
 - **Configurable Schedule** — Set the cron expression to match your timezone and preferences
 - **Enable/Disable Toggle** — Turn on/off without restarting the application
@@ -613,13 +613,13 @@ Configure the Summarization Agent in the **Settings** page (`/settings`):
 1. **Enable/Disable** — Toggle the agent on/off
 2. **Cron Expression** — Set the schedule (e.g., `0 8 * * *` for 8 AM daily)
 3. **Activity Count** — Number of recent activities per symbol to include in the summary (1–5)
-4. **Timezone** — Uses the global scheduler timezone from `config.yaml` (default: `America/New_York`)
+4. **Timezone** — Uses the container's system timezone (default: UTC)
 
 Or configure in `config.yaml`:
 ```yaml
 summary_agent:
   enabled: true
-  cron: "0 8 * * *"        # 8 AM daily (America/New_York timezone)
+  cron: "0 8 * * *"        # 8 AM daily (UTC)
   activity_count: 3         # Latest N activities per symbol
 ```
 

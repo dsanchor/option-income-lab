@@ -31,8 +31,8 @@ context:
   activity_ttl_days: 90     # Activities older than this are auto-expired via CosmosDB TTL
 
 scheduler:
-  cron: "30 9-16/4 * * 1-5"  # Cron expression: every 2 hours, market hours (Mon-Fri 14-21 Spain / 9-16 US)
-  timezone: "America/New_York"  # Timezone for scheduler (default: America/New_York)
+  cron: "30 9-16/4 * * 1-5"  # Cron expression: every 4 hours starting at 9:30, market hours Mon-Fri
+  timezone: "UTC"  # Timezone for scheduler (container default)
 
 web:
   host: "0.0.0.0"
@@ -45,12 +45,12 @@ telegram:
 
 summary_agent:
   enabled: true
-  cron: "0 8 * * *"  # 8 AM daily (America/New_York timezone)
+  cron: "0 8 * * *"  # 8 AM daily (UTC)
   activity_count: 3  # Latest N activities per symbol
 
 plan_monitor:
   enabled: true
-  cron: "0 4,16 * * 1-5"  # 4 AM and 4 PM weekdays (America/New_York)
+  cron: "0 4,16 * * 1-5"  # 4 AM and 4 PM weekdays (UTC)
   model: "gpt-5.4-mini"
 
 banner_agent:
@@ -60,7 +60,7 @@ banner_agent:
 
 dps_scorer:
   enabled: true
-  cron: "0 22 * * 1-5"  # 10 PM weekdays (America/New_York)
+  cron: "0 22 * * 1-5"  # 10 PM weekdays (UTC)
 
 options_chain_scheduler:
   enabled: true
@@ -68,7 +68,7 @@ options_chain_scheduler:
 
 portfolio_enrichment:
   enabled: true
-  cron: "0 9-17 * * 1-5"  # Hourly 9-17 Mon-Fri (America/New_York)
+  cron: "0 9-17 * * 1-5"  # Hourly 9-17 Mon-Fri (UTC)
 
 # yfinance data provider settings
 yfinance:
@@ -82,7 +82,7 @@ yfinance:
 
 dgi_screener:
   enabled: true
-  cron: "0 6 * * 1-5"  # 6 AM weekdays (America/New_York)
+  cron: "0 6 * * 1-5"  # 6 AM weekdays (UTC)
   symbols: "A,AAL,AAPL,ABBV,ABNB,ABT,ACGL,ACN,ADBE,ADI,ADM,ADP,ADSK,AEE,AEP,AES,AFL,AIG,AIZ,AJG,AKAM,ALB,ALGN,ALL,ALLE,AMAT,AMCR,AMD,AME,AMGN,AMP,AMT,AMZN,ANET,AON,AOS,APA,APD,APH,APTV,ARE,ATO,AVGO,AVY,AWK,AXP,AZO,BA,BAC,BAX,BBY,BDX,BEN,BF-B,BG,BIIB,BIO,BK,BKNG,BKR,BLDR,BLK,BMY,BR,BRK-B,BRO,BSX,BWA,BX,BXP,C,CAG,CAH,CARR,CAT,CB,CBOE,CBRE,CCI,CCL,CDNS,CDW,CE,CEG,CF,CFG,CHD,CHRW,CHTR,CI,CINF,CL,CLX,CMA,CMCSA,CME,CMG,CMI,CMS,CNC,CNP,COF,COO,COP,COR,COST,CPAY,CPB,CPRT,CPT,CRL,CRM,CRWD,CSCO,CSGP,CSX,CTAS,CTRA,CTSH,CTVA,CVS,CVX,CZR,D,DAL,DD,DE,DECK,DG,DGX,DHI,DHR,DIS,DLTR,DOV,DOW,DPZ,DRI,DTE,DUK,DVA,DVN,DXCM,EA,EBAY,ECL,ED,EFX,EG,EIX,EL,EMN,EMR,ENPH,EOG,EPAM,EQIX,EQR,EQT,ES,ESS,ETN,ETR,EVRG,EW,EXC,EXPD,EXPE,EXR,F,FANG,FAST,FCNCA,FCX,FDS,FDX,FE,FFIV,FI,FICO,FIS,FISV,FITB,FLT,FMC,FOX,FOXA,FRT,FSLR,FTNT,FTV,GD,GDDY,GE,GEHC,GEN,GEV,GILD,GIS,GL,GLW,GM,GNRC,GOOG,GOOGL,GPC,GPN,GRMN,GS,GWW,HAL,HAS,HBAN,HCA,HD,HOLX,HON,HPE,HPQ,HRL,HSIC,HST,HSY,HUBB,HUM,HWM,IBM,ICE,IDXX,IEX,IFF,ILMN,INCY,INTC,INTU,INVH,IP,IPG,IQV,IR,IRM,ISRG,IT,ITW,IVZ,J,JBHT,JBL,JCI,JKHY,JNJ,JNPR,JPM,K,KDP,KEY,KEYS,KHC,KIM,KKR,KLAC,KMB,KMI,KMX,KO,KR,KVUE,L,LDOS,LEN,LH,LHX,LIN,LKQ,LLY,LRCX,LULU,LUV,LVS,LW,LYB,LYV,MA,MAA,MAR,MAS,MCD,MCHP,MCK,MCO,MDLZ,MDT,MET,META,MGM,MHK,MKC,MKTX,MLM,MMC,MMM,MNST,MO,MOH,MOS,MPC,MPWR,MRK,MRNA,MRO,MS,MSCI,MSFT,MSI,MTB,MTCH,MTD,MU,NCLH,NDAQ,NDSN,NEE,NEM,NFLX,NI,NKE,NOC,NOW,NRG,NSC,NTAP,NTRS,NUE,NVDA,NVR,NWS,NWSA,NXPI,O,ODFL,OGN,OKE,OMC,ON,ORCL,ORLY,OTIS,OXY,PAYC,PAYX,PCAR,PCG,PEG,PEP,PFE,PFG,PG,PGR,PH,PHM,PKG,PLD,PM,PNC,PNR,PNW,POOL,PPG,PPL,PRU,PSA,PSX,PTC,PVH,PWR,PYPL,QCOM,QRVO,RCL,REG,REGN,RF,RHI,RJF,RL,RMD,ROK,ROL,ROP,ROST,RSG,RTX,RVTY,SBAC,SBUX,SCHW,SEE,SHW,SJM,SLB,SMCI,SNA,SNPS,SO,SOLV,SPG,SPGI,SRE,STE,STLD,STT,STX,STZ,SWK,SWKS,SYF,SYK,SYY,T,TAP,TDG,TDY,TECH,TEL,TER,TFC,TFX,TGT,TJX,TMO,TMUS,TPR,TRGP,TRMB,TROW,TRV,TSCO,TSLA,TSN,TT,TTWO,TXN,TXT,TYL,UAL,UBER,UDR,UHS,ULTA,UNH,UNP,UPS,URI,USB,V,VFC,VICI,VLO,VLTO,VMC,VRSK,VRSN,VRTX,VST,VTR,VTRS,VZ,WAB,WAT,WBA,WBD,WDC,WEC,WELL,WFC,WHR,WM,WMB,WMT,WRB,WRK,WST,WTW,WY,WYNN,XEL,XOM,XYL,YUM,ZBH,ZBRA,ZTS"
   top_n: 50
   filters:
