@@ -306,7 +306,8 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
     ]
     wins = [
         position for position in settled_positions
-        if position["status"] != "rolled"
+        if position["status"] == "closed"
+        or (position["status"] == "rolled" and (position.get("net") or 0) > 0)
     ]
     win_rate = _round2((len(wins) / len(settled_positions)) * 100) if settled_positions else 0.0
 
