@@ -422,6 +422,16 @@ When you determine the position needs action (ROLL), output a **handoff JSON** i
     "next_earnings_date": "YYYY-MM-DD or null",
     "next_ex_div_date": "YYYY-MM-DD or null"
   },
+  "market_bias": {
+    "direction": "bullish or bearish or neutral",
+    "rsi_14": 46.08,
+    "sma_20_vs_price": "above or below",
+    "sma_50_vs_price": "above or below",
+    "macd_signal": "bullish or bearish or flat",
+    "oscillator_summary": "Buy or Sell or Neutral",
+    "ma_summary": "Buy or Sell or Neutral",
+    "reasoning": "Brief technical summary supporting the direction call"
+  },
   "pivot_points": {
     "classic": { "R1": 74.50, "R2": 76.00, "R3": 78.00, "S1": 70.50, "S2": 69.00, "S3": 67.00 }
   },
@@ -438,6 +448,7 @@ When you determine the position needs action (ROLL), output a **handoff JSON** i
 - `close_for_profit_recommended`: Set to `true` when the TastyTrade 50%+ profit rule applies — Phase 2 will evaluate whether to close for profit or attempt a roll. Default `false`.
 - `profit_level_pct`: Approximate profit percentage when `close_for_profit_recommended` is true (e.g., 55.0 for ~55% profit). Set to `null` otherwise.
 - `pivot_points`: Extract the Classic pivot points from the technicals data (R1-R3, S1-S3). Agent 2 uses these for strike targeting.
+- `market_bias`: Summarize the current technical outlook so Agent 2 can assess whether a profit optimization roll is supported by market conditions. Extract RSI(14), price vs SMA20/SMA50, MACD signal direction, and the oscillator/MA summaries. Set `direction` to "bullish" (strong uptrend — risky for call ROLL_DOWN), "bearish" (downtrend — favorable for call ROLL_DOWN), or "neutral" (range-bound — acceptable). The `reasoning` field should be 1-2 sentences explaining the technical picture. **This is critical for profit optimization**: a bullish bias warns Agent 2 that rolling down closer to the money may face assignment risk.
 - `profit_optimization_gate`: Set to "eligible" if the profit optimization gate passed (ROLL_DOWN for premium capture), "failed" if evaluated but failed, or `null` if not applicable (defensive roll). Agent 2 will validate candidate-dependent conditions.
 - `profit_optimization_constraints`: When gate is "eligible", include `next_earnings_date` and `next_ex_div_date` (or null if unknown) so Agent 2 can validate against the chosen expiration.
 - `roll_target_rules`: Summarize any earnings-driven constraints on roll targets so Agent 2 respects them.

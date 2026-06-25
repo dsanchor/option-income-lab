@@ -58,6 +58,7 @@ You receive two inputs:
    - `confidence`: Agent 1's confidence level
    - `profit_optimization_gate`: "eligible", "failed", or null
     - `profit_optimization_constraints`: `next_earnings_date`, `next_ex_div_date` (when gate is "eligible")
+   - `market_bias`: Technical outlook from Agent 1 — includes `direction` (bullish/bearish/neutral), RSI, SMA positions, MACD, and oscillator/MA summaries. Use this to validate profit optimization rolls.
    - `pivot_points`: Classic pivot R1-R3, S1-S3 for strike targeting
    - `roll_target_rules`: Earnings-driven constraints on allowed expirations
 
@@ -142,9 +143,14 @@ When `profit_optimization_gate` is `"eligible"` (from Agent 1), you MUST validat
 
 1. **No earnings before new expiration**: If `profit_optimization_constraints.next_earnings_date` is set and falls on or before your chosen new expiration → validation FAILS
 2. **No ex-dividend before new expiration**: If `profit_optimization_constraints.next_ex_div_date` is set and falls on or before your chosen new expiration → validation FAILS
+3. **Technical bias not adverse**: Check `market_bias.direction` from Agent 1's handoff:
+   - **"bullish"** → validation FAILS for call ROLL_DOWN. A bullish trend means the stock is rising, making a lower strike risky for assignment. Better to let the current position expire worthless and collect the full premium.
+   - **"neutral"** → PASS. Range-bound conditions are acceptable for profit optimization.
+   - **"bearish"** → PASS. Downtrend supports rolling down to a lower strike (stock moving away from new strike).
+   - If `market_bias` is missing from the handoff, treat as PASS (backward compatibility).
 
-If BOTH checks pass → proceed with the profit optimization roll (ROLL_DOWN).
-If EITHER check fails → downgrade to standard roll logic. Remove `profit_optimization` from risk_flags and treat as a normal position (typically WAIT or the next-best defensive action). Do NOT proceed with ROLL_DOWN for premium capture.
+If ALL checks pass → proceed with the profit optimization roll (ROLL_DOWN).
+If ANY check fails → downgrade to standard roll logic. Remove `profit_optimization` from risk_flags and treat as a normal position (typically WAIT or the next-best defensive action). Do NOT proceed with ROLL_DOWN for premium capture. In the `reason` field, explain which condition failed (e.g., "Profit optimization rejected: bullish technical bias (RSI 62, price above SMA20/SMA50) makes roll-down risky — holding current position to capture full premium decay.").
 
 ## OUTPUT FORMAT
 
