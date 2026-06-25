@@ -1847,11 +1847,15 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 structured_chain = json.loads(data.get('options_chain', '{}'))
             except (json.JSONDecodeError, TypeError):
                 structured_chain = {"calls": {}, "puts": {}}
+            _pre_delta_chain = structured_chain  # fallback if no filtering occurs
             if structured_chain.get("calls") or structured_chain.get("puts"):
                 structured_chain = filter_options_chain_by_type(structured_chain, position_type)
                 structured_chain = filter_options_chain_for_position(
                     structured_chain, float(strike), position_type,
                 )
+                # Keep a copy BEFORE delta filtering for buyback cost lookup
+                # (the current contract may be deeply OTM and get delta-filtered out)
+                _pre_delta_chain = structured_chain
                 structured_chain = filter_options_chain_by_delta(structured_chain)
             filtered_chain_text = (
                 OPTIONS_CHAIN_SCHEMA_DESCRIPTION + "\n"
@@ -1932,15 +1936,20 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         option_type=position_type,
                     )
                     # Pre-compute candidates as a readable table.
-                    # Look up buyback cost from the pre-direction-filtered chain
-                    # because direction filtering usually excludes the current contract.
+                    # Look up buyback cost from the pre-delta-filtered chain
+                    # because delta filtering usually excludes the current OTM contract.
                     _bb_cost = None
                     _bb_bucket_key = "calls" if position_type == "call" else "puts"
-                    _bb_bucket = structured_chain.get(_bb_bucket_key, {})
+                    _bb_bucket = _pre_delta_chain.get(_bb_bucket_key, {})
                     _bb_exp_key = expiration.replace("-", "")
-                    _bb_strike_key = str(float(strike))
-                    if _bb_exp_key in _bb_bucket and _bb_strike_key in _bb_bucket[_bb_exp_key]:
-                        _bb_ask = _bb_bucket[_bb_exp_key][_bb_strike_key].get("ask")
+                    _bb_strike_f = float(strike)
+                    # Try both key formats: str(float()) and f"{:.1f}"
+                    _bb_strike_key = str(_bb_strike_f)
+                    _bb_strike_key_alt = f"{_bb_strike_f:.1f}" if _bb_strike_f == int(_bb_strike_f) else _bb_strike_key
+                    _bb_exp_contracts = _bb_bucket.get(_bb_exp_key, {})
+                    _bb_contract = _bb_exp_contracts.get(_bb_strike_key) or _bb_exp_contracts.get(_bb_strike_key_alt)
+                    if _bb_contract:
+                        _bb_ask = _bb_contract.get("ask")
                         if _bb_ask is not None:
                             _bb_cost = float(_bb_ask)
 
