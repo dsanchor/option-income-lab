@@ -3929,6 +3929,18 @@ async def trigger_all_status(request: Request):
     return JSONResponse(dict(status))
 
 
+@app.get("/api/scheduler/health")
+async def scheduler_health(request: Request):
+    """Check if the scheduler thread is alive and running."""
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None:
+        return JSONResponse({"alive": False, "reason": "no scheduler instance"}, status_code=503)
+    return JSONResponse({
+        "alive": getattr(scheduler, "alive", False),
+        "running": getattr(scheduler, "running", False),
+    })
+
+
 # ===========================================================================
 # DGI Screener — Page & API
 # ===========================================================================

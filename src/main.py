@@ -74,6 +74,7 @@ class OptionsAgentScheduler:
     
     def __init__(self):
         self.running = True
+        self.alive = False  # Health flag — True while scheduler loop is active
         self.config = None
         self.runner = None
         self.cosmos = None
@@ -88,6 +89,8 @@ class OptionsAgentScheduler:
         self._portfolio_enrichment_cron_changed = False
         self._last_config_reload = None
         self._config_reload_interval = 60  # seconds
+        self._last_heartbeat = 0  # epoch for periodic heartbeat log
+        self._heartbeat_interval = 600  # heartbeat every 10 minutes
     
     def reschedule(self, new_cron: str):
         """Update cron expression. The run loop will pick it up on next iteration."""
@@ -907,9 +910,19 @@ class OptionsAgentScheduler:
         
         print("Press Ctrl+C to stop\n")
         
+        self.alive = True
+        self._last_heartbeat = time.time()
+        
         while self.running:
-            # Periodically reload config from CosmosDB to pick up web UI changes
+          try:
+            # Heartbeat — periodic log to confirm scheduler is alive
             current_time = time.time()
+            if current_time - self._last_heartbeat >= self._heartbeat_interval:
+                self._last_heartbeat = current_time
+                now_hb = _now_local()
+                print(f"💓 Scheduler alive at {now_hb.strftime('%Y-%m-%d %H:%M:%S %Z')} | Next monitor run: {next_run.strftime('%H:%M:%S')}")
+
+            # Periodically reload config from CosmosDB to pick up web UI changes
             if current_time - self._last_config_reload >= self._config_reload_interval:
                 self._reload_config_from_cosmos()
                 self._last_config_reload = current_time
@@ -1037,54 +1050,83 @@ class OptionsAgentScheduler:
             
             # Check main scheduler
             if now_tz >= next_run:
-                self.run_all_agents()
+                try:
+                    self.run_all_agents()
+                except Exception as e:
+                    print(f"❌ SCHEDULER ERROR in run_all_agents: {e}")
                 next_run = cron.get_next(datetime)
                 print(f"Monitor Agents - Next run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
             
             # Check summary agent scheduler
             if summary_enabled and summary_next_run and now_tz >= summary_next_run:
-                self.run_summary_agent_job()
+                try:
+                    self.run_summary_agent_job()
+                except Exception as e:
+                    print(f"❌ SCHEDULER ERROR in summary_agent: {e}")
                 summary_next_run = summary_cron.get_next(datetime)
                 print(f"Summary Agent  - Next run: {summary_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
             
-            # Check options chain scheduler
+            # Check plan monitor scheduler
             if plan_monitor_enabled and plan_monitor_next_run and now_tz >= plan_monitor_next_run:
-                self.run_plan_monitor_job()
+                try:
+                    self.run_plan_monitor_job()
+                except Exception as e:
+                    print(f"❌ SCHEDULER ERROR in plan_monitor: {e}")
                 plan_monitor_next_run = plan_monitor_cron.get_next(datetime)
                 print(f"Plan Monitor          - Next run: {plan_monitor_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
 
             # Check options chain scheduler
             if options_chain_enabled and options_chain_next_run and now_tz >= options_chain_next_run:
-                self.run_options_chain_fetch_job()
+                try:
+                    self.run_options_chain_fetch_job()
+                except Exception as e:
+                    print(f"❌ SCHEDULER ERROR in options_chain: {e}")
                 options_chain_next_run = options_chain_cron.get_next(datetime)
                 print(f"Options Chain Fetcher - Next run: {options_chain_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-                print(f"Summary Agent  - Next run: {summary_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
             
             # Check DGI screener scheduler
             if dgi_enabled and dgi_next_run and now_tz >= dgi_next_run:
-                self.run_dgi_screener_job()
+                try:
+                    self.run_dgi_screener_job()
+                except Exception as e:
+                    print(f"❌ SCHEDULER ERROR in dgi_screener: {e}")
                 dgi_next_run = dgi_cron.get_next(datetime)
                 print(f"DGI Screener          - Next run: {dgi_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
 
             # Check dashboard banner scheduler
             if banner_enabled and banner_next_run and now_tz >= banner_next_run:
-                self.run_banner_agent_job()
+                try:
+                    self.run_banner_agent_job()
+                except Exception as e:
+                    print(f"❌ SCHEDULER ERROR in banner_agent: {e}")
                 banner_next_run = banner_cron.get_next(datetime)
                 print(f"Dashboard Banner      - Next run: {banner_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
 
             if calendar_enabled and calendar_next_run and now_tz >= calendar_next_run:
-                self.run_calendar_sync_job()
+                try:
+                    self.run_calendar_sync_job()
+                except Exception as e:
+                    print(f"❌ SCHEDULER ERROR in calendar_sync: {e}")
                 calendar_next_run = calendar_cron.get_next(datetime)
                 print(f"Calendar Sync         - Next run: {calendar_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
 
             # Check portfolio enrichment scheduler
             if pe_enabled and pe_next_run and now_tz >= pe_next_run:
-                self.run_portfolio_enrichment_job()
+                try:
+                    self.run_portfolio_enrichment_job()
+                except Exception as e:
+                    print(f"❌ SCHEDULER ERROR in portfolio_enrichment: {e}")
                 pe_next_run = pe_cron.get_next(datetime)
                 print(f"Portfolio Enrichment  - Next run: {pe_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
             
             time.sleep(1)
+          except Exception as e:
+            print(f"❌ SCHEDULER LOOP ERROR (recovering): {e}")
+            import traceback
+            traceback.print_exc()
+            time.sleep(5)  # Brief pause before retrying
         
+        self.alive = False
         print("Scheduler stopped. Goodbye!")
 
 
