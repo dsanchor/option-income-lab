@@ -338,6 +338,14 @@ Load **risk-flags** for the canonical earnings flag definitions.
     "expiration_to_earnings_gap": 5,
     "earnings_gate_result": "HOLD or HOLD_WITH_CAUTION or FLAG or FLAG_MEDIUM or FLAG_HIGH or ROLL_RECOMMENDED or ROLL_URGENTLY or CLOSE_OR_ROLL or CONSERVATIVE",
     "earnings_risk_flag": "earnings_approaching or null"
+  },
+  "market_bias": {
+    "direction": "bullish or bearish or neutral",
+    "rsi_14": 42.5,
+    "sma_20_vs_price": "above or below",
+    "sma_50_vs_price": "above or below",
+    "macd_signal": "bullish or bearish or flat",
+    "reasoning": "Brief 1-2 sentence technical summary"
   }
 }
 ```
@@ -350,6 +358,7 @@ SUMMARY: TICKER | WAIT open put | Strike $X exp YYYY-MM-DD | Price $X | Delta X.
 - `assignment_risk`: "low" (|delta| <0.25, deep OTM), "medium" (|delta| 0.25-0.45), "high" (|delta| 0.45-0.60 or ATM), "critical" (|delta| >0.60 or deep ITM)
 - `confidence`: "high" (clear situation), "medium" (reasonable assessment), "low" (insufficient data)
 - `risk_flags`: array from Unified Risk Flag Taxonomy, or `[]` if none
+- `market_bias`: Always include. Extract direction from technicals: RSI(14) value, price vs SMA20/SMA50 position, MACD signal direction. Set direction to "bullish" (price above MAs, RSI > 55, bullish MACD), "bearish" (price below MAs, RSI < 45, bearish MACD), or "neutral" (mixed signals).
 
 **WAIT Example:**
 ```json

@@ -232,6 +232,14 @@ If you cannot find a suitable candidate in the table, output CLOSE instead of a 
     "expiration_to_earnings_gap": 5,
     "earnings_gate_result": "HOLD or HOLD_WITH_CAUTION or FLAG or FLAG_MEDIUM or FLAG_HIGH or ROLL_RECOMMENDED or ROLL_URGENTLY or CLOSE_OR_ROLL or CONSERVATIVE",
     "earnings_risk_flag": "earnings_approaching or null"
+  },
+  "market_bias": {
+    "direction": "bullish or bearish or neutral",
+    "rsi_14": 42.5,
+    "sma_20_vs_price": "above or below",
+    "sma_50_vs_price": "above or below",
+    "macd_signal": "bullish or bearish or flat",
+    "reasoning": "Brief 1-2 sentence technical summary"
   }
 }
 ```
@@ -248,6 +256,7 @@ SUMMARY: TICKER | ROLL_X open put | Strike $X→$Y exp OLD→NEW | Price $X | De
 - `confidence`: Carry from Agent 1's handoff
 - `risk_flags`: Merge Agent 1's flags with any roll-specific flags
 - `earnings_analysis`: Copy directly from Agent 1's handoff
+- `market_bias`: Copy directly from Agent 1's handoff. If Agent 1 did not include it, omit the field.
 
 ### CLOSE Activity Logic
 
