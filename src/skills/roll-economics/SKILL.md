@@ -33,23 +33,48 @@ Example format:
 
 ## Three-Tier Hierarchy
 
-### Tier 1 — Preferred: Net Credit ≥ $1.00
+### Standard Rolls (defensive — assignment risk, earnings, etc.)
+
+#### Tier 1 — Preferred: Net Credit ≥ $1.00
 
 - approved automatically
 - ideal outcome
 - proceed with the roll
 
-### Tier 2 — Acceptable Ultra-Defensive Roll: Net Debit ≤ $1.00
+#### Tier 2 — Acceptable Ultra-Defensive Roll: Net Debit ≤ $1.00
 
 - acceptable only as defensive insurance
 - add `ultra_defensive_roll`
 - explain clearly why paying the debit is justified
 
-### Tier 3 — Rejected: Net Debit > $1.00
+#### Tier 3 — Rejected: Net Debit > $1.00
 
 - do **not** recommend this roll
 - run the roll search algorithm
 - if no better candidate exists, recommend `CLOSE`
+
+### Profit Optimization Rolls (premium capture — no assignment urgency)
+
+When `profit_optimization_gate == "eligible"`, the position is deeply OTM with a nearly worthless contract. The buyback cost is naturally very small ($0.02-$0.20), so standard tier thresholds do NOT apply. Use these instead:
+
+#### Tier 1 — Preferred: Net Credit > $0.00 (any positive credit)
+
+- approved automatically
+- the key metric is that you collect MORE than you pay to close
+- proceed with the roll
+
+#### Tier 2 — Acceptable: Net Credit = $0.00 (break-even)
+
+- acceptable only if the new position has significantly better delta/DTE alignment
+- explain why resetting the position is worthwhile even at break-even
+
+#### Tier 3 — Rejected: Net Debit (any amount)
+
+- do **not** recommend paying to reopen a position that has no urgency
+- output `WAIT` instead (let theta continue decaying on the current position)
+- add `profit_optimization_no_roll` to risk_flags
+
+**Why different thresholds?** In a defensive roll, you are paying to avoid assignment — the $1.00 threshold ensures the cost is justified. In profit optimization, there is zero urgency. The current position is safe. You are simply asking: "Can I redeploy capital more efficiently?" Any net credit, however small, is a positive answer.
 
 ## Roll Search Algorithm
 

@@ -124,6 +124,8 @@ Select a specific new strike and expiration based on the handoff data:
 
 Load **roll-economics** before selecting or validating a candidate. Use that skill for the Premium-First Roll Policy, mandatory row verification, and tiered accept/reject rules.
 
+**⚠️ CRITICAL: The roll-economics skill defines TWO separate tier systems.** Use **Standard Tiers** for defensive rolls (assignment risk, earnings, etc.). Use **Profit Optimization Tiers** when `profit_optimization_gate` is `"eligible"`. Profit optimization tiers have much lower thresholds (any net credit > $0 is Tier 1) because the buyback cost is naturally small and there is no urgency.
+
 ## ROLL SEARCH ALGORITHM
 
 When your initial roll candidate fails Tier 1 or exceeds the Tier 2 threshold, systematically search the candidates table for better alternatives in this order:
