@@ -548,3 +548,12 @@ Rusty completed a major scheduler modernization that affects the entire team:
 - Same task set (minus redundant DPS), same crons, same execution logic
 
 Impact on your work: None. This is pure scheduler infrastructure. Your decision logic, agent instructions, and trading strategy remain unchanged.
+
+### Scheduler Last-Run Display + Restart-Durable Timestamps (2026-06-26)
+
+Rusty completed scheduler UI polish:
+- **Problem:** 3 tasks (Calendar Sync, DGI Screener, Watchlist Enrichment) lacked Last Run display in settings UI; all tasks showed "Never" after restart
+- **Solution:** Added `get_persisted_last_run()` + `resolve_last_run()` helpers to fall back to persisted Cosmos timestamps (activities, agent_notes, dgi_entries, banner, calendar events, symbol updates)
+- **Impact:** All 8 tasks now uniformly show Last Run + Next Run; accurate timestamps survive scheduler restarts
+- **Files:** web/app.py (+100 lines), web/templates/settings_config.html (+24 lines)
+- **Decision:** `.squad/decisions.md` (Decision #8)

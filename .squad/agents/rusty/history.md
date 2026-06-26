@@ -1102,3 +1102,74 @@ Evidence that disabled tasks do NOT execute:
 - Gap closed: monitoring is now consistent with the other 7 tasks
 
 **Key Learning:** When adding a new control (like enabled checkboxes) to the registry, audit ALL tasks to ensure uniform coverage. This gap went unnoticed because monitoring used the legacy `config_key="scheduler"` instead of a task-specific key like the others.
+
+---
+
+## 2026-06-26: Scheduler Last Run Display + Restart-Durable Timestamps
+
+**Task:** Fix missing "Last Run" display for 3 scheduler tasks (Calendar Sync, DGI Screener, Watchlist Enrichment) + make last_run restart-durable by falling back to persisted Cosmos timestamps.
+
+**Problem:**
+1. **Missing Last Run Display:** 3 of 8 scheduler sections in settings_config.html lacked Last Run rows (calendar_sync, dgi_screener, portfolio_enrichment). Only showed Next Run.
+2. **Missing Context Vars:** web/app.py didn't build `calendar_last_run` or `pe_last_run` for the template.
+3. **In-Memory Only last_run:** TaskRegistry tracked last_run in-memory (`task.last_run = now_tz` on execution). After scheduler restart, all last_run reset to None → UI showed "Never" even for recently run tasks. Pre-refactor code derived last_run from persisted Cosmos timestamps (activities, agent_notes, dgi_entries, banner doc, etc.).
+
+**Root Cause:**
+- Template gaps: calendar_sync and portfolio_enrichment sections were incomplete (missing Last Run row).
+- DGI had `dgi_last_run` built in context (web/app.py:2917), but template never rendered it (only had cron input + Run Now button, no Last Run/Next Run grid).
+- Refactor to TaskRegistry dropped the fallback logic that read last_run from Cosmos when in-memory was None.
+
+**Fix:**
+1. **Added Last Run Display (template):**
+   - web/templates/settings_config.html: Calendar Sync (line ~229), DGI Screener (line ~344), Watchlist Enrichment (line ~391)
+   - Matched the standard 2-column grid used by the other 5 tasks (Last Run + Next Run side-by-side)
+   - Result: ALL 8 scheduler sections now render Last Run + Next Run uniformly
+
+2. **Added Missing Context Vars (web/app.py):**
+   - Built `calendar_last_run` and `pe_last_run` in `_build_settings_config_context` (lines ~3024, ~3028)
+   - Added to return dict (lines ~3072, ~3074)
+
+3. **Restart-Durable last_run (web/app.py:2878-2972):**
+   - Created `get_persisted_last_run(task_name)` helper that queries Cosmos for task-specific timestamps:
+     - **monitor_agents**: most recent activity timestamp (`cosmos.get_all_activities(limit=1)`)
+     - **summary_agent**: most recent agent_notes timestamp from symbol configs
+     - **dgi_screener**: max `last_updated` from dgi_top entries (`cosmos.get_dgi_top()`)
+     - **banner_agent**: `generated_at` from banner doc (`cosmos.get_banner()`)
+     - **plan_monitor**: most recent plan note timestamp (`cosmos.get_plans()`)
+     - **calendar_sync**: max `updated_at` from calendar events (`cosmos.get_calendar_events()`)
+     - **portfolio_enrichment**: max `updated_at` from symbol configs with enrichment data
+     - **options_chain**: no persisted source (in-memory only; cache is transient)
+   - Created `resolve_last_run(task_name, in_memory_last_run)` wrapper:
+     - Prefers in-memory value if present
+     - Falls back to `get_persisted_last_run()` when None
+     - Formats with `fmt_time()` for display
+   - Updated all 8 task context vars to use `resolve_last_run()` instead of `fmt_time(task.get("last_run"))` (lines ~2987-3028)
+
+**Persisted last_run Sources (file:line):**
+- **monitor_agents**: src/cosmos_db.py (get_all_activities) → activity.timestamp
+- **summary_agent**: src/cosmos_db.py (get_all_symbols) → symbol_config.agent_notes[].timestamp
+- **dgi_screener**: src/cosmos_db.py:1409 (get_dgi_top) → dgi_top.last_updated
+- **banner_agent**: src/cosmos_db.py:893 (get_banner) → banner.generated_at
+- **plan_monitor**: src/cosmos_db.py (get_plans) → plan.notes[].timestamp
+- **calendar_sync**: src/cosmos_db.py:1496 (get_calendar_events) → calendar_event.updated_at
+- **portfolio_enrichment**: src/cosmos_db.py:149 (update_symbol_enrichment) → symbol_config.updated_at (when enrichment is saved)
+- **options_chain**: no persisted timestamp (cache is in-memory only; left as in-memory/"Never")
+
+**Why Persisted Sources Matter:**
+- The scheduler runs continuously but may restart (deployments, config reloads, crashes).
+- In-memory last_run is lost on restart.
+- Persisted timestamps let the UI show accurate "Last Run" even after a restart, so users know the task has executed recently (vs. misleading "Never").
+- Each task's persisted source mirrors how the OLD pre-refactor code derived last_run (see git show 16dcbec^:web/app.py).
+
+**Validation:**
+- ✅ `python3 -c "from src import main"` — import succeeds
+- ✅ `python3 -c "import web.app"` — import succeeds
+- ✅ `pytest tests/ -q` — 4 economics failures (pre-existing, unrelated), 98 passed
+- ✅ Template grep: 8 "Last Run" labels, 8 `*_last_run` template variables
+- ✅ Context builder: all 8 tasks build `*_last_run` using `resolve_last_run()` (web/app.py:2987-3028)
+- ✅ Return dict includes `calendar_last_run`, `pe_last_run` (web/app.py:3072, 3074)
+
+**Key Learning:**
+- **Centralized last_run resolution:** The helper pattern (`resolve_last_run()` + per-task source lookup) keeps the code DRY. Future tasks inherit restart-durable last_run automatically if they have a persisted timestamp source.
+- **Task-specific Cosmos queries:** Each task has a natural "most recent execution" signal in Cosmos (activities, notes, entries, docs). Reuse those instead of adding new timestamp fields.
+- **Template consistency:** When a refactor unifies scheduler UI (like the TaskRegistry did), audit ALL sections to ensure uniform coverage (enabled, cron, last_run, next_run, Run Now). Gaps are easy to miss if some sections were partially migrated.

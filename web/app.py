@@ -2875,6 +2875,91 @@ def _build_settings_config_context(
     banner_cfg = config.get("banner_agent", {})
     banner_max_items = banner_cfg.get("max_items", 10)
     
+    # Helper to resolve last_run from Cosmos when in-memory value is None
+    # (makes last_run restart-durable by falling back to persisted timestamps)
+    def get_persisted_last_run(task_name: str) -> str:
+        """Resolve last_run from CosmosDB for a task when in-memory value is None."""
+        if not cosmos:
+            return ""
+        
+        try:
+            if task_name == "monitor_agents":
+                # Monitoring: most recent activity timestamp
+                all_activities = cosmos.get_all_activities(limit=1)
+                if all_activities:
+                    timestamp_str = all_activities[0].get("timestamp", "")
+                    if timestamp_str:
+                        return timestamp_str
+            
+            elif task_name == "summary_agent":
+                # Summary: most recent agent_notes timestamp from symbol configs
+                symbols = cosmos.get_all_symbols()
+                timestamps = []
+                for sym in symbols:
+                    notes = sym.get("agent_notes", [])
+                    if isinstance(notes, list):
+                        for note in notes:
+                            if isinstance(note, dict) and note.get("timestamp"):
+                                timestamps.append(note["timestamp"])
+                if timestamps:
+                    return max(timestamps)
+            
+            elif task_name == "dgi_screener":
+                # DGI: most recent last_updated from dgi_top entries
+                dgi_entries = cosmos.get_dgi_top()
+                timestamps = [e.get("last_updated", "") for e in dgi_entries if e.get("last_updated")]
+                if timestamps:
+                    return max(timestamps)
+            
+            elif task_name == "banner_agent":
+                # Banner: generated_at from dashboard_banner doc
+                banner_doc = cosmos.get_banner()
+                if banner_doc and banner_doc.get("generated_at"):
+                    return banner_doc["generated_at"]
+            
+            elif task_name == "plan_monitor":
+                # Plan Monitor: most recent plan note timestamp
+                plans = cosmos.get_plans()
+                timestamps = []
+                for plan in plans:
+                    notes = plan.get("notes", [])
+                    if isinstance(notes, list):
+                        for note in notes:
+                            if isinstance(note, dict) and note.get("timestamp"):
+                                timestamps.append(note["timestamp"])
+                if timestamps:
+                    return max(timestamps)
+            
+            elif task_name == "options_chain":
+                # Options Chain: no persisted timestamp available (in-memory only)
+                return ""
+            
+            elif task_name == "calendar_sync":
+                # Calendar: most recent updated_at from calendar events
+                events = cosmos.get_calendar_events()
+                timestamps = [e.get("updated_at", "") for e in events if e.get("updated_at")]
+                if timestamps:
+                    return max(timestamps)
+            
+            elif task_name == "portfolio_enrichment":
+                # Portfolio Enrichment: most recent updated_at from enriched symbol configs
+                symbols = cosmos.get_all_symbols()
+                timestamps = []
+                for sym in symbols:
+                    enrichment = sym.get("enrichment")
+                    if enrichment:
+                        # The parent doc's updated_at is touched when enrichment is saved
+                        ts = sym.get("updated_at")
+                        if ts:
+                            timestamps.append(ts)
+                if timestamps:
+                    return max(timestamps)
+        
+        except Exception as exc:
+            logger.warning("Failed to resolve persisted last_run for %s: %s", task_name, exc)
+        
+        return ""
+    
     # Helper to format timestamps for display
     def fmt_time(iso_str):
         if not iso_str:
@@ -2885,52 +2970,63 @@ def _build_settings_config_context(
         except Exception:
             return iso_str
     
+    # Unified helper to get last_run (prefers in-memory, falls back to persisted)
+    def resolve_last_run(task_name: str, in_memory_last_run: str) -> str:
+        """Resolve last_run: prefer in-memory, else persisted from Cosmos."""
+        if in_memory_last_run:
+            return fmt_time(in_memory_last_run)
+        # Fall back to persisted timestamp
+        persisted = get_persisted_last_run(task_name)
+        return fmt_time(persisted)
+    
     # Build backward-compatible individual task variables for template
     # (Until template is refactored to use scheduler_tasks loop)
     monitoring = tasks_by_name.get("monitor_agents", {})
     monitoring_enabled = monitoring.get("enabled", True)
     cron_expr = monitoring.get("cron", "30 9-16/4 * * 1-5")
-    monitoring_last_run = fmt_time(monitoring.get("last_run"))
+    monitoring_last_run = resolve_last_run("monitor_agents", monitoring.get("last_run"))
     monitoring_next_run = fmt_time(monitoring.get("next_run"))
     
     summary = tasks_by_name.get("summary_agent", {})
     summary_enabled = summary.get("enabled", True)
     summary_cron = summary.get("cron", "0 8 * * *")
-    summary_last_run = fmt_time(summary.get("last_run"))
+    summary_last_run = resolve_last_run("summary_agent", summary.get("last_run"))
     summary_next_run = fmt_time(summary.get("next_run"))
     
     plan_monitor = tasks_by_name.get("plan_monitor", {})
     plan_monitor_enabled = plan_monitor.get("enabled", True)
     plan_monitor_cron = plan_monitor.get("cron", "0 4,16 * * 1-5")
-    plan_monitor_last_run = fmt_time(plan_monitor.get("last_run"))
+    plan_monitor_last_run = resolve_last_run("plan_monitor", plan_monitor.get("last_run"))
     plan_monitor_next_run = fmt_time(plan_monitor.get("next_run"))
     
     options_chain = tasks_by_name.get("options_chain", {})
     options_chain_enabled = options_chain.get("enabled", True)
     options_chain_cron = options_chain.get("cron", "0 * * * *")
-    options_chain_last_run = fmt_time(options_chain.get("last_run"))
+    options_chain_last_run = resolve_last_run("options_chain", options_chain.get("last_run"))
     options_chain_next_run = fmt_time(options_chain.get("next_run"))
     
     dgi = tasks_by_name.get("dgi_screener", {})
     dgi_enabled = dgi.get("enabled", True)
     dgi_cron = dgi.get("cron", "0 6 * * 1-5")
-    dgi_last_run = fmt_time(dgi.get("last_run"))
+    dgi_last_run = resolve_last_run("dgi_screener", dgi.get("last_run"))
     dgi_next_run = fmt_time(dgi.get("next_run"))
     
     banner = tasks_by_name.get("banner_agent", {})
     banner_enabled = banner.get("enabled", True)
     banner_cron = banner.get("cron", "0 5 * * *")
-    banner_last_run = fmt_time(banner.get("last_run"))
+    banner_last_run = resolve_last_run("banner_agent", banner.get("last_run"))
     banner_next_run = fmt_time(banner.get("next_run"))
     
     calendar = tasks_by_name.get("calendar_sync", {})
     calendar_enabled = calendar.get("enabled", True)
     calendar_cron = calendar.get("cron", "0 5 * * 1-5")
+    calendar_last_run = resolve_last_run("calendar_sync", calendar.get("last_run"))
     calendar_next_run = fmt_time(calendar.get("next_run"))
     
     pe = tasks_by_name.get("portfolio_enrichment", {})
     pe_enabled = pe.get("enabled", True)
     pe_cron = pe.get("cron", "0 9-17 * * 1-5")
+    pe_last_run = resolve_last_run("portfolio_enrichment", pe.get("last_run"))
     pe_next_run = fmt_time(pe.get("next_run"))
     
     return {
@@ -2971,9 +3067,11 @@ def _build_settings_config_context(
         "banner_next_run": banner_next_run,
         "calendar_enabled": calendar_enabled,
         "calendar_cron": calendar_cron,
+        "calendar_last_run": calendar_last_run,
         "calendar_next_run": calendar_next_run,
         "pe_enabled": pe_enabled,
         "pe_cron": pe_cron,
+        "pe_last_run": pe_last_run,
         "pe_next_run": pe_next_run,
     }
 

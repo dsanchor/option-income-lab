@@ -3531,3 +3531,96 @@ Tasks with extra config have additional fields IN ADDITION to these 5.
 - **Technical Debt:** Closes scheduler registry refactor gap
 - **Future:** All new tasks MUST include 5 standard controls
 
+
+### 8. Scheduler Last Run Display + Restart-Durable Timestamps
+**Date:** 2026-06-26  
+**Author:** Rusty (Agent Dev)  
+**Status:** ✅ Implemented  
+**Scope:** Scheduler settings UI, last_run persistence  
+
+#### Context
+
+After the scheduler refactor (16dcbec — task-registry architecture), the settings UI displayed 8 scheduled tasks with Next Run but only 5 had Last Run. Three tasks (Calendar Sync, DGI Screener, Watchlist Enrichment) were missing the Last Run display entirely.
+
+Additionally, the TaskRegistry tracked `last_run` in-memory only (`task.last_run = now_tz` on execution). This meant that after a scheduler restart (deployment, config reload, crash), all `last_run` values reset to `None` → UI showed "Never" even for tasks that had recently executed.
+
+The pre-refactor code (before 16dcbec) derived `last_run` from persisted Cosmos timestamps (activities, agent_notes, dgi_entries, banner doc, etc.), so the UI showed accurate "Last Run" even after restarts.
+
+#### Problem
+
+1. **Missing Last Run Display:**
+   - Calendar Sync, DGI Screener, Watchlist Enrichment sections lacked Last Run rows
+   - Only showed Next Run (single column) instead of the standard Last Run + Next Run grid
+
+2. **Missing Context Variables:**
+   - `web/app.py` didn't build `calendar_last_run` or `pe_last_run` for the template
+   - DGI had `dgi_last_run` built but template never rendered it
+
+3. **In-Memory Only last_run (Not Restart-Durable):**
+   - TaskRegistry tracked `last_run` in-memory only
+   - After scheduler restart, all `last_run` reset to `None` → UI showed "Never"
+   - Lost the pre-refactor behavior where `last_run` was derived from persisted Cosmos data
+
+#### Decision
+
+**Restore uniform Last Run display for all 8 scheduler tasks AND make last_run restart-durable by falling back to persisted Cosmos timestamps.**
+
+#### Implementation
+
+**Template Updates (web/templates/settings_config.html):**
+- Added Last Run display rows to 3 missing sections (Calendar Sync, DGI Screener, Watchlist Enrichment)
+- All 8 sections now have uniform 2-column layout (Last Run + Next Run)
+
+**Context Variables (web/app.py):**
+- Added `calendar_last_run` and `pe_last_run` vars
+- Both added to template context dict
+
+**Restart-Durable last_run (web/app.py:2878-2972):**
+- Created `get_persisted_last_run(task_name: str) -> str` helper
+  - Queries Cosmos for task-specific "most recent execution" timestamp
+  - Per-task sources: activities, agent_notes, dgi_entries, banner doc, calendar events, symbol updates
+- Created `resolve_last_run(task_name: str, in_memory_last_run: str) -> str` helper
+  - Prefers in-memory value if present
+  - Falls back to `get_persisted_last_run()` when `None`
+- Updated all 8 task context vars to use `resolve_last_run()` instead of direct `fmt_time()`
+
+#### Rationale
+
+**Why Restart-Durable Matters:** Scheduler may restart (deployments, config reloads, crashes). Persisted timestamps let UI show accurate "Last Run" even after restart.
+
+**Why Per-Task Cosmos Sources:** Each task has a natural "most recent execution" signal already in Cosmos. Reusing existing timestamps is cleaner than adding new `last_execution_timestamp` fields to every task.
+
+**Why Options Chain is In-Memory Only:** Cache is transient, task runs hourly, so "Never" after restart reflects reality (cache empty, task needs to run).
+
+#### Alternatives Considered
+
+1. **Add `last_execution_timestamp` field to every task's Cosmos output** → Adds storage overhead, duplicates existing data
+2. **Persist last_run in dedicated `scheduler_state` Cosmos doc** → Extra Cosmos write per execution, doesn't help options_chain
+3. **Leave last_run in-memory only (status quo)** → UI shows "Never" after restart (regression)
+
+**Chosen:** Per-task Cosmos sources. Balances simplicity, no schema changes, leverages existing timestamps.
+
+#### Impact
+
+**User-Facing:**
+- Scheduler Settings UI now shows Last Run + Next Run for ALL 8 tasks uniformly
+- Last Run survives scheduler restarts (accurate even after deployments)
+- Users can trust "Never" means "truly never run" (not "scheduler restarted")
+
+**Code:**
+- **web/app.py**: +100 lines (helper functions, per-task resolution)
+- **web/templates/settings_config.html**: +24 lines (3 Last Run rows)
+- No schema changes, no new Cosmos writes
+
+**Validation:**
+- ✅ Imports succeed
+- ✅ 98 tests pass (4 pre-existing economics failures unrelated)
+- ✅ Template: 8 "Last Run" labels, 8 `*_last_run` variables
+- ✅ Context builder: all 8 tasks use `resolve_last_run()`
+
+#### Future Work
+
+1. **Refactor template to loop over `scheduler_tasks`** instead of 8 hardcoded sections
+2. **Add `last_run` persistence to TaskRegistry itself** → Store in Cosmos `settings` container alongside cron/enabled
+
+---
