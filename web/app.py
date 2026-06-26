@@ -2843,215 +2843,102 @@ def _build_settings_config_context(
     else:
         config = _load_config()
 
-    cron_expr = config.get("scheduler", {}).get("cron", "0 14-21/2 * * 1-5")
+    # Get scheduler tasks from registry (if available)
+    scheduler = getattr(request.app.state, "scheduler", None)
+    scheduler_tasks = []
+    if scheduler and hasattr(scheduler, "registry"):
+        scheduler_tasks = scheduler.registry.get_all_task_metadata()
+    
+    # Build task lookup for backward compatibility with existing template variables
+    tasks_by_name = {t["name"]: t for t in scheduler_tasks}
+    
+    # Telegram settings (not scheduler-related)
     telegram_cfg = config.get("telegram", {})
     telegram_enabled = telegram_cfg.get("enabled", False)
     telegram_bot_token = telegram_cfg.get("bot_token", "")
     telegram_chat_id = telegram_cfg.get("chat_id", "")
-
-    # Summary agent settings
-    summary_cfg = config.get("summary_agent", {})
-    summary_enabled = summary_cfg.get("enabled", True)
-    summary_cron = summary_cfg.get("cron", "0 8 * * *")
-    summary_activity_count = summary_cfg.get("activity_count", 3)
-
-    # Plan monitor settings
-    plan_monitor_cfg = config.get("plan_monitor", {})
-    plan_monitor_enabled = plan_monitor_cfg.get("enabled", True)
-    plan_monitor_cron = plan_monitor_cfg.get("cron", "0 4,16 * * 1-5")
-
-    # Options chain scheduler settings
-    options_chain_cfg = config.get("options_chain_scheduler", {})
-    options_chain_enabled = options_chain_cfg.get("enabled", True)
-    options_chain_cron = options_chain_cfg.get("cron", "0 * * * *")
-
-    # DGI screener settings
-    dgi_cfg = config.get("dgi_screener", {})
-    dgi_enabled = dgi_cfg.get("enabled", True)
-    dgi_cron = dgi_cfg.get("cron", "0 6 * * 1-5")
-    dgi_top_n = dgi_cfg.get("top_n", 40)
-
-    # Banner agent settings
-    banner_cfg = config.get("banner_agent", {})
-    banner_enabled = banner_cfg.get("enabled", True)
-    banner_cron = banner_cfg.get("cron", "0 5 * * *")
-    banner_max_items = banner_cfg.get("max_items", 10)
-
-    # Calendar sync settings
-    calendar_cfg = config.get("calendar_sync", {})
-    calendar_enabled = calendar_cfg.get("enabled", True)
-    calendar_cron = calendar_cfg.get("cron", "0 5 * * 1-5")
-
-    # Portfolio enrichment settings
-    pe_cfg = config.get("portfolio_enrichment", {})
-    pe_enabled = pe_cfg.get("enabled", True)
-    pe_cron = pe_cfg.get("cron", "0 9-17 * * 1-5")
     
     # Resolve env vars for display
     if telegram_bot_token.startswith("${"):
         telegram_bot_token = _resolve_env(telegram_bot_token)
     if telegram_chat_id.startswith("${"):
         telegram_chat_id = _resolve_env(telegram_chat_id)
-
-    monitoring_last_run = ""
-    monitoring_next_run = ""
-
-    # Get last run from most recent activity
-    if cosmos:
+    
+    # Extract per-task extra config (for tasks with has_extra_config=True)
+    summary_cfg = config.get("summary_agent", {})
+    summary_activity_count = summary_cfg.get("activity_count", 3)
+    
+    dgi_cfg = config.get("dgi_screener", {})
+    dgi_top_n = dgi_cfg.get("top_n", 40)
+    dgi_symbols = dgi_cfg.get("symbols", "")
+    
+    banner_cfg = config.get("banner_agent", {})
+    banner_max_items = banner_cfg.get("max_items", 10)
+    
+    # Helper to format timestamps for display
+    def fmt_time(iso_str):
+        if not iso_str:
+            return ""
         try:
-            all_activities = cosmos.get_all_activities(limit=1)
-            if all_activities:
-                timestamp_str = all_activities[0].get("timestamp", "")
-                if timestamp_str:
-                    try:
-                        last_run_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                        if last_run_dt.tzinfo is None:
-                            last_run_dt = last_run_dt.replace(tzinfo=timezone.utc)
-                        monitoring_last_run = _format_time(last_run_dt)
-                    except Exception:
-                        pass
+            dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+            return _format_time(dt)
         except Exception:
-            pass
-
-    # Calculate next run from cron
-    if cron_expr:
-        try:
-            now_tz = _local_now()
-            cron = croniter(cron_expr, now_tz)
-            next_run_dt = cron.get_next(datetime)
-            monitoring_next_run = _format_time(next_run_dt)
-        except Exception:
-            monitoring_next_run = "Invalid cron"
-
-    # Calculate scheduler times for Summarization Agent
-    summary_last_run = ""
-    summary_next_run = ""
-
-    # For summary agent, we'd need to track summary-specific runs
-    # For now, we'll just calculate next run from cron
-    if summary_cron:
-        try:
-            now_tz = _local_now()
-            cron = croniter(summary_cron, now_tz)
-            next_run_dt = cron.get_next(datetime)
-            summary_next_run = _format_time(next_run_dt)
-        except Exception:
-            summary_next_run = "Invalid cron"
-
-    # Calculate scheduler times for Plan Monitor
-    plan_monitor_last_run = ""
-    plan_monitor_next_run = ""
-
-    if cosmos:
-        try:
-            plans = cosmos.get_plans()
-            note_timestamps = [
-                note.get("timestamp", "")
-                for plan in plans
-                for note in plan.get("agent_notes", [])
-                if isinstance(note, dict) and note.get("timestamp")
-            ]
-            if note_timestamps:
-                latest = max(note_timestamps)
-                last_dt = datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
-                plan_monitor_last_run = _format_time(last_dt)
-        except Exception:
-            pass
-
-    if plan_monitor_cron:
-        try:
-            now_tz = _local_now()
-            cron = croniter(plan_monitor_cron, now_tz)
-            next_run_dt = cron.get_next(datetime)
-            plan_monitor_next_run = _format_time(next_run_dt)
-        except Exception:
-            plan_monitor_next_run = "Invalid cron"
-
-    # Calculate scheduler times for Options Chain Scheduler
-    options_chain_last_run = ""
-    options_chain_next_run = ""
-
-    if options_chain_cron:
-        try:
-            now_tz = _local_now()
-            cron = croniter(options_chain_cron, now_tz)
-            next_run_dt = cron.get_next(datetime)
-            options_chain_next_run = _format_time(next_run_dt)
-        except Exception:
-            options_chain_next_run = "Invalid cron"
-
-    # Calculate scheduler times for DGI Screener
-    dgi_last_run = ""
-    dgi_next_run = ""
-
-    if cosmos:
-        try:
-            dgi_entries = cosmos.get_dgi_top()
-            timestamps = [e.get("last_updated", "") for e in dgi_entries if e.get("last_updated")]
-            if timestamps:
-                latest = max(timestamps)
-                last_dt = datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
-                dgi_last_run = _format_time(last_dt)
-        except Exception:
-            pass
-
-    if dgi_cron:
-        try:
-            now_tz = _local_now()
-            cron = croniter(dgi_cron, now_tz)
-            next_run_dt = cron.get_next(datetime)
-            dgi_next_run = _format_time(next_run_dt)
-        except Exception:
-            dgi_next_run = "Invalid cron"
-
-    # Calculate scheduler times for Banner Agent
-    banner_last_run = ""
-    banner_next_run = ""
-
-    if cosmos:
-        try:
-            banner_doc = cosmos.get_banner()
-            if banner_doc and banner_doc.get("generated_at"):
-                last_dt = datetime.fromisoformat(str(banner_doc["generated_at"]).replace("Z", "+00:00"))
-                banner_last_run = _format_time(last_dt)
-        except Exception:
-            pass
-
-    if banner_cron:
-        try:
-            now_tz = _local_now()
-            cron = croniter(banner_cron, now_tz)
-            next_run_dt = cron.get_next(datetime)
-            banner_next_run = _format_time(next_run_dt)
-        except Exception:
-            banner_next_run = "Invalid cron"
-
-    # Calculate scheduler times for Calendar Sync
-    calendar_next_run = ""
-    if calendar_cron:
-        try:
-            now_tz = _local_now()
-            cron = croniter(calendar_cron, now_tz)
-            next_run_dt = cron.get_next(datetime)
-            calendar_next_run = _format_time(next_run_dt)
-        except Exception:
-            calendar_next_run = "Invalid cron"
-
-    # Calculate scheduler times for Portfolio Enrichment
-    pe_next_run = ""
-    if pe_cron:
-        try:
-            now_tz = _local_now()
-            cron = croniter(pe_cron, now_tz)
-            next_run_dt = cron.get_next(datetime)
-            pe_next_run = _format_time(next_run_dt)
-        except Exception:
-            pe_next_run = "Invalid cron"
-
+            return iso_str
+    
+    # Build backward-compatible individual task variables for template
+    # (Until template is refactored to use scheduler_tasks loop)
+    monitoring = tasks_by_name.get("monitor_agents", {})
+    monitoring_enabled = monitoring.get("enabled", True)
+    cron_expr = monitoring.get("cron", "30 9-16/4 * * 1-5")
+    monitoring_last_run = fmt_time(monitoring.get("last_run"))
+    monitoring_next_run = fmt_time(monitoring.get("next_run"))
+    
+    summary = tasks_by_name.get("summary_agent", {})
+    summary_enabled = summary.get("enabled", True)
+    summary_cron = summary.get("cron", "0 8 * * *")
+    summary_last_run = fmt_time(summary.get("last_run"))
+    summary_next_run = fmt_time(summary.get("next_run"))
+    
+    plan_monitor = tasks_by_name.get("plan_monitor", {})
+    plan_monitor_enabled = plan_monitor.get("enabled", True)
+    plan_monitor_cron = plan_monitor.get("cron", "0 4,16 * * 1-5")
+    plan_monitor_last_run = fmt_time(plan_monitor.get("last_run"))
+    plan_monitor_next_run = fmt_time(plan_monitor.get("next_run"))
+    
+    options_chain = tasks_by_name.get("options_chain", {})
+    options_chain_enabled = options_chain.get("enabled", True)
+    options_chain_cron = options_chain.get("cron", "0 * * * *")
+    options_chain_last_run = fmt_time(options_chain.get("last_run"))
+    options_chain_next_run = fmt_time(options_chain.get("next_run"))
+    
+    dgi = tasks_by_name.get("dgi_screener", {})
+    dgi_enabled = dgi.get("enabled", True)
+    dgi_cron = dgi.get("cron", "0 6 * * 1-5")
+    dgi_last_run = fmt_time(dgi.get("last_run"))
+    dgi_next_run = fmt_time(dgi.get("next_run"))
+    
+    banner = tasks_by_name.get("banner_agent", {})
+    banner_enabled = banner.get("enabled", True)
+    banner_cron = banner.get("cron", "0 5 * * *")
+    banner_last_run = fmt_time(banner.get("last_run"))
+    banner_next_run = fmt_time(banner.get("next_run"))
+    
+    calendar = tasks_by_name.get("calendar_sync", {})
+    calendar_enabled = calendar.get("enabled", True)
+    calendar_cron = calendar.get("cron", "0 5 * * 1-5")
+    calendar_next_run = fmt_time(calendar.get("next_run"))
+    
+    pe = tasks_by_name.get("portfolio_enrichment", {})
+    pe_enabled = pe.get("enabled", True)
+    pe_cron = pe.get("cron", "0 9-17 * * 1-5")
+    pe_next_run = fmt_time(pe.get("next_run"))
+    
     return {
         "request": request,
         "saved": saved or [],
         "server_time": _format_time(_local_now()),
+        "scheduler_tasks": scheduler_tasks,  # NEW: unified task list for template
+        "monitoring_enabled": monitoring_enabled,
         "cron_expr": cron_expr,
         "telegram_enabled": telegram_enabled,
         "telegram_bot_token": telegram_bot_token,
@@ -3074,7 +2961,7 @@ def _build_settings_config_context(
         "dgi_enabled": dgi_enabled,
         "dgi_cron": dgi_cron,
         "dgi_top_n": dgi_top_n,
-        "dgi_symbols": dgi_cfg.get("symbols", ""),
+        "dgi_symbols": dgi_symbols,
         "dgi_last_run": dgi_last_run,
         "dgi_next_run": dgi_next_run,
         "banner_enabled": banner_enabled,
@@ -3108,6 +2995,9 @@ async def settings_config_save(request: Request):
     saved: List[str] = []
     cosmos = getattr(request.app.state, "cosmos", None)
 
+    # Monitoring agent enabled toggle
+    monitoring_enabled = form.get("monitoring_enabled") == "true"
+
     # Cron schedule
     new_cron = str(form.get("cron_expr", "")).strip()
     if new_cron:
@@ -3117,12 +3007,16 @@ async def settings_config_save(request: Request):
             # Update CosmosDB first
             if cosmos:
                 cosmos_settings = _load_settings_from_cosmos(cosmos) or {}
-                cosmos_settings.setdefault("scheduler", {})["cron"] = new_cron
+                cosmos_settings.setdefault("scheduler", {})
+                cosmos_settings["scheduler"]["cron"] = new_cron
+                cosmos_settings["scheduler"]["enabled"] = monitoring_enabled
                 _save_settings_to_cosmos(cosmos, cosmos_settings)
             
             # Also update config.yaml for backward compat
             config = _load_config()
-            config.setdefault("scheduler", {})["cron"] = new_cron
+            config.setdefault("scheduler", {})
+            config["scheduler"]["cron"] = new_cron
+            config["scheduler"]["enabled"] = monitoring_enabled
             _write_config(config)
             saved.append("Cron schedule")
 
@@ -3908,6 +3802,129 @@ def _run_all_agents_sequentially(scheduler, status: dict):
         status.update(_default_full_analysis_status())
 
     threading.Thread(target=_reset, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+# Unified Scheduler API — consistent access to all scheduled tasks
+# ---------------------------------------------------------------------------
+
+@app.get("/api/scheduler/tasks")
+async def get_scheduler_tasks(request: Request):
+    """Get metadata for all scheduled tasks (unified endpoint).
+    
+    Returns: list of {name, display_name, config_key, enabled, cron, last_run, next_run, has_extra_config}
+    """
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None or scheduler.registry is None:
+        return JSONResponse(
+            {"error": "Scheduler not running"},
+            status_code=503)
+    
+    tasks = scheduler.registry.get_all_task_metadata()
+    return JSONResponse({"tasks": tasks})
+
+
+@app.post("/api/scheduler/tasks/{task_name}/run")
+async def run_scheduler_task_now(request: Request, task_name: str):
+    """Manually trigger a scheduled task (Run Now button).
+    
+    Returns: {"success": bool, "message": str}
+    """
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None or scheduler.registry is None:
+        return JSONResponse(
+            {"error": "Scheduler not running"},
+            status_code=503)
+    
+    # Run in background thread to avoid blocking
+    result = {"success": False, "message": "Starting task..."}
+    
+    def _run_in_background():
+        nonlocal result
+        result.update(scheduler.registry.trigger_task_now(task_name))
+    
+    thread = threading.Thread(target=_run_in_background, daemon=True)
+    thread.start()
+    thread.join(timeout=1.0)  # Wait up to 1s for quick feedback
+    
+    return JSONResponse(result)
+
+
+@app.post("/api/scheduler/tasks/{task_name}/cron")
+async def update_scheduler_task_cron(request: Request, task_name: str):
+    """Update a task's cron expression (live reschedule).
+    
+    Body: {"cron": "0 14 * * *"}
+    Returns: {"success": bool, "message": str}
+    """
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None or scheduler.registry is None:
+        return JSONResponse(
+            {"error": "Scheduler not running"},
+            status_code=503)
+    
+    try:
+        body = await request.json()
+        new_cron = body.get("cron")
+        if not new_cron:
+            return JSONResponse(
+                {"success": False, "message": "Missing 'cron' field in request body"},
+                status_code=400)
+        
+        scheduler.registry.reschedule(task_name, new_cron, scheduler.config)
+        
+        # Persist to CosmosDB
+        task = scheduler.registry.get_task(task_name)
+        if task and scheduler.cosmos:
+            scheduler.cosmos.save_settings({task.config_key: {"cron": new_cron}})
+        
+        return JSONResponse({"success": True, "message": f"Cron updated to {new_cron}"})
+    except Exception as e:
+        logger.exception(f"Error updating cron for {task_name}")
+        return JSONResponse(
+            {"success": False, "message": str(e)},
+            status_code=500)
+
+
+@app.post("/api/scheduler/tasks/{task_name}/enabled")
+async def update_scheduler_task_enabled(request: Request, task_name: str):
+    """Toggle a task's enabled state.
+    
+    Body: {"enabled": true}
+    Returns: {"success": bool, "message": str}
+    """
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None or scheduler.registry is None:
+        return JSONResponse(
+            {"error": "Scheduler not running"},
+            status_code=503)
+    
+    try:
+        body = await request.json()
+        enabled = body.get("enabled")
+        if enabled is None:
+            return JSONResponse(
+                {"success": False, "message": "Missing 'enabled' field in request body"},
+                status_code=400)
+        
+        success = scheduler.registry.update_task_enabled(task_name, bool(enabled), scheduler.config)
+        if not success:
+            return JSONResponse(
+                {"success": False, "message": f"Task '{task_name}' not found"},
+                status_code=404)
+        
+        # Persist to CosmosDB
+        task = scheduler.registry.get_task(task_name)
+        if task and scheduler.cosmos:
+            scheduler.cosmos.save_settings({task.config_key: {"enabled": bool(enabled)}})
+        
+        status = "enabled" if enabled else "disabled"
+        return JSONResponse({"success": True, "message": f"Task {status}"})
+    except Exception as e:
+        logger.exception(f"Error updating enabled state for {task_name}")
+        return JSONResponse(
+            {"success": False, "message": str(e)},
+            status_code=500)
 
 
 @app.post("/api/trigger-all")

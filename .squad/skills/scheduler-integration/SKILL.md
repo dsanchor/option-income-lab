@@ -1,18 +1,23 @@
 # Skill: Scheduler Task Integration
 
 **Context:** Adding new scheduled tasks to the Options Agent Scheduler (src/main.py)  
-**Pattern:** croniter-based task scheduling with dynamic config reload  
+**Pattern:** Task Registry-based scheduling (replaced 11-point boilerplate as of 2026-06-26)  
 **When to use:** Any time a new periodic job needs to be added to the system
 
 ---
 
-## The Pattern
+## The Pattern (NEW — Registry-Based)
 
-The scheduler uses a **croniter-based** polling loop (1-second interval) with per-task error isolation. Each task has:
-- A cron expression (from config.yaml or CosmosDB override)
-- An enabled/disabled flag
-- A job function (sync wrapper → async implementation)
-- A reschedule API for web UI updates
+The scheduler uses a **TaskRegistry** to manage all periodic tasks with centralized handling of:
+- Cron parsing and next-run calculation
+- Config reload from CosmosDB
+- Cron change detection (for web UI live updates)
+- Task execution with error isolation
+- Consistent logging and display
+
+**Each task requires only 2 integration points** (down from 11):
+1. Register the task in `run()` with: name, display_name, config_key, default_cron, job_func
+2. Add a reschedule method (for web UI compatibility)
 
 ---
 
@@ -29,7 +34,7 @@ my_new_task:
   # ... task-specific settings
 ```
 
-### 2. Add Config Accessor (Optional)
+### 2. Add Config Accessor (Optional, for task logic)
 
 **File:** `src/config.py`
 
@@ -43,55 +48,13 @@ def my_new_task_cron(self) -> str:
     return str(self.config.get('my_new_task', {}).get('cron', '0 12 * * 1-5'))
 ```
 
-### 3. Add Cron Changed Flag
+*Note: The registry reads config directly, so these accessors are optional — only add if your task logic needs them.*
+
+### 3. Add Job Methods
 
 **File:** `src/main.py`
 
-In `OptionsAgentScheduler.__init__()` (around line 75):
-
-```python
-self._my_new_task_cron_changed = False
-```
-
-### 4. Add Reschedule Method
-
-**File:** `src/main.py`
-
-After existing `reschedule_*` methods (around line 135):
-
-```python
-def reschedule_my_new_task(self, new_cron: str):
-    """Update my_new_task cron expression."""
-    task_config = self.config.config.get('my_new_task', {})
-    task_config['cron'] = new_cron
-    self.config.config['my_new_task'] = task_config
-    self._my_new_task_cron_changed = True
-```
-
-### 5. Add Config Logging in Setup
-
-**File:** `src/main.py`
-
-In `setup()` method (around line 200-280):
-
-```python
-task_config = self.config.config.get('my_new_task', {})
-task_enabled = task_config.get('enabled', True)
-task_cron = task_config.get('cron', '0 12 * * 1-5')
-
-print(f"\nMy New Task Configuration:")
-print(f"  Enabled: {task_enabled}")
-if task_enabled:
-    print(f"  Cron: {task_cron}")
-else:
-    print(f"  Status: Disabled in config")
-```
-
-### 6. Add Job Methods
-
-**File:** `src/main.py`
-
-After existing `run_*_job()` methods (around line 434-503):
+Add your task's execution logic (same pattern as before — sync wrapper + async implementation):
 
 ```python
 def run_my_new_task_job(self):
@@ -120,117 +83,40 @@ async def _run_my_new_task_async(self):
         print(f"ERROR during My New Task: {e}")
 ```
 
-### 7. Add Config Reload Logic
+### 4. Register the Task
 
-**File:** `src/main.py`
-
-In `_reload_config_from_cosmos()` method (around line 719-809):
+**File:** `src/main.py` — in the `run()` method, after existing `registry.register()` calls:
 
 ```python
-# Check my_new_task settings
-task_settings = cosmos_settings.get('my_new_task', {})
-new_task_cron = task_settings.get('cron')
-current_task_cron = self.config.config.get('my_new_task', {}).get('cron', '0 12 * * 1-5')
-
-task_cron_changed = False
-if new_task_cron and new_task_cron != current_task_cron:
-    if 'my_new_task' not in self.config.config:
-        self.config.config['my_new_task'] = {}
-    self.config.config['my_new_task']['cron'] = new_task_cron
-    task_cron_changed = True
-
-if task_settings:
-    if 'my_new_task' not in self.config.config:
-        self.config.config['my_new_task'] = {}
-    for key in ['enabled']:  # Add any other dynamic config keys
-        if key in task_settings:
-            self.config.config['my_new_task'][key] = task_settings[key]
-
-if task_cron_changed:
-    self._my_new_task_cron_changed = True
-    print(f"✓ Config reloaded from CosmosDB: my_new_task cron changed to {new_task_cron}")
+self.registry.register(
+    "my_new_task",           # name (used internally, must be unique)
+    "My New Task",           # display_name (shown in schedule output)
+    "my_new_task",           # config_key (matches config.yaml section name)
+    "0 12 * * 1-5",          # default_cron (fallback if not in config)
+    self.run_my_new_task_job,  # job_func (the method to execute)
+)
 ```
 
-### 8. Add Cron Initialization
+**That's it!** The registry now handles:
+- Cron initialization
+- Next-run calculation
+- Config reload from CosmosDB
+- Cron change detection
+- Execution when due
+- Error isolation
+- Schedule display
 
-**File:** `src/main.py`
+### 5. Add Reschedule Method (For Web UI)
 
-In `run()` method (around line 876-892):
+**File:** `src/main.py` — after existing `reschedule_X()` methods:
 
 ```python
-# Initialize my_new_task cron (if enabled)
-task_config = self.config.config.get('my_new_task', {})
-task_enabled = task_config.get('enabled', True)
-task_cron_expr = task_config.get('cron', '0 12 * * 1-5')
-task_next_run = None
-task_cron = None
+def reschedule_my_new_task(self, new_cron: str):
+    """Update my_new_task cron expression."""
+    self.registry.reschedule("my_new_task", new_cron, self.config)
 ```
 
-Then in the initialization block (around line 868-892):
-
-```python
-if task_enabled:
-    try:
-        task_cron = croniter(task_cron_expr, now_tz)
-        task_next_run = task_cron.get_next(datetime)
-    except (ValueError, KeyError) as e:
-        print(f"⚠️  Invalid my_new_task cron expression '{task_cron_expr}': {e}")
-        print(f"⚠️  My New Task scheduling disabled")
-        task_enabled = False
-```
-
-### 9. Add Initial Schedule Display
-
-**File:** `src/main.py`
-
-In the initial schedule display block (around line 878-907):
-
-```python
-if task_enabled and task_next_run:
-    print(f"My New Task           - Next run: {task_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-else:
-    print(f"My New Task           - Disabled")
-```
-
-### 10. Add Cron Change Handler
-
-**File:** `src/main.py`
-
-In the main loop's cron change detection block (around line 1034-1047):
-
-```python
-if self._my_new_task_cron_changed:
-    self._my_new_task_cron_changed = False
-    task_config = self.config.config.get('my_new_task', {})
-    task_cron_expr = task_config.get('cron', '0 12 * * 1-5')
-    try:
-        now_tz = _now_local()
-        task_cron = croniter(task_cron_expr, now_tz)
-        task_next_run = task_cron.get_next(datetime)
-        task_enabled = task_config.get('enabled', True)
-        print(f"My New Task cron rescheduled to: {task_cron_expr}")
-        print(f"Next scheduled run: {task_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-    except (ValueError, KeyError) as e:
-        print(f"⚠️  Invalid my_new_task cron expression '{task_cron_expr}': {e}")
-        task_enabled = False
-```
-
-### 11. Add Execution Block
-
-**File:** `src/main.py`
-
-In the main loop, before the `time.sleep(1)` line (around line 1113-1122):
-
-```python
-# Check my_new_task scheduler
-if task_enabled and task_next_run and now_tz >= task_next_run:
-    try:
-        self.run_my_new_task_job()
-    except Exception as e:
-        print(f"❌ SCHEDULER ERROR in my_new_task: {e}")
-    task_next_run = task_cron.get_next(datetime)
-    print(f"My New Task           - Next run: {task_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-```
+This preserves web UI compatibility — the web layer can call `scheduler.reschedule_my_new_task("0 14 * * *")` to live-update the cron.
 
 ---
 
@@ -240,41 +126,138 @@ After implementing, verify:
 
 1. ✅ Config entry exists in `config.yaml`
 2. ✅ Import test: `python3 -c "from src import main"`
-3. ✅ Method exists: `grep "def run_my_new_task_job" src/main.py`
-4. ✅ All 11 integration points present:
-   - Config flag
-   - Reschedule method
-   - Setup logging
-   - Job methods
-   - Config reload
-   - Cron initialization
-   - Display
-   - Change handler
-   - Execution block
+3. ✅ Task registered: Check `run()` method for `registry.register("my_new_task", ...)`
+4. ✅ Reschedule method exists: `grep "def reschedule_my_new_task" src/main.py`
+5. ✅ Job method exists: `grep "def run_my_new_task_job" src/main.py`
+
+**Optional (if web UI integration needed):**
+6. Update `web/app.py` to add UI controls for the new task
+7. Update `web/templates/settings_config.html` with task-specific settings section
+
+---
+
+## Example: Portfolio Enrichment (Real Implementation)
+
+```python
+# In run() method:
+self.registry.register(
+    "portfolio_enrichment",
+    "Portfolio Enrichment",
+    "portfolio_enrichment",
+    "0 9-17 * * 1-5",
+    self.run_portfolio_enrichment_job,
+)
+
+# Reschedule method:
+def reschedule_portfolio_enrichment(self, new_cron: str):
+    """Update portfolio enrichment cron expression."""
+    self.registry.reschedule("portfolio_enrichment", new_cron, self.config)
+```
+
+**Result:** Task runs hourly during market hours (9 AM - 5 PM weekdays), reschedule-able via web UI.
+
+---
+
+## Migration Notes (From Old 11-Point Pattern)
+
+**OBSOLETE (pre-2026-06-26):** The old pattern required 11 separate edits across ~50 lines:
+- ❌ `_X_cron_changed` flag in `__init__()`
+- ❌ Manual cron initialization in `run()`
+- ❌ Manual config reload logic in `_reload_config_from_cosmos()`
+- ❌ Manual cron change handler in main loop
+- ❌ Manual execution if-block in main loop
+- ❌ Manual schedule display
+- ❌ Hardcoded reschedule method implementation
+
+**NEW (registry-based):** 2 integration points:
+- ✅ `registry.register(...)` — 1 line
+- ✅ `def reschedule_X(self, new_cron): self.registry.reschedule(...)` — 2 lines
+
+**Net reduction:** ~50 lines → 3 lines per task (94% less boilerplate).
 
 ---
 
 ## Common Pitfalls
 
-1. **Forgetting `_run_async()` wrapper** — async tasks need the sync→async bridge
-2. **Missing enabled check** — always check `config.get('enabled', True)` in job method
-3. **Wrong cron initialization order** — must happen after config load in `run()`
-4. **Hardcoded default cron** — use same default in 3 places: config.yaml, config accessor, initialization
-5. **Missing error isolation** — always wrap execution in try/except
+1. **Forgetting `_run_async()` wrapper** — async tasks need the sync→async bridge (same as before).
+2. **Missing enabled check** — always check `config.get('enabled', True)` in job method (same as before).
+3. **Mismatched config_key** — the `config_key` in `registry.register()` must match the section name in `config.yaml`.
+4. **Forgetting reschedule method** — without it, the web UI can't live-update the cron (causes runtime error in web layer).
+5. **Duplicate task names** — task names must be unique within the registry.
 
 ---
 
-## Example: DPS Scorer Integration (Real Implementation)
+## Architecture Notes
 
-See commit `2026-06-26: Add DPS scheduler integration` for a complete working example.
+**Why keep the sync→async wrapper pattern?**
+- The scheduler loop is synchronous (while-loop with `time.sleep(1)`).
+- Most tasks (agent runs, fetchers, etc.) are async.
+- `_run_async(coro)` provides the bridge with proper cleanup to avoid "Event loop is closed" errors in Python 3.12+.
 
-**Files:**
-- `src/main.py` — 9 edits, 60 lines
-- `config.yaml` — already had `dps_scorer.cron` entry
-- `src/dps_cron.py` — existing task logic (no changes needed)
-
-**Result:** DPS now runs nightly at 10 PM, calculating position risk scores.
+**Why separate reschedule methods instead of a generic `reschedule(task_name, new_cron)`?**
+- Web UI backwards compatibility — existing `/api/settings/config/save` endpoint calls specific methods like `scheduler.reschedule_summary(...)`.
+- Explicit API surface — each task's reschedule method is self-documenting.
+- Could be refactored to generic in future if web UI is updated.
 
 ---
 
-**Last Updated:** 2026-06-26 by Rusty
+**Last Updated:** 2026-06-26 by Rusty  
+**See Also:**
+- `.squad/decisions/inbox/rusty-scheduler-registry-refactor.md` — full refactor rationale
+- `.squad/agents/rusty/history.md` — registry design patterns and learnings
+- `src/scheduler_registry.py` — registry implementation reference
+
+
+---
+
+## UI Auto-Provisioning (Since 2026-06-26)
+
+**Every task registered in the registry automatically gets 5 standard UI controls** in the scheduler settings page:
+
+1. ✅ **Enabled checkbox** — toggle on/off, persists to CosmosDB
+2. ✅ **Cron expression field** — editable, live-reschedule
+3. ✅ **Last run timestamp** — auto-tracked when task executes
+4. ✅ **Next run timestamp** — computed from cron
+5. ✅ **Run Now button** — manual trigger
+
+**No additional code needed** — the unified endpoints (`/api/scheduler/tasks`, `/api/scheduler/tasks/{name}/run`, etc.) handle all tasks uniformly.
+
+### Per-Task Extra Config
+
+If your task needs **task-specific config beyond the 5 standard fields** (e.g., symbol list, threshold, max items):
+
+1. Set `has_extra_config=True` in `registry.register()`:
+   ```python
+   self.registry.register(
+       "my_task",
+       "My Task",
+       "my_task",
+       "0 12 * * *",
+       self.run_my_task_job,
+       has_extra_config=True,  # <-- indicates extra config
+   )
+   ```
+
+2. Add your extra config fields to the template (e.g., `web/templates/settings_config.html`) within the task's section:
+   ```html
+   <div>
+       <label>Max Items</label>
+       <input type="number" name="my_task_max_items" value="{{ my_task_max_items }}">
+   </div>
+   ```
+
+3. Extract extra config in `_build_settings_config_context()` (web/app.py):
+   ```python
+   my_task_cfg = config.get("my_task", {})
+   my_task_max_items = my_task_cfg.get("max_items", 10)
+   ```
+
+**Result:** Your task has the 5 standard controls + your custom extra fields.
+
+---
+
+**See also:**
+- `.squad/decisions/inbox/rusty-scheduler-settings-unify.md` — unified UI model design
+- `.squad/agents/rusty/history.md` — registry metadata extensions
+- `src/scheduler_registry.py` — registry implementation
+- `web/app.py:3911-4038` — unified endpoints reference

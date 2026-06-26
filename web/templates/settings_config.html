@@ -41,6 +41,18 @@
             <!-- Monitoring Agent Section -->
             <div style="margin-bottom:1.5rem;">
                 <h3 style="font-size:0.95rem; font-weight:600; margin:0 0 0.75rem 0; padding-bottom:0.5rem; border-bottom:1px solid var(--border); color:var(--text);">Monitoring Agent</h3>
+                
+                <!-- Enable Monitoring Agent Checkbox -->
+                <div style="margin-bottom:1rem;">
+                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                        <input type="checkbox" name="monitoring_enabled" value="true" {{ 'checked' if monitoring_enabled }}>
+                        <span style="font-size:0.9rem;">Enable monitoring agent</span>
+                    </label>
+                    <small style="display:block; margin-top:0.3rem; margin-left:1.5rem; color:var(--text-muted); font-size:0.75rem;">
+                        Periodically checks all active position monitors and strategy followers.
+                    </small>
+                </div>
+
                 <div>
                     <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Cron Expression</label>
                     <input type="text" name="cron_expr" value="{{ cron_expr }}" spellcheck="false"

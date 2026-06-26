@@ -1900,3 +1900,30 @@ Rusty analyzed the complete scheduler architecture and fixed a critical bug:
 - **Bug Fix:** DPS scorer (Deterministic Position Scorer) was fully implemented (`src/dps_cron.py`, `src/dps_scorer.py`) with config entry but never wired into scheduler. Rusty integrated it: 9 edits to `src/main.py` (~60 lines). DPS now fires nightly at 10 PM (configurable), position snapshots receive DPS scores.
 - **Deferred:** Task-registry simplification (medium-risk refactor) flagged for future review.
 - **Reference:** `scheduler_analysis.md` (architecture doc), decision record in `.squad/decisions.md`
+
+### Cross-Agent Note: Scheduler Registry Refactor & DPS Removal (2026-06-26)
+
+Rusty completed scheduler modernization. Key change affecting monitoring agents: **DPS Scorer Task Removed**.
+
+**Why DPS Removed**
+- Monitoring agents you work with (covered_call, cash_secured_put, buy_tracker, open_call_monitor, open_put_monitor) already invoke `run_dps_analysis()` after every position snapshot
+- They run every 4 hours during market hours — providing real-time DPS scoring 4x/day
+- The nightly batch DPS job was redundant (1x/day, stale data vs real-time every 4 hours)
+
+**What Changed**
+- Removed DPS task from scheduler (9 tasks → 8 tasks)
+- Monitoring agents' existing DPS computation logic unchanged
+- Position snapshots still captured with RSI/MACD as before
+
+**Impact on Your Work**
+- No changes needed in your agent instructions or logic
+- Your monitoring agents' DPS scoring (monitor_agents.py, agent_runner.py:2349-2370) is now the ONLY DPS computation — no redundancy
+- Real-time approach is better quality (4x/day) than batch approach (1x/day)
+
+**Infrastructure Improvement**
+- New `TaskRegistry` in `src/scheduler_registry.py` — single source of truth for all scheduled tasks
+- All 8 tasks now uniformly expose: enabled/cron/last_run/next_run/run_now via web UI
+- Enable-gating guarantee: disabled monitoring won't execute (checked at execution time)
+- Code reduction: main.py -530 lines (41% smaller)
+
+No breaking changes to your agents or trading logic. This is pure scheduler infrastructure.

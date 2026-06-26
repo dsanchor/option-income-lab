@@ -877,3 +877,228 @@ Implemented clean cut replacement of all TradingView data fetching with yfinance
 
 See `scheduler_analysis.md` for full architecture documentation.
 
+
+## Learnings
+
+### 2026-06-26: DPS Redundancy Investigation + Scheduler Registry Refactor
+
+**DPS Redundancy Finding:**
+- **REDUNDANT** — The standalone DPS scorer task (`run_dps_job`, scheduled nightly at 10 PM) is completely redundant.
+- **Evidence:** `src/agent_runner.py:2349-2370` shows that EVERY monitoring agent run already computes DPS scores immediately after creating position snapshots.
+  ```python
+  # ── Run DPS after monitor completes (uses fresh snapshot) ──────
+  from .dps_scorer import run_dps_analysis as _run_dps
+  _dps_result = _run_dps(...)
+  if _dps_score is not None:
+      cosmos.update_snapshot_dps(symbol, position_id, _dps_score)
+  ```
+- **Frequency:** Monitor agents run every 4 hours during market hours (`30 9-16/4 * * 1-5`), providing real-time DPS scores. The nightly batch job adds no value.
+- **Decision:** REMOVED the standalone DPS task cleanly — deleted `run_dps_job()`, `_run_dps_async()`, all DPS cron initialization, config reload, change handling, and execution blocks. Kept `dps_scorer.py` and `dps_cron.py` modules since they contain the scoring logic used by the agents.
+
+**Scheduler Registry Refactor:**
+- **Goal:** Eliminate per-task boilerplate (9 tasks × ~50 lines = 450+ lines of duplication).
+- **Implementation:**
+  - Created `src/scheduler_registry.py` with `ScheduledTask` dataclass and `TaskRegistry` class.
+  - Each task is now declared ONCE with: name, display_name, config_key, default_cron, job_func.
+  - Centralized: task initialization, cron parsing, config reload, cron change detection, execution, error isolation, schedule display.
+  - Replaced 9 `_X_cron_changed` flags, 9 `reschedule_X()` methods, 9 config reload blocks, 9 cron initialization blocks, 9 execution blocks, 9 change handlers with a single registry that handles all tasks uniformly.
+- **Web UI Compatibility:** Preserved all `reschedule_X()` methods as thin wrappers around `registry.reschedule()` — web layer (`web/app.py`) unchanged.
+- **Result:**
+  - **Before:** 1266 lines in `src/main.py`
+  - **After:** 736 lines in `src/main.py` (+ 185 lines in `src/scheduler_registry.py`)
+  - **Net saved:** 530 lines removed from main.py (41% reduction), 345 lines net reduction overall (27% reduction).
+  - **Tasks:** 9 → 8 (DPS removed as redundant).
+
+**Key Registry Design Patterns:**
+1. **Task declaration:** `registry.register(name, display_name, config_key, default_cron, job_func)` — single line per task.
+2. **Initialization:** `registry.initialize_all(config, now_tz)` — replaces 100+ lines of per-task cron setup.
+3. **Config reload:** `registry.reload_from_cosmos(config, cosmos_settings)` — replaces 200+ lines of per-task reload logic.
+4. **Cron changes:** `registry.handle_cron_changes(now_tz)` — replaces 120+ lines of per-task change handlers.
+5. **Execution:** `registry.execute_due_tasks(now_tz)` — replaces 80+ lines of per-task if-blocks.
+6. **Display:** `registry.display_schedule()` — replaces 30+ lines of per-task print statements.
+
+**Web UI Scheduler Interface (Preserved):**
+- `scheduler.reschedule(new_cron)` — monitor agents
+- `scheduler.reschedule_summary(new_cron)` — summary agent
+- `scheduler.reschedule_plan_monitor(new_cron)` — plan monitor
+- `scheduler.reschedule_options_chain(new_cron)` — options chain
+- `scheduler.reschedule_dgi_screener(new_cron)` — DGI screener
+- `scheduler.reschedule_banner(new_cron)` — banner agent
+- `scheduler.reschedule_calendar(new_cron)` — calendar sync
+- `scheduler.reschedule_portfolio_enrichment(new_cron)` — portfolio enrichment
+All methods now delegate to `registry.reschedule(task_name, new_cron, config)` internally.
+
+**Validation:**
+- ✅ `python3 -c "from src import main"` — import successful.
+- ✅ All 8 reschedule methods present and callable.
+- ✅ Existing tests pass (4 economics test failures unrelated to scheduler).
+- ✅ Task count verified: 8 tasks with correct crons.
+
+**Migration Notes:**
+- **Adding a new task (NEW pattern):** See updated `.squad/skills/scheduler-integration/SKILL.md`.
+  - Register in `run()`: `registry.register(name, display_name, config_key, default_cron, job_func)`.
+  - Add reschedule method (for web UI): `def reschedule_X(self, new_cron): self.registry.reschedule("X", new_cron, self.config)`.
+  - That's it — no flags, no reload logic, no init blocks, no execution blocks.
+- **Old 11-point pattern is OBSOLETE** — replaced by 2-point pattern (register + reschedule method).
+
+**Files Changed:**
+- `src/scheduler_registry.py` — NEW, 185 lines (task registry implementation).
+- `src/main.py` — REFACTORED, 1266 → 736 lines (530 lines removed, 41% reduction).
+  - Removed: 9 `_X_cron_changed` flags, 9 `reschedule_X()` implementations, `run_dps_job()`, `_run_dps_async()`, 200+ lines of config reload boilerplate, 100+ lines of cron init, 120+ lines of change handlers, 80+ lines of execution blocks.
+  - Added: `TaskRegistry` import, `registry.register()` calls, registry-based reschedule wrappers, simplified `_reload_config_from_cosmos()`, simplified `run()` main loop.
+
+**Key Insight:**
+- The DPS scorer's nightly batch approach was solving a problem that didn't exist — the monitoring agents already provide real-time DPS scoring every 4 hours. This is a cautionary tale about orphaned features accumulating without revisiting the architecture.
+
+## Learnings
+
+### Unified Scheduler Settings UI (2026-06-26)
+
+**Problem:** Web UI for scheduler tasks was inconsistent — not all tasks had enabled checkboxes, last_run/next_run timestamps, or Run Now buttons. Logic was duplicated per-task in web/app.py (8 separate blocks computing next_run ad-hoc). Manual trigger endpoints existed for some tasks but not all.
+
+**Solution — Unified Per-Task UI Model:**
+
+1. **Extended TaskRegistry/ScheduledTask** (src/scheduler_registry.py):
+   - Added `last_run: Optional[datetime]` field to ScheduledTask — set when task executes (both cron and manual runs)
+   - Added `has_extra_config: bool` flag to indicate tasks with per-task config beyond the 5 standard fields (enabled, cron, last_run, next_run, run now)
+   - `execute_due_tasks()` now records `last_run` timestamp on successful execution
+   - `get_all_task_metadata()` returns uniform metadata for all tasks: `{name, display_name, config_key, enabled, cron, last_run (ISO), next_run (ISO), has_extra_config}`
+   - `trigger_task_now(name)` manually runs a task and records last_run (for Run Now button)
+   - `update_task_enabled(name, enabled, config)` toggles enabled state and persists to config (gates execution)
+
+2. **Unified Backend Endpoints** (web/app.py):
+   - `GET /api/scheduler/tasks` — returns list of all tasks with uniform metadata (replaces per-task duplicated logic)
+   - `POST /api/scheduler/tasks/{task_name}/run` — triggers any task manually (uniform Run Now)
+   - `POST /api/scheduler/tasks/{task_name}/cron` — updates cron, persists to CosmosDB
+   - `POST /api/scheduler/tasks/{task_name}/enabled` — toggles enabled state, persists to CosmosDB
+   - Existing `/api/trigger/{agent_type}` endpoints preserved for backward compatibility
+
+3. **Eliminated Duplication in web/app.py:**
+   - Removed ~150 lines of duplicated next_run/last_run computation (lines 2900-3082 in original)
+   - `_build_settings_config_context()` now sources from `scheduler.registry.get_all_task_metadata()` instead of ad-hoc croniter calculations
+   - Backward-compatible: still provides per-task variables for existing template (summary_enabled, summary_cron, etc.) until template is refactored
+
+4. **Task Registration** (src/main.py):
+   - Updated `registry.register()` calls to indicate `has_extra_config=True` for: summary_agent (activity_count), dgi_screener (symbols, top_n), banner_agent (max_items)
+   - Remaining 5 tasks have `has_extra_config=False` (only need the 5 standard controls)
+
+**Result:**
+- Every scheduled task (8 total: monitor_agents, summary_agent, plan_monitor, options_chain, dgi_screener, banner_agent, calendar_sync, portfolio_enrichment) now uniformly exposes:
+  1. Enabled checkbox (persisted to config/CosmosDB)
+  2. Cron expression field (editable, live-reschedule)
+  3. Last run timestamp (sourced from registry)
+  4. Next run timestamp (computed from cron object)
+  5. Run Now button (manual trigger via unified endpoint)
+- Tasks with extra config (summary, dgi, banner) retain their task-specific fields in addition to the 5 standard ones
+- Enabled state gates execution: disabled tasks do NOT run on cron schedule
+- No duplication: single source of truth in TaskRegistry, single set of API endpoints
+
+**Files Changed:**
+- src/scheduler_registry.py:16-30 (ScheduledTask dataclass + last_run + has_extra_config)
+- src/scheduler_registry.py:44-62 (register method + has_extra_config param)
+- src/scheduler_registry.py:158-245 (execute_due_tasks records last_run + new methods: trigger_task_now, get_all_task_metadata, update_task_enabled)
+- src/main.py:583-639 (registry.register calls with has_extra_config flags)
+- web/app.py:2834-2976 (_build_settings_config_context refactored to source from registry)
+- web/app.py:3911-4038 (new unified endpoints: GET /tasks, POST /tasks/{name}/run, POST /tasks/{name}/cron, POST /tasks/{name}/enabled)
+
+**Validation:**
+- ✅ `python3 -c "from src import main"` succeeds
+- ✅ `python3 -c "import web.app"` succeeds
+- ✅ `pytest tests/ -q` → 4 economics failures (pre-existing, unrelated to scheduler)
+- ✅ All 4 unified endpoints registered: /api/scheduler/tasks, /tasks/{name}/run, /tasks/{name}/cron, /tasks/{name}/enabled
+- ✅ Registry methods tested: get_all_task_metadata, trigger_task_now, update_task_enabled all work
+
+**Next Steps (for template):**
+- web/templates/settings_config.html can be refactored to loop over `scheduler_tasks` list instead of hardcoding 8 separate blocks
+- Existing per-task fetch() calls preserved for backward compatibility; could migrate to unified /api/scheduler/tasks/{name}/run endpoints in future
+
+**Key Pattern:** TaskRegistry is the single source of truth for per-task UI metadata. Extensions to the registry automatically propagate to all tasks without template changes.
+
+### Monitoring Agent Enabled Checkbox + Uniform Enable-Gating (2026-06-26)
+
+**Gap:** The Monitoring Agent (monitor_agents task) was the ONLY task of 8 that lacked an enabled checkbox in the settings UI. All other tasks (summary, plan_monitor, options_chain, dgi, banner, calendar, portfolio_enrichment) already had `*_enabled` checkboxes. This was an oversight from the initial scheduler registry refactor.
+
+**Changes Made (End-to-End Enabled Wiring for Monitoring):**
+
+1. **Template** (web/templates/settings_config.html:44-54):
+   - Added enabled checkbox for Monitoring Agent section (line 48: `<input type="checkbox" name="monitoring_enabled" value="true" {{ 'checked' if monitoring_enabled }}>`)
+   - Markup matches other 7 tasks: checkbox above cron field with help text
+
+2. **Backend Context** (web/app.py:2891):
+   - Added `monitoring_enabled = monitoring.get("enabled", True)` — sources from registry metadata
+   - Added to template context dict (line 2941): `"monitoring_enabled": monitoring_enabled`
+   - Default: `True` (preserves current behavior — monitoring enabled by default)
+
+3. **POST Handler** (web/app.py:2999, 3012, 3019):
+   - Line 2999: `monitoring_enabled = form.get("monitoring_enabled") == "true"` — reads checkbox from form
+   - Line 3012: Persists to CosmosDB: `cosmos_settings["scheduler"]["enabled"] = monitoring_enabled`
+   - Line 3019: Persists to config.yaml: `config["scheduler"]["enabled"] = monitoring_enabled`
+   - Same pattern as other 7 tasks
+
+4. **Registry Wiring** (src/main.py:584-589):
+   - monitor_agents task already registered with config_key="scheduler"
+   - Config loader (src/scheduler_registry.py:69) reads `enabled` from `config.get("scheduler", {}).get("enabled", True)`
+   - Default enabled=True ensures backward compatibility
+
+**Enable-Gating Verification (Uniform for All 8 Tasks):**
+
+Evidence that disabled tasks do NOT execute:
+
+1. **src/scheduler_registry.py:165** — `execute_due_tasks()` method:
+   ```python
+   if task.enabled and task.next_run and now_tz >= task.next_run:
+   ```
+   - ALL 8 tasks share this SAME method — enable check happens BEFORE execution
+   - A disabled task is skipped even if cron schedule is due
+
+2. **src/scheduler_registry.py:69-73** — `initialize_task()` method:
+   ```python
+   task.enabled = task_config.get('enabled', True)
+   ...
+   if not task.enabled:
+       return False
+   ```
+   - Tasks load enabled state from config/CosmosDB on startup
+   - Disabled tasks do not schedule next_run
+
+3. **src/scheduler_registry.py:154-158** — `reload_from_cosmos()` method:
+   ```python
+   for key in ['enabled']:
+       if key in task_settings:
+           config.config[task.config_key][key] = task_settings[key]
+           if key == 'enabled':
+               task.enabled = task_settings[key]  # Immediate refresh
+   ```
+   - Enabled state refreshes from CosmosDB on config reload (60s interval)
+   - Changes in settings UI propagate to task execution within 1 minute
+
+4. **All 8 Tasks Registered** (src/main.py:584-645):
+   - monitor_agents, summary_agent, plan_monitor, options_chain, dgi_screener, banner_agent, calendar_sync, portfolio_enrichment
+   - All use the TaskRegistry — uniform enable-gating guaranteed
+
+**Web UI Coverage (Enabled Checkboxes for All 8 Tasks):**
+- monitoring_enabled: web/templates/settings_config.html:48 ✅ (ADDED)
+- summary_enabled: line 83 ✅
+- banner_enabled: line 140 ✅
+- calendar_enabled: line 197 ✅
+- options_chain_enabled: line 237 ✅
+- dgi_enabled: line 284 ✅
+- pe_enabled: line 335 ✅
+- plan_monitor_enabled: line 375 ✅
+
+**Validation:**
+- ✅ `python3 -c "from src import main"` — import succeeds
+- ✅ `python3 -c "import web.app"` — import succeeds
+- ✅ `pytest tests/ -q` — 4 economics failures (pre-existing, unrelated)
+- ✅ Template renders monitoring_enabled checkbox (grep confirmed line 48)
+- ✅ Backend context provides monitoring_enabled (web/app.py:2891, 2941)
+- ✅ POST handler persists monitoring_enabled (web/app.py:2999, 3012, 3019)
+- ✅ Enable-gating verified: src/scheduler_registry.py:165 checks `task.enabled` before execution
+
+**Result:**
+- All 8 tasks now have the 5 standard controls: enabled checkbox, cron, last_run, next_run, Run Now button
+- Uniform enable-gating: disabled tasks do NOT execute, regardless of cron schedule
+- Monitoring defaults to enabled (preserves current behavior)
+- Gap closed: monitoring is now consistent with the other 7 tasks
+
+**Key Learning:** When adding a new control (like enabled checkboxes) to the registry, audit ALL tasks to ensure uniform coverage. This gap went unnoticed because monitoring used the legacy `config_key="scheduler"` instead of a task-specific key like the others.

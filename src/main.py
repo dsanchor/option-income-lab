@@ -36,6 +36,7 @@ from .open_call_monitor_agent import run_open_call_monitor
 from .open_put_monitor_agent import run_open_put_monitor
 from .dgi_screener import run_dgi_screener
 from .banner_agent import run_banner_agent
+from .scheduler_registry import TaskRegistry
 
 
 def _run_async(coro):
@@ -79,80 +80,46 @@ class OptionsAgentScheduler:
         self.runner = None
         self.cosmos = None
         self.context_provider = None
-        self._cron_changed = False
-        self._summary_cron_changed = False
-        self._plan_monitor_cron_changed = False
-        self._options_chain_cron_changed = False
-        self._dgi_screener_cron_changed = False
-        self._banner_cron_changed = False
-        self._calendar_cron_changed = False
-        self._portfolio_enrichment_cron_changed = False
-        self._dps_cron_changed = False
         self._last_config_reload = None
         self._config_reload_interval = 60  # seconds
         self._last_heartbeat = 0  # epoch for periodic heartbeat log
         self._heartbeat_interval = 600  # heartbeat every 10 minutes
+        self.registry = TaskRegistry()  # Centralized task registry
     
     def reschedule(self, new_cron: str):
         """Update cron expression. The run loop will pick it up on next iteration."""
         self.config.cron_expression = new_cron
-        self._cron_changed = True
+        task = self.registry.get_task("monitor_agents")
+        if task:
+            task._cron_changed = True
     
     def reschedule_summary(self, new_cron: str):
         """Update summary agent cron expression. The run loop will pick it up on next iteration."""
-        summary_config = self.config.config.get('summary_agent', {})
-        summary_config['cron'] = new_cron
-        self.config.config['summary_agent'] = summary_config
-        self._summary_cron_changed = True
+        self.registry.reschedule("summary_agent", new_cron, self.config)
 
     def reschedule_plan_monitor(self, new_cron: str):
         """Update plan monitor cron expression. The run loop will pick it up on next iteration."""
-        plan_monitor_config = self.config.config.get('plan_monitor', {})
-        plan_monitor_config['cron'] = new_cron
-        self.config.config['plan_monitor'] = plan_monitor_config
-        self._plan_monitor_cron_changed = True
+        self.registry.reschedule("plan_monitor", new_cron, self.config)
     
     def reschedule_options_chain(self, new_cron: str):
         """Update options chain scheduler cron expression. The run loop will pick it up on next iteration."""
-        options_chain_config = self.config.config.get('options_chain_scheduler', {})
-        options_chain_config['cron'] = new_cron
-        self.config.config['options_chain_scheduler'] = options_chain_config
-        self._options_chain_cron_changed = True
+        self.registry.reschedule("options_chain", new_cron, self.config)
     
     def reschedule_dgi_screener(self, new_cron: str):
         """Update DGI screener cron expression. The run loop will pick it up on next iteration."""
-        dgi_config = self.config.config.get('dgi_screener', {})
-        dgi_config['cron'] = new_cron
-        self.config.config['dgi_screener'] = dgi_config
-        self._dgi_screener_cron_changed = True
+        self.registry.reschedule("dgi_screener", new_cron, self.config)
     
     def reschedule_portfolio_enrichment(self, new_cron: str):
         """Update portfolio enrichment cron expression."""
-        pe_config = self.config.config.get('portfolio_enrichment', {})
-        pe_config['cron'] = new_cron
-        self.config.config['portfolio_enrichment'] = pe_config
-        self._portfolio_enrichment_cron_changed = True
-
-    def reschedule_dps(self, new_cron: str):
-        """Update DPS scorer cron expression."""
-        dps_config = self.config.config.get('dps_scorer', {})
-        dps_config['cron'] = new_cron
-        self.config.config['dps_scorer'] = dps_config
-        self._dps_cron_changed = True
+        self.registry.reschedule("portfolio_enrichment", new_cron, self.config)
 
     def reschedule_banner(self, new_cron: str):
         """Update banner agent cron expression. The run loop will pick it up on next iteration."""
-        banner_config = self.config.config.get('banner_agent', {})
-        banner_config['cron'] = new_cron
-        self.config.config['banner_agent'] = banner_config
-        self._banner_cron_changed = True
+        self.registry.reschedule("banner_agent", new_cron, self.config)
 
     def reschedule_calendar(self, new_cron: str):
         """Update calendar sync cron expression. The run loop will pick it up on next iteration."""
-        calendar_config = self.config.config.get('calendar_sync', {})
-        calendar_config['cron'] = new_cron
-        self.config.config['calendar_sync'] = calendar_config
-        self._calendar_cron_changed = True
+        self.registry.reschedule("calendar_sync", new_cron, self.config)
     
     def setup(self):
         """Initialize configuration, CosmosDB, and agent runner."""
@@ -475,33 +442,6 @@ class OptionsAgentScheduler:
         except Exception as e:
             print(f"ERROR during Portfolio Enrichment: {e}")
 
-    def run_dps_job(self):
-        """Execute DPS scorer (bridges async to sync for scheduler)."""
-        _run_async(self._run_dps_async())
-
-    async def _run_dps_async(self):
-        """Run DPS scorer if enabled in config."""
-        dps_config = self.config.config.get('dps_scorer', {})
-        if not dps_config.get('enabled', True):
-            print("⏭️  DPS Scorer disabled in config")
-            return
-
-        from .dps_cron import run_dps_cron
-        from .yfinance_data_provider import get_shared_provider
-
-        now_tz = _now_local()
-        print(f"\n{'📐'*35}")
-        print(f"📐 DPS Scorer - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        print(f"{'📐'*35}\n")
-
-        try:
-            yf_provider = get_shared_provider(getattr(self.config, 'yfinance_config', None))
-            result = await run_dps_cron(self.cosmos, yf_provider)
-            print(f"DPS Scorer complete: {result.get('processed', 0)} processed, "
-                  f"{result.get('skipped', 0)} skipped, {result.get('failed', 0)} failed")
-        except Exception as e:
-            print(f"ERROR during DPS Scorer: {e}")
-
     def run_banner_agent_job(self):
         """Execute banner agent (bridges async to sync for scheduler)."""
         _run_async(self._run_banner_agent_async())
@@ -606,218 +546,31 @@ class OptionsAgentScheduler:
             if not cosmos_settings:
                 return
             
-            # Track if we need to update anything
-            main_cron_changed = False
-            summary_cron_changed = False
-            plan_monitor_cron_changed = False
-            options_chain_cron_changed = False
-            banner_cron_changed = False
-            
-            # Check scheduler settings
+            # Handle main monitor agents cron (special case, not in registry)
             scheduler_settings = cosmos_settings.get('scheduler', {})
             new_cron = scheduler_settings.get('cron')
             
             if new_cron and new_cron != self.config.cron_expression:
                 self.config.cron_expression = new_cron
-                main_cron_changed = True
-            
-            # Check summary agent settings
-            summary_settings = cosmos_settings.get('summary_agent', {})
-            new_summary_cron = summary_settings.get('cron')
-            current_summary_cron = self.config.config.get('summary_agent', {}).get('cron', '0 8 * * *')
-            
-            if new_summary_cron and new_summary_cron != current_summary_cron:
-                if 'summary_agent' not in self.config.config:
-                    self.config.config['summary_agent'] = {}
-                self.config.config['summary_agent']['cron'] = new_summary_cron
-                summary_cron_changed = True
-            
-            # Update other summary agent settings
-            if summary_settings:
-                if 'summary_agent' not in self.config.config:
-                    self.config.config['summary_agent'] = {}
-                for key in ['enabled', 'activity_count']:
-                    if key in summary_settings:
-                        self.config.config['summary_agent'][key] = summary_settings[key]
-            
-            # Check options chain scheduler settings
-            options_chain_settings = cosmos_settings.get('options_chain_scheduler', {})
-            new_options_chain_cron = options_chain_settings.get('cron')
-            current_options_chain_cron = self.config.config.get('options_chain_scheduler', {}).get('cron', '0 * * * *')
-            
-            if new_options_chain_cron and new_options_chain_cron != current_options_chain_cron:
-                if 'options_chain_scheduler' not in self.config.config:
-                    self.config.config['options_chain_scheduler'] = {}
-                self.config.config['options_chain_scheduler']['cron'] = new_options_chain_cron
-                options_chain_cron_changed = True
-            
-            # Update other options chain scheduler settings
-            if options_chain_settings:
-                if 'options_chain_scheduler' not in self.config.config:
-                    self.config.config['options_chain_scheduler'] = {}
-                for key in ['enabled']:
-                    if key in options_chain_settings:
-                        self.config.config['options_chain_scheduler'][key] = options_chain_settings[key]
-            
-            # Check DGI screener settings
-            dgi_settings = cosmos_settings.get('dgi_screener', {})
-            new_dgi_cron = dgi_settings.get('cron')
-            current_dgi_cron = self.config.config.get('dgi_screener', {}).get('cron', '0 6 * * 1-5')
-            
-            dgi_cron_changed = False
-            if new_dgi_cron and new_dgi_cron != current_dgi_cron:
-                if 'dgi_screener' not in self.config.config:
-                    self.config.config['dgi_screener'] = {}
-                self.config.config['dgi_screener']['cron'] = new_dgi_cron
-                dgi_cron_changed = True
-            
-            if dgi_settings:
-                if 'dgi_screener' not in self.config.config:
-                    self.config.config['dgi_screener'] = {}
-                for key in ['enabled']:
-                    if key in dgi_settings:
-                        self.config.config['dgi_screener'][key] = dgi_settings[key]
-
-            banner_settings = cosmos_settings.get('banner_agent', {})
-            new_banner_cron = banner_settings.get('cron')
-            current_banner_cron = self.config.config.get('banner_agent', {}).get('cron', '0 5 * * *')
-
-            if new_banner_cron and new_banner_cron != current_banner_cron:
-                if 'banner_agent' not in self.config.config:
-                    self.config.config['banner_agent'] = {}
-                self.config.config['banner_agent']['cron'] = new_banner_cron
-                banner_cron_changed = True
-
-            if banner_settings:
-                if 'banner_agent' not in self.config.config:
-                    self.config.config['banner_agent'] = {}
-                for key in ['enabled', 'max_items']:
-                    if key in banner_settings:
-                        self.config.config['banner_agent'][key] = banner_settings[key]
-            
-            # Set flags for the main loop to pick up
-            if main_cron_changed:
-                self._cron_changed = True
-                if new_cron:
+                task = self.registry.get_task("monitor_agents")
+                if task:
+                    task._cron_changed = True
                     print(f"✓ Config reloaded from CosmosDB: monitor cron changed to {new_cron}")
             
-            if summary_cron_changed:
-                self._summary_cron_changed = True
-                print(f"✓ Config reloaded from CosmosDB: summary cron changed to {new_summary_cron}")
-
-            # Check plan monitor settings
-            plan_monitor_settings = cosmos_settings.get('plan_monitor', {})
-            new_plan_monitor_cron = plan_monitor_settings.get('cron')
-            current_plan_monitor_cron = self.config.config.get('plan_monitor', {}).get('cron', '0 4,16 * * 1-5')
-
-            if new_plan_monitor_cron and new_plan_monitor_cron != current_plan_monitor_cron:
-                if 'plan_monitor' not in self.config.config:
-                    self.config.config['plan_monitor'] = {}
-                self.config.config['plan_monitor']['cron'] = new_plan_monitor_cron
-                plan_monitor_cron_changed = True
-
-            if plan_monitor_settings:
-                if 'plan_monitor' not in self.config.config:
-                    self.config.config['plan_monitor'] = {}
-                for key in ['enabled', 'model']:
-                    if key in plan_monitor_settings:
-                        self.config.config['plan_monitor'][key] = plan_monitor_settings[key]
-            
-            if options_chain_cron_changed:
-                self._options_chain_cron_changed = True
-                print(f"✓ Config reloaded from CosmosDB: options chain cron changed to {new_options_chain_cron}")
-
-            if plan_monitor_cron_changed:
-                self._plan_monitor_cron_changed = True
-                print(f"✓ Config reloaded from CosmosDB: plan monitor cron changed to {new_plan_monitor_cron}")
-            
-            if dgi_cron_changed:
-                self._dgi_screener_cron_changed = True
-                print(f"✓ Config reloaded from CosmosDB: DGI screener cron changed to {new_dgi_cron}")
-
-            if banner_cron_changed:
-                self._banner_cron_changed = True
-                print(f"✓ Config reloaded from CosmosDB: banner agent cron changed to {new_banner_cron}")
-
-            # Check calendar sync settings
-            calendar_settings = cosmos_settings.get('calendar_sync', {})
-            new_calendar_cron = calendar_settings.get('cron')
-            current_calendar_cron = self.config.config.get('calendar_sync', {}).get('cron', '0 5 * * 1-5')
-
-            calendar_cron_changed = False
-            if new_calendar_cron and new_calendar_cron != current_calendar_cron:
-                if 'calendar_sync' not in self.config.config:
-                    self.config.config['calendar_sync'] = {}
-                self.config.config['calendar_sync']['cron'] = new_calendar_cron
-                calendar_cron_changed = True
-
-            if calendar_settings:
-                if 'calendar_sync' not in self.config.config:
-                    self.config.config['calendar_sync'] = {}
-                for key in ['enabled']:
-                    if key in calendar_settings:
-                        self.config.config['calendar_sync'][key] = calendar_settings[key]
-
-            if calendar_cron_changed:
-                self._calendar_cron_changed = True
-                print(f"✓ Config reloaded from CosmosDB: calendar sync cron changed to {new_calendar_cron}")
-
-            # Check portfolio enrichment settings
-            pe_settings = cosmos_settings.get('portfolio_enrichment', {})
-            new_pe_cron = pe_settings.get('cron')
-            current_pe_cron = self.config.config.get('portfolio_enrichment', {}).get('cron', '0 9-17 * * 1-5')
-
-            pe_cron_changed = False
-            if new_pe_cron and new_pe_cron != current_pe_cron:
-                if 'portfolio_enrichment' not in self.config.config:
-                    self.config.config['portfolio_enrichment'] = {}
-                self.config.config['portfolio_enrichment']['cron'] = new_pe_cron
-                pe_cron_changed = True
-
-            if pe_settings:
-                if 'portfolio_enrichment' not in self.config.config:
-                    self.config.config['portfolio_enrichment'] = {}
-                for key in ['enabled']:
-                    if key in pe_settings:
-                        self.config.config['portfolio_enrichment'][key] = pe_settings[key]
-
-            if pe_cron_changed:
-                self._portfolio_enrichment_cron_changed = True
-                print(f"✓ Config reloaded from CosmosDB: portfolio enrichment cron changed to {new_pe_cron}")
-
-            # Check DPS scorer settings
-            dps_settings = cosmos_settings.get('dps_scorer', {})
-            new_dps_cron = dps_settings.get('cron')
-            current_dps_cron = self.config.config.get('dps_scorer', {}).get('cron', '0 22 * * 1-5')
-
-            dps_cron_changed = False
-            if new_dps_cron and new_dps_cron != current_dps_cron:
-                if 'dps_scorer' not in self.config.config:
-                    self.config.config['dps_scorer'] = {}
-                self.config.config['dps_scorer']['cron'] = new_dps_cron
-                dps_cron_changed = True
-
-            if dps_settings:
-                if 'dps_scorer' not in self.config.config:
-                    self.config.config['dps_scorer'] = {}
-                for key in ['enabled']:
-                    if key in dps_settings:
-                        self.config.config['dps_scorer'][key] = dps_settings[key]
-
-            if dps_cron_changed:
-                self._dps_cron_changed = True
-                print(f"✓ Config reloaded from CosmosDB: DPS scorer cron changed to {new_dps_cron}")
+            # Reload all registered tasks via the registry
+            self.registry.reload_from_cosmos(self.config, cosmos_settings)
                 
         except Exception as e:
             # Don't crash the scheduler on config reload errors
             print(f"⚠️  Error reloading config from CosmosDB: {e}")
+
     
     def run(self, install_signals=True):
         """Main execution loop using cron expression.
         
         Args:
             install_signals: Install SIGINT/SIGTERM handlers. Set to False when
-                running inside a thread (signals can only be set in the main thread).
+                 running inside a thread (signals can only be set in the main thread).
         """
         if install_signals:
             signal.signal(signal.SIGINT, self.signal_handler)
@@ -827,172 +580,86 @@ class OptionsAgentScheduler:
         
         now_tz = _now_local()
         
-        # Initialize main scheduler cron
+        # Register all tasks in the registry (including monitor agents for consistency)
+        self.registry.register(
+            "monitor_agents",
+            "Monitor Agents",
+            "scheduler",  # Uses scheduler.cron from config
+            "30 9-16/4 * * 1-5",
+            self.run_all_agents,
+            has_extra_config=False,  # No extra per-task config beyond the 5 standard fields
+        )
+        self.registry.register(
+            "summary_agent",
+            "Summary Agent",
+            "summary_agent",
+            "0 8 * * *",
+            self.run_summary_agent_job,
+            has_extra_config=True,  # Has activity_count extra config
+        )
+        self.registry.register(
+            "plan_monitor",
+            "Plan Monitor",
+            "plan_monitor",
+            "0 4,16 * * 1-5",
+            self.run_plan_monitor_job,
+            has_extra_config=False,
+        )
+        self.registry.register(
+            "options_chain",
+            "Options Chain Fetcher",
+            "options_chain_scheduler",
+            "0 * * * *",
+            self.run_options_chain_fetch_job,
+            has_extra_config=False,
+        )
+        self.registry.register(
+            "dgi_screener",
+            "DGI Screener",
+            "dgi_screener",
+            "0 6 * * 1-5",
+            self.run_dgi_screener_job,
+            has_extra_config=True,  # Has symbols + top_n extra config
+        )
+        self.registry.register(
+            "banner_agent",
+            "Dashboard Banner",
+            "banner_agent",
+            "0 5 * * *",
+            self.run_banner_agent_job,
+            has_extra_config=True,  # Has max_items extra config
+        )
+        self.registry.register(
+            "calendar_sync",
+            "Calendar Sync",
+            "calendar_sync",
+            "0 5 * * 1-5",
+            self.run_calendar_sync_job,
+            has_extra_config=False,
+        )
+        self.registry.register(
+            "portfolio_enrichment",
+            "Portfolio Enrichment",
+            "portfolio_enrichment",
+            "0 9-17 * * 1-5",
+            self.run_portfolio_enrichment_job,
+            has_extra_config=False,
+        )
+        
+        # Initialize main monitor agents cron from config
+        # Note: monitor_agents uses config.cron_expression, not config.config['scheduler']
         cron = croniter(self.config.cron_expression, now_tz)
         next_run = cron.get_next(datetime)
         
-        # Initialize summary agent cron (if enabled)
-        summary_config = self.config.config.get('summary_agent', {})
-        summary_enabled = summary_config.get('enabled', True)
-        summary_cron_expr = summary_config.get('cron', '0 8 * * *')
-        summary_next_run = None
-        summary_cron = None
-
-        # Initialize plan monitor cron (if enabled)
-        plan_monitor_config = self.config.config.get('plan_monitor', {})
-        plan_monitor_enabled = plan_monitor_config.get('enabled', True)
-        plan_monitor_cron_expr = plan_monitor_config.get('cron', '0 4,16 * * 1-5')
-        plan_monitor_next_run = None
-        plan_monitor_cron = None
+        # Store config reference for registry's handle_cron_changes
+        self.registry.set_config(self.config)
         
-        # Initialize options chain scheduler cron (if enabled)
-        options_chain_config = self.config.config.get('options_chain_scheduler', {})
-        options_chain_enabled = options_chain_config.get('enabled', True)
-        options_chain_cron_expr = options_chain_config.get('cron', '0 * * * *')
-        options_chain_next_run = None
-        options_chain_cron = None
-        
-        # Initialize DGI screener cron (if enabled)
-        dgi_config = self.config.config.get('dgi_screener', {})
-        dgi_enabled = dgi_config.get('enabled', True)
-        dgi_cron_expr = dgi_config.get('cron', '0 6 * * 1-5')
-        dgi_next_run = None
-        dgi_cron = None
-
-        # Initialize dashboard banner cron (if enabled)
-        banner_config = self.config.config.get('banner_agent', {})
-        banner_enabled = banner_config.get('enabled', True)
-        banner_cron_expr = banner_config.get('cron', '0 5 * * *')
-        banner_next_run = None
-        banner_cron = None
-
-        # Initialize calendar sync cron (if enabled)
-        calendar_config = self.config.config.get('calendar_sync', {})
-        calendar_enabled = calendar_config.get('enabled', True)
-        calendar_cron_expr = calendar_config.get('cron', '0 5 * * 1-5')
-        calendar_next_run = None
-        calendar_cron = None
-
-        # Initialize portfolio enrichment cron (if enabled)
-        pe_config = self.config.config.get('portfolio_enrichment', {})
-        pe_enabled = pe_config.get('enabled', True)
-        pe_cron_expr = pe_config.get('cron', '0 9-17 * * 1-5')
-        pe_next_run = None
-        pe_cron = None
-
-        # Initialize DPS scorer cron (if enabled)
-        dps_config = self.config.config.get('dps_scorer', {})
-        dps_enabled = dps_config.get('enabled', True)
-        dps_cron_expr = dps_config.get('cron', '0 22 * * 1-5')
-        dps_next_run = None
-        dps_cron = None
-        
-        if summary_enabled:
-            try:
-                summary_cron = croniter(summary_cron_expr, now_tz)
-                summary_next_run = summary_cron.get_next(datetime)
-            except (ValueError, KeyError) as e:
-                print(f"⚠️  Invalid summary agent cron expression '{summary_cron_expr}': {e}")
-                print(f"⚠️  Summary agent scheduling disabled")
-                summary_enabled = False
-        
-        if options_chain_enabled:
-            try:
-                options_chain_cron = croniter(options_chain_cron_expr, now_tz)
-                options_chain_next_run = options_chain_cron.get_next(datetime)
-            except (ValueError, KeyError) as e:
-                print(f"⚠️  Invalid options chain cron expression '{options_chain_cron_expr}': {e}")
-                print(f"⚠️  Options chain scheduling disabled")
-                options_chain_enabled = False
-
-        if plan_monitor_enabled:
-            try:
-                plan_monitor_cron = croniter(plan_monitor_cron_expr, now_tz)
-                plan_monitor_next_run = plan_monitor_cron.get_next(datetime)
-            except (ValueError, KeyError) as e:
-                print(f"⚠️  Invalid plan monitor cron expression '{plan_monitor_cron_expr}': {e}")
-                print(f"⚠️  Plan monitor scheduling disabled")
-                plan_monitor_enabled = False
-        
-        if dgi_enabled:
-            try:
-                dgi_cron = croniter(dgi_cron_expr, now_tz)
-                dgi_next_run = dgi_cron.get_next(datetime)
-            except (ValueError, KeyError) as e:
-                print(f"⚠️  Invalid DGI screener cron expression '{dgi_cron_expr}': {e}")
-                print(f"⚠️  DGI screener scheduling disabled")
-                dgi_enabled = False
-
-        if banner_enabled:
-            try:
-                banner_cron = croniter(banner_cron_expr, now_tz)
-                banner_next_run = banner_cron.get_next(datetime)
-            except (ValueError, KeyError) as e:
-                print(f"⚠️  Invalid banner agent cron expression '{banner_cron_expr}': {e}")
-                print(f"⚠️  Dashboard banner scheduling disabled")
-                banner_enabled = False
-
-        if calendar_enabled:
-            try:
-                calendar_cron = croniter(calendar_cron_expr, now_tz)
-                calendar_next_run = calendar_cron.get_next(datetime)
-            except (ValueError, KeyError) as e:
-                print(f"⚠️  Invalid calendar sync cron expression '{calendar_cron_expr}': {e}")
-                print(f"⚠️  Calendar sync scheduling disabled")
-                calendar_enabled = False
-
-        if pe_enabled:
-            try:
-                pe_cron = croniter(pe_cron_expr, now_tz)
-                pe_next_run = pe_cron.get_next(datetime)
-            except (ValueError, KeyError) as e:
-                print(f"⚠️  Invalid portfolio enrichment cron expression '{pe_cron_expr}': {e}")
-                print(f"⚠️  Portfolio enrichment scheduling disabled")
-                pe_enabled = False
-
-        if dps_enabled:
-            try:
-                dps_cron = croniter(dps_cron_expr, now_tz)
-                dps_next_run = dps_cron.get_next(datetime)
-            except (ValueError, KeyError) as e:
-                print(f"⚠️  Invalid DPS scorer cron expression '{dps_cron_expr}': {e}")
-                print(f"⚠️  DPS scorer scheduling disabled")
-                dps_enabled = False
+        # Initialize all registered tasks
+        self.registry.initialize_all(self.config, now_tz)
         
         # Display initial schedule
         print(f"\nMonitor Agents        - Next run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        if summary_enabled and summary_next_run:
-            print(f"Summary Agent         - Next run: {summary_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        else:
-            print(f"Summary Agent         - Disabled")
-        if plan_monitor_enabled and plan_monitor_next_run:
-            print(f"Plan Monitor          - Next run: {plan_monitor_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        else:
-            print(f"Plan Monitor          - Disabled")
-        if options_chain_enabled and options_chain_next_run:
-            print(f"Options Chain Fetcher - Next run: {options_chain_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        else:
-            print(f"Options Chain Fetcher - Disabled")
-        if dgi_enabled and dgi_next_run:
-            print(f"DGI Screener          - Next run: {dgi_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        else:
-            print(f"DGI Screener          - Disabled")
-        if banner_enabled and banner_next_run:
-            print(f"Dashboard Banner      - Next run: {banner_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        else:
-            print(f"Dashboard Banner      - Disabled")
-        if calendar_enabled and calendar_next_run:
-            print(f"Calendar Sync         - Next run: {calendar_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        else:
-            print(f"Calendar Sync         - Disabled")
-        if pe_enabled and pe_next_run:
-            print(f"Portfolio Enrichment  - Next run: {pe_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        else:
-            print(f"Portfolio Enrichment  - Disabled")
-        if dps_enabled and dps_next_run:
-            print(f"DPS Scorer            - Next run: {dps_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        else:
-            print(f"DPS Scorer            - Disabled")
+        self.registry.display_schedule()
         
         # Track when we last reloaded config
         self._last_config_reload = time.time()
@@ -1016,221 +683,32 @@ class OptionsAgentScheduler:
                 self._reload_config_from_cosmos()
                 self._last_config_reload = current_time
             
-            # Check if main cron was updated from the web UI
-            if self._cron_changed:
-                self._cron_changed = False
+            # Handle cron changes for monitor agents (special case)
+            monitor_task = self.registry.get_task("monitor_agents")
+            if monitor_task and monitor_task._cron_changed:
+                monitor_task._cron_changed = False
                 now_tz = _now_local()
                 cron = croniter(self.config.cron_expression, now_tz)
                 next_run = cron.get_next(datetime)
                 print(f"Monitor agents cron rescheduled to: {self.config.cron_expression}")
                 print(f"Next scheduled run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
             
-            # Check if summary cron was updated from the web UI
-            if self._summary_cron_changed:
-                self._summary_cron_changed = False
-                summary_config = self.config.config.get('summary_agent', {})
-                summary_cron_expr = summary_config.get('cron', '0 8 * * *')
-                try:
-                    now_tz = _now_local()
-                    summary_cron = croniter(summary_cron_expr, now_tz)
-                    summary_next_run = summary_cron.get_next(datetime)
-                    summary_enabled = summary_config.get('enabled', True)
-                    print(f"Summary agent cron rescheduled to: {summary_cron_expr}")
-                    print(f"Next scheduled run: {summary_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-                except (ValueError, KeyError) as e:
-                    print(f"⚠️  Invalid summary agent cron expression '{summary_cron_expr}': {e}")
-                    summary_enabled = False
-
-            if self._plan_monitor_cron_changed:
-                self._plan_monitor_cron_changed = False
-                plan_monitor_config = self.config.config.get('plan_monitor', {})
-                plan_monitor_cron_expr = plan_monitor_config.get('cron', '0 4,16 * * 1-5')
-                try:
-                    now_tz = _now_local()
-                    plan_monitor_cron = croniter(plan_monitor_cron_expr, now_tz)
-                    plan_monitor_next_run = plan_monitor_cron.get_next(datetime)
-                    plan_monitor_enabled = plan_monitor_config.get('enabled', True)
-                    print(f"Plan monitor cron rescheduled to: {plan_monitor_cron_expr}")
-                    print(f"Next scheduled run: {plan_monitor_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-                except (ValueError, KeyError) as e:
-                    print(f"⚠️  Invalid plan monitor cron expression '{plan_monitor_cron_expr}': {e}")
-                    plan_monitor_enabled = False
+            # Handle cron changes for all registered tasks
+            self.registry.handle_cron_changes(now_tz)
             
-            # Check if options chain cron was updated from the web UI
-            if self._options_chain_cron_changed:
-                self._options_chain_cron_changed = False
-                options_chain_config = self.config.config.get('options_chain_scheduler', {})
-                options_chain_cron_expr = options_chain_config.get('cron', '0 * * * *')
-                try:
-                    now_tz = _now_local()
-                    options_chain_cron = croniter(options_chain_cron_expr, now_tz)
-                    options_chain_next_run = options_chain_cron.get_next(datetime)
-                    options_chain_enabled = options_chain_config.get('enabled', True)
-                    print(f"Options chain scheduler cron rescheduled to: {options_chain_cron_expr}")
-                    print(f"Next scheduled run: {options_chain_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-                except (ValueError, KeyError) as e:
-                    print(f"⚠️  Invalid options chain cron expression '{options_chain_cron_expr}': {e}")
-                    options_chain_enabled = False
-            
-            # Check if DGI screener cron was updated from the web UI
-            if self._dgi_screener_cron_changed:
-                self._dgi_screener_cron_changed = False
-                dgi_config = self.config.config.get('dgi_screener', {})
-                dgi_cron_expr = dgi_config.get('cron', '0 6 * * 1-5')
-                try:
-                    now_tz = _now_local()
-                    dgi_cron = croniter(dgi_cron_expr, now_tz)
-                    dgi_next_run = dgi_cron.get_next(datetime)
-                    dgi_enabled = dgi_config.get('enabled', True)
-                    print(f"DGI screener cron rescheduled to: {dgi_cron_expr}")
-                    print(f"Next scheduled run: {dgi_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-                except (ValueError, KeyError) as e:
-                    print(f"⚠️  Invalid DGI screener cron expression '{dgi_cron_expr}': {e}")
-                    dgi_enabled = False
-
-            # Check if dashboard banner cron was updated from the web UI
-            if self._banner_cron_changed:
-                self._banner_cron_changed = False
-                banner_config = self.config.config.get('banner_agent', {})
-                banner_cron_expr = banner_config.get('cron', '0 5 * * *')
-                try:
-                    now_tz = _now_local()
-                    banner_cron = croniter(banner_cron_expr, now_tz)
-                    banner_next_run = banner_cron.get_next(datetime)
-                    banner_enabled = banner_config.get('enabled', True)
-                    print(f"Dashboard banner cron rescheduled to: {banner_cron_expr}")
-                    print(f"Next scheduled run: {banner_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-                except (ValueError, KeyError) as e:
-                    print(f"⚠️  Invalid banner agent cron expression '{banner_cron_expr}': {e}")
-                    banner_enabled = False
-
-            # Check if calendar cron was updated from the web UI
-            if self._calendar_cron_changed:
-                self._calendar_cron_changed = False
-                calendar_config = self.config.config.get('calendar_sync', {})
-                calendar_cron_expr = calendar_config.get('cron', '0 5 * * 1-5')
-                try:
-                    now_tz = _now_local()
-                    calendar_cron = croniter(calendar_cron_expr, now_tz)
-                    calendar_next_run = calendar_cron.get_next(datetime)
-                    calendar_enabled = calendar_config.get('enabled', True)
-                    print(f"Calendar sync cron rescheduled to: {calendar_cron_expr}")
-                    print(f"Next scheduled run: {calendar_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-                except (ValueError, KeyError) as e:
-                    print(f"⚠️  Invalid calendar sync cron expression '{calendar_cron_expr}': {e}")
-                    calendar_enabled = False
-
-            if self._portfolio_enrichment_cron_changed:
-                self._portfolio_enrichment_cron_changed = False
-                pe_config = self.config.config.get('portfolio_enrichment', {})
-                pe_cron_expr = pe_config.get('cron', '0 9-17 * * 1-5')
-                try:
-                    now_tz = _now_local()
-                    pe_cron = croniter(pe_cron_expr, now_tz)
-                    pe_next_run = pe_cron.get_next(datetime)
-                    pe_enabled = pe_config.get('enabled', True)
-                    print(f"Portfolio enrichment cron rescheduled to: {pe_cron_expr}")
-                    print(f"Next scheduled run: {pe_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-                except (ValueError, KeyError) as e:
-                    print(f"⚠️  Invalid portfolio enrichment cron expression '{pe_cron_expr}': {e}")
-                    pe_enabled = False
-
-            if self._dps_cron_changed:
-                self._dps_cron_changed = False
-                dps_config = self.config.config.get('dps_scorer', {})
-                dps_cron_expr = dps_config.get('cron', '0 22 * * 1-5')
-                try:
-                    now_tz = _now_local()
-                    dps_cron = croniter(dps_cron_expr, now_tz)
-                    dps_next_run = dps_cron.get_next(datetime)
-                    dps_enabled = dps_config.get('enabled', True)
-                    print(f"DPS scorer cron rescheduled to: {dps_cron_expr}")
-                    print(f"Next scheduled run: {dps_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-                except (ValueError, KeyError) as e:
-                    print(f"⚠️  Invalid DPS scorer cron expression '{dps_cron_expr}': {e}")
-                    dps_enabled = False
-
             now_tz = _now_local()
             
-            # Check main scheduler
+            # Check main monitor agents scheduler
             if now_tz >= next_run:
                 try:
                     self.run_all_agents()
                 except Exception as e:
                     print(f"❌ SCHEDULER ERROR in run_all_agents: {e}")
                 next_run = cron.get_next(datetime)
-                print(f"Monitor Agents - Next run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
+                print(f"Monitor Agents        - Next run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
             
-            # Check summary agent scheduler
-            if summary_enabled and summary_next_run and now_tz >= summary_next_run:
-                try:
-                    self.run_summary_agent_job()
-                except Exception as e:
-                    print(f"❌ SCHEDULER ERROR in summary_agent: {e}")
-                summary_next_run = summary_cron.get_next(datetime)
-                print(f"Summary Agent  - Next run: {summary_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-            
-            # Check plan monitor scheduler
-            if plan_monitor_enabled and plan_monitor_next_run and now_tz >= plan_monitor_next_run:
-                try:
-                    self.run_plan_monitor_job()
-                except Exception as e:
-                    print(f"❌ SCHEDULER ERROR in plan_monitor: {e}")
-                plan_monitor_next_run = plan_monitor_cron.get_next(datetime)
-                print(f"Plan Monitor          - Next run: {plan_monitor_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-
-            # Check options chain scheduler
-            if options_chain_enabled and options_chain_next_run and now_tz >= options_chain_next_run:
-                try:
-                    self.run_options_chain_fetch_job()
-                except Exception as e:
-                    print(f"❌ SCHEDULER ERROR in options_chain: {e}")
-                options_chain_next_run = options_chain_cron.get_next(datetime)
-                print(f"Options Chain Fetcher - Next run: {options_chain_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-            
-            # Check DGI screener scheduler
-            if dgi_enabled and dgi_next_run and now_tz >= dgi_next_run:
-                try:
-                    self.run_dgi_screener_job()
-                except Exception as e:
-                    print(f"❌ SCHEDULER ERROR in dgi_screener: {e}")
-                dgi_next_run = dgi_cron.get_next(datetime)
-                print(f"DGI Screener          - Next run: {dgi_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-
-            # Check dashboard banner scheduler
-            if banner_enabled and banner_next_run and now_tz >= banner_next_run:
-                try:
-                    self.run_banner_agent_job()
-                except Exception as e:
-                    print(f"❌ SCHEDULER ERROR in banner_agent: {e}")
-                banner_next_run = banner_cron.get_next(datetime)
-                print(f"Dashboard Banner      - Next run: {banner_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-
-            if calendar_enabled and calendar_next_run and now_tz >= calendar_next_run:
-                try:
-                    self.run_calendar_sync_job()
-                except Exception as e:
-                    print(f"❌ SCHEDULER ERROR in calendar_sync: {e}")
-                calendar_next_run = calendar_cron.get_next(datetime)
-                print(f"Calendar Sync         - Next run: {calendar_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-
-            # Check portfolio enrichment scheduler
-            if pe_enabled and pe_next_run and now_tz >= pe_next_run:
-                try:
-                    self.run_portfolio_enrichment_job()
-                except Exception as e:
-                    print(f"❌ SCHEDULER ERROR in portfolio_enrichment: {e}")
-                pe_next_run = pe_cron.get_next(datetime)
-                print(f"Portfolio Enrichment  - Next run: {pe_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-
-            # Check DPS scorer scheduler
-            if dps_enabled and dps_next_run and now_tz >= dps_next_run:
-                try:
-                    self.run_dps_job()
-                except Exception as e:
-                    print(f"❌ SCHEDULER ERROR in dps_scorer: {e}")
-                dps_next_run = dps_cron.get_next(datetime)
-                print(f"DPS Scorer            - Next run: {dps_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
+            # Execute all registered tasks that are due
+            self.registry.execute_due_tasks(now_tz)
             
             time.sleep(1)
           except Exception as e:

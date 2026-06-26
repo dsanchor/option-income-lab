@@ -517,3 +517,34 @@ Rusty completed comprehensive scheduler analysis:
 - **Integration:** Fixed orphaned DPS scorer (config present, never wired) by adding 9 scheduler edits (~60 lines). DPS now fires nightly at 10 PM, position snapshots receive DPS scores.
 - Deferred task-registry simplification (medium-risk) for future review.
 - Reference: `scheduler_analysis.md`, decision record in `.squad/decisions.md`
+
+### Cross-Agent Note: Scheduler Registry Refactor (2026-06-26)
+
+Rusty completed a major scheduler modernization that affects the entire team:
+
+**New Architecture (TaskRegistry)**
+- Single source of truth for all 8 scheduled tasks at runtime
+- Located in `src/scheduler_registry.py` (185 lines)
+- Exposes: `register()`, `initialize_all()`, `reload_from_cosmos()`, `handle_cron_changes()`, `execute_due_tasks()`, `display_schedule()`, `get_all_task_metadata()`, `trigger_task_now()`, `update_task_enabled()`
+
+**DPS Scorer Removed**
+- Task removed: Standalone DPS nightly job (`0 22 * * 1-5`)
+- Reason: Monitoring agents (covered_call, cash_secured_put, buy_tracker, open_call_monitor, open_put_monitor) already compute DPS real-time every 4 hours
+- Real-time approach (4x/day) is better than nightly batch (1x/day, stale data)
+- No impact on agent instructions or logic — only scheduler plumbing
+
+**Code Reduction**
+- `src/main.py`: 1266 → 736 lines (41% reduction, -530 lines)
+- New task integration: 50+ lines → 2 lines (96% effort reduction)
+- Web UI duplication: -150 lines in `web/app.py` context builder
+
+**Consistency Improvement**
+- All 8 tasks now uniformly expose: enabled checkbox, cron, last_run, next_run, run_now button
+- Enable-gating guarantee: disabled tasks WILL NOT execute
+
+**No Breaking Changes**
+- All reschedule_X() web UI methods preserved
+- Config hierarchy unchanged (default in config.yaml + CosmosDB override)
+- Same task set (minus redundant DPS), same crons, same execution logic
+
+Impact on your work: None. This is pure scheduler infrastructure. Your decision logic, agent instructions, and trading strategy remain unchanged.
