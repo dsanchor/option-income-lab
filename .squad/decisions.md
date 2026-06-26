@@ -3275,3 +3275,74 @@ Use a lazy-loaded position snapshot chart in `symbol_detail.html` backed by a de
 
 ### Integration
 The snapshot chart consumes data from Linus's `position_snapshots` CosmosDB container via the API boundary, following the documented position snapshot schema and retention model.
+
+---
+
+## Rusty — DPS Scheduler Integration
+
+**Date:** 2026-06-26  
+**Author:** Rusty (Agent Dev)  
+**Status:** ✅ Implemented  
+**Impact:** Bug fix — critical missing scheduler
+
+### Context
+
+The DPS (Deterministic Position Scorer) was fully implemented with:
+- Scoring logic in `src/dps_scorer.py` (992 lines)
+- Cron wrapper in `src/dps_cron.py` (173 lines)
+- Config entry in `config.yaml`: `dps_scorer.cron: "0 22 * * 1-5"` (nightly 10 PM)
+
+But it was **never wired into the scheduler** in `src/main.py`. The task existed in config, the code existed, but it never ran.
+
+### Problem
+
+Active option positions were not receiving DPS scores in their snapshots. The nightly DPS job (configured to run at 10 PM weekdays) never executed because `src/main.py` had no DPS scheduler block.
+
+### Decision
+
+Integrate DPS scheduler into the main scheduler loop, following the existing pattern used by the other 8 scheduled tasks.
+
+### Implementation
+
+**Files Changed:**
+- `src/main.py` — 9 edits, ~60 lines added
+
+**Changes:**
+1. Added `_dps_cron_changed` flag to `__init__` (line 89)
+2. Added `reschedule_dps(new_cron)` method (lines 135-140)
+3. Added DPS config logging in `setup()` (lines 277-283)
+4. Added `run_dps_job()` + `_run_dps_async()` methods (lines 478-503)
+5. Added DPS config reload logic in `_reload_config_from_cosmos()` (lines 789-809)
+6. Added DPS cron initialization in `run()` (lines 883-892)
+7. Added DPS to initial schedule display (lines 993-995)
+8. Added DPS cron change handler (lines 1207-1219)
+9. Added DPS execution block in main loop (lines 1228-1235)
+
+**Pattern Followed:**
+Mirrored the structure of `portfolio_enrichment` scheduler (8th task) to ensure consistency.
+
+### Impact
+
+**Before:** DPS never ran, position snapshots missing DPS scores.  
+**After:** DPS runs nightly at 10 PM (UTC, configurable), position snapshots receive DPS scores.
+
+**No Breaking Changes:** Purely additive — existing tasks unaffected.
+
+### Validation
+
+- ✅ Import test: `python3 -c "from src import main"` — successful
+- ✅ Method exists: `run_dps_job()` confirmed at line 478
+- ✅ Scheduler blocks: DPS config, initialization, reload, execution all present
+
+### Alternatives Considered
+
+None — this was a bug fix, not a design choice. The only alternative was to remove the orphaned config/code, but DPS is a valuable feature.
+
+### Lessons Learned
+
+**Risk:** Config entries without scheduler wiring can go unnoticed.  
+**Prevention:** Grep for `cron` in config.yaml and cross-reference with `src/main.py` scheduler blocks.
+
+### Related Work
+
+See `scheduler_analysis.md` for full scheduler architecture documentation and deferred improvement recommendations.

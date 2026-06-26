@@ -814,3 +814,66 @@ Implemented clean cut replacement of all TradingView data fetching with yfinance
 - Buy tracker follows the existing watchlist-agent pipeline: `src/buy_tracker_agent.py` mirrors the CSP runner and plugs into `AgentRunner.run_symbol_agent()` with a dedicated `buy_tracker` agent type.
 - Buy tracker wiring spans `src/cosmos_db.py`, `src/main.py`, `web/app.py`, `web/templates/symbol_detail.html`, and `web/templates/symbols.html`; the watchlist flag must exist in CosmosDB, scheduler triggers, API payloads, and both symbol management UIs together.
 - `src/buy_tracker_instructions.py` constrains the new agent to `BUY` or `WAIT` outputs only, so backend alert plumbing and badge/rendering need BUY-aware handling rather than SELL-only assumptions.
+
+## 2026-06-26 — Scheduler Analysis & DPS Fix
+
+### Analysis Performed
+- Traced scheduler architecture: entrypoints (run.py), control flow, cron mechanism
+- Identified 9 scheduled tasks (8 active + 1 orphaned)
+- Documented scheduling mechanism: croniter-based, 1s polling, per-task error isolation
+- Discovered critical bug: DPS cron configured but never scheduled
+
+### Task Inventory
+| Task | Cadence | Module |
+|------|---------|--------|
+| Monitor Agents | `30 9-16/4 * * 1-5` | 5 agents: covered_call, cash_secured_put, buy_tracker, open_call_monitor, open_put_monitor |
+| Summary Agent | `0 8 * * *` | runner.run_summary_agent() |
+| Plan Monitor | `0 4,16 * * 1-5` | runner.run_plan_monitor() |
+| Options Chain | `0 * * * *` | options_chain_cache.refresh_all() |
+| DGI Screener | `0 6 * * 1-5` | run_dgi_screener() |
+| Dashboard Banner | `0 5 * * *` | run_banner_agent() |
+| Calendar Sync | `0 5 * * 1-5` | yfinance earnings/ex-div fetch |
+| Portfolio Enrichment | `0 9-17 * * 1-5` | run_portfolio_enrichment() |
+| **DPS Scorer** | `0 22 * * 1-5` | run_dps_cron() — **WAS ORPHANED** |
+
+### Critical Fix Applied
+**Problem:** DPS scoring configured in config.yaml (`dps_scorer.cron`) but never scheduled in main.py.
+
+**Solution:** Integrated DPS scheduler into main loop:
+- Added `_dps_cron_changed` flag (line 89)
+- Added `reschedule_dps()` method (lines 135-140)
+- Added DPS config display in setup() (lines 277-283)
+- Added DPS job methods: `run_dps_job()` + `_run_dps_async()` (lines 478-503)
+- Added DPS config reload logic (lines 789-809)
+- Added DPS cron initialization (lines 883-892)
+- Added DPS display in initial schedule (lines 993-995)
+- Added DPS cron change handler (lines 1207-1219)
+- Added DPS execution block in main loop (lines 1228-1235)
+
+**Impact:** DPS scoring now runs nightly at 10 PM as configured. Position snapshots will receive DPS scores.
+
+**Files Modified:**
+- `src/main.py`: 9 edits (added ~60 lines for DPS scheduler integration)
+
+### Learnings
+- **Scheduler pattern:** `croniter` + 1s polling, per-task flags for config changes
+- **Config overlay:** config.yaml defaults + CosmosDB live overrides (reloaded every 60s)
+- **Error isolation:** try/except per task prevents cascade failures
+- **Market hours:** Live bid/ask probe (market_hours.py) but NOT used by scheduler — cron-based only
+- **Orphaned code risk:** Config entries without scheduler wiring can go unnoticed
+
+### Key File Paths
+- Main scheduler: `src/main.py` (1153 → 1213 lines)
+- DPS cron logic: `src/dps_cron.py` (173 lines)
+- Config loader: `src/config.py` (265 lines)
+- Market hours probe: `src/market_hours.py` (99 lines)
+- Entrypoint: `run.py` (146 lines)
+
+### Deferred Recommendations
+1. **Task Registry Abstraction** — reduce 50+ line boilerplate per task to 1 registration line (medium risk, needs testing)
+2. **Config Reload Optimization** — add version check to skip reload if unchanged (low risk, requires schema change)
+3. **Error Aggregator** — centralized task stats for observability (low risk, safe to apply)
+4. **Symbol List Cleanup** — move DGI 500+ tickers to external file (cosmetic, low priority)
+
+See `scheduler_analysis.md` for full architecture documentation.
+

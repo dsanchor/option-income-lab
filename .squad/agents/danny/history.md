@@ -508,3 +508,12 @@ tradingview:
 
 **Decision doc:** `.squad/decisions/inbox/danny-position-snapshots.md`
 **Status:** Proposed — ready for implementation
+
+### Scheduler Architecture & DPS Integration (2026-06-26)
+Rusty completed comprehensive scheduler analysis:
+- Documented croniter-based 1s polling loop in `src/main.py` with 9 independent scheduled tasks
+- Each task has: enabled flag, cron expression, next_run timestamp
+- Sequential execution (no parallelism); per-task try/except prevents full crash on failure
+- **Integration:** Fixed orphaned DPS scorer (config present, never wired) by adding 9 scheduler edits (~60 lines). DPS now fires nightly at 10 PM, position snapshots receive DPS scores.
+- Deferred task-registry simplification (medium-risk) for future review.
+- Reference: `scheduler_analysis.md`, decision record in `.squad/decisions.md`

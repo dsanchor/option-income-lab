@@ -1892,3 +1892,11 @@ Renamed all 14 instruction files to drop the misleading `tv_` prefix (leftover f
 
 ### Position Snapshot Chart Frontend (2026-06-04)
 Rusty implemented the frontend chart in `symbol_detail.html` that lazy-loads position snapshot history when a position detail drawer expands. The chart consumes snapshots via the dedicated API endpoint `/api/symbols/{symbol}/positions/{position_id}/snapshots`, rendering gap %, RSI, and MACD using Chart.js with dual axes. This completes the end-to-end pipeline from your backend persistence layer to the user-facing visualization.
+
+### Scheduler Analysis & DPS Integration (2026-06-26)
+Rusty analyzed the complete scheduler architecture and fixed a critical bug:
+- **Architecture:** Croniter-based 1s polling loop in `src/main.py` manages 9 independent tasks (portfolio enrichment, market hours detection, DPS, etc.)
+- **Each task:** Has enabled flag, cron expression, next_run timestamp; independent try/except prevents cascade failures
+- **Bug Fix:** DPS scorer (Deterministic Position Scorer) was fully implemented (`src/dps_cron.py`, `src/dps_scorer.py`) with config entry but never wired into scheduler. Rusty integrated it: 9 edits to `src/main.py` (~60 lines). DPS now fires nightly at 10 PM (configurable), position snapshots receive DPS scores.
+- **Deferred:** Task-registry simplification (medium-risk refactor) flagged for future review.
+- **Reference:** `scheduler_analysis.md` (architecture doc), decision record in `.squad/decisions.md`

@@ -87,6 +87,7 @@ class OptionsAgentScheduler:
         self._banner_cron_changed = False
         self._calendar_cron_changed = False
         self._portfolio_enrichment_cron_changed = False
+        self._dps_cron_changed = False
         self._last_config_reload = None
         self._config_reload_interval = 60  # seconds
         self._last_heartbeat = 0  # epoch for periodic heartbeat log
@@ -131,6 +132,13 @@ class OptionsAgentScheduler:
         pe_config['cron'] = new_cron
         self.config.config['portfolio_enrichment'] = pe_config
         self._portfolio_enrichment_cron_changed = True
+
+    def reschedule_dps(self, new_cron: str):
+        """Update DPS scorer cron expression."""
+        dps_config = self.config.config.get('dps_scorer', {})
+        dps_config['cron'] = new_cron
+        self.config.config['dps_scorer'] = dps_config
+        self._dps_cron_changed = True
 
     def reschedule_banner(self, new_cron: str):
         """Update banner agent cron expression. The run loop will pick it up on next iteration."""
@@ -259,6 +267,17 @@ class OptionsAgentScheduler:
         print(f"  Enabled: {calendar_enabled}")
         if calendar_enabled:
             print(f"  Cron: {calendar_cron}")
+        else:
+            print(f"  Status: Disabled in config")
+
+        dps_config = self.config.config.get('dps_scorer', {})
+        dps_enabled = dps_config.get('enabled', True)
+        dps_cron = dps_config.get('cron', '0 22 * * 1-5')
+
+        print(f"\nDPS Scorer Configuration:")
+        print(f"  Enabled: {dps_enabled}")
+        if dps_enabled:
+            print(f"  Cron: {dps_cron}")
         else:
             print(f"  Status: Disabled in config")
     
@@ -455,6 +474,33 @@ class OptionsAgentScheduler:
                   f"{result.get('errors', 0)} errors")
         except Exception as e:
             print(f"ERROR during Portfolio Enrichment: {e}")
+
+    def run_dps_job(self):
+        """Execute DPS scorer (bridges async to sync for scheduler)."""
+        _run_async(self._run_dps_async())
+
+    async def _run_dps_async(self):
+        """Run DPS scorer if enabled in config."""
+        dps_config = self.config.config.get('dps_scorer', {})
+        if not dps_config.get('enabled', True):
+            print("⏭️  DPS Scorer disabled in config")
+            return
+
+        from .dps_cron import run_dps_cron
+        from .yfinance_data_provider import get_shared_provider
+
+        now_tz = _now_local()
+        print(f"\n{'📐'*35}")
+        print(f"📐 DPS Scorer - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"{'📐'*35}\n")
+
+        try:
+            yf_provider = get_shared_provider(getattr(self.config, 'yfinance_config', None))
+            result = await run_dps_cron(self.cosmos, yf_provider)
+            print(f"DPS Scorer complete: {result.get('processed', 0)} processed, "
+                  f"{result.get('skipped', 0)} skipped, {result.get('failed', 0)} failed")
+        except Exception as e:
+            print(f"ERROR during DPS Scorer: {e}")
 
     def run_banner_agent_job(self):
         """Execute banner agent (bridges async to sync for scheduler)."""
@@ -738,6 +784,29 @@ class OptionsAgentScheduler:
             if pe_cron_changed:
                 self._portfolio_enrichment_cron_changed = True
                 print(f"✓ Config reloaded from CosmosDB: portfolio enrichment cron changed to {new_pe_cron}")
+
+            # Check DPS scorer settings
+            dps_settings = cosmos_settings.get('dps_scorer', {})
+            new_dps_cron = dps_settings.get('cron')
+            current_dps_cron = self.config.config.get('dps_scorer', {}).get('cron', '0 22 * * 1-5')
+
+            dps_cron_changed = False
+            if new_dps_cron and new_dps_cron != current_dps_cron:
+                if 'dps_scorer' not in self.config.config:
+                    self.config.config['dps_scorer'] = {}
+                self.config.config['dps_scorer']['cron'] = new_dps_cron
+                dps_cron_changed = True
+
+            if dps_settings:
+                if 'dps_scorer' not in self.config.config:
+                    self.config.config['dps_scorer'] = {}
+                for key in ['enabled']:
+                    if key in dps_settings:
+                        self.config.config['dps_scorer'][key] = dps_settings[key]
+
+            if dps_cron_changed:
+                self._dps_cron_changed = True
+                print(f"✓ Config reloaded from CosmosDB: DPS scorer cron changed to {new_dps_cron}")
                 
         except Exception as e:
             # Don't crash the scheduler on config reload errors
@@ -810,6 +879,13 @@ class OptionsAgentScheduler:
         pe_cron_expr = pe_config.get('cron', '0 9-17 * * 1-5')
         pe_next_run = None
         pe_cron = None
+
+        # Initialize DPS scorer cron (if enabled)
+        dps_config = self.config.config.get('dps_scorer', {})
+        dps_enabled = dps_config.get('enabled', True)
+        dps_cron_expr = dps_config.get('cron', '0 22 * * 1-5')
+        dps_next_run = None
+        dps_cron = None
         
         if summary_enabled:
             try:
@@ -873,6 +949,15 @@ class OptionsAgentScheduler:
                 print(f"⚠️  Invalid portfolio enrichment cron expression '{pe_cron_expr}': {e}")
                 print(f"⚠️  Portfolio enrichment scheduling disabled")
                 pe_enabled = False
+
+        if dps_enabled:
+            try:
+                dps_cron = croniter(dps_cron_expr, now_tz)
+                dps_next_run = dps_cron.get_next(datetime)
+            except (ValueError, KeyError) as e:
+                print(f"⚠️  Invalid DPS scorer cron expression '{dps_cron_expr}': {e}")
+                print(f"⚠️  DPS scorer scheduling disabled")
+                dps_enabled = False
         
         # Display initial schedule
         print(f"\nMonitor Agents        - Next run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
@@ -904,6 +989,10 @@ class OptionsAgentScheduler:
             print(f"Portfolio Enrichment  - Next run: {pe_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         else:
             print(f"Portfolio Enrichment  - Disabled")
+        if dps_enabled and dps_next_run:
+            print(f"DPS Scorer            - Next run: {dps_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        else:
+            print(f"DPS Scorer            - Disabled")
         
         # Track when we last reloaded config
         self._last_config_reload = time.time()
@@ -1046,6 +1135,21 @@ class OptionsAgentScheduler:
                     print(f"⚠️  Invalid portfolio enrichment cron expression '{pe_cron_expr}': {e}")
                     pe_enabled = False
 
+            if self._dps_cron_changed:
+                self._dps_cron_changed = False
+                dps_config = self.config.config.get('dps_scorer', {})
+                dps_cron_expr = dps_config.get('cron', '0 22 * * 1-5')
+                try:
+                    now_tz = _now_local()
+                    dps_cron = croniter(dps_cron_expr, now_tz)
+                    dps_next_run = dps_cron.get_next(datetime)
+                    dps_enabled = dps_config.get('enabled', True)
+                    print(f"DPS scorer cron rescheduled to: {dps_cron_expr}")
+                    print(f"Next scheduled run: {dps_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
+                except (ValueError, KeyError) as e:
+                    print(f"⚠️  Invalid DPS scorer cron expression '{dps_cron_expr}': {e}")
+                    dps_enabled = False
+
             now_tz = _now_local()
             
             # Check main scheduler
@@ -1118,6 +1222,15 @@ class OptionsAgentScheduler:
                     print(f"❌ SCHEDULER ERROR in portfolio_enrichment: {e}")
                 pe_next_run = pe_cron.get_next(datetime)
                 print(f"Portfolio Enrichment  - Next run: {pe_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
+
+            # Check DPS scorer scheduler
+            if dps_enabled and dps_next_run and now_tz >= dps_next_run:
+                try:
+                    self.run_dps_job()
+                except Exception as e:
+                    print(f"❌ SCHEDULER ERROR in dps_scorer: {e}")
+                dps_next_run = dps_cron.get_next(datetime)
+                print(f"DPS Scorer            - Next run: {dps_next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
             
             time.sleep(1)
           except Exception as e:
