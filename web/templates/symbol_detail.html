@@ -350,40 +350,34 @@
                                     <div class="detail-value mono">${{ pos.source.underlying_price }}</div>
                                 </div>
                                 {% endif %}
-                                {% if pos.source.premium is not none %}
                                 <div class="detail-field">
                                     <div class="detail-label">Premium</div>
                                     <div class="detail-value mono premium-editable" data-symbol="{{ symbol_doc.symbol }}" data-pos-id="{{ pos.position_id }}">
-                                        <span class="premium-display" title="Click to edit">${{ pos.source.premium }}</span>
+                                        {% if pos._display_premium is not none %}
+                                        <span class="premium-display" title="Click to edit">${{ "%.2f"|format(pos._display_premium) }}</span>
                                         <div class="premium-edit" style="display:none;">
-                                            <input type="number" step="0.01" class="input-field premium-input" value="{{ pos.source.premium }}" style="width:80px; font-size:0.85rem;">
+                                            <input type="number" step="0.01" class="input-field premium-input" value="{{ pos._display_premium }}" style="width:80px; font-size:0.85rem;">
                                             <button class="btn-sm btn-primary premium-save">✓</button>
                                             <button class="btn-sm premium-cancel">✗</button>
                                         </div>
-                                    </div>
-                                </div>
-                                {% endif %}
-                                {% if pos.source.premium is none %}
-                                <div class="detail-field">
-                                    <div class="detail-label">Premium</div>
-                                    <div class="detail-value mono premium-editable" data-symbol="{{ symbol_doc.symbol }}" data-pos-id="{{ pos.position_id }}">
+                                        {% else %}
                                         <span class="premium-display" title="Click to edit" style="color:var(--text-muted, #8d969e);">N/A</span>
                                         <div class="premium-edit" style="display:none;">
                                             <input type="number" step="0.01" class="input-field premium-input" value="" style="width:80px; font-size:0.85rem;">
                                             <button class="btn-sm btn-primary premium-save">✓</button>
                                             <button class="btn-sm premium-cancel">✗</button>
                                         </div>
+                                        {% endif %}
                                     </div>
                                 </div>
-                                {% endif %}
                                 {% if pos.rolled_to %}
                                 <div class="detail-field">
                                     <div class="detail-label">Buyback Cost</div>
                                     <div class="detail-value mono buyback-editable" data-symbol="{{ symbol_doc.symbol }}" data-pos-id="{{ pos.position_id }}">
-                                        {% if pos.buyback_cost is defined and pos.buyback_cost is not none %}
-                                        <span class="buyback-display" title="Click to edit">${{ pos.buyback_cost }}</span>
+                                        {% if pos._display_buyback is not none %}
+                                        <span class="buyback-display" title="Click to edit">${{ "%.2f"|format(pos._display_buyback) }}</span>
                                         <div class="buyback-edit" style="display:none;">
-                                            <input type="number" step="0.01" class="input-field buyback-input" value="{{ pos.buyback_cost }}" style="width:80px; font-size:0.85rem;">
+                                            <input type="number" step="0.01" class="input-field buyback-input" value="{{ pos._display_buyback }}" style="width:80px; font-size:0.85rem;">
                                             <button class="btn-sm btn-primary buyback-save">✓</button>
                                             <button class="btn-sm buyback-cancel">✗</button>
                                         </div>
@@ -459,22 +453,31 @@
                                 <div class="detail-field">
                                     <div class="detail-label">Premium</div>
                                     <div class="detail-value mono premium-editable" data-symbol="{{ symbol_doc.symbol }}" data-pos-id="{{ pos.position_id }}">
+                                        {% if pos._display_premium is not none %}
+                                        <span class="premium-display" title="Click to edit">${{ "%.2f"|format(pos._display_premium) }}</span>
+                                        <div class="premium-edit" style="display:none;">
+                                            <input type="number" step="0.01" class="input-field premium-input" value="{{ pos._display_premium }}" style="width:80px; font-size:0.85rem;">
+                                            <button class="btn-sm btn-primary premium-save">✓</button>
+                                            <button class="btn-sm premium-cancel">✗</button>
+                                        </div>
+                                        {% else %}
                                         <span class="premium-display" title="Click to edit" style="color:var(--text-muted, #8d969e);">N/A</span>
                                         <div class="premium-edit" style="display:none;">
                                             <input type="number" step="0.01" class="input-field premium-input" value="" style="width:80px; font-size:0.85rem;">
                                             <button class="btn-sm btn-primary premium-save">✓</button>
                                             <button class="btn-sm premium-cancel">✗</button>
                                         </div>
+                                        {% endif %}
                                     </div>
                                 </div>
                                 {% if pos.rolled_to %}
                                 <div class="detail-field">
                                     <div class="detail-label">Buyback Cost</div>
                                     <div class="detail-value mono buyback-editable" data-symbol="{{ symbol_doc.symbol }}" data-pos-id="{{ pos.position_id }}">
-                                        {% if pos.buyback_cost is defined and pos.buyback_cost is not none %}
-                                        <span class="buyback-display" title="Click to edit">${{ pos.buyback_cost }}</span>
+                                        {% if pos._display_buyback is not none %}
+                                        <span class="buyback-display" title="Click to edit">${{ "%.2f"|format(pos._display_buyback) }}</span>
                                         <div class="buyback-edit" style="display:none;">
-                                            <input type="number" step="0.01" class="input-field buyback-input" value="{{ pos.buyback_cost }}" style="width:80px; font-size:0.85rem;">
+                                            <input type="number" step="0.01" class="input-field buyback-input" value="{{ pos._display_buyback }}" style="width:80px; font-size:0.85rem;">
                                             <button class="btn-sm btn-primary buyback-save">✓</button>
                                             <button class="btn-sm buyback-cancel">✗</button>
                                         </div>

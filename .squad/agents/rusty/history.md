@@ -1173,3 +1173,32 @@ Evidence that disabled tasks do NOT execute:
 - **Centralized last_run resolution:** The helper pattern (`resolve_last_run()` + per-task source lookup) keeps the code DRY. Future tasks inherit restart-durable last_run automatically if they have a persisted timestamp source.
 - **Task-specific Cosmos queries:** Each task has a natural "most recent execution" signal in Cosmos (activities, notes, entries, docs). Reuse those instead of adding new timestamp fields.
 - **Template consistency:** When a refactor unifies scheduler UI (like the TaskRegistry did), audit ALL sections to ensure uniform coverage (enabled, cron, last_run, next_run, Run Now). Gaps are easy to miss if some sections were partially migrated.
+
+## Learnings
+
+### Position Premium/Buyback Data Shape and Display Normalization (2026-06-26)
+
+**Root Cause:** The economics page and symbol detail page were using different logic to access premium/buyback values, causing display inconsistencies.
+
+**Data Storage Locations:**
+- **Premium:** Always stored at `position["source"]["premium"]` (nested)
+  - Set during position creation from activities (web/app.py:816, 883, 951, 1020)
+  - Can be number, string (e.g., "1.50"), or None/missing
+  - `source` itself can be None, non-dict, or missing in early/malformed data
+- **Buyback:** Always stored at `position["buyback_cost"]` (top-level)
+  - Set during manual roll (web/app.py:1058) or via update_position_buyback_cost (src/cosmos_db.py:513)
+  - Can be number, string, or None/missing
+  - Semantically only meaningful when `position["rolled_to"]` exists, but can exist independently
+
+**Display Path Divergence (the bug):**
+- **Economics path** (web/app.py:216-230): Normalizes `source` to {} if not dict, uses `_parse_numeric()` (tolerant parser accepting numbers, numeric strings, strips "$"/",", treats "N/A" as None)
+- **Symbol detail template** (web/templates/symbol_detail.html:353, 377): Direct Jinja2 access to `pos.source.premium` and `pos.buyback_cost` without normalization
+  - If `source` is not a dict, Jinja2 returns Undefined → unexpected behavior
+  - If premium/buyback is a string like "N/A", template renders it raw instead of parsing
+
+**The Fix (web/app.py:2120-2131, web/templates/symbol_detail.html:353-394, 453-485):**
+1. Added normalization in `symbol_detail_page` route: for each position, compute `_display_premium` and `_display_buyback` using the same `_parse_numeric()` logic as economics
+2. Updated template to use these normalized fields with `"%.2f"|format` for consistent display
+3. Both pages now agree: economics counts a position ⟺ symbol detail shows it
+
+**Key Insight:** Always normalize user-facing data at the READ boundary (route handler), not in the template. This ensures consistency across all display paths and centralizes the parsing logic.

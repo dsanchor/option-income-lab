@@ -3624,3 +3624,109 @@ The pre-refactor code (before 16dcbec) derived `last_run` from persisted Cosmos 
 2. **Add `last_run` persistence to TaskRegistry itself** → Store in Cosmos `settings` container alongside cron/enabled
 
 ---
+
+## 27. Premium/Buyback Display Normalization
+
+**Date:** 2026-06-26  
+**Status:** ✅ Implemented  
+**Agent:** Rusty (Agent Dev)  
+**Requested by:** dsanchor
+
+### Problem
+
+Premium and buyback cost values sometimes displayed as "N/A" on the symbol detail page even though the economics page correctly showed and counted those values for the same positions.
+
+### Root Cause
+
+**Data shape inconsistency** between the economics aggregation path and the symbol detail display path:
+
+1. **Economics path** (`web/app.py` line 216-230):
+   - Normalizes `source` to `{}` if not a dict
+   - Uses `_parse_numeric()` for tolerant parsing (accepts numbers, numeric strings like "1.50", strips "$" and commas, treats "N/A" as None)
+   - Skips positions where premium parses to None
+
+2. **Symbol detail template** (`web/templates/symbol_detail.html`):
+   - Direct Jinja2 access: `pos.source.premium` and `pos.buyback_cost`
+   - No normalization or parsing
+   - If `source` is None/non-dict → Jinja2 returns Undefined → unpredictable rendering
+   - If premium is a string "N/A" or other non-numeric → renders raw string
+
+**Result:** Economics uses tolerant parsing and shows/counts valid values, while the template directly accesses potentially malformed data and shows "N/A" for the same position.
+
+### Data Model Facts
+
+- **Premium location:** `position["source"]["premium"]` (nested in source dict)
+  - Written by: `api_add_position`, `api_add_position_from_activity`, `api_roll_position_from_activity`, `api_manual_roll_position`
+  - Can be: number, numeric string, None, or missing
+  - `source` can be: dict, None, non-dict (string, number), or missing
+
+- **Buyback location:** `position["buyback_cost"]` (top-level)
+  - Written by: manual roll endpoint, `update_position_buyback_cost`
+  - Can be: number, numeric string, None, or missing
+  - Semantically tied to `rolled_to` (template only shows buyback if position was rolled)
+
+### Decision
+
+**Normalize premium and buyback at the READ boundary** (in the route handler) using the same logic as economics, rather than in the template.
+
+#### Implementation
+
+**Changed files:**
+1. `web/app.py` (line 2120-2131): Added normalization in `symbol_detail_page` route
+   ```python
+   # Normalize premium and buyback for display (same logic as economics)
+   source = pos.get("source")
+   if not isinstance(source, dict):
+       source = {}
+   pos["_display_premium"] = _parse_numeric(source.get("premium"))
+   pos["_display_buyback"] = _parse_numeric(pos.get("buyback_cost"))
+   ```
+
+2. `web/templates/symbol_detail.html`:
+   - Lines 353-372: Updated premium display to use `pos._display_premium` with `"%.2f"|format` filter
+   - Lines 373-394: Updated buyback display to use `pos._display_buyback` with `"%.2f"|format` filter
+   - Lines 453-485: Updated manual position section to also use normalized fields
+
+#### Benefits
+
+✅ **Consistency:** Economics and symbol detail pages now show identical values  
+✅ **Robustness:** Handles all data shapes (strings, None, missing, non-dict source)  
+✅ **Centralized logic:** Single source of truth (`_parse_numeric`) for numeric parsing  
+✅ **Clean templates:** Templates render pre-normalized data, no complex logic in Jinja2
+
+### Validation
+
+✅ `python3 -c "import web.app"` — imports successfully  
+✅ `python3 -c "from src import main"` — imports successfully  
+✅ Custom validation tests — all passed (7/7 test cases covering various data shapes)  
+✅ `python3 -m pytest tests/ -q` — 4 pre-existing failures (economics/yfinance), no new failures
+
+**Test coverage:**
+- Normal numeric values (1.50, 0.50) → parsed correctly
+- String values ("2.25", "$3.50") → parsed correctly
+- Missing source dict (None) → premium=None (correct fallback)
+- Non-dict source ("manual", 1) → premium=None (correct fallback)
+- String "N/A" → premium=None (correct, avoids displaying "$N/A")
+- Buyback without `rolled_to` → shown in economics, hidden in UI (by design)
+
+### Alternatives Considered
+
+❌ **Fix the template directly:** Add parsing logic in Jinja2
+  - Rejected: Duplicates business logic, harder to maintain, poor separation of concerns
+
+❌ **Normalize on write:** Ensure all writes store numeric values
+  - Rejected: Could corrupt existing data; doesn't handle legacy/malformed data; read-time normalization is safer
+
+### Notes
+
+- **No write-path changes:** Values continue to be stored as-is (preserves existing data)
+- **Backwards compatible:** Handles both old (potentially malformed) and new data
+- **Template semantic:** Buyback only shown when `rolled_to` exists (unchanged from original design)
+
+### Related Files
+
+- `web/app.py` (symbol_detail_page route, _parse_numeric helper)
+- `web/templates/symbol_detail.html` (premium/buyback display sections)
+- `.squad/agents/rusty/history.md` (data shape documentation)
+
+---

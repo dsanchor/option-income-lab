@@ -2122,6 +2122,14 @@ async def symbol_detail_page(request: Request, symbol: str):
         if mon:
             pos["_assignment_risk"] = mon.get("assignment_risk")
             pos["_moneyness"] = mon.get("moneyness")
+        
+        # Normalize premium and buyback for display (same logic as economics)
+        # This ensures the UI shows values consistently with the economics page
+        source = pos.get("source")
+        if not isinstance(source, dict):
+            source = {}
+        pos["_display_premium"] = _parse_numeric(source.get("premium"))
+        pos["_display_buyback"] = _parse_numeric(pos.get("buyback_cost"))
 
     # Gather alerts separately for latest_sell_alerts computation
     alerts: List[Dict] = []
