@@ -2978,6 +2978,18 @@ def _build_settings_config_context(
         except Exception:
             return iso_str
     
+    # Helper to get raw ISO timestamp (for client-side relative time calculations)
+    def to_iso(iso_str):
+        """Return normalized ISO string with timezone, or empty string."""
+        if not iso_str:
+            return ""
+        try:
+            dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+            # Return ISO format with timezone (UTC)
+            return dt.astimezone(timezone.utc).isoformat()
+        except Exception:
+            return ""
+    
     # Unified helper to get last_run (prefers in-memory, falls back to persisted)
     def resolve_last_run(task_name: str, in_memory_last_run: str) -> str:
         """Resolve last_run: prefer in-memory, else persisted from Cosmos."""
@@ -2987,6 +2999,15 @@ def _build_settings_config_context(
         persisted = get_persisted_last_run(task_name)
         return fmt_time(persisted)
     
+    # Unified helper to get raw last_run ISO (for client-side relative time)
+    def resolve_last_run_iso(task_name: str, in_memory_last_run: str) -> str:
+        """Resolve last_run as ISO string: prefer in-memory, else persisted from Cosmos."""
+        if in_memory_last_run:
+            return to_iso(in_memory_last_run)
+        # Fall back to persisted timestamp
+        persisted = get_persisted_last_run(task_name)
+        return to_iso(persisted)
+    
     # Build backward-compatible individual task variables for template
     # (Until template is refactored to use scheduler_tasks loop)
     monitoring = tasks_by_name.get("monitor_agents", {})
@@ -2994,48 +3015,64 @@ def _build_settings_config_context(
     cron_expr = monitoring.get("cron", "30 9-16/4 * * 1-5")
     monitoring_last_run = resolve_last_run("monitor_agents", monitoring.get("last_run"))
     monitoring_next_run = fmt_time(monitoring.get("next_run"))
+    monitoring_last_run_iso = resolve_last_run_iso("monitor_agents", monitoring.get("last_run"))
+    monitoring_next_run_iso = to_iso(monitoring.get("next_run"))
     
     summary = tasks_by_name.get("summary_agent", {})
     summary_enabled = summary.get("enabled", True)
     summary_cron = summary.get("cron", "0 8 * * *")
     summary_last_run = resolve_last_run("summary_agent", summary.get("last_run"))
     summary_next_run = fmt_time(summary.get("next_run"))
+    summary_last_run_iso = resolve_last_run_iso("summary_agent", summary.get("last_run"))
+    summary_next_run_iso = to_iso(summary.get("next_run"))
     
     plan_monitor = tasks_by_name.get("plan_monitor", {})
     plan_monitor_enabled = plan_monitor.get("enabled", True)
     plan_monitor_cron = plan_monitor.get("cron", "0 4,16 * * 1-5")
     plan_monitor_last_run = resolve_last_run("plan_monitor", plan_monitor.get("last_run"))
     plan_monitor_next_run = fmt_time(plan_monitor.get("next_run"))
+    plan_monitor_last_run_iso = resolve_last_run_iso("plan_monitor", plan_monitor.get("last_run"))
+    plan_monitor_next_run_iso = to_iso(plan_monitor.get("next_run"))
     
     options_chain = tasks_by_name.get("options_chain", {})
     options_chain_enabled = options_chain.get("enabled", True)
     options_chain_cron = options_chain.get("cron", "0 * * * *")
     options_chain_last_run = resolve_last_run("options_chain", options_chain.get("last_run"))
     options_chain_next_run = fmt_time(options_chain.get("next_run"))
+    options_chain_last_run_iso = resolve_last_run_iso("options_chain", options_chain.get("last_run"))
+    options_chain_next_run_iso = to_iso(options_chain.get("next_run"))
     
     dgi = tasks_by_name.get("dgi_screener", {})
     dgi_enabled = dgi.get("enabled", True)
     dgi_cron = dgi.get("cron", "0 6 * * 1-5")
     dgi_last_run = resolve_last_run("dgi_screener", dgi.get("last_run"))
     dgi_next_run = fmt_time(dgi.get("next_run"))
+    dgi_last_run_iso = resolve_last_run_iso("dgi_screener", dgi.get("last_run"))
+    dgi_next_run_iso = to_iso(dgi.get("next_run"))
     
     banner = tasks_by_name.get("banner_agent", {})
     banner_enabled = banner.get("enabled", True)
     banner_cron = banner.get("cron", "0 5 * * *")
     banner_last_run = resolve_last_run("banner_agent", banner.get("last_run"))
     banner_next_run = fmt_time(banner.get("next_run"))
+    banner_last_run_iso = resolve_last_run_iso("banner_agent", banner.get("last_run"))
+    banner_next_run_iso = to_iso(banner.get("next_run"))
     
     calendar = tasks_by_name.get("calendar_sync", {})
     calendar_enabled = calendar.get("enabled", True)
     calendar_cron = calendar.get("cron", "0 5 * * 1-5")
     calendar_last_run = resolve_last_run("calendar_sync", calendar.get("last_run"))
     calendar_next_run = fmt_time(calendar.get("next_run"))
+    calendar_last_run_iso = resolve_last_run_iso("calendar_sync", calendar.get("last_run"))
+    calendar_next_run_iso = to_iso(calendar.get("next_run"))
     
     pe = tasks_by_name.get("portfolio_enrichment", {})
     pe_enabled = pe.get("enabled", True)
     pe_cron = pe.get("cron", "0 9-17 * * 1-5")
     pe_last_run = resolve_last_run("portfolio_enrichment", pe.get("last_run"))
     pe_next_run = fmt_time(pe.get("next_run"))
+    pe_last_run_iso = resolve_last_run_iso("portfolio_enrichment", pe.get("last_run"))
+    pe_next_run_iso = to_iso(pe.get("next_run"))
     
     return {
         "request": request,
@@ -3052,35 +3089,51 @@ def _build_settings_config_context(
         "summary_activity_count": summary_activity_count,
         "monitoring_last_run": monitoring_last_run,
         "monitoring_next_run": monitoring_next_run,
+        "monitoring_last_run_iso": monitoring_last_run_iso,
+        "monitoring_next_run_iso": monitoring_next_run_iso,
         "summary_last_run": summary_last_run,
         "summary_next_run": summary_next_run,
+        "summary_last_run_iso": summary_last_run_iso,
+        "summary_next_run_iso": summary_next_run_iso,
         "plan_monitor_enabled": plan_monitor_enabled,
         "plan_monitor_cron": plan_monitor_cron,
         "plan_monitor_last_run": plan_monitor_last_run,
         "plan_monitor_next_run": plan_monitor_next_run,
+        "plan_monitor_last_run_iso": plan_monitor_last_run_iso,
+        "plan_monitor_next_run_iso": plan_monitor_next_run_iso,
         "options_chain_enabled": options_chain_enabled,
         "options_chain_cron": options_chain_cron,
         "options_chain_last_run": options_chain_last_run,
         "options_chain_next_run": options_chain_next_run,
+        "options_chain_last_run_iso": options_chain_last_run_iso,
+        "options_chain_next_run_iso": options_chain_next_run_iso,
         "dgi_enabled": dgi_enabled,
         "dgi_cron": dgi_cron,
         "dgi_top_n": dgi_top_n,
         "dgi_symbols": dgi_symbols,
         "dgi_last_run": dgi_last_run,
         "dgi_next_run": dgi_next_run,
+        "dgi_last_run_iso": dgi_last_run_iso,
+        "dgi_next_run_iso": dgi_next_run_iso,
         "banner_enabled": banner_enabled,
         "banner_cron": banner_cron,
         "banner_max_items": banner_max_items,
         "banner_last_run": banner_last_run,
         "banner_next_run": banner_next_run,
+        "banner_last_run_iso": banner_last_run_iso,
+        "banner_next_run_iso": banner_next_run_iso,
         "calendar_enabled": calendar_enabled,
         "calendar_cron": calendar_cron,
         "calendar_last_run": calendar_last_run,
         "calendar_next_run": calendar_next_run,
+        "calendar_last_run_iso": calendar_last_run_iso,
+        "calendar_next_run_iso": calendar_next_run_iso,
         "pe_enabled": pe_enabled,
         "pe_cron": pe_cron,
         "pe_last_run": pe_last_run,
         "pe_next_run": pe_next_run,
+        "pe_last_run_iso": pe_last_run_iso,
+        "pe_next_run_iso": pe_next_run_iso,
     }
 
 

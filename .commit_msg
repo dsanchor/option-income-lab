@@ -1,0 +1,19 @@
+feat(scheduler-ui): live relative time next to Last/Next Run; docs: fix stale DPS cron in README
+
+Add live "(2h ago)" / "(in 45m)" relative time display next to Last Run and Next Run
+for all 8 scheduled tasks in Settings. Client-side vanilla JS refreshes every 30s
+with ISO timestamps in data attributes. No scheduler logic changes—purely display-additive.
+
+Also remove stale "Daily DPS Cron" documentation from README that incorrectly described
+DPS as a separate nightly cron (0 22). DPS is now computed automatically after each
+monitor run, not as a separate scheduled job.
+
+Files modified:
+- web/app.py: Added to_iso() helper, resolve_last_run_iso(), 16 *_iso context vars
+- web/templates/settings_config.html: Added data-* attributes, formatRelative()/updateAllRelativeTimes() JS
+- README.md: Removed stale DPS cron paragraph
+- .squad/decisions.md: Added decision #8 (merged from inbox)
+- .squad/orchestration-log: Added session coordination log
+- .squad/log: Added brief session log
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

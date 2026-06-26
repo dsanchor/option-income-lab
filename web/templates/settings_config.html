@@ -65,14 +65,16 @@
                     <div style="margin-top:0.75rem; display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
                         <div>
                             <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Last Run</label>
-                            <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                            <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-last-run="{{ monitoring_last_run_iso }}">
                                 {{ monitoring_last_run or "Never" }}
+                                <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                             </div>
                         </div>
                         <div>
                             <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
-                            <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                            <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-next-run="{{ monitoring_next_run_iso }}">
                                 {{ monitoring_next_run or "N/A" }}
+                                <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                             </div>
                         </div>
                     </div>
@@ -124,14 +126,16 @@
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Last Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-last-run="{{ summary_last_run_iso }}">
                             {{ summary_last_run or "Never" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-next-run="{{ summary_next_run_iso }}">
                             {{ summary_next_run or "N/A" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                 </div>
@@ -181,14 +185,16 @@
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Last Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-last-run="{{ banner_last_run_iso }}">
                             {{ banner_last_run or "Never" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-next-run="{{ banner_next_run_iso }}">
                             {{ banner_next_run or "N/A" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                 </div>
@@ -227,14 +233,16 @@
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Last Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-last-run="{{ calendar_last_run_iso }}">
                             {{ calendar_last_run or "Never" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-next-run="{{ calendar_next_run_iso }}">
                             {{ calendar_next_run or "N/A" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                 </div>
@@ -275,14 +283,16 @@
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Last Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-last-run="{{ options_chain_last_run_iso }}">
                             {{ options_chain_last_run or "Never" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-next-run="{{ options_chain_next_run_iso }}">
                             {{ options_chain_next_run or "N/A" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                 </div>
@@ -342,14 +352,16 @@
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Last Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-last-run="{{ dgi_last_run_iso }}">
                             {{ dgi_last_run or "Never" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-next-run="{{ dgi_next_run_iso }}">
                             {{ dgi_next_run or "N/A" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                 </div>
@@ -389,14 +401,16 @@
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Last Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-last-run="{{ pe_last_run_iso }}">
                             {{ pe_last_run or "Never" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-next-run="{{ pe_next_run_iso }}">
                             {{ pe_next_run or "N/A" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                 </div>
@@ -435,14 +449,16 @@
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Last Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-last-run="{{ plan_monitor_last_run_iso }}">
                             {{ plan_monitor_last_run or "Never" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
-                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-next-run="{{ plan_monitor_next_run_iso }}">
                             {{ plan_monitor_next_run or "N/A" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
                         </div>
                     </div>
                 </div>
@@ -497,6 +513,55 @@
 {% block scripts %}
 <script>
 (function() {
+    // Relative time formatter (DRY helper for all 8 tasks)
+    function formatRelative(isoStr) {
+        if (!isoStr) return '';
+        try {
+            var dt = new Date(isoStr);
+            if (isNaN(dt.getTime())) return '';
+            
+            var now = new Date();
+            var deltaMs = dt.getTime() - now.getTime();
+            var isPast = deltaMs < 0;
+            var absDelta = Math.abs(deltaMs);
+            
+            var seconds = Math.floor(absDelta / 1000);
+            var minutes = Math.floor(seconds / 60);
+            var hours = Math.floor(minutes / 60);
+            var days = Math.floor(hours / 24);
+            
+            var label;
+            if (days > 0) {
+                label = days + 'd';
+            } else if (hours > 0) {
+                label = hours + 'h';
+            } else if (minutes > 0) {
+                label = minutes + 'm';
+            } else {
+                label = '<1m';
+            }
+            
+            return isPast ? '(' + label + ' ago)' : '(in ' + label + ')';
+        } catch (e) {
+            return '';
+        }
+    }
+    
+    function updateAllRelativeTimes() {
+        var containers = document.querySelectorAll('[data-last-run], [data-next-run]');
+        containers.forEach(function(container) {
+            var isoStr = container.getAttribute('data-last-run') || container.getAttribute('data-next-run');
+            var span = container.querySelector('.relative-time');
+            if (span && isoStr) {
+                span.textContent = formatRelative(isoStr);
+            }
+        });
+    }
+    
+    // Update on load and every 30 seconds
+    updateAllRelativeTimes();
+    setInterval(updateAllRelativeTimes, 30000);
+
     var browserTimeDisplay = document.getElementById('browserTimeDisplay');
     if (browserTimeDisplay) {
         var now = new Date();

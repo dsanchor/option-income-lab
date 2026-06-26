@@ -1202,3 +1202,23 @@ Evidence that disabled tasks do NOT execute:
 3. Both pages now agree: economics counts a position ⟺ symbol detail shows it
 
 **Key Insight:** Always normalize user-facing data at the READ boundary (route handler), not in the template. This ensures consistency across all display paths and centralizes the parsing logic.
+
+### README DPS Documentation Update (2026-06-26)
+
+**Context:** The standalone DPS cron task was removed in the recent scheduler refactor (commit 16dcbec). DPS scoring now runs automatically after each position monitor run, not as a separate scheduled job. The README had stale documentation describing the removed DPS cron.
+
+**Changes (docs-only, no code changes):**
+1. **Line 150:** Changed "The DPS provides **on-demand and scheduled rule-based analysis**" → "The DPS provides **on-demand and automatic rule-based analysis**"
+   - Reflects that DPS is no longer a separate scheduled task, but runs automatically as part of monitor flow
+   
+2. **Line 195:** Replaced "**Daily DPS Cron:** A scheduled job (configurable, default `0 22 * * 1-5`) runs DPS for all active positions and stores the score in the snapshot timeline. Enable/disable and change the schedule from the Settings page." with "**Automatic scoring:** DPS is computed automatically after each position monitor run (~4 times daily during market hours per the monitor cron `30 9-16/4 * * 1-5`) and the score is stored in the snapshot timeline. You can also trigger analysis on-demand with the "📊 DPS Analysis" button on the position panel."
+   - Removes reference to non-existent standalone DPS cron schedule
+   - Clarifies DPS runs post-monitor (4x/day during market hours)
+   - References the actual monitor cron schedule from config.yaml
+   - Explains on-demand option via UI button
+
+**Validation:**
+- ✅ `grep -nE "0 22|Daily DPS Cron|scheduled rule-based" README.md` returns no matches (stale content removed)
+- ✅ No references to `dps_scorer` cron config in scheduler documentation
+- ✅ DGI Scheduling section (~line 725) untouched (still correct)
+- ✅ DPS algorithm/factor tables (~lines 152-193) unchanged (Linus's domain, still accurate)

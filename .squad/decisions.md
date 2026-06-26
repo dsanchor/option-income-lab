@@ -3730,3 +3730,97 @@ Premium and buyback cost values sometimes displayed as "N/A" on the symbol detai
 - `.squad/agents/rusty/history.md` (data shape documentation)
 
 ---
+
+### 8. Scheduler Settings: Relative Time Display
+**Date:** 2026-06-26  
+**Agent:** Rusty (scheduler + Settings UI owner)  
+**Status:** ✅ Completed  
+**Impact:** UI/UX (scheduler settings page)
+
+#### Request
+User requested: "under scheduler configuration settings, could you calculate the time next to Last Run and Next Run so we know when it was triggered and how much time is still to the next one? Add it next to the label."
+
+#### Implementation Approach
+
+**Choice: Live Client-Side JS (Preferred)**
+Implemented live client-side relative time calculation with ISO timestamps in data attributes. This keeps the "in 45m" countdown continuously accurate as the page sits open without requiring a page reload.
+
+**Rationale:**
+- Better UX: countdown stays live (updates every 30 seconds via setInterval)
+- No staleness: times remain accurate without reload
+- Clean separation: server provides raw timestamps, client renders human-friendly relative times
+- DRY: single reusable `formatRelative()` JS helper for all 8 tasks
+
+#### Server-Side Changes (web/app.py)
+
+1. **Added `to_iso()` helper** (line ~2981): Normalizes ISO timestamp strings to UTC for client-side parsing
+2. **Added `resolve_last_run_iso()` helper** (line ~3000): Parallel to `resolve_last_run()` but returns raw ISO instead of formatted display string
+3. **Extended context for all 8 tasks** (lines ~3005–3075):
+   - Added `*_last_run_iso` and `*_next_run_iso` variants for each task:
+     - `monitoring_last_run_iso`, `monitoring_next_run_iso`
+     - `summary_last_run_iso`, `summary_next_run_iso`
+     - `banner_last_run_iso`, `banner_next_run_iso`
+     - `calendar_last_run_iso`, `calendar_next_run_iso`
+     - `options_chain_last_run_iso`, `options_chain_next_run_iso`
+     - `dgi_last_run_iso`, `dgi_next_run_iso`
+     - `pe_last_run_iso`, `pe_next_run_iso`
+     - `plan_monitor_last_run_iso`, `plan_monitor_next_run_iso`
+   - Pattern: each task now contributes 4 context vars (display + ISO for both last/next)
+4. **Added ISO variants to return dict** (lines ~3090–3137): All 16 ISO context vars added to the template context dictionary
+
+#### Template Changes (web/templates/settings_config.html)
+
+1. **Updated all 8 task sections** (lines vary):
+   - Each Last Run div now has `data-last-run="{{ *_last_run_iso }}"`
+   - Each Next Run div now has `data-next-run="{{ *_next_run_iso }}"`
+   - Each div contains a `<span class="relative-time" style="..."></span>` for the computed relative time
+   - Style: `font-size:0.75rem; opacity:0.7; margin-left:0.5rem;` to match existing muted text styling
+2. **Added JS helper** (line ~498):
+   - `formatRelative(isoStr)`: DRY helper that computes relative time strings
+     - Returns `(2h ago)` for past times, `(in 45m)` for future times
+     - Handles days, hours, minutes, `<1m` for very recent/imminent
+     - Gracefully handles empty/invalid ISO strings (returns `''`)
+   - `updateAllRelativeTimes()`: queries all `[data-last-run], [data-next-run]` elements and updates their `.relative-time` spans
+   - Runs on page load and every 30 seconds via `setInterval(updateAllRelativeTimes, 30000)`
+
+#### Validation Results
+
+✅ **Import checks**: `python3 -c "import web.app"` → OK; `python3 -c "from src import main"` → OK  
+✅ **Template parsing**: Jinja template parses successfully (no syntax errors)  
+✅ **Attribute counts** (via grep):
+  - `data-last-run=` → 8 occurrences (✓ all 8 tasks)
+  - `data-next-run=` → 8 occurrences (✓ all 8 tasks)
+  - `class="relative-time"` → 16 occurrences (✓ 8 last + 8 next)  
+✅ **Pytest**: 4 pre-existing economics test failures (expected, unrelated); no new failures introduced
+
+#### Affected Tasks (All 8)
+1. Monitoring Agent
+2. Summarization
+3. Dashboard Banner
+4. Calendar Sync
+5. Options Chain
+6. DGI Screener
+7. Watchlist Enrichment (portfolio_enrichment)
+8. Plan Monitor
+
+#### Edge Cases Handled
+- `Never` / `None` last_run → no relative time shown (empty span)
+- `N/A` next_run → no relative time shown (empty span)
+- Next Run in the past (overdue task) → shows `(in <1m)` if very soon, or `(Xm ago)` if past
+- Timezone correctness: ISO strings include UTC timezone, JS `Date` parses correctly
+
+#### Notes
+- Did NOT modify scheduler logic, cron expressions, or how last_run is resolved (purely display-additive)
+- Kept all existing absolute timestamps intact (relative time is ADDITIONAL, not a replacement)
+- Uniform styling across all 8 tasks (muted, small font, consistent placement)
+- Live updates every 30s ensure "in 45m" → "in 44m" → ... without page reload
+
+#### Files Modified
+- `web/app.py` (lines ~2971–3137): Added ISO helpers and context vars
+- `web/templates/settings_config.html`: Updated all 8 task sections + added JS helper
+
+#### Future Improvements (Out of Scope)
+- Could refactor the template to loop over `scheduler_tasks` instead of 8 hardcoded sections (reduces duplication)
+- Could add tooltip on hover showing exact local time conversion
+
+---

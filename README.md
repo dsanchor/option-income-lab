@@ -147,7 +147,7 @@ Each position monitor run captures a **snapshot** of the position's key indicato
 
 ### Deterministic Position Scorer (DPS)
 
-The DPS provides **on-demand and scheduled rule-based analysis** of open positions without using an LLM. It combines live options chain Greeks with historical snapshot trends to produce a deterministic HOLD/WATCH/ROLL recommendation.
+The DPS provides **on-demand and automatic rule-based analysis** of open positions without using an LLM. It combines live options chain Greeks with historical snapshot trends to produce a deterministic HOLD/WATCH/ROLL recommendation.
 
 **How it works:**
 1. Fetches live options chain via yfinance for the position's strike/expiration
@@ -192,7 +192,7 @@ The DPS provides **on-demand and scheduled rule-based analysis** of open positio
 
 **Override rules:** Force ROLL when delta is extreme + ADX rising + MACD worsening. Allow HOLD when delta is high but RSI + MACD + ADX all improving.
 
-**Daily DPS Cron:** A scheduled job (configurable, default `0 22 * * 1-5`) runs DPS for all active positions and stores the score in the snapshot timeline. Enable/disable and change the schedule from the Settings page.
+**Automatic scoring:** DPS is computed automatically after each position monitor run (~4 times daily during market hours per the monitor cron `30 9-16/4 * * 1-5`) and the score is stored in the snapshot timeline. You can also trigger analysis on-demand with the "📊 DPS Analysis" button on the position panel.
 
 **Agent integration:** Monitor agents (call/put assessment) receive a supplementary `POSITION HEALTH METRICS` block with latest DPS score, trend direction, and P&L %. This is advisory context only — agents make independent decisions but can flag divergence.
 
