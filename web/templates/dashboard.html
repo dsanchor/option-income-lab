@@ -33,12 +33,12 @@
 <!-- Summary cards -->
 <div class="summary-row">
     <div class="summary-card">
-        <div class="summary-value">{{ symbol_count }}</div>
-        <div class="summary-label">Symbols Watched</div>
+        <div class="summary-value">${{ "{:,.0f}".format(total_call_exposure) }}</div>
+        <div class="summary-label">Calls Exposure</div>
     </div>
     <div class="summary-card">
-        <div class="summary-value">{{ position_count }}</div>
-        <div class="summary-label">Open Positions</div>
+        <div class="summary-value">${{ "{:,.0f}".format(total_put_exposure) }}</div>
+        <div class="summary-label">Puts Committed</div>
     </div>
 
     <div class="summary-card summary-card-action">

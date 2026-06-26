@@ -1840,6 +1840,19 @@ async def dashboard(request: Request):
         len([p for p in s.get("positions", []) if p.get("status") == "active"])
         for s in all_symbols
     )
+    # Aggregate exposure totals for dashboard cards
+    total_call_exposure = 0
+    total_put_exposure = 0
+    for s in all_symbols:
+        active_positions = [p for p in s.get("positions", []) if p.get("status") == "active"]
+        total_call_exposure += sum(
+            float(p.get("strike", 0)) * 100
+            for p in active_positions if p.get("type") == "call"
+        )
+        total_put_exposure += sum(
+            float(p.get("strike", 0)) * 100
+            for p in active_positions if p.get("type") == "put"
+        )
 
     agent_tables, grand_totals = _build_dashboard_tables(
         cosmos, all_symbols, all_alerts, all_activities)
@@ -1858,6 +1871,8 @@ async def dashboard(request: Request):
         "grand_totals": grand_totals,
         "symbol_count": symbol_count,
         "position_count": position_count,
+        "total_call_exposure": total_call_exposure,
+        "total_put_exposure": total_put_exposure,
         "activity": activity,
         "banner_items": (banner_doc or {}).get("items", []),
         "agent_types": AGENT_TYPES,
