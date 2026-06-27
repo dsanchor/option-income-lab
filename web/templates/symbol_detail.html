@@ -787,6 +787,30 @@
         </div>
     </div>
 </div>
+
+<!-- Close Position Modal -->
+<div class="modal-overlay" id="closePositionModal" style="display:none;">
+    <div class="modal-content" style="max-width:450px;">
+        <div class="modal-header">
+            <h3>Close Position</h3>
+            <button class="modal-close" id="closePositionModalClose">&times;</button>
+        </div>
+        <div style="padding:1rem 1.25rem;">
+            <div style="margin-bottom:1.5rem;">
+                <label for="closeReasonSelect" style="display:block; margin-bottom:0.5rem; font-weight:500; font-size:0.9rem;">Close Reason</label>
+                <select id="closeReasonSelect" class="form-control" style="width:100%; padding:0.5rem; border-radius:var(--radius); border:1px solid var(--border); background:var(--bg-input); color:var(--text); font-size:0.9rem;">
+                    <option value="manual" selected>Manual close</option>
+                    <option value="expired">Expired</option>
+                    <option value="assigned">Assigned</option>
+                </select>
+            </div>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+                <button id="closePositionCancel" class="btn-sm">Cancel</button>
+                <button id="closePositionConfirm" class="btn btn-primary">Close Position</button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -1320,17 +1344,37 @@
         }
     });
 
-    // Close position
-    document.querySelectorAll('[data-close-pos]').forEach(function(btn) {
-        btn.addEventListener('click', async function(e) {
-            e.stopPropagation();
-            var posId = this.dataset.closePos;
-            var reason = prompt('Close reason?\n\n1 — Expired\n2 — Assigned\n3 — Manual close\n\nEnter 1, 2 or 3:');
-            if (reason === null) return;
-            var reasonMap = { '1': 'expired', '2': 'assigned', '3': 'manual' };
-            var closeReason = reasonMap[reason.trim()] || 'manual';
+    // Close position modal
+    var closePositionModal = document.getElementById('closePositionModal');
+    var closeReasonSelect = document.getElementById('closeReasonSelect');
+    var closePositionConfirm = document.getElementById('closePositionConfirm');
+    var closePositionCancel = document.getElementById('closePositionCancel');
+    var closePositionModalClose = document.getElementById('closePositionModalClose');
+    var currentClosePositionId = null;
+
+    function openClosePositionModal(posId) {
+        currentClosePositionId = posId;
+        closeReasonSelect.value = 'manual'; // Reset to default
+        closePositionModal.style.display = 'block';
+    }
+
+    function closeClosePositionModal() {
+        closePositionModal.style.display = 'none';
+        currentClosePositionId = null;
+    }
+
+    if (closePositionModalClose) closePositionModalClose.addEventListener('click', closeClosePositionModal);
+    if (closePositionCancel) closePositionCancel.addEventListener('click', closeClosePositionModal);
+    if (closePositionModal) closePositionModal.addEventListener('click', function(e) {
+        if (e.target === closePositionModal) closeClosePositionModal();
+    });
+
+    if (closePositionConfirm) {
+        closePositionConfirm.addEventListener('click', async function() {
+            if (!currentClosePositionId) return;
+            var closeReason = closeReasonSelect.value;
             try {
-                var res = await fetch('/api/symbols/' + SYMBOL + '/positions/' + encodeURIComponent(posId) + '/close', {
+                var res = await fetch('/api/symbols/' + SYMBOL + '/positions/' + encodeURIComponent(currentClosePositionId) + '/close', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ close_reason: closeReason })
@@ -1344,6 +1388,14 @@
             } catch(e) {
                 alert('Network error: ' + e.message);
             }
+        });
+    }
+
+    document.querySelectorAll('[data-close-pos]').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var posId = this.dataset.closePos;
+            openClosePositionModal(posId);
         });
     });
 

@@ -1222,3 +1222,47 @@ Evidence that disabled tasks do NOT execute:
 - ✅ No references to `dps_scorer` cron config in scheduler documentation
 - ✅ DGI Scheduling section (~line 725) untouched (still correct)
 - ✅ DPS algorithm/factor tables (~lines 152-193) unchanged (Linus's domain, still accurate)
+
+### Close Position Modal/Dropdown Pattern (2026-06-27)
+
+**Context:** User requested replacing the numeric prompt() for choosing close reason (1/2/3) with a proper dropdown UI.
+
+**Implementation:**
+- **Modal markup** (web/templates/symbol_detail.html:793-815): Created reusable `closePositionModal` following existing modal pattern (modal-overlay → modal-content → modal-header + body). Contains:
+  - `<select id="closeReasonSelect">` with three options: Manual close (value `manual`, default), Expired (`expired`), Assigned (`assigned`)
+  - Cancel and "Close Position" (confirm) buttons
+  - Standard modal-close (×) button
+  
+- **Handler logic** (web/templates/symbol_detail.html:1347-1399):
+  - Module-scoped `currentClosePositionId` variable stores the position_id from the clicked Close button
+  - `openClosePositionModal(posId)`: Sets `currentClosePositionId`, resets dropdown to 'manual' default, displays modal
+  - `closeClosePositionModal()`: Hides modal, clears `currentClosePositionId`
+  - Modal closes on: × button click, Cancel button click, overlay click (e.target === modal)
+  - Confirm button: reads `closeReasonSelect.value`, calls `PUT /api/symbols/{symbol}/positions/{position_id}/close` with `{ close_reason: <value> }`, reloads on success, alerts on error
+  
+- **Button click** (web/templates/symbol_detail.html:1395-1399): Each `[data-close-pos]` button calls `openClosePositionModal(posId)` with `e.stopPropagation()` preserved (prevents row toggle)
+
+**API Contract (unchanged):**
+- Endpoint: `PUT /api/symbols/{symbol}/positions/{position_id}/close`
+- Body: `{ close_reason: "expired" | "assigned" | "manual" }`
+- Backend: web/app.py:1072 `api_close_position`
+- Default when body omitted or invalid: "manual"
+
+**Position ID Flow:**
+1. User clicks Close button → handler extracts `this.dataset.closePos` → calls `openClosePositionModal(posId)`
+2. Modal opens, stores posId in `currentClosePositionId`
+3. User selects reason, clicks "Close Position" → confirm handler reads `currentClosePositionId` and `closeReasonSelect.value` → fetch PUT with { close_reason }
+
+**Consistency with Existing Modals:**
+- Uses same CSS classes: `modal-overlay`, `modal-content`, `modal-header`, `modal-close`
+- Same close behavior: overlay click, × button, and explicit cancel button all call the close function
+- Same button styles: `btn-sm`, `btn`, `btn-primary`
+- One reusable modal (not per-position) — position_id passed via module variable
+
+**Validation:**
+- ✅ Jinja2 template parses
+- ✅ web.app imports successfully
+- ✅ Old `prompt('Close reason?` removed (grep returns empty)
+- ✅ New `<select id="closeReasonSelect">` with expired/assigned/manual options present
+- ✅ Fetch still posts `{ close_reason: <value> }` to the same endpoint
+- ✅ Tests pass with same baseline failures (2 economics, 1 yfinance config, 17 yfinance fixture errors — all pre-existing)

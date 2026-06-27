@@ -3824,3 +3824,124 @@ Implemented live client-side relative time calculation with ISO timestamps in da
 - Could add tooltip on hover showing exact local time conversion
 
 ---
+# Replace Close Position Prompt with Dropdown Modal
+
+**Date:** 2026-06-27  
+**Author:** Rusty  
+**Status:** Implemented  
+**PR/Commit:** TBD
+
+## Context
+
+Users were prompted to type a number (1/2/3) to select a close reason when closing a position:
+- 1 → Expired
+- 2 → Assigned  
+- 3 → Manual close
+
+This required remembering the mapping and typing accurately. The Close button already had a ▾ symbol hinting at a dropdown, but the UX was still a basic `prompt()` dialog.
+
+## Decision
+
+Replace the numeric `prompt()` with a **dropdown modal** for selecting the close reason.
+
+**User Request (translated from Spanish):**  
+> "al cerrar las posiciones, da la opción de cerrar como expirada, asignada o close manual. Puedes cambiarlo para que no sea introducir un número sino que sea un desplegable?"  
+> ("When closing positions, give the option to close as expired, assigned, or manual close. Can you change it so it's not entering a number but a dropdown?")
+
+## Implementation
+
+### Modal UI (web/templates/symbol_detail.html:793-815)
+
+Added a reusable modal following the existing pattern used by `planDetailModalSD` and `summaryDetailModal`:
+
+```html
+<div class="modal-overlay" id="closePositionModal" style="display:none;">
+    <div class="modal-content" style="max-width:450px;">
+        <div class="modal-header">
+            <h3>Close Position</h3>
+            <button class="modal-close" id="closePositionModalClose">&times;</button>
+        </div>
+        <div style="padding:1rem 1.25rem;">
+            <div style="margin-bottom:1.5rem;">
+                <label for="closeReasonSelect" style="display:block; margin-bottom:0.5rem; font-weight:500; font-size:0.9rem;">Close Reason</label>
+                <select id="closeReasonSelect" class="form-control" style="width:100%; padding:0.5rem; border-radius:var(--radius); border:1px solid var(--border); background:var(--bg-input); color:var(--text); font-size:0.9rem;">
+                    <option value="manual" selected>Manual close</option>
+                    <option value="expired">Expired</option>
+                    <option value="assigned">Assigned</option>
+                </select>
+            </div>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+                <button id="closePositionCancel" class="btn-sm">Cancel</button>
+                <button id="closePositionConfirm" class="btn btn-primary">Close Position</button>
+            </div>
+        </div>
+    </div>
+</div>
+```
+
+**Design choices:**
+- One reusable modal (not per-position) to minimize DOM bloat
+- Default selection: "Manual close" (matches previous default behavior)
+- Three explicit options: Manual close (`manual`), Expired (`expired`), Assigned (`assigned`)
+- Standard modal close paths: × button, Cancel button, overlay click
+
+### Handler Logic (web/templates/symbol_detail.html:1347-1399)
+
+Replaced the old prompt-based handler with:
+
+1. **Module variable:** `currentClosePositionId` stores the position_id when modal opens
+2. **Open function:** `openClosePositionModal(posId)` sets the position_id, resets dropdown to default, shows modal
+3. **Close function:** `closeClosePositionModal()` hides modal, clears position_id
+4. **Close triggers:** × button, Cancel button, overlay click all call close function
+5. **Confirm handler:** Reads `closeReasonSelect.value`, calls `PUT /api/symbols/{symbol}/positions/{position_id}/close` with `{ close_reason: <value> }`, reloads on success, alerts on error
+6. **Button click:** Each `[data-close-pos]` button opens modal with `e.stopPropagation()` preserved (doesn't trigger row toggle)
+
+**Position ID flow:**
+```
+User clicks [data-close-pos] button
+  → Extract dataset.closePos
+  → openClosePositionModal(posId)
+  → Store in currentClosePositionId
+  → User selects reason, clicks "Close Position"
+  → Confirm handler reads currentClosePositionId + closeReasonSelect.value
+  → fetch PUT with { close_reason }
+```
+
+### API Contract (unchanged)
+
+- **Endpoint:** `PUT /api/symbols/{symbol}/positions/{position_id}/close`
+- **Body:** `{ close_reason: "expired" | "assigned" | "manual" }`
+- **Backend:** web/app.py:1072 `api_close_position`
+- **Default:** "manual" (when body omitted or invalid)
+
+No backend changes required. The dropdown values map directly to the existing API contract.
+
+## Validation
+
+- ✅ Jinja2 template parses successfully
+- ✅ `import web.app` succeeds
+- ✅ Old `prompt('Close reason?` removed from codebase
+- ✅ New `<select id="closeReasonSelect">` with expired/assigned/manual options present
+- ✅ Fetch still posts `{ close_reason: <value> }` to same endpoint
+- ✅ Tests pass with same baseline failures (2 economics, 1 yfinance config, 17 yfinance fixture errors — all pre-existing, unrelated to this change)
+- ✅ Manual trace confirms: button click → modal opens with position_id → confirm sends correct PUT request
+
+## Alternatives Considered
+
+1. **Inline dropdown in table row:** Would clutter the position table and require per-row dropdowns
+2. **Keep prompt() with text options:** Still requires typing; modal is more user-friendly
+3. **Custom dropdown component:** Overkill; standard `<select>` is accessible and sufficient
+
+## Impact
+
+- **User-facing:** More intuitive UX, no need to remember number mappings
+- **Code:** Replaced ~25 lines of prompt-based handler with ~53 lines of modal UI + handlers (net +28 lines)
+- **Consistency:** Follows the same modal pattern as plan detail and summary modals
+- **Accessibility:** Standard `<select>` element is keyboard-navigable and screen-reader-friendly
+- **Behavior:** Default to "Manual close" matches previous default, no behavioral change
+
+## Future Considerations
+
+- Could add keyboard shortcut (Escape to close) for power users — already works via overlay click
+- If we add more close reasons in the future, just add `<option>` elements to the dropdown
+- The modal pattern is reusable for other action confirmations (e.g., delete position, roll confirmation)
