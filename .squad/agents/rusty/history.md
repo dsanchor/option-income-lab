@@ -1266,3 +1266,64 @@ Evidence that disabled tasks do NOT execute:
 - ✅ New `<select id="closeReasonSelect">` with expired/assigned/manual options present
 - ✅ Fetch still posts `{ close_reason: <value> }` to the same endpoint
 - ✅ Tests pass with same baseline failures (2 economics, 1 yfinance config, 17 yfinance fixture errors — all pre-existing)
+
+### Scheduler Non-Blocking Fix (2026-06-29)
+
+**Root Cause:** The scheduler UI showed `next_run` timestamps in the **PAST** (e.g. "2026-06-29 13:55:00 UTC (6h ago)"), indicating the scheduler loop was frozen. Three interrelated issues:
+
+1. **Loop freeze:** Jobs (`run_all_agents`, `run_summary_agent_job`, etc.) ran synchronously and blocking on the ONLY scheduler thread. A long-running or hung job (e.g. a yfinance/LLM network call with no timeout) blocked the entire loop → no `next_run` advances, heartbeat stops, UI shows frozen past timestamp.
+
+2. **next_run advanced AFTER job completes:** In `src/scheduler_registry.py:execute_due_tasks` (pre-fix line 176), `task.next_run = task.cron_obj.get_next(datetime)` ran AFTER `task.job_func()`. So even a normal long job showed a past `next_run` for its whole duration.
+
+3. **monitor_agents double-scheduled:** The heaviest job (runs 5 agents across all symbols with many sequential LLM + yfinance calls) was registered in the TaskRegistry AND ALSO handled by separate local `next_run`/`cron` variables in the loop (src/main.py:651-652, 686-694, 702-708). This caused `run_all_agents()` to run TWICE when due, and the heartbeat's local next_run diverged from the registry next_run shown in the UI.
+
+**The Fix:**
+
+**A) Non-blocking job execution via worker thread (src/scheduler_registry.py):**
+- Added `queue.Queue` (`_job_queue`), worker thread (`_worker_thread`), and shutdown flag (`_shutdown`) to `TaskRegistry.__init__`
+- `initialize_all()` now starts a daemon worker thread (`_worker_loop`) that consumes jobs from the queue
+- `execute_due_tasks()` detects due tasks, advances `next_run` BEFORE dispatching, sets `task.running = True`, and enqueues `task.name` (non-blocking)
+- `_worker_loop()` executes jobs sequentially (one at a time, NOT concurrent), sets `task.last_run` and `task.running = False` after completion, logs exceptions but never kills the worker thread
+- Main loop never blocks on job execution → heartbeat + schedule advancement continue even while heavy jobs run
+
+**B) Advance next_run BEFORE dispatching:**
+- `execute_due_tasks()` now calls `_advance_next_run(task, now_tz)` BEFORE enqueuing the job
+- `_advance_next_run()` loops `task.cron_obj.get_next(datetime)` until the result is strictly in the future (guards against stale cron base causing tight catch-up loops)
+- UI always shows a FUTURE `next_run`, never a past timestamp
+
+**C) Removed duplicate monitor_agents scheduling (src/main.py):**
+- Deleted local `cron`/`next_run` variables for monitor agents (lines 651-652)
+- Deleted the separate `if now_tz >= next_run: run_all_agents()` block (lines 702-708)
+- Deleted the local cron reschedule block for monitor agents (lines 686-694)
+- `monitor_agents` now lives ONLY in the TaskRegistry, like all other tasks
+- Updated heartbeat (line ~679) to read `monitor_task.next_run` from the registry instead of the deleted local variable
+
+**D) Overlap guard:**
+- Added `running: bool` field to `ScheduledTask` dataclass
+- `execute_due_tasks()` skips a due task if `task.running == True` (previous run still in progress), logs a warning, and still advances `next_run` to prevent catch-up loops
+- `trigger_task_now()` (Run Now button) also respects the overlap guard: returns `{"success": False, "message": "...already running"}` instead of enqueueing a duplicate
+
+**E) Shutdown cleanup:**
+- Added `registry.shutdown()` method (sets `_shutdown` flag, joins worker thread with 5s timeout)
+- `OptionsAgentScheduler.run()` calls `self.registry.shutdown()` before exiting (line 721)
+
+**Special Handling for monitor_agents:**
+- `monitor_agents` uses `config.cron_expression` as its cron source (not `config.config['scheduler']['cron']`), because `scheduler.cron` historically stored in config.yaml top-level
+- `initialize_task()` and `handle_cron_changes()` have special-case logic to read `config.cron_expression` for `task.name == "monitor_agents"`
+- Web UI reschedule flow (web/app.py) still updates `config.cron_expression` and sets `monitor_task._cron_changed = True`, which the main loop picks up via `registry.handle_cron_changes()`
+
+**Files Changed:**
+- `src/scheduler_registry.py` (lines 1-12, 16-32, 42-48, 66-108, 165-225, 257-272): Added worker thread, overlap guard, advance-before-dispatch
+- `src/main.py` (lines 568-722): Removed duplicate monitor_agents scheduling, updated heartbeat, added registry.shutdown()
+
+**Validation:**
+- ✅ `python3 -c "import src.main, src.scheduler_registry, web.app; print('import OK')"`
+- ✅ `python3 -c "import jinja2,pathlib; jinja2.Environment().parse(pathlib.Path('web/templates/settings_config.html').read_text()); print('jinja OK')"`
+- ✅ Runtime check: Created throwaway test script that verified: (a) next_run is future immediately after due detection, (b) loop not blocked during 3s job, (c) job runs only once, (d) last_run gets set, (e) overlap guard prevents double-run. All checks PASSED.
+- ✅ `pytest tests/ -k "schedul or registry or main" -q` → 102 deselected, 3 warnings, 0 failures
+
+**Key Learning:**
+- **Worker thread pattern:** When a scheduler's jobs are long-running and NOT proven thread-safe (e.g. agents/cosmos/runner may share state), use a single dedicated worker thread (queue consumer) instead of a thread pool. This keeps the main loop ticking (heartbeat + schedule advancement) without blocking, while preserving sequential job execution and existing code assumptions.
+- **Advance next_run before dispatch:** Always compute and persist the NEXT future occurrence before starting the job. This prevents the UI from showing a past timestamp during long runs and avoids tight catch-up loops if the job fails or hangs.
+- **Overlap guard:** Add a per-task `running` flag and skip re-execution if a previous run is still in progress. Don't queue duplicates; let the next cron cycle retry.
+- **Eliminate duplicate scheduling:** If a task is in the centralized registry, it must NOT have a separate local next_run/cron in the loop. The registry is the single source of truth for all tasks.

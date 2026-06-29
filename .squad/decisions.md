@@ -3945,3 +3945,135 @@ No backend changes required. The dropdown values map directly to the existing AP
 - Could add keyboard shortcut (Escape to close) for power users — already works via overlay click
 - If we add more close reasons in the future, just add `<option>` elements to the dropdown
 - The modal pattern is reusable for other action confirmations (e.g., delete position, roll confirmation)
+# Scheduler Non-Blocking Architecture
+
+**Date:** 2026-06-29  
+**Status:** ✅ Implemented  
+**Components:** Scheduler, TaskRegistry  
+**Files:** `src/scheduler_registry.py`, `src/main.py`
+
+## Context
+
+The scheduler UI displayed `next_run` timestamps in the past (e.g., "2026-06-29 13:55:00 UTC (6h ago)"), indicating the scheduler loop had frozen. Users could not tell if the scheduler was alive or when the next run would actually occur.
+
+## Problem
+
+Three interrelated issues caused the freeze:
+
+1. **Loop freeze:** Jobs ran synchronously on the single scheduler thread. A long-running or hung job (e.g., a yfinance/LLM network call with no timeout) blocked the entire loop → no `next_run` advances, heartbeat stops, UI shows frozen past timestamp.
+
+2. **next_run advanced AFTER job completes:** In `execute_due_tasks`, `task.next_run = task.cron_obj.get_next(datetime)` ran AFTER `task.job_func()`. Even a normal long job showed a past `next_run` for its whole duration.
+
+3. **monitor_agents double-scheduled:** The heaviest job (runs 5 agents across all symbols with many sequential LLM + yfinance calls) was registered in the TaskRegistry AND ALSO handled by separate local `next_run`/`cron` variables in the loop. This caused `run_all_agents()` to run TWICE when due, and the heartbeat's local next_run diverged from the registry next_run shown in the UI.
+
+## Decision
+
+**Non-blocking job execution via worker thread:**
+
+- Introduce a single dedicated worker thread inside `TaskRegistry` that executes jobs sequentially off the main loop thread
+- Main loop detects due tasks, advances their `next_run` to the next future occurrence, and enqueues the job (non-blocking)
+- Worker thread consumes jobs from a `queue.Queue`, executes them one at a time, logs exceptions but never dies
+- Keep jobs SEQUENTIAL (one worker, not concurrent) because agents/cosmos/runner are NOT proven thread-safe
+
+**Rationale:**
+- Keeps the main loop ticking (heartbeat + schedule advancement) even while heavy jobs run
+- Preserves sequential job execution to avoid breaking existing code assumptions
+- Isolates failures: a failing job logs an error but doesn't kill the loop or worker
+- Simple and correct: one queue, one worker, one job at a time
+
+**Advance next_run BEFORE dispatching:**
+- Compute `task.next_run = task.cron_obj.get_next(datetime)` BEFORE enqueuing the job
+- Loop `get_next()` until the result is strictly in the future (guards against stale cron base)
+- UI always shows a FUTURE `next_run`, never a past timestamp
+
+**Overlap guard:**
+- Add `task.running: bool` flag, set to `True` when enqueuing, `False` when job completes
+- If a task is due but `task.running == True`, skip and log a warning (don't enqueue duplicate)
+- `trigger_task_now()` (Run Now button) also respects the overlap guard
+
+**Eliminate duplicate monitor_agents scheduling:**
+- Remove local `cron`/`next_run` variables for monitor agents in `src/main.py`
+- Remove the separate `if now_tz >= next_run: run_all_agents()` block
+- `monitor_agents` lives ONLY in the TaskRegistry, like all other tasks
+- Heartbeat reads `monitor_task.next_run` from the registry
+
+## Alternatives Considered
+
+**ThreadPoolExecutor with max_workers=1:**
+- Pros: Standard library, no manual queue management
+- Cons: Requires more boilerplate for shutdown, less explicit control over job sequencing
+- **Rejected:** Simple `queue.Queue` + worker thread is more explicit and easier to reason about
+
+**Concurrent job execution (thread pool with N workers):**
+- Pros: Higher throughput, could run multiple lightweight tasks in parallel
+- Cons: Agents/cosmos/runner are NOT proven thread-safe; would require extensive testing + locks
+- **Rejected:** Risk too high for marginal gain (jobs already take hours, not seconds)
+
+**Async/await with asyncio.create_task:**
+- Pros: Python-native concurrency, could integrate with existing async agent code
+- Cons: Scheduler loop is sync, would require refactoring `run()` method and signal handling
+- **Rejected:** Mixing sync loop + async jobs adds complexity; worker thread is simpler
+
+**Move `next_run` advancement AFTER job completes (status quo):**
+- Pros: Simpler logic (one place to update next_run)
+- Cons: UI shows past timestamps during long runs, confusing users
+- **Rejected:** Advance-before-dispatch is a one-line change with huge UX benefit
+
+## Implementation
+
+**src/scheduler_registry.py:**
+- Added `queue.Queue` (`_job_queue`), worker thread (`_worker_thread`), and shutdown flag (`_shutdown`) to `TaskRegistry.__init__`
+- `initialize_all()` starts daemon worker thread
+- `_worker_loop()` consumes jobs, executes them, sets `last_run` and clears `running` flag
+- `execute_due_tasks()` detects due tasks, advances `next_run` via `_advance_next_run()`, sets `running = True`, enqueues job
+- `_advance_next_run()` loops `get_next()` until result is in the future (max 100 iterations)
+- `trigger_task_now()` checks overlap guard, enqueues job
+- `shutdown()` sets `_shutdown` flag and joins worker thread with 5s timeout
+
+**src/main.py:**
+- Removed local `cron`/`next_run` variables for monitor agents
+- Removed separate `if now_tz >= next_run: run_all_agents()` block
+- Removed local cron reschedule block for monitor agents
+- Updated heartbeat to read `monitor_task.next_run` from registry
+- Added `self.registry.shutdown()` call before exiting
+
+**Special handling for monitor_agents:**
+- `monitor_agents` uses `config.cron_expression` (not `config.config['scheduler']['cron']`)
+- `initialize_task()` and `handle_cron_changes()` special-case `task.name == "monitor_agents"`
+
+## Validation
+
+- ✅ Import checks: `python3 -c "import src.main, src.scheduler_registry, web.app"`
+- ✅ Jinja2 template parsing: `jinja2.Environment().parse(...)`
+- ✅ Runtime check: Created test script validating (a) next_run is future after dispatch, (b) loop not blocked, (c) job runs once, (d) last_run set, (e) overlap guard works → all PASSED
+- ✅ Existing tests: `pytest tests/ -k "schedul or registry or main"` → 0 failures
+
+## Consequences
+
+**Positive:**
+- Scheduler loop never freezes, even when jobs hang or take hours
+- UI always shows accurate future `next_run` timestamps
+- Heartbeat confirms scheduler is alive every 10 minutes
+- Overlap guard prevents duplicate job execution
+- Clean shutdown via `registry.shutdown()`
+
+**Negative:**
+- Slightly more complex: worker thread + queue instead of direct function calls
+- Jobs still sequential (not concurrent), so total runtime unchanged
+
+**Neutral:**
+- `task.last_run` now records job START time (when enqueued) instead of completion time
+  - Rationale: Start time is more useful for "when did this last run?" UI display
+  - Alternative: Could record completion time, but then last_run wouldn't update until job finishes
+
+## Follow-up
+
+- Consider adding per-task timeout (e.g., `job_timeout: Optional[int]` in `ScheduledTask`, worker enforces via `threading.Timer`) if jobs start hanging indefinitely
+- Consider logging job duration (worker thread records start/end, logs delta) for performance monitoring
+- Consider making `max_iterations` in `_advance_next_run()` configurable (currently hard-coded to 100)
+
+## Related
+
+- `.squad/agents/rusty/history.md` — Learnings section on worker thread pattern
+- `src/scheduler_registry.py` — Implementation
+- `src/main.py` — Scheduler loop

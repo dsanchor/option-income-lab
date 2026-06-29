@@ -580,11 +580,11 @@ class OptionsAgentScheduler:
         
         now_tz = _now_local()
         
-        # Register all tasks in the registry (including monitor agents for consistency)
+        # Register all tasks in the registry
         self.registry.register(
             "monitor_agents",
             "Monitor Agents",
-            "scheduler",  # Uses scheduler.cron from config
+            "scheduler",  # Uses scheduler.cron from config (via self.config.cron_expression)
             "30 9-16/4 * * 1-5",
             self.run_all_agents,
             has_extra_config=False,  # No extra per-task config beyond the 5 standard fields
@@ -646,19 +646,14 @@ class OptionsAgentScheduler:
             has_extra_config=False,
         )
         
-        # Initialize main monitor agents cron from config
-        # Note: monitor_agents uses config.cron_expression, not config.config['scheduler']
-        cron = croniter(self.config.cron_expression, now_tz)
-        next_run = cron.get_next(datetime)
-        
         # Store config reference for registry's handle_cron_changes
         self.registry.set_config(self.config)
         
-        # Initialize all registered tasks
+        # Initialize all registered tasks (including monitor_agents)
+        # Note: monitor_agents uses self.config.cron_expression as its cron source
         self.registry.initialize_all(self.config, now_tz)
         
         # Display initial schedule
-        print(f"\nMonitor Agents        - Next run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         self.registry.display_schedule()
         
         # Track when we last reloaded config
@@ -676,38 +671,21 @@ class OptionsAgentScheduler:
             if current_time - self._last_heartbeat >= self._heartbeat_interval:
                 self._last_heartbeat = current_time
                 now_hb = _now_local()
-                print(f"💓 Scheduler alive at {now_hb.strftime('%Y-%m-%d %H:%M:%S %Z')} | Next monitor run: {next_run.strftime('%H:%M:%S')}")
+                monitor_task = self.registry.get_task("monitor_agents")
+                monitor_next = monitor_task.next_run.strftime('%H:%M:%S') if monitor_task and monitor_task.next_run else "N/A"
+                print(f"💓 Scheduler alive at {now_hb.strftime('%Y-%m-%d %H:%M:%S %Z')} | Next monitor run: {monitor_next}")
 
             # Periodically reload config from CosmosDB to pick up web UI changes
             if current_time - self._last_config_reload >= self._config_reload_interval:
                 self._reload_config_from_cosmos()
                 self._last_config_reload = current_time
             
-            # Handle cron changes for monitor agents (special case)
-            monitor_task = self.registry.get_task("monitor_agents")
-            if monitor_task and monitor_task._cron_changed:
-                monitor_task._cron_changed = False
-                now_tz = _now_local()
-                cron = croniter(self.config.cron_expression, now_tz)
-                next_run = cron.get_next(datetime)
-                print(f"Monitor agents cron rescheduled to: {self.config.cron_expression}")
-                print(f"Next scheduled run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-            
-            # Handle cron changes for all registered tasks
+            # Handle cron changes for all registered tasks (including monitor_agents)
             self.registry.handle_cron_changes(now_tz)
             
             now_tz = _now_local()
             
-            # Check main monitor agents scheduler
-            if now_tz >= next_run:
-                try:
-                    self.run_all_agents()
-                except Exception as e:
-                    print(f"❌ SCHEDULER ERROR in run_all_agents: {e}")
-                next_run = cron.get_next(datetime)
-                print(f"Monitor Agents        - Next run: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n")
-            
-            # Execute all registered tasks that are due
+            # Execute all registered tasks that are due (no separate monitor_agents path)
             self.registry.execute_due_tasks(now_tz)
             
             time.sleep(1)
@@ -718,6 +696,7 @@ class OptionsAgentScheduler:
             time.sleep(5)  # Brief pause before retrying
         
         self.alive = False
+        self.registry.shutdown()
         print("Scheduler stopped. Goodbye!")
 
 
