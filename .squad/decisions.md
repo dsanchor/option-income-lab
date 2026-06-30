@@ -2451,6 +2451,103 @@ The adversarial framing caused the LLM to manufacture objections against correct
 
 ---
 
+### 27. Robust Mid-Price Calculation for Illiquid Options
+
+**Date:** 2026-06-30  
+**Author:** Rusty (Agent Dev)  
+**Status:** ✅ Implemented  
+**Impact:** Options pricing accuracy, P&L calculations, open-put monitor dashboard
+
+#### Context
+
+The open-put monitor dashboard showed an ADM 67.5 put (expiration 2026-07-17, stock price $76.73, deep out-of-the-money SOLD put) with P&L of **-254.6%** (displayed in red/negative) when it should have been strongly positive. Investigation revealed:
+
+- Position snapshot stored: `midprice=1.95`, `premium_received=0.55`
+- P&L formula: `(premium_received - midprice) / premium_received * 100` = `(0.55 - 1.95) / 0.55 * 100` = **-254.5%**
+- Live yfinance data showed: `bid=0.05`, `ask=0.25` → true value ~$0.15
+- Corrupted snapshot came from: `bid=0`, `ask≈3.9` → naive mid = `(0 + 3.9)/2 = 1.95`
+
+The problem was a **garbage one-sided illiquid quote** where the naive midpoint calculation produced an absurd mark.
+
+#### Decision
+
+Replace the naive mid-price calculation `(bid + ask) / 2` with a **robust mid-price function** that resists one-sided and stale-wide illiquid quotes.
+
+#### Implementation
+
+##### Created `src/options_math.py`
+
+New shared module containing `robust_mid(bid, ask, last=0.0)` with logic:
+
+1. **Sane two-sided quote** (bid > 0, ask > 0, not implausibly wide) → `(bid + ask) / 2`
+2. **Implausibly wide spread** (ask > bid * 8 + 0.20) → anchor to `bid` (ignore stale/garbage ask)
+3. **No bid (bid ≤ 0)** → mark conservatively near 0, hard cap at `0.10` (never use `ask/2`)
+4. **Nothing usable** → `0.0`
+
+The `last` (lastPrice) parameter is accepted for future heuristics but currently unused (lastPrice is stale for illiquid names).
+
+##### Updated Two Call Sites
+
+Both naive calculations were identical and replaced in a single commit:
+
+1. **`src/options_chain_cache.py` line ~460:**
+   - Before: `"mid": round((bid + ask) / 2, 4) if (bid + ask) > 0 else 0.0,`
+   - After: `"mid": robust_mid(bid, ask, last_price),`
+
+2. **`src/yfinance_data_provider.py` line ~522:**
+   - Before: `"mid": round((bid + ask) / 2, 4) if (bid + ask) > 0 else 0.0,`
+   - After: `"mid": robust_mid(bid, ask, last_price),`
+
+Both sites have access to `last_price` parameter via existing local variables.
+
+##### Test Coverage
+
+- **Created `tests/test_options_math.py`:** 11 test cases covering:
+  - Sane two-sided quotes → midpoint
+  - Garbage one-sided quotes (bid=0, ask=3.9) → capped at 0.10 (NOT 1.95)
+  - Normal spreads (bid=0.05, ask=0.25) → 0.15
+  - Implausibly wide spreads (bid=0.05, ask=3.9) → anchor to bid (0.05)
+  - Edge cases (both zero, only bid, only ask, negative/None handling, rounding)
+
+- **Updated `tests/test_yfinance_data_provider.py`:**
+  - `test_mid_price_calculation` now uses `robust_mid` instead of naive average for expected values
+
+- **Validation:**
+  - ✅ All 11 new tests pass
+  - ✅ Updated yfinance test passes
+  - ✅ Direct verification: `robust_mid(0, 3.9)` = `0.1` (not 1.95), `robust_mid(0.05, 0.25)` = `0.15`
+  - ✅ No regressions
+
+#### Rationale
+
+1. **Data quality at the source:** Fixing bad marks at the data ingestion layer (options_chain_cache, yfinance_data_provider) prevents downstream corruption in position snapshots, P&L calculations, and dashboard displays.
+
+2. **Shared logic:** Option pricing math should live in a dedicated module, not duplicated across multiple files.
+
+3. **No lastPrice trust:** For illiquid names, `lastPrice` is stale (hours/days old) and unreliable. Using it as a fallback would just substitute one garbage value for another.
+
+4. **Hard cap for bidless options:** When there are no buyers (bid=0), the option is near-worthless to the holder. Capping at `0.10` prevents a stale-high ask from inflating the mark on truly worthless positions.
+
+5. **No downstream changes:** The P&L formula, dashboard logic, and position tracking are all CORRECT. This is purely a data-quality fix.
+
+#### Impact
+
+- **Immediate:** Prevents future position snapshots from recording absurd mid-prices due to one-sided/illiquid quotes.
+- **Historical:** Existing corrupted snapshots (like the ADM 67.5 put with mid=1.95) remain in storage until the next live refresh overwrites them with correct marks.
+- **Monitor accuracy:** Once refreshed, the open-put monitor will show correct P&L for all illiquid positions.
+
+#### Files Changed
+
+- **Created:** `src/options_math.py`
+- **Modified:** `src/options_chain_cache.py` (import + line ~460)
+- **Modified:** `src/yfinance_data_provider.py` (import + line ~522)
+- **Created:** `tests/test_options_math.py`
+- **Modified:** `tests/test_yfinance_data_provider.py` (test_mid_price_calculation)
+
+#### Ownership
+
+- **Module:** Rusty (Agent Dev — Python / data plumbing)
+- **Not changed:** P&L logic, dashboard (Linus/Ralph/Danny — they own strategy/UI)
 
 ---
 

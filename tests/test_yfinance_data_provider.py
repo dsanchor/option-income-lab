@@ -201,13 +201,15 @@ class TestOptionsChainStructure:
 
     @patch("src.yfinance_data_provider.yf")
     def test_mid_price_calculation(self, mock_yf, mock_yf_ticker):
+        """Mid price uses robust_mid logic (not naive average)."""
+        from src.options_math import robust_mid
         mock_yf.Ticker.return_value = mock_yf_ticker
         provider = create_provider()
         result = _run(provider.fetch_all("AAPL"))
         parsed = json.loads(result["options_chain"])
         for exp_key, strikes in parsed.get("calls", {}).items():
             for strike_key, contract in strikes.items():
-                expected_mid = round((contract["bid"] + contract["ask"]) / 2, 4)
+                expected_mid = robust_mid(contract["bid"], contract["ask"], contract["lastPrice"])
                 assert contract["mid"] == pytest.approx(expected_mid, abs=0.01)
 
     @patch("src.yfinance_data_provider.yf")

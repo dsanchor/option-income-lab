@@ -16,6 +16,7 @@ import pandas as pd
 
 from src.greeks_calculator import GreeksCalculator
 from src.options_chain_cache import get_options_chain_cache
+from src.options_math import robust_mid
 from src.technicals_calculator import TechnicalsCalculator
 from src.yfinance_fetcher import YFinanceFetcher
 
@@ -513,13 +514,14 @@ class YFinanceDataProvider:
                 ltd_str = None
 
             strike_key = f"{strike:.1f}" if strike == int(strike) else str(strike)
+            last_price = float(row.get("lastPrice", 0) or 0) if not _is_nan(row.get("lastPrice")) else 0.0
 
             contracts[strike_key] = {
                 "contractSymbol": row.get("contractSymbol", ""),
                 "strike": float(strike),
                 "bid": bid,
                 "ask": ask,
-                "mid": round((bid + ask) / 2, 4) if (bid + ask) > 0 else 0.0,
+                "mid": robust_mid(bid, ask, last_price),
                 "iv": round(iv, 6),
                 "delta": greeks["delta"],
                 "gamma": greeks["gamma"],
@@ -528,7 +530,7 @@ class YFinanceDataProvider:
                 "rho": greeks["rho"],
                 "volume": int(row.get("volume", 0) or 0) if not _is_nan(row.get("volume")) else 0,
                 "openInterest": int(row.get("openInterest", 0) or 0) if not _is_nan(row.get("openInterest")) else 0,
-                "lastPrice": float(row.get("lastPrice", 0) or 0) if not _is_nan(row.get("lastPrice")) else 0.0,
+                "lastPrice": last_price,
                 "lastTradeDate": ltd_str,
                 "inTheMoney": bool(row.get("inTheMoney", False)),
                 "expiration": exp_key,

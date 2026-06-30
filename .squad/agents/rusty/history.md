@@ -1393,3 +1393,33 @@ The options_chain job at 03:20 printed "Refreshing options chain cache for 16 sy
 - **Worker watchdog for scheduler safety:** Even with per-item timeouts, a scheduler worker should have a max-duration guard for the entire job execution. This prevents ANY job type (known or future) from jamming the queue forever.
 - **Defense in depth:** Use two layers: (1) per-item timeout for known risky operations (yfinance, LLM, etc.), and (2) max-duration guard for the entire job execution. Both are necessary — the first prevents common hangs, the second is a catch-all safety net.
 - **Method name bugs in error paths:** Always verify method names exist when calling dynamic code paths (e.g. error handlers, last_run resolvers). `get_all_symbols()` did not exist but was only called in the last_run resolver error path, so it went unnoticed until production logs showed the AttributeError.
+
+### Robust Mid-Price Data Quality Fix (2026-06-30)
+
+**Problem:**
+The open-put monitor dashboard showed ADM 67.5 put (exp 2026-07-17, stock $76.73, deep-OTM SOLD put) with P&L = -254.6% (red/negative) when it should be strongly POSITIVE. Root cause: The position snapshot stored `midprice=1.95` from a one-sided/garbage illiquid quote (bid=0, ask≈3.9) where naive midpoint `(0 + 3.9)/2 = 1.95` produced an absurd mark. The option was truly worth ~$0.15 (live yfinance: bid=0.05, ask=0.25).
+
+**Solution:**
+Created `src/options_math.py` with `robust_mid(bid, ask, last=0.0)` helper that resists one-sided and stale-wide illiquid quotes:
+- Sane two-sided quote → `(bid+ask)/2`
+- Real bid but implausibly wide ask (ask > bid*8 + 0.20) → anchor to bid
+- No bid at all (bid<=0) → mark conservatively near 0, hard cap at 0.10 (never ask/2)
+- Nothing usable → 0.0
+
+**Files Changed:**
+- **Created:** `src/options_math.py` (robust_mid function)
+- **Updated:** `src/options_chain_cache.py` line ~460 — replaced naive mid with `robust_mid(bid, ask, last_price)`
+- **Updated:** `src/yfinance_data_provider.py` line ~522 — replaced naive mid with `robust_mid(bid, ask, last_price)`
+- **Created:** `tests/test_options_math.py` — 11 test cases covering sane quotes, garbage one-sided quotes, wide spreads, edge cases
+- **Updated:** `tests/test_yfinance_data_provider.py` — updated `test_mid_price_calculation` to use `robust_mid` instead of naive average
+
+**Validation:**
+- ✅ `python3 -c "from src.options_math import robust_mid; print(robust_mid(0,3.9), robust_mid(0.05,0.25), robust_mid(0.05,3.9), robust_mid(1.0,1.1), robust_mid(0,0))"` → `0.1 0.15 0.05 1.05 0.0` (all expected)
+- ✅ `pytest tests/test_options_math.py -v` → 11/11 passed
+- ✅ `pytest tests/test_yfinance_data_provider.py::TestOptionsChainStructure::test_mid_price_calculation -v` → passed
+
+**Key Learnings:**
+- **Illiquid options data quality:** yfinance (and most market data sources) return raw exchange quotes without sanity checks. For illiquid strikes, one-sided quotes (bid=0, stale-high ask) are common and a naive midpoint produces absurd marks that wreck P&L calculations downstream.
+- **Shared math helpers:** Option pricing math (mid, greeks, etc.) should live in a dedicated module (`src/options_math.py`) not duplicated across data providers.
+- **Test both call sites:** When replacing a naive calculation used in multiple places, update ALL call sites in the same commit and verify with existing tests that may encode the naive logic.
+- **Hard caps for garbage data:** When there's no bid (bidless option), the holder has no buyers so the mark should be conservatively near zero. A hard cap (0.10) prevents a stale-high ask from inflating the mark on truly worthless positions.
