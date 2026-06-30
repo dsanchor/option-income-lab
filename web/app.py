@@ -2901,7 +2901,7 @@ def _build_settings_config_context(
             
             elif task_name == "summary_agent":
                 # Summary: most recent agent_notes timestamp from symbol configs
-                symbols = cosmos.get_all_symbols()
+                symbols = cosmos.list_symbols()
                 timestamps = []
                 for sym in symbols:
                     notes = sym.get("agent_notes", [])
@@ -2951,7 +2951,7 @@ def _build_settings_config_context(
             
             elif task_name == "portfolio_enrichment":
                 # Portfolio Enrichment: most recent updated_at from enriched symbol configs
-                symbols = cosmos.get_all_symbols()
+                symbols = cosmos.list_symbols()
                 timestamps = []
                 for sym in symbols:
                     enrichment = sym.get("enrichment")

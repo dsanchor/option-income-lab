@@ -14,6 +14,7 @@ the best available merge of both sources.
 
 import asyncio
 import copy
+import concurrent.futures
 import json
 import logging
 import time
@@ -25,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 # Default TTL: 30 minutes
 _DEFAULT_TTL_SECONDS = 1800
+
+# Per-symbol refresh timeout to prevent hung jobs from blocking the queue
+_REFRESH_SYMBOL_TIMEOUT = 90
 
 
 class OptionsChainCache:
@@ -148,17 +152,43 @@ class OptionsChainCache:
         return chain_json
 
     async def refresh_all(self, symbols: list[str]) -> dict:
-        """Refresh cache for all symbols. Returns summary stats."""
+        """Refresh cache for all symbols with per-symbol timeout. Returns summary stats."""
         success_count = 0
         error_count = 0
 
-        for symbol in symbols:
-            try:
-                await self.refresh(symbol)
-                success_count += 1
-            except Exception as e:
-                logger.error("%s: options chain refresh failed: %s", symbol, e)
-                error_count += 1
+        # Use ThreadPoolExecutor with bounded concurrency to handle symbols.
+        # Each thread runs _sync_refresh which creates its own event loop.
+        # NOTE: we deliberately do NOT use `with ... as executor` here, because
+        # the context manager exit calls shutdown(wait=True), which would block
+        # forever on a truly hung yfinance/requests call — reintroducing the very
+        # deadlock this method guards against. Instead we enforce a per-symbol
+        # timeout and then shutdown(wait=False, cancel_futures=True) so hung
+        # threads are abandoned (they linger harmlessly) without blocking.
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        try:
+            futures_map = {
+                symbol: executor.submit(self._sync_refresh, symbol)
+                for symbol in symbols
+            }
+
+            # Process each symbol with timeout enforcement
+            for symbol, future in futures_map.items():
+                try:
+                    future.result(timeout=_REFRESH_SYMBOL_TIMEOUT)
+                    success_count += 1
+                except concurrent.futures.TimeoutError:
+                    logger.warning(
+                        "%s: options chain refresh timed out after %d seconds "
+                        "(abandoning, will retry next run)",
+                        symbol, _REFRESH_SYMBOL_TIMEOUT
+                    )
+                    error_count += 1
+                except Exception as e:
+                    logger.error("%s: options chain refresh failed: %s", symbol, e)
+                    error_count += 1
+        finally:
+            # Never block on hung worker threads: don't wait, cancel pending.
+            executor.shutdown(wait=False, cancel_futures=True)
 
         return {"success": success_count, "errors": error_count}
 

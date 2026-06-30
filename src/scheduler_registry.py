@@ -13,6 +13,9 @@ import threading
 
 logger = logging.getLogger(__name__)
 
+# Maximum duration for any single task execution (30 minutes)
+_MAX_TASK_DURATION_SECONDS = 1800
+
 
 @dataclass
 class ScheduledTask:
@@ -211,17 +214,36 @@ class TaskRegistry:
                     logger.warning(f"Worker received unknown task: {task_name}")
                     continue
                 
-                # Execute the job
+                # Execute the job in a sub-thread with max-duration guard
                 start_time = datetime.now().astimezone()
-                try:
-                    task.job_func()
-                    task.last_run = start_time  # Record successful run timestamp
-                except Exception as e:
-                    print(f"❌ SCHEDULER ERROR in {task.name}: {e}")
-                    task.last_run = start_time  # Record attempt even on failure
-                    logger.exception(f"Error executing task {task_name}")
-                finally:
-                    task.running = False
+                
+                def run_task():
+                    """Job execution wrapper for sub-thread."""
+                    try:
+                        task.job_func()
+                    except Exception as e:
+                        print(f"❌ SCHEDULER ERROR in {task.name}: {e}")
+                        logger.exception(f"Error executing task {task_name}")
+                
+                # Run job in a daemon sub-thread with timeout
+                job_thread = threading.Thread(
+                    target=run_task,
+                    daemon=True,
+                    name=f"TaskExec-{task_name}"
+                )
+                job_thread.start()
+                job_thread.join(timeout=_MAX_TASK_DURATION_SECONDS)
+                
+                if job_thread.is_alive():
+                    # Task exceeded max duration — abandon it (thread will linger but won't block queue)
+                    logger.error(
+                        f"Task {task_name} exceeded max duration of {_MAX_TASK_DURATION_SECONDS}s, abandoning"
+                    )
+                    print(f"❌ SCHEDULER TIMEOUT: {task.display_name} exceeded {_MAX_TASK_DURATION_SECONDS}s")
+                
+                # Record execution timestamp even on timeout/error
+                task.last_run = start_time
+                task.running = False
                     
             except Exception as e:
                 logger.exception(f"Worker thread error: {e}")

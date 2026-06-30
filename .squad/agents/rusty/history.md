@@ -1327,3 +1327,69 @@ Evidence that disabled tasks do NOT execute:
 - **Advance next_run before dispatch:** Always compute and persist the NEXT future occurrence before starting the job. This prevents the UI from showing a past timestamp during long runs and avoids tight catch-up loops if the job fails or hangs.
 - **Overlap guard:** Add a per-task `running` flag and skip re-execution if a previous run is still in progress. Don't queue duplicates; let the next cron cycle retry.
 - **Eliminate duplicate scheduling:** If a task is in the centralized registry, it must NOT have a separate local next_run/cron in the loop. The registry is the single source of truth for all tasks.
+
+## Learnings
+
+### Production Scheduler Hang — Timeout Guards & Worker Watchdog (2026-06-30)
+
+**Root Cause (from production logs):**
+The options_chain job at 03:20 printed "Refreshing options chain cache for 16 symbols..." and NEVER printed "Complete". It hung indefinitely, jamming the entire scheduler queue. From 04:20 onward every hour: "Options Chain Fetcher - Skipped (still running)" + "Skipping options_chain: previous run still in progress". Because the worker thread is single/sequential, that one hung job blocked ALL other jobs (monitor_agents, summary, etc.) from ever executing — even though next_run kept advancing in the UI.
+
+**Three Root Causes:**
+
+1. **options_chain_cache.py refresh_all (lines ~150-163):** Awaited `self.refresh(symbol)` sequentially with NO timeout. `refresh` calls `_fetch_yfinance` (line ~196) which makes synchronous blocking yfinance calls (`yf.Ticker(symbol)`, `ticker.info`, `ticker.option_chain(...)` at lines ~212-255) directly inside an `async def`, with no `asyncio.to_thread`/executor and no socket timeout. yfinance uses `requests`; a stalled connection hangs forever. One hung symbol => `refresh_all` never returns => the scheduler worker thread is blocked permanently.
+   - Note: The existing sync web path `get_or_load` (line ~63-89) DID bound it: `pool.submit(self._sync_refresh, symbol).result(timeout=120)`. `refresh_all` lacked this protection.
+
+2. **scheduler_registry.py _worker_loop (lines ~200-228):** Ran each job to completion with no max-duration guard. A hung job jams the queue forever.
+
+3. **web/app.py (lines 2904, 2954):** Called `cosmos.get_all_symbols()` which does not exist. The correct method is `cosmos.list_symbols()` (defined in src/cosmos_db.py:124). This caused `'CosmosDBService' object has no attribute 'get_all_symbols'` errors when resolving `last_run` for summary_agent and portfolio_enrichment tasks.
+
+**The Two-Layer Fix:**
+
+**A) Fix 1 — Bound options_chain refresh_all per symbol (primary defense):**
+- **File:** `src/options_chain_cache.py`
+- **Changes:**
+  - Added module constant `_REFRESH_SYMBOL_TIMEOUT = 90` (line ~28)
+  - Added `import concurrent.futures` (line 17)
+  - Rewrote `refresh_all` (lines ~150-180) to use `concurrent.futures.ThreadPoolExecutor(max_workers=4)` and execute each symbol's `_sync_refresh` in a thread with a hard timeout via `future.result(timeout=_REFRESH_SYMBOL_TIMEOUT)`
+  - On timeout: log a warning, count it as an error, and CONTINUE to the next symbol (does not abort the batch)
+  - Reuses the existing `_sync_refresh(symbol)` helper which runs `self.refresh(symbol)` in its own event loop (safe for thread execution)
+  - Each thread gets its own event loop (already handled by `_sync_refresh`)
+  - Small bounded concurrency (max_workers=4) speeds up refresh while keeping each symbol timeout-bounded
+- **Rationale:** Prevents one hung symbol from blocking the entire options chain refresh job. In production, if one symbol's yfinance connection stalls, the job logs the error and moves on to the next symbol. The worker queue never jams.
+
+**B) Fix 2 — Worker watchdog (defense in depth):**
+- **File:** `src/scheduler_registry.py`
+- **Changes:**
+  - Added module constant `_MAX_TASK_DURATION_SECONDS = 1800` (30 minutes, line ~17)
+  - Rewrote `_worker_loop` (lines ~200-245) to execute each dequeued job in a sub-thread with `join(timeout=_MAX_TASK_DURATION_SECONDS)`
+  - If the job exceeds the timeout: log error ("task X exceeded max duration, abandoning"), set `task.running = False`, and continue to the next queued job (the orphaned thread may linger but does NOT block the worker)
+  - Preserves: setting `task.last_run` (start time) on completion AND on timeout/error; error isolation; the existing overlap guard via `task.running`
+  - The job functions themselves bridge async via `_run_async` (new event loop). Running them in a sub-thread is safe (each thread daemon).
+- **Rationale:** No job can ever jam the queue forever, even if the per-symbol timeout guard is bypassed or a different job type hangs. This is a catch-all safety net for the entire scheduler.
+
+**C) Fix 3 — get_all_symbols bug:**
+- **File:** `web/app.py`
+- **Changes:**
+  - Line ~2904 (summary_agent branch): `cosmos.get_all_symbols()` → `cosmos.list_symbols()`
+  - Line ~2954 (portfolio_enrichment branch): `cosmos.get_all_symbols()` → `cosmos.list_symbols()`
+- **Rationale:** `get_all_symbols()` does not exist. `list_symbols()` is the correct method (defined in src/cosmos_db.py:124). This fixes the AttributeError in the persisted last_run resolver.
+
+**Files Changed:**
+- `src/options_chain_cache.py` (lines 17, 28-30, 150-180): Per-symbol timeout with ThreadPoolExecutor
+- `src/scheduler_registry.py` (lines 17, 200-245): Worker watchdog with max-duration guard
+- `web/app.py` (lines 2904, 2954): get_all_symbols → list_symbols
+
+**Validation:**
+- ✅ `python3 -c "import src.main, src.scheduler_registry, web.app, src.options_chain_cache; print('import OK')"`
+- ✅ Throwaway runtime test (deleted after):
+  - a) refresh_all-style call where one "symbol" hangs (mocked to sleep 5s with timeout=2s) returns within ~2s, counts it as an error, and OTHER symbols still succeed → PASS
+  - b) Scheduler worker watchdog: enqueue a job that sleeps longer than test max-duration (2s); assert the worker logs/abandons it, clears running, and then a SECOND enqueued job still runs (proving the queue is not jammed) → PASS
+- ✅ `pytest tests/ -k "schedul or registry or options_chain or cache" -q` → 3 passed, 99 deselected, 4 warnings (pre-existing economics/yfinance fixture failures ignored)
+
+**Key Learnings:**
+- **Blocking yfinance in async with no timeout:** yfinance (and other libraries using `requests`) makes synchronous blocking network calls. If called directly inside an `async def` without wrapping in `asyncio.to_thread` or `run_in_executor`, a stalled connection hangs the async task forever. ALWAYS wrap blocking I/O in a thread with a hard timeout.
+- **Per-symbol timeout for batch jobs:** When a batch job (refresh_all, fetch_all, etc.) iterates over many items, each item MUST have a bounded timeout. One hung item must NOT block the entire batch.
+- **Worker watchdog for scheduler safety:** Even with per-item timeouts, a scheduler worker should have a max-duration guard for the entire job execution. This prevents ANY job type (known or future) from jamming the queue forever.
+- **Defense in depth:** Use two layers: (1) per-item timeout for known risky operations (yfinance, LLM, etc.), and (2) max-duration guard for the entire job execution. Both are necessary — the first prevents common hangs, the second is a catch-all safety net.
+- **Method name bugs in error paths:** Always verify method names exist when calling dynamic code paths (e.g. error handlers, last_run resolvers). `get_all_symbols()` did not exist but was only called in the last_run resolver error path, so it went unnoticed until production logs showed the AttributeError.
