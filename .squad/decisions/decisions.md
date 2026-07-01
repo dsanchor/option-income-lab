@@ -2808,3 +2808,31 @@ If/when codebase matures and these constants become "legacy" (e.g., migration to
 New activity indicators should follow the same pattern: conditional check → span with class + title tooltip → emoji. CSS goes in `style.css` near the other indicator classes.
 
 **Risk:** Low. Follows existing patterns, no logic changes, purely presentational.
+
+### Decision: Roll DTE Target and Post-Earnings Window Update (Linus)
+
+**Author:** Linus (Quant Dev)  
+**Date:** 2026-07-01  
+**Status:** Implemented  
+**Scope:** Symmetric application to covered call and cash-secured put roll/assessment instructions
+
+**Decision**
+
+Covered call and cash-secured put roll instructions now target **21-35 DTE as the primary roll window**. The existing DTE ≤ 45 candidate cap remains as the hard outer fallback and should only be used when the 21-35 DTE window cannot provide adequate premium to finance the buyback.
+
+Post-earnings expiration handling now uses **0-7 day hard block** after earnings. Expirations 8-13 days after earnings are a **caution zone** and may be selected only when technicals have stabilized and roll economics are compelling. Expirations at least 8 days after earnings are otherwise acceptable, while pre-earnings expirations at least 3 days before earnings remain preferred.
+
+**Rationale**
+
+The shorter 21-35 DTE primary target accelerates theta capture and tightens risk control while preserving the 45 DTE cap for cases where roll economics require more time. Narrowing the hard post-earnings block to 0-7 days avoids the highest post-earnings chaos/IV-crush period, while the 8-13 day caution zone keeps flexibility for compelling, stabilized setups.
+
+**Files Modified**
+- `src/open_call_roll_instructions.py`
+- `src/open_put_roll_instructions.py`
+- `src/open_call_assessment_instructions.py`
+- `src/open_put_assessment_instructions.py`
+
+**Validation** (Linus)
+- ✅ Python compile check passed
+- ✅ Stale-string grep clean
+- ✅ No test assertions affected

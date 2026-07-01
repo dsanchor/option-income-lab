@@ -169,7 +169,7 @@ Use:
 
 The gate has already determined the earnings-driven action for this position. Apply the gate result here:
 - **HOLD/FLAG (OTM spanning earnings)**: Earnings risk is flagged but position is well OTM. DO NOT force-roll. Include flag in risk assessment. Monitor delta — if it approaches 0.30+, upgrade to ROLL. If at 50%+ profit, hand off to Phase 2 with `close_for_profit_recommended` flag (TastyTrade winner management).
-- **ROLL recommended (near ATM spanning earnings)**: Strong signal to ROLL. If at 50%+ profit, hand off to Phase 2 with `close_for_profit_recommended` flag. Roll target MUST follow Roll Target Rules above — NEVER roll to 0-13 days after earnings.
+- **ROLL recommended (near ATM spanning earnings)**: Strong signal to ROLL. If at 50%+ profit, hand off to Phase 2 with `close_for_profit_recommended` flag. Roll target MUST follow Roll Target Rules above — NEVER roll to 0-7 days after earnings.
 - **ROLL urgently (ATM/ITM, imminent earnings or chaos zone expiry)**: Hard override — hand off to Phase 2 for roll regardless. Roll target follows Roll Target Rules. If at 80%+ profit, set `close_for_profit_recommended: true` — Phase 2 will close for profit.
 
 **Catalyst Risk:**
@@ -445,9 +445,9 @@ When you determine the position needs action (ROLL), output a **handoff JSON** i
     "classic": { "R1": 74.50, "R2": 76.00, "R3": 78.00, "S1": 70.50, "S2": 69.00, "S3": 67.00 }
   },
   "roll_target_rules": {
-    "earnings_blocked_expirations": "0-13 days after earnings",
-    "preferred_expiration": "pre-earnings ≥3 days before or ≥14 days after earnings",
-    "target_dte": "30-45 DTE from today"
+    "earnings_blocked_expirations": "0-7 days after earnings",
+    "preferred_expiration": "pre-earnings ≥3 days before or ≥8 days after earnings",
+    "target_dte": "21-35 DTE from today (up to 45 fallback)"
   }
 }
 ```

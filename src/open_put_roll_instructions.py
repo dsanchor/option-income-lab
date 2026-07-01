@@ -114,11 +114,12 @@ Select a specific new strike and expiration based on the handoff data:
   - Scan the candidates table for rows with |delta| 0.25-0.30 and pick the best match
   - New strike must be OTM by ≥1.5-2% below current price
 - **New expiration**:
-  - Default target: 30-45 DTE from today for optimal theta decay
+  - Default target: 21-35 DTE from today for faster theta capture and tighter risk control. Extend up to 45 DTE (the candidate cap) only if the 21-35 window cannot provide adequate premium to finance the buyback.
   - If `roll_target_rules` specifies earnings constraints:
     - PREFERRED: Pre-earnings expiration ≥3 days before earnings
-    - ACCEPTABLE: ≥14 days after earnings
-    - BLOCKED: 0-13 days after earnings (post-earnings chaos zone) — NEVER select these
+    - ACCEPTABLE: ≥8 days after earnings
+    - CAUTION (8-13 days after earnings): allowed only if technicals have stabilized and roll economics are compelling
+    - BLOCKED: 0-7 days after earnings (post-earnings chaos/IV-crush zone) — NEVER select these
 
 ## ROLL ECONOMICS WORKFLOW
 
@@ -139,7 +140,7 @@ Scan the table rows sorted by Net Credit (descending). The table is already sort
 
 Track how many candidate rows you evaluated in `roll_economics.candidates_evaluated`.
 
-**Respect earnings constraints**: When `roll_target_rules` blocks certain expirations (0-13 days after earnings), skip those expirations in the search.
+**Respect earnings constraints**: When `roll_target_rules` blocks certain expirations (0-7 days after earnings), skip those expirations in the search.
 
 ## PROFIT OPTIMIZATION VALIDATION
 

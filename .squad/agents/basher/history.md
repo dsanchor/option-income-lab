@@ -216,3 +216,24 @@ python -m pytest tests/test_anti403.py -v
 - **Testing patterns:** `asyncio.get_event_loop().run_until_complete()` for async tests (no pytest-asyncio needed), `@patch("src.yfinance_data_provider.yf")` for yfinance mocking, synthetic OHLCV generators with known trend properties, edge cases for expired/zero-vol options via `_expired_greeks`.
 - **Key insight:** `_ma_signal(key, ma_val, close)` — second arg is MA value, third is close price. `close > ma_val` → Buy. Easy to confuse parameter order.
 - **Run command:** `python3 -m pytest tests/test_greeks_calculator.py tests/test_technicals_calculator.py tests/test_yfinance_data_provider.py -v`
+
+### Cross-Agent Note: Roll DTE Target and Post-Earnings Block Changes (2026-07-01)
+
+Linus updated roll agent instructions with new DTE targets and post-earnings windows. These changes affect test validation expectations if your test suite checks roll parameters.
+
+**What Changed**
+- Roll target: 30-45 DTE → 21-35 DTE primary (45 DTE fallback cap)
+- Post-earnings: Hard block 0-13 days → 0-7 days hard block; 8-13 days caution zone; acceptable ≥8 days
+
+**Impact on Testing**
+- If test fixtures check `target_dte` or `fallback_dte`, update expectations to match new windows
+- If test validation asserts on post-earnings thresholds, update to 0-7 hard block (was 0-13)
+- Caution zone (8-13 days) is now part of validation logic
+
+**Files Changed** (by Linus)
+- `src/open_call_roll_instructions.py`
+- `src/open_put_roll_instructions.py`
+- `src/open_call_assessment_instructions.py`
+- `src/open_put_assessment_instructions.py`
+
+**Decision Record:** `.squad/decisions/decisions.md` → "Roll DTE Target and Post-Earnings Window Update"
