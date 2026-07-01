@@ -1423,3 +1423,7 @@ Created `src/options_math.py` with `robust_mid(bid, ask, last=0.0)` helper that 
 - **Shared math helpers:** Option pricing math (mid, greeks, etc.) should live in a dedicated module (`src/options_math.py`) not duplicated across data providers.
 - **Test both call sites:** When replacing a naive calculation used in multiple places, update ALL call sites in the same commit and verify with existing tests that may encode the naive logic.
 - **Hard caps for garbage data:** When there's no bid (bidless option), the holder has no buyers so the mark should be conservatively near zero. A hard cap (0.10) prevents a stale-high ask from inflating the mark on truly worthless positions.
+
+### Dead yfinance.options_chain DTE Config Removal (2026-07-01)
+
+- Removed dead `yfinance.options_chain.min_dte` / `max_dte` config keys. The 7-90 DTE window filter was dropped in the `OptionsChainCache` refactor; per dsanchor, `OptionsChainCache._fetch_yfinance` should only exclude expired contracts while roll-candidate selection keeps its separate DTE<=45 cap.

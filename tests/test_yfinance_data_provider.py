@@ -127,7 +127,7 @@ def mock_yf_ticker(mock_ticker_info, mock_option_chain, mock_ohlcv):
     """Fully mocked yfinance Ticker object."""
     ticker = MagicMock()
     ticker.info = mock_ticker_info
-    # Options expirations: mix within and outside 7-90 DTE range
+    # Options expirations: mix of near-term and longer-dated contracts
     exps = _make_expiration_dates([5, 14, 30, 45, 60, 90, 120, 180])
     ticker.options = exps
     ticker.option_chain.return_value = mock_option_chain
@@ -358,48 +358,7 @@ class TestCacheBehavior:
 
 
 # ---------------------------------------------------------------------------
-# 8. DTE filtering
-# ---------------------------------------------------------------------------
-
-class TestDTEFiltering:
-    @patch("src.yfinance_data_provider.yf")
-    def test_only_7_to_90_dte_included(self, mock_yf, mock_yf_ticker):
-        """Expirations outside 7-90 DTE should be excluded."""
-        mock_yf.Ticker.return_value = mock_yf_ticker
-        provider = create_provider()
-        result = _run(provider.fetch_all("AAPL"))
-        parsed = json.loads(result["options_chain"])
-
-        today = datetime.now(timezone.utc)
-        for exp_key in list(parsed.get("calls", {}).keys()) + list(parsed.get("puts", {}).keys()):
-            exp_date = datetime.strptime(exp_key, "%Y%m%d").replace(tzinfo=timezone.utc)
-            dte = (exp_date - today).days
-            assert 6 <= dte <= 91, f"Expiration {exp_key} has DTE={dte}, outside 7-90 range"
-
-    @patch("src.yfinance_data_provider.yf")
-    def test_near_term_excluded(self, mock_yf):
-        """Expirations < 7 DTE should be filtered out."""
-        ticker = MagicMock()
-        ticker.info = {"symbol": "TEST", "regularMarketPrice": 100}
-        near_exps = _make_expiration_dates([1, 2, 3, 5, 6])
-        ticker.options = near_exps
-        ticker.option_chain.return_value = MagicMock(
-            calls=pd.DataFrame(columns=["contractSymbol", "strike", "bid", "ask", "volume", "openInterest", "impliedVolatility"]),
-            puts=pd.DataFrame(columns=["contractSymbol", "strike", "bid", "ask", "volume", "openInterest", "impliedVolatility"]),
-        )
-        ticker.history.return_value = pd.DataFrame()
-        ticker.dividends = pd.Series()
-        mock_yf.Ticker.return_value = ticker
-
-        provider = create_provider()
-        result = _run(provider.fetch_all("TEST"))
-        parsed = json.loads(result["options_chain"])
-        assert len(parsed.get("calls", {})) == 0, "Near-term expirations should be filtered"
-        assert len(parsed.get("puts", {})) == 0
-
-
-# ---------------------------------------------------------------------------
-# 9. create_provider factory
+# 8. create_provider factory
 # ---------------------------------------------------------------------------
 
 class TestCreateProvider:
@@ -407,14 +366,8 @@ class TestCreateProvider:
         provider = create_provider()
         assert isinstance(provider, YFinanceDataProvider)
 
-    def test_custom_config_applied(self):
-        provider = create_provider({"min_dte": 10, "max_dte": 60})
-        assert provider._min_dte == 10
-        assert provider._max_dte == 60
-
-
 # ---------------------------------------------------------------------------
-# 10. Error handling
+# 9. Error handling
 # ---------------------------------------------------------------------------
 
 class TestErrorHandling:

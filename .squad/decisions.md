@@ -4451,3 +4451,59 @@ Root causes identified but held pending dsanchor decision:
 
 **Decision Pending:** Dsanchor to decide whether to (a) re-implement the DTE window filter, or (b) retire the config keys + remove the test.
 
+
+### 4. Remove Dead 7-90 DTE Window Config
+
+**Date:** 2026-07-01  
+**Author:** Rusty (Agent Dev)  
+**Requested by:** dsanchor  
+**Status:** ✅ Done  
+**Impact:** Config cleanliness, eliminated dead configuration keys
+
+#### Decision
+
+Remove the nested `yfinance.options_chain` config block from `config.yaml`, including `min_dte` and `max_dte` keys.
+
+#### Rationale
+
+The 7-90 DTE filter on options-chain fetch was intentionally removed during the `OptionsChainCache` refactor. The fetch path now only excludes expired contracts; roll-candidate selection keeps its separate DTE≤45 cap.
+
+#### Changes
+
+**config.yaml:**
+- Removed `yfinance.options_chain` sub-block containing `min_dte: 7` and `max_dte: 90`
+
+#### Verification
+
+- ✅ No live config reads depend on `yfinance.options_chain.min_dte` / `max_dte` (src/config.py has no accessors)
+- ✅ `config.yaml` parses successfully after removal
+
+### 5. Retire Obsolete yFinance DTE-Window Tests
+
+**Date:** 2026-07-01  
+**Author:** Basher (Tester)  
+**Requested by:** dsanchor  
+**Status:** ✅ Done  
+**Impact:** Test suite cleanliness, removed assertions on deleted filter behavior
+
+#### Decision
+
+Retire obsolete tests from `tests/test_yfinance_data_provider.py` that asserted the removed fetch-time 7-90 DTE filter or removed `_min_dte` / `_max_dte` attributes.
+
+#### Changes
+
+**tests/test_yfinance_data_provider.py:**
+- Removed `test_only_7_to_90_dte_included` (asserted removed fetch-time 7-90 filter)
+- Removed `test_near_term_excluded` (asserted removed fetch-time 7-90 filter)
+- Removed `test_custom_config_applied` (asserted removed _min_dte/_max_dte attributes)
+- Removed empty `TestDTEFiltering` class
+- Updated fixture comments to no longer imply a 7-90 fetch-time filter
+
+#### Verification
+
+- ✅ pytest tests/test_yfinance_data_provider.py: 20 passed, 1 failed
+- **Pre-existing out-of-scope failure:** `test_greeks_populated_for_nonzero_iv` fails due to Playwright/mock-target root cause (same issue as held yfinance item). This failure exists independently and is not caused by DTE config removal.
+
+#### Note on Held Item
+
+The pre-existing `test_greeks_populated_for_nonzero_iv` failure is now also documented as related to the held yfinance mock-drift issue: test mocks `src.yfinance_data_provider.yf` but yfinance is now imported directly in `src/options_chain_cache.py` (not through wrapper), and TradingView Playwright path is also unmocked. Browser cannot start in test environment.

@@ -73,9 +73,6 @@ portfolio_enrichment:
 # yfinance data provider settings
 yfinance:
   cache_ttl: 300             # Cache TTL in seconds (default: 5 minutes)
-  options_chain:
-    min_dte: 7               # Minimum days to expiration for options chain
-    max_dte: 90              # Maximum days to expiration for options chain
   rate_limit:
     calls_per_second: 2      # Max yfinance API calls per second
   randomize_symbols: true    # Shuffle symbol order to vary processing

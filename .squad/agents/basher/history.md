@@ -31,6 +31,10 @@
 ### Economics Contract Multiplier Test Expectations (2026-07-01)
 - Economics report tests were stale after `web/app.py` added `CONTRACT_MULTIPLIER = 100` for option contract dollar amounts. Updated `tests/test_economics.py` expectations to ×100 dollar values while leaving ratios, per-share fields, counts, filters, and ordering semantics unmultiplied for dsanchor.
 
+### Retired Obsolete yFinance Fetch DTE-Window Tests (2026-07-01)
+- Retired obsolete DTE-window tests `test_only_7_to_90_dte_included`, `test_near_term_excluded`, and `test_custom_config_applied` after dsanchor confirmed the 7-90 fetch filter and `_min_dte`/`_max_dte` provider attributes were removed.
+- Fetch-time options-chain behavior now only excludes expired contracts; roll-candidate DTE caps remain separate and out of scope for `tests/test_yfinance_data_provider.py`.
+
 ### Phase 4a — Provisioning, Dockerfile, README (2026-03-28)
 - **Architecture:** CosmosDB single-container, partition by `/symbol`, three doc types: `symbol_config`, `decision`, `signal`
 - **Indexing:** Custom policy indexes only query fields (`symbol`, `doc_type`, `timestamp`, `watchlist/*`, `agent_type`, `decision`); excludes large blobs (`reason`, `raw_response`, `analysis_context`)
