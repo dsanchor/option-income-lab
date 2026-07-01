@@ -29,3 +29,32 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 - Merged 4 inbox decisions into main decisions.md
 - Created orchestration and session logs
 - Updated Linus team history with task completion record
+
+### Orchestration Session (2026-07-01T20:11:24Z)
+
+**Task:** Linus DTE Target & Post-Earnings Block Update — Scribe Orchestration
+
+**Status:** ✅ Complete
+
+**Actions Performed**
+1. ✅ Orchestration log: `.squad/orchestration-log/2026-07-01T20:11:24Z-linus.md`
+2. ✅ Session log: `.squad/log/2026-07-01T20-11-roll-dte-earnings.md`
+3. ✅ Decision merge: Appended to `.squad/decisions/decisions.md`, deleted inbox file
+4. ✅ Cross-agent update: Appended to `.squad/agents/basher/history.md`
+5. ✅ Git commit: `feat: update roll DTE target and post-earnings block windows` (commit 76c5dae)
+
+**History Archival Status**
+- ⚠️ Basher: 16KB (>12KB threshold) — requires archival
+- ⚠️ Danny: 34KB (>12KB threshold) — requires archival
+- ⚠️ Linus: 152KB (>12KB threshold) — requires archival
+- ⚠️ Rusty: 107KB (>12KB threshold) — requires archival
+- ✅ Ralph: 0KB
+- ✅ Scribe: 1KB
+
+**Deferred:** History summarization/archival for 4 files flagged for future archival session. Each file needs careful review of dated entries and consolidation into Core Context sections.
+
+**Related Records**
+- Orchestration Log: `.squad/orchestration-log/2026-07-01T20:11:24Z-linus.md`
+- Session Log: `.squad/log/2026-07-01T20-11-roll-dte-earnings.md`
+- Decision: `.squad/decisions/decisions.md` → "Roll DTE Target and Post-Earnings Window Update"
+- Commit: `76c5dae`
