@@ -237,3 +237,28 @@ Linus updated roll agent instructions with new DTE targets and post-earnings win
 - `src/open_put_assessment_instructions.py`
 
 **Decision Record:** `.squad/decisions/decisions.md` → "Roll DTE Target and Post-Earnings Window Update"
+
+### Cross-Agent Note: Roll Candidate Ranking by Ann.Ret% (2026-07-01)
+
+Linus changed roll candidate table sorting from **Net Credit descending** → **Ann.Ret% (annualized return) descending**. This affects test expectations for candidate ordering if your test suite validates roll candidate rankings.
+
+**What Changed**
+- Sort key: `net_credit` (longer DTE bias) → `ann_ret` (time-normalized return)
+- Rationale: Ann.Ret% = Premium% × 365 / DTE normalizes premium by time, surfacing best return/day and aligning with 21-35 DTE target
+- Net Credit column remains available for economics/threshold checks
+
+**Impact on Testing**
+- If test assertions check roll candidate table order or validate specific candidate rankings, update expectations
+- Longer-dated contracts will rank lower now (lower annualized return per day)
+- Shorter-DTE contracts with higher premium% will rank higher
+
+**Pre-Existing Test Failures** (unrelated to this change)
+- `test_economics`: contract-multiplier bug in test (premium × 100 discrepancy)
+- `yfinance DTE-window filter test`: API window handling issue
+
+**Files Changed** (by Linus)
+- `src/options_chain_filters.py` (sort key + table label)
+- `src/open_call_roll_instructions.py` (prose "sorted by Net Credit" → "sorted by Ann.Ret%")
+- `src/open_put_roll_instructions.py` (prose "sorted by Net Credit" → "sorted by Ann.Ret%")
+
+**Decision Record:** `.squad/decisions/decisions.md` → "Sort Roll Candidates by Ann.Ret%"

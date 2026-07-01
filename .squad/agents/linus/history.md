@@ -9,6 +9,7 @@
 
 ## Learnings
 
+- 2026-07-01: Roll candidate table now sorted by Ann.Ret% (was Net Credit) to favor shorter-DTE rolls aligned with the 21-35 DTE target; approved by dsanchor 2026-07-01.
 - 2026-07-01: Roll target is now 21-35 DTE primary with 45 DTE fallback cap, and post-earnings hard block is 0-7 days with 8-13 days as a caution zone; applied symmetrically across calls/puts after dsanchor approval.
 ### Position Snapshot Capture (2026-06-04)
 - `src/agent_runner.py` now captures a point-in-time snapshot for every position-monitor run immediately after `fetch_all()`, before the Phase 1 assessment runs.

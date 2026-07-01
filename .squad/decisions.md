@@ -4374,3 +4374,34 @@ Three interrelated issues caused the freeze:
 - `.squad/agents/rusty/history.md` — Learnings section on worker thread pattern
 - `src/scheduler_registry.py` — Implementation
 - `src/main.py` — Scheduler loop
+
+### 2. Sort Roll Candidates by Ann.Ret%
+
+**Date:** 2026-07-01  
+**Author:** Linus (Quant Dev)  
+**Requested by:** dsanchor  
+**Status:** ✅ Implemented  
+**Impact:** Roll candidate ranking, DTE target alignment
+
+#### Decision
+
+Roll candidate tables are sorted by `Ann.Ret%` (annualized return) descending instead of Net Credit descending.
+
+#### Rationale
+
+Net Credit descending biases candidate selection toward longer-dated contracts because longer expirations usually carry higher absolute premium. Sorting by `Ann.Ret% = Premium% × 365 / DTE` normalizes premium by time, surfacing the best return per day and better aligning candidate ranking with the approved 21-35 DTE roll target.
+
+#### Scope
+
+The Net Credit column and `net_credit` values remain available for economics and threshold checks. Only candidate table sort order and related instruction prose changed.
+
+#### Changes
+
+- **src/options_chain_filters.py**: Sort key in both branches + table label updated
+- **src/open_call_roll_instructions.py**: Prose "sorted by Net Credit" → "sorted by Ann.Ret%"
+- **src/open_put_roll_instructions.py**: Prose "sorted by Net Credit" → "sorted by Ann.Ret%"
+
+#### Validation
+
+- ✅ py_compile passed
+- ✅ Targeted pytest: 2 pre-existing unrelated failures confirmed (contract-multiplier bug; yfinance DTE-window filter test)

@@ -374,11 +374,11 @@ def format_roll_candidates_table(
                 "ann_ret": ann_ret,
             })
 
-    # Sort by net_credit descending (best credit first); fall back to bid desc if no buyback
+    # Sort by annualized return descending (best return per day first).
     if buyback_cost is not None:
-        candidates.sort(key=lambda c: c["net_credit"] if c["net_credit"] is not None else -9999, reverse=True)
+        candidates.sort(key=lambda c: c["ann_ret"] if c["ann_ret"] is not None else -9999, reverse=True)
     else:
-        candidates.sort(key=lambda c: c["bid"], reverse=True)
+        candidates.sort(key=lambda c: c["ann_ret"] if c["ann_ret"] is not None else -9999, reverse=True)
 
     if not candidates:
         lines.append("")
@@ -387,7 +387,7 @@ def format_roll_candidates_table(
 
     # --- Format table ---
     lines.append("")
-    lines.append(f"ROLL CANDIDATES ({roll_type} — {len(candidates)} candidates, sorted by net credit):")
+    lines.append(f"ROLL CANDIDATES ({roll_type} — {len(candidates)} candidates, sorted by annualized return (Ann.Ret%)):")
     header = "| #  | Strike | Expiration | DTE | Delta |  Bid  |  Ask  | New Prem | Buyback | Net Credit | Prem% | Ann.Ret% |"
     sep    = "|----|--------|------------|-----|-------|-------|-------|----------|---------|------------|-------|----------|"
     lines.append(header)

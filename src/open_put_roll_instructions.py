@@ -136,7 +136,7 @@ When your initial roll candidate fails Tier 1 or exceeds the Tier 2 threshold, s
 3. **Lower strike AND later expiration**: Look for a row combining both — the next lower available strike and more time
 4. **If no table row meets thresholds → CLOSE**: No viable roll exists
 
-Scan the table rows sorted by Net Credit (descending). The table is already sorted this way. Pick the first row that passes all constraints (|delta| range, DTE ≤ 45, earnings rules, tier thresholds).
+Scan the table rows sorted by Ann.Ret% (annualized return, descending). The table is already sorted this way — the top rows give the best return per day, which favors the 21-35 DTE target. Pick the first row that passes all constraints (|delta| range, DTE ≤ 45, earnings rules, tier thresholds).
 
 Track how many candidate rows you evaluated in `roll_economics.candidates_evaluated`.
 
