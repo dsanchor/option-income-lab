@@ -84,12 +84,12 @@ def test_build_economics_report_aggregates_only_valid_numeric_premiums():
     )
 
     assert report["summary"] == {
-        "total_premium": 300.0,
-        "total_buyback": 30.0,
-        "net_income": 270.0,
-        "avg_roc_pct": 10.0,
-        "avg_roc_annualized": 121.67,
-        "win_rate": 66.67,
+        "total_premium": 30000.0,
+        "total_buyback": 3000.0,
+        "net_income": 27000.0,
+        "avg_roc_pct": 9.0,
+        "avg_roc_annualized": 109.5,
+        "win_rate": 100.0,
         "total_positions": 4,
     }
     assert report["filters"] == {
@@ -107,18 +107,18 @@ def test_build_economics_report_aggregates_only_valid_numeric_premiums():
     assert report["by_symbol"] == [
         {
             "symbol": "AAPL",
-            "premium": 180.0,
-            "buyback": 30.0,
-            "net": 150.0,
+            "premium": 18000.0,
+            "buyback": 3000.0,
+            "net": 15000.0,
             "positions_count": 2,
-            "avg_roc_pct": 10.0,
-            "avg_roc_annualized": 121.67,
+            "avg_roc_pct": 8.33,
+            "avg_roc_annualized": 101.35,
         },
         {
             "symbol": "MSFT",
-            "premium": 120.0,
+            "premium": 12000.0,
             "buyback": 0.0,
-            "net": 120.0,
+            "net": 12000.0,
             "positions_count": 2,
             "avg_roc_pct": 10.0,
             "avg_roc_annualized": 121.67,
@@ -145,10 +145,10 @@ def test_build_economics_report_applies_filters():
     )
 
     assert report["summary"]["total_positions"] == 1
-    assert report["summary"]["total_premium"] == 80.0
-    assert report["summary"]["total_buyback"] == 30.0
-    assert report["summary"]["net_income"] == 50.0
-    assert report["summary"]["win_rate"] == 0.0
+    assert report["summary"]["total_premium"] == 8000.0
+    assert report["summary"]["total_buyback"] == 3000.0
+    assert report["summary"]["net_income"] == 5000.0
+    assert report["summary"]["win_rate"] == 100.0
     assert report["positions"] == [
         {
             "symbol": "AAPL",
@@ -156,11 +156,13 @@ def test_build_economics_report_applies_filters():
             "type": "put",
             "strike": 800.0,
             "expiration": "2026-02-14",
-            "premium": 80.0,
-            "buyback_cost": 30.0,
-            "net": 50.0,
-            "roc_pct": 10.0,
-            "roc_annualized": 121.67,
+            "premium": 8000.0,
+            "premium_per_share": 80.0,
+            "buyback_cost": 3000.0,
+            "buyback_per_share": 30.0,
+            "net": 5000.0,
+            "roc_pct": 6.25,
+            "roc_annualized": 76.04,
             "days_held": 17,
             "status": "rolled",
             "opened_at": "2026-01-15T00:00:00Z",

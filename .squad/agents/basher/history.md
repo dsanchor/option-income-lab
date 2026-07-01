@@ -28,6 +28,9 @@
 
 ## Learnings
 
+### Economics Contract Multiplier Test Expectations (2026-07-01)
+- Economics report tests were stale after `web/app.py` added `CONTRACT_MULTIPLIER = 100` for option contract dollar amounts. Updated `tests/test_economics.py` expectations to ×100 dollar values while leaving ratios, per-share fields, counts, filters, and ordering semantics unmultiplied for dsanchor.
+
 ### Phase 4a — Provisioning, Dockerfile, README (2026-03-28)
 - **Architecture:** CosmosDB single-container, partition by `/symbol`, three doc types: `symbol_config`, `decision`, `signal`
 - **Indexing:** Custom policy indexes only query fields (`symbol`, `doc_type`, `timestamp`, `watchlist/*`, `agent_type`, `decision`); excludes large blobs (`reason`, `raw_response`, `analysis_context`)

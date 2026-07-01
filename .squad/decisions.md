@@ -4405,3 +4405,49 @@ The Net Credit column and `net_credit` values remain available for economics and
 
 - ✅ py_compile passed
 - ✅ Targeted pytest: 2 pre-existing unrelated failures confirmed (contract-multiplier bug; yfinance DTE-window filter test)
+
+### 3. Economics Test Fix — Contract Multiplier & Net-RoC Semantics
+
+**Date:** 2026-07-01  
+**Author:** Basher (Tester)  
+**Requested by:** dsanchor  
+**Status:** ✅ Done  
+**Impact:** Test suite correctness, production contract multiplier semantics
+
+#### Decision
+
+Update stale `tests/test_economics.py` expectations to match current `web/app.py::_build_economics_report` contract-multiplier semantics.
+
+#### Scope
+
+Production code was NOT changed. Only test expectations updated to reflect intentional web/app.py behavior:
+- `CONTRACT_MULTIPLIER = 100` for option contract dollar amounts
+- RoC now reported net-of-buyback
+- win_rate now counts profitable rolls as wins
+
+#### Changes
+
+**tests/test_economics.py:**
+- Dollar aggregate expectations multiplied by 100 per CONTRACT_MULTIPLIER
+- avg_roc_pct / annualized_roc_pct updated to expect net-RoC values (net of buyback cost)
+- win_rate updated to reflect profitable-roll-as-win semantics
+- Added premium_per_share and buyback_per_share field assertions
+
+#### Validation
+
+✅ pytest tests/test_economics.py -q → 2 passed, 2 warnings
+
+Coordinator (Squad) independently verified the new expected values are correct against the intentional web/app.py logic (not rubber-stamped).
+
+#### Pending — Held Item
+
+**yfinance DTE-Window Test Failure (DIAGNOSED ONLY, NO CODE CHANGES)**
+
+Root causes identified but held pending dsanchor decision:
+
+1. **Mock Mismatch:** Test mocks `src.yfinance_data_provider.yf` but yfinance now imported directly in `src/options_chain_cache.py` (not through wrapper). TradingView Playwright path also unmocked.
+
+2. **Dead Config Keys:** The 7-90 DTE window filter was dropped during OptionsChainCache refactor. `config.yaml` keys `min_dte` and `max_dte` are now unused.
+
+**Decision Pending:** Dsanchor to decide whether to (a) re-implement the DTE window filter, or (b) retire the config keys + remove the test.
+
