@@ -804,6 +804,10 @@
                     <option value="assigned">Assigned</option>
                 </select>
             </div>
+            <div id="closeBuybackRow" style="margin-bottom:1.5rem;">
+                <label for="closeBuybackInput" style="display:block; margin-bottom:0.5rem; font-weight:500; font-size:0.9rem;">Buyback Cost</label>
+                <input type="number" id="closeBuybackInput" class="form-control" step="0.01" placeholder="Cost to close (optional)" style="width:100%; padding:0.5rem; border-radius:var(--radius); border:1px solid var(--border); background:var(--bg-input); color:var(--text); font-size:0.9rem;">
+            </div>
             <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
                 <button id="closePositionCancel" class="btn-sm">Cancel</button>
                 <button id="closePositionConfirm" class="btn btn-primary">Close Position</button>
@@ -1350,11 +1354,21 @@
     var closePositionConfirm = document.getElementById('closePositionConfirm');
     var closePositionCancel = document.getElementById('closePositionCancel');
     var closePositionModalClose = document.getElementById('closePositionModalClose');
+    var closeBuybackRow = document.getElementById('closeBuybackRow');
+    var closeBuybackInput = document.getElementById('closeBuybackInput');
     var currentClosePositionId = null;
+
+    function toggleCloseBuybackRow() {
+        if (closeBuybackRow && closeReasonSelect) {
+            closeBuybackRow.style.display = closeReasonSelect.value === 'manual' ? 'block' : 'none';
+        }
+    }
 
     function openClosePositionModal(posId) {
         currentClosePositionId = posId;
         closeReasonSelect.value = 'manual'; // Reset to default
+        if (closeBuybackInput) closeBuybackInput.value = '';
+        toggleCloseBuybackRow();
         closePositionModal.style.display = 'block';
     }
 
@@ -1365,6 +1379,7 @@
 
     if (closePositionModalClose) closePositionModalClose.addEventListener('click', closeClosePositionModal);
     if (closePositionCancel) closePositionCancel.addEventListener('click', closeClosePositionModal);
+    if (closeReasonSelect) closeReasonSelect.addEventListener('change', toggleCloseBuybackRow);
     if (closePositionModal) closePositionModal.addEventListener('click', function(e) {
         if (e.target === closePositionModal) closeClosePositionModal();
     });
@@ -1373,11 +1388,18 @@
         closePositionConfirm.addEventListener('click', async function() {
             if (!currentClosePositionId) return;
             var closeReason = closeReasonSelect.value;
+            var requestBody = { close_reason: closeReason };
+            if (closeReason === 'manual' && closeBuybackInput && closeBuybackInput.value.trim() !== '') {
+                var buybackCost = parseFloat(closeBuybackInput.value);
+                if (!Number.isNaN(buybackCost)) {
+                    requestBody.buyback_cost = buybackCost;
+                }
+            }
             try {
                 var res = await fetch('/api/symbols/' + SYMBOL + '/positions/' + encodeURIComponent(currentClosePositionId) + '/close', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ close_reason: closeReason })
+                    body: JSON.stringify(requestBody)
                 });
                 if (res.ok) {
                     window.location.reload();

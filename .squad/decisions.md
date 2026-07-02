@@ -4507,3 +4507,56 @@ Retire obsolete tests from `tests/test_yfinance_data_provider.py` that asserted 
 #### Note on Held Item
 
 The pre-existing `test_greeks_populated_for_nonzero_iv` failure is now also documented as related to the held yfinance mock-drift issue: test mocks `src.yfinance_data_provider.yf` but yfinance is now imported directly in `src/options_chain_cache.py` (not through wrapper), and TradingView Playwright path is also unmocked. Browser cannot start in test environment.
+
+### 6. Manual Position Close — Optional Per-Share Buyback Cost
+
+**Date:** 2026-07-02  
+**Author:** Rusty (Agent Dev)  
+**Requested by:** dsanchor  
+**Status:** ✅ Done  
+**Impact:** Manual close workflows, position economics tracking
+
+#### Decision
+
+Extend manual position closes to accept an optional per-share `buyback_cost`. When provided, the value is stored directly on the closed position. When omitted or empty, the field is not set. The input is only exposed in the close modal for the `manual` close reason; assigned and expired closes retain their existing flow.
+
+#### Rationale
+
+Users may want to track the actual cost paid to buy back shares when closing a position manually. The value is optional to maintain backward compatibility. Limiting the input to manual closes avoids schema drift in positions closed by automated reasons (assignment, expiration).
+
+#### Changes
+
+**src/cosmos_db.py:**
+- `close_position()` function gained parameter: `buyback_cost: float | None = None`
+- Sets `pos["buyback_cost"]` only when `buyback_cost` is provided (not None)
+- If not provided, the field is omitted from the position record
+
+**web/app.py:**
+- `api_close_position()` endpoint now parses optional `buyback_cost` from the request JSON body
+- Invalid or empty values are normalized to None
+- The parameter is suppressed for non-manual close reasons; only exposed when `reason='manual'`
+- Passes the parsed value to `close_position()`
+
+**web/templates/symbol_detail.html:**
+- Added optional buyback cost input field in the close modal
+- Input is shown only when the close reason is set to `manual`
+- Input is reset on modal open (no carry-over from previous closes)
+- Only included in the PUT request body when the value is valid and non-empty
+
+**tests/test_cosmos_close.py:**
+- NEW test file with 2 test cases:
+  - Close position WITH buyback_cost (verifies field is stored)
+  - Close position WITHOUT buyback_cost (verifies field is omitted when not provided)
+- Both tests passed ✅
+
+#### Validation
+
+- ✅ pytest tests/test_cosmos_close.py -q → 2 passed
+- ✅ py_compile src/cosmos_db.py web/app.py → OK
+
+#### Technical Notes
+
+- The economics module already reads `position.buyback_cost` and multiplies by the contract multiplier
+- No reporting changes were required
+- The field is optional; backward-compatible with existing positions that lack it
+- Manual-close-only constraint ensures assigned and expired positions keep clean, simple schemas

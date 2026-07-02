@@ -1079,7 +1079,18 @@ async def api_close_position(request: Request, symbol: str, position_id: str):
         except Exception:
             pass
         close_reason = body.get("close_reason", "manual")
-        doc = cosmos.close_position(symbol.upper(), position_id, close_reason=close_reason)
+        buyback_cost = body.get("buyback_cost")
+        if buyback_cost is not None:
+            try:
+                buyback_cost = float(buyback_cost)
+            except (TypeError, ValueError):
+                buyback_cost = None
+        if close_reason != "manual":
+            buyback_cost = None
+        doc = cosmos.close_position(
+            symbol.upper(), position_id, close_reason=close_reason,
+            buyback_cost=buyback_cost,
+        )
         return JSONResponse(_clean_doc(doc))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=404)

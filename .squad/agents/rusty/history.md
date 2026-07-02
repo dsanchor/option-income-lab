@@ -1427,3 +1427,4 @@ Created `src/options_math.py` with `robust_mid(bid, ask, last=0.0)` helper that 
 ### Dead yfinance.options_chain DTE Config Removal (2026-07-01)
 
 - Removed dead `yfinance.options_chain.min_dte` / `max_dte` config keys. The 7-90 DTE window filter was dropped in the `OptionsChainCache` refactor; per dsanchor, `OptionsChainCache._fetch_yfinance` should only exclude expired contracts while roll-candidate selection keeps its separate DTE<=45 cap.
+- 2026-07-02 for dsanchor: Manual close now supports an optional per-share `buyback_cost` via `cosmos_db.close_position`, the `/api/symbols/{symbol}/positions/{position_id}/close` endpoint, and the `symbol_detail.html` close modal. The buyback input is only shown for `reason=manual`, and empty/invalid input is allowed/omitted.
