@@ -1428,3 +1428,8 @@ Created `src/options_math.py` with `robust_mid(bid, ask, last=0.0)` helper that 
 
 - Removed dead `yfinance.options_chain.min_dte` / `max_dte` config keys. The 7-90 DTE window filter was dropped in the `OptionsChainCache` refactor; per dsanchor, `OptionsChainCache._fetch_yfinance` should only exclude expired contracts while roll-candidate selection keeps its separate DTE<=45 cap.
 - 2026-07-02 for dsanchor: Manual close now supports an optional per-share `buyback_cost` via `cosmos_db.close_position`, the `/api/symbols/{symbol}/positions/{position_id}/close` endpoint, and the `symbol_detail.html` close modal. The buyback input is only shown for `reason=manual`, and empty/invalid input is allowed/omitted.
+
+### Scheduler Enabled Toggle Live Registry Fix (2026-07-03)
+
+## Learnings
+- settings_config_save must call registry.update_task_enabled(name, enabled, scheduler.config) per task — writing enabled only to disk/cosmos + reschedule(cron) leaves the live registry stale, so the settings checkbox reverts on reload; monitor_agents is intentionally always-on. 2026-07-03 for dsanchor.

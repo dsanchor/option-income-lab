@@ -4560,3 +4560,47 @@ Users may want to track the actual cost paid to buy back shares when closing a p
 - No reporting changes were required
 - The field is optional; backward-compatible with existing positions that lack it
 - Manual-close-only constraint ensures assigned and expired positions keep clean, simple schemas
+
+### 7. Scheduler Enabled Toggle Live Registry Persistence
+
+**Date:** 2026-07-03  
+**Author:** Rusty (Agent Dev)  
+**Requested by:** dsanchor  
+**Status:** ✅ Done  
+**Impact:** Settings UI reliability, scheduler task enable/disable workflows
+
+#### Decision
+
+When saving scheduler settings from the `settings_config_save` endpoint, update the live scheduler registry enabled state for every togglable task immediately after rescheduling its cron.
+
+#### Context
+
+The save path persisted the `enabled` flag to disk config and CosmosDB, and rescheduled the associated cron task. However, the settings page reads checkbox state from `scheduler.registry.get_all_task_metadata()`, which contains the live in-memory state. Without updating the registry after save, the page reload would display stale (previously cached) enabled state for toggled tasks.
+
+**Root Cause:** Gap between persistent storage (disk/Cosmos) and live registry state. The save wrote to disk but not to the registry.
+
+#### Outcome
+
+Added `scheduler.registry.update_task_enabled(task_name, enabled_bool, scheduler.config)` immediately after each `scheduler.reschedule_*()` call in `settings_config_save` for all togglable tasks:
+
+1. summary_agent
+2. plan_monitor
+3. options_chain
+4. dgi_screener
+5. banner_agent
+6. calendar_sync
+7. portfolio_enrichment
+
+**Note:** `monitor_agents` was intentionally left unchanged because the registry hardcodes it as enabled per design.
+
+#### Validation
+
+- ✅ `python3 -m py_compile web/app.py` — No syntax errors
+- ✅ Code review: 7 one-line insertions, minimal and surgical
+- ✅ No pre-existing unit tests for settings_config_save to run
+
+#### Technical Notes
+
+- The fix is strictly an in-memory sync operation; no API contract changes
+- All task enable/disable state paths now synchronized: disk → Cosmos → registry
+- Backward-compatible; no breaking changes to existing functionality

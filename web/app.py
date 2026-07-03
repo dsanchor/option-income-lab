@@ -3259,6 +3259,7 @@ async def settings_config_save(request: Request):
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
                 scheduler.reschedule_summary(summary_cron)
+                scheduler.registry.update_task_enabled("summary_agent", summary_enabled, scheduler.config)
         except (ValueError, KeyError):
             pass
 
@@ -3286,6 +3287,7 @@ async def settings_config_save(request: Request):
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
                 scheduler.reschedule_plan_monitor(plan_monitor_cron)
+                scheduler.registry.update_task_enabled("plan_monitor", plan_monitor_enabled, scheduler.config)
         except (ValueError, KeyError):
             pass
 
@@ -3317,6 +3319,7 @@ async def settings_config_save(request: Request):
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
                 scheduler.reschedule_options_chain(options_chain_cron)
+                scheduler.registry.update_task_enabled("options_chain", options_chain_enabled, scheduler.config)
         except (ValueError, KeyError):
             pass
 
@@ -3355,6 +3358,7 @@ async def settings_config_save(request: Request):
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
                 scheduler.reschedule_dgi_screener(dgi_cron)
+                scheduler.registry.update_task_enabled("dgi_screener", dgi_enabled, scheduler.config)
         except (ValueError, KeyError):
             pass
 
@@ -3390,6 +3394,7 @@ async def settings_config_save(request: Request):
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
                 scheduler.reschedule_banner(banner_cron)
+                scheduler.registry.update_task_enabled("banner_agent", banner_enabled, scheduler.config)
         except (ValueError, KeyError):
             pass
 
@@ -3417,6 +3422,7 @@ async def settings_config_save(request: Request):
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
                 scheduler.reschedule_calendar(calendar_cron)
+                scheduler.registry.update_task_enabled("calendar_sync", calendar_enabled, scheduler.config)
         except (ValueError, KeyError):
             pass
 
@@ -3444,6 +3450,7 @@ async def settings_config_save(request: Request):
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
                 scheduler.reschedule_portfolio_enrichment(pe_cron)
+                scheduler.registry.update_task_enabled("portfolio_enrichment", pe_enabled, scheduler.config)
         except (ValueError, KeyError):
             pass
 
