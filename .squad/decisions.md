@@ -4665,3 +4665,46 @@ All tests passed — CSP-gating works correctly, other agents byte-for-byte unch
 - `agent_runner.py:1131-1132` — DIVIDENDS PAGE injection (already exists)
 - `src/supervisor_instructions.py:556-578` — new CSP ex-div awareness section
 - Entry-timing awareness framing ensures alignment with existing options pricing model (put-call parity)
+
+### 9. Calendar active-position flag per event date
+
+**Date:** 2026-07-08  
+**Author:** Rusty (Agent Dev)  
+**Status:** ✅ Implemented  
+**Impact:** Calendar event accuracy, position state consistency
+
+#### Decision
+
+The scheduled `sync_calendar` in `src/main.py` now computes `has_active_position` per calendar event date, matching the logic already present in `web/app.py`.
+
+#### Context
+
+Calendar events (earnings / ex-dividend) were being flagged as "active position" whenever the symbol had ANY active position, even if that position had expired before the event date. This was a symbol-wide check that failed to account for position expiration dates.
+
+The web/manual sync in `web/app.py` (lines 2012-2021) was already implementing the correct per-event logic; the scheduled sync had not been updated to match.
+
+#### Implementation
+
+**File:** `src/main.py`  
+**Changes:**
+- Rewrote `sync_calendar` to collect active positions with their expirations
+- Added helper function `_has_position_active_on(event_date)` that returns True only if some active position has `expiration >= event_date`
+- Applied the helper to both `earnings` and `ex_dividend` upserts
+- Web/app.py left unchanged (already correct)
+
+**New Test File:** `tests/test_calendar_active_position.py`  
+- Validates per-event active position logic
+- Test passed ✅
+
+#### Validation
+
+```
+python3 -m py_compile src/main.py → OK
+pytest tests/test_calendar_active_position.py -q → 1 passed
+```
+
+#### Rationale
+
+- **Per-event accuracy:** Each calendar event should be checked against active positions that extend through that specific date
+- **Consistency:** Scheduled sync now mirrors the correct web/manual sync logic
+- **Scope:** Changes apply to scheduled calendar sync only; web/manual sync and trading logic remain unchanged

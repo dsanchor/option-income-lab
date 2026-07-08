@@ -496,9 +496,21 @@ class OptionsAgentScheduler:
             if not symbol:
                 continue
 
-            has_active_position = any(
-                p.get("status") == "active" for p in sym_doc.get("positions", [])
-            )
+            active_positions = [
+                p for p in sym_doc.get("positions", [])
+                if p.get("status") == "active" and p.get("expiration")
+            ]
+
+            def _has_position_active_on(event_date_str: str) -> bool:
+                """True if any active position covers the event date (expiration >= event date)."""
+                for p in active_positions:
+                    try:
+                        exp_str = p["expiration"][:10]  # handle ISO datetime strings
+                        if exp_str >= event_date_str:
+                            return True
+                    except (TypeError, IndexError):
+                        continue
+                return False
 
             try:
                 ticker = yf_lib.Ticker(symbol)
@@ -513,7 +525,7 @@ class OptionsAgentScheduler:
             if earnings_ts:
                 try:
                     earnings_date = datetime.fromtimestamp(earnings_ts, tz=timezone.utc).strftime("%Y-%m-%d")
-                    self.cosmos.upsert_calendar_event(symbol, "earnings", earnings_date, has_active_position)
+                    self.cosmos.upsert_calendar_event(symbol, "earnings", earnings_date, _has_position_active_on(earnings_date))
                     updated += 1
                 except (OSError, ValueError):
                     pass
@@ -523,7 +535,7 @@ class OptionsAgentScheduler:
             if ex_div_ts:
                 try:
                     ex_div_date = datetime.fromtimestamp(ex_div_ts, tz=timezone.utc).strftime("%Y-%m-%d")
-                    self.cosmos.upsert_calendar_event(symbol, "ex_dividend", ex_div_date, has_active_position)
+                    self.cosmos.upsert_calendar_event(symbol, "ex_dividend", ex_div_date, _has_position_active_on(ex_div_date))
                     updated += 1
                 except (OSError, ValueError):
                     pass
