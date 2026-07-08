@@ -4604,3 +4604,64 @@ Added `scheduler.registry.update_task_enabled(task_name, enabled_bool, scheduler
 - The fix is strictly an in-memory sync operation; no API contract changes
 - All task enable/disable state paths now synchronized: disk → Cosmos → registry
 - Backward-compatible; no breaking changes to existing functionality
+
+### 8. Supervisor surfaces ex-dividend for CSP (informational); calls unchanged
+
+**Date:** 2026-07-08  
+**Author:** dsanchor (via Copilot)  
+**Agent:** Linus (Quant Dev)  
+**Status:** ✅ Implemented  
+**Impact:** CSP entry-timing awareness, supervisor context
+
+#### Decision
+
+Add a NON-BLOCKING informational note to the supervisor audit for cash-secured put (CSP) SELL decisions when an ex-dividend date falls within the trade window. Covered-call / call side is intentionally LEFT UNCHANGED (its ex-div ITM early-assignment warning already handles the real risk).
+
+#### Context
+
+**Motivation:** User request. Motivated by a GIS CSP alert (2026-07-07, $35 Aug-21 put) where ex-div was 3 days out and not surfaced.
+
+**Ex-div data availability:** Ex-div data is already in the supervisor's context via the `DIVIDENDS PAGE` block injected by `agent_runner.py:1131-1132` (from yfinance `ex_dividend_date_recent`), so this is instruction-only — no plumbing work.
+
+**Why CSP-only:** For short puts, ex-div creates mild entry-timing consideration (the underlying typically drops ~the dividend on ex-date, moving it modestly toward the short strike). However, options already price this via put-call parity; the value is discretionary entry timing, not catching mispricing. Calls have different dynamics (ITM early-assignment risk), already handled in call instructions.
+
+#### Implementation
+
+**File:** `src/supervisor_instructions.py`  
+**Method:** Modified `get_supervisor_instructions()` to conditionally append ex-div section when:
+- `agent_type == "cash_secured_put"`
+- `decision_type == "SELL"`
+
+**Content Guidelines:**
+- Check DIVIDENDS PAGE for ex-div within trade window (now → expiration)
+- Emphasize near-term case (~10 days) as most relevant for fresh entry
+- State ex-div date and typical price drop effect (modest headwind toward strike)
+- Frame as **INFORMATIONAL / entry-timing awareness ONLY** — must NOT block, downgrade, or flip SELL decision by itself
+- Must NOT by itself raise `challenge_strength` (options already price dividends via put-call parity)
+- Deep-ITM (delta < -0.70) + ex-div within ~10 days: rare early-assignment possibility (brief note, consistent with existing CSP framework)
+- Fold into existing audit fields (`counter_arguments`, `one_liner`, etc.) — no schema changes
+
+**Lines added:** ~26
+
+#### Verification
+
+- ✅ `python3 -m py_compile src/supervisor_instructions.py` — Passed
+- ✅ `covered_call SELL` — no ex-div text (unchanged)
+- ✅ `open_call WAIT` — no ex-div text (unchanged)
+- ✅ `cash_secured_put SELL` — has ex-div text (CSP-gated)
+- ✅ `cash_secured_put NOT_NOW` — no ex-div text (SELL-only gating)
+
+All tests passed — CSP-gating works correctly, other agents byte-for-byte unchanged.
+
+#### Rationale
+
+- **CSP-specific:** Ex-div creates mild entry-timing consideration but options already price this. Different from calls where ex-div creates ITM early-assignment risk (already handled).
+- **Non-blocking:** Awareness, not a blocker. Supervisor surfaces as context, not as a challenge requiring reconsideration unless there's also a genuine data/risk issue.
+- **No schema changes:** Folds into existing audit fields to keep response parsing unchanged.
+- **Conditional append:** Implementation ensures covered_call and other agents get zero changes (tested and verified).
+
+#### Technical Notes
+
+- `agent_runner.py:1131-1132` — DIVIDENDS PAGE injection (already exists)
+- `src/supervisor_instructions.py:556-578` — new CSP ex-div awareness section
+- Entry-timing awareness framing ensures alignment with existing options pricing model (put-call parity)

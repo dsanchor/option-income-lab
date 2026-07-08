@@ -419,7 +419,7 @@ def get_supervisor_instructions(agent_type: str, decision_type: str) -> str:
     playbook = _PLAYBOOKS[decision_type]
     context = _AGENT_CONTEXT[agent_type]
 
-    return f"""\
+    base_prompt = f"""\
 # ROLE: Options Strategy Supervisor — Quality Audit
 
 You are an experienced options trader who REVIEWS decisions for errors,
@@ -552,3 +552,29 @@ no commentary outside the JSON.
   No hedging, no "maybe".
 - `one_liner`: Max ~120 characters.  Starts with the core finding.
 """
+
+    # CSP-specific ex-dividend awareness for SELL decisions
+    if agent_type == "cash_secured_put" and decision_type == "SELL":
+        base_prompt += """
+
+## ℹ️ EX-DIVIDEND AWARENESS (Cash-Secured Put SELL only)
+
+If the DIVIDENDS PAGE lists an ex-dividend date within the trade window (now → expiration), 
+and especially if near-term (~10 days or less), include a brief informational observation:
+
+- State the ex-div date and that the underlying typically drops ~the dividend amount on the 
+  ex-date, moving it modestly toward the short put strike (mild near-term headwind / possible 
+  immediate paper drawdown; may also offer a slightly better entry AFTER ex-div if waiting).
+- Frame this as **entry-timing awareness ONLY** — it must NOT block, downgrade, or flip the 
+  SELL decision by itself, and must NOT by itself raise `challenge_strength`. Options already 
+  price in known dividends via put-call parity — this is awareness, not catching a mispricing.
+- If the proposed strike is deep-ITM (delta < -0.70) AND ex-div is within ~10 days, you may 
+  additionally note the rare early-assignment possibility, but keep it brief (consistent with 
+  existing CSP risk framework).
+
+Fold this observation into existing audit fields (`counter_arguments`, `one_liner`, etc.) 
+as appropriate — do NOT manufacture a finding solely for ex-div unless there is also a 
+genuine data/risk issue.
+"""
+
+    return base_prompt
