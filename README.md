@@ -198,6 +198,23 @@ The DPS provides **on-demand and automatic rule-based analysis** of open positio
 
 **UI:** A "📊 DPS Analysis" button on each active position panel triggers the analysis. Results show the recommendation, score, risk zone, key drivers, and an expandable score breakdown table with per-factor point contributions.
 
+#### DPS Insights (LLM Narrative)
+
+The **DPS Insights** feature provides a one-shot LLM-generated narrative explaining a position's DPS health over time. Accessible via a "🧠 DPS Insights" button next to the "📊 DPS Analysis" button on active position panels, it narrates the deterministic DPS score's trajectory and contributing factors without recomputing or overriding the score.
+
+**How it works:**
+1. Reads the position record and its full snapshot history from CosmosDB
+2. Sends the historical DPS scores, trends, and key indicators to an LLM (default: `gpt-5.4-mini`)
+3. The LLM produces a plain-text narrative interpreting what the DPS data shows — momentum, inflection points, risk drivers
+4. **No live data fetch** — only persisted position and snapshot data are used, keeping the analysis grounded in what the system actually recorded
+
+**Key principles:**
+- **Narrates, never overrides:** The LLM explains the deterministic score's story; it does not recalculate or second-guess the DPS algorithm
+- **Historical context only:** Uses the exact snapshots captured at monitor run time, not current market data
+- **One-shot response:** No chat history or follow-up questions — single advisory output per click
+
+**Configuration:** Model configurable via `dps_insights.model` in `config.yaml` (default: `gpt-5.4-mini`).
+
 ### Risk Rating (Sell-Side Agents)
 
 Every sell-side agent output (Covered Call and Cash Secured Put) includes a **risk rating** on a 0–10 scale, quantifying how risky the recommended action is.
@@ -231,6 +248,11 @@ A **mandatory hard rule** embedded in both position monitor agents (Open Call Mo
 
 The gate fires BEFORE other assessment logic (except earnings proximity). When triggered, the agent sets `close_for_profit_recommended: true` and adds `"profit_optimization"` to risk flags. The roll economics (buyback cost, new premium, net credit) are calculated from the filtered options chain.
 
+**Roll targets and timing:**
+- **DTE target range:** 21–35 DTE primary range, with a fallback cap at 45 DTE when no candidates exist in the primary window
+- **Post-earnings block window:** Hard block 0–7 days after earnings (no rolls into contracts expiring within this window); 8–13 days flagged as a caution zone
+- **Candidate ranking:** Roll candidates are sorted by **Annualized Return %** (descending) — calculated as `Premium% × 365 / DTE` — which normalizes premium by time and favors the 21–35 DTE target. The Net Credit column remains available for economics validation.
+
 ### Events Calendar
 
 The **Events Calendar** (`/symbols/calendar`) provides a monthly view of earnings dates and ex-dividend dates for all tracked symbols, with color coding to indicate whether open positions are exposed.
@@ -241,7 +263,7 @@ The **Events Calendar** (`/symbols/calendar`) provides a monthly view of earning
 | Earnings | 🟣 Purple (warning) | 🟠 Orange (informational) |
 | Ex-Dividend | 🔴 Red (warning) | 🟡 Yellow (informational) |
 
-**Active position detection:** A position is considered "active on a date" if its status is `active` AND its expiration date is on or after the event date. This ensures only positions actually exposed to the event are flagged — not just any open position for that symbol.
+**Active position detection:** A position is considered "active on a date" if its status is `active` AND its expiration date is on or after the event date. This per-event-date check ensures only positions actually exposed to the event are flagged — not just any open position for that symbol. The scheduled sync and manual refresh both apply this per-event logic.
 
 **Data source:** Earnings and ex-dividend dates are fetched from Yahoo Finance (`yfinance`) and cached in CosmosDB (`calendar` container, partition key `/symbol`). A scheduled sync job runs Mon–Fri at 5am by default (configurable via Settings). A manual **Refresh** button on the calendar page triggers an on-demand sync.
 
@@ -306,6 +328,8 @@ The Supervisor Agent is a separate LLM instance that audits every actionable tra
 | SELL | IV rank reality check, earnings proximity, technical headwinds, premium adequacy with benchmarks |
 | NOT_NOW | Support/resistance alignment, elevated IV, opportunity cost accumulation |
 
+**Ex-dividend awareness (CSP SELL only):** For cash-secured put SELL decisions, the Supervisor includes informational entry-timing awareness when an ex-dividend date falls within the trade window (now → expiration). The note surfaces the ex-div date and typical price drop effect (underlying typically drops by approximately the dividend amount on the ex-date, moving modestly toward the short put strike). This is **non-blocking, informational context only** — it does not raise `challenge_strength` or block the decision by itself, as options already price known dividends via put-call parity. Deep-ITM positions (delta < -0.70) with ex-div within ~10 days receive a brief note on rare early-assignment possibility. Call-side agents are unchanged; their ex-div ITM early-assignment handling remains in place.
+
 ### Alpha Advisor Agent (Parameter Relaxation)
 
 The Alpha Advisor is a separate LLM instance that identifies the **single blocking parameter** behind a WAIT decision and offers the best possible trade relaxing only that constraint. It does NOT replace the conservative recommendation — it provides a data-driven alternative when a trade was "almost good enough."
@@ -326,6 +350,8 @@ The Alpha Advisor is a separate LLM instance that identifies the **single blocki
 - `dte_below_ideal` — DTE acceptable but shorter than preferred
 
 **Hard gates (never relaxed):** Earnings within window, DTE > 45, fundamental quality failures, free-fall conditions (RSI < 25 + negative momentum), delta > 0.50.
+
+**Exclusion of held contracts:** When proposing alternative strikes for open positions, the Alpha Advisor automatically excludes the exact contract currently held (matching strike + expiration) from its recommendations, ensuring alternatives are always genuinely different. For roll scenarios, it surfaces the current position's buyback cost as a reference point when evaluating roll economics.
 
 **Output schema:**
 ```json
@@ -375,7 +401,7 @@ When a monitor agent (open_call_monitor, open_put_monitor) generates a ROLL aler
 Active positions in the Symbol Detail page have a Roll button in the positions table. Clicking it opens an inline form to specify new strike, new expiration, and optional notes. The same `rolled_to`/`rolled_from` chain is created without alert snapshots.
 
 **Position Actions:**
-- **Close** — Marks position as closed (status: "closed") with the timestamp
+- **Close** — Marks position as closed (status: "closed") with the timestamp. Supports an optional per-share `buyback_cost` field when closing manually (input shown only for manual close reason; omitted for assigned/expired closes).
 - **Roll** — Atomically closes current position (status: "rolled") and opens a new one, maintaining traceability chain. Supports optional buyback cost (per-share cost to close the old position) and new premium (per-share premium on the new position).
 - **Delete** — Permanently removes the position and cascade-deletes all linked activities/alerts
 
@@ -593,6 +619,26 @@ Perfect for researching new symbols before committing to tracking.
 6. Use "Change Mode" to switch back to Portfolio Chat or select a different symbol
 
 **Configuration:** Quick Analysis is read-only — data is fetched but never saved to CosmosDB. Rate limiting is handled gracefully with clear error messages.
+
+### Per-Activity Chat
+
+Accessible from individual activity detail pages via a **"Chat"** button next to the Delete button, this feature provides a read-only LLM advisory conversation about a specific agent decision. Designed for "why did the agent decide this?" questions and "what does this mean given today's market?" exploration.
+
+**How it works:**
+1. Click the "Chat" button on any activity detail page to open an ephemeral chat panel
+2. Ask questions about the activity — the LLM's decision rationale, position context, or implications
+3. The LLM receives two-tier context with strict separation:
+   - **AGENT DECISION block (historical):** The persisted activity record and position snapshot at decision time — exact, immutable data the agent used
+   - **CURRENT MARKET DATA block (live):** Re-fetched options chain and technical analysis labeled as "current, not what the agent used" — for comparing then vs. now
+4. The chat maintains conversation history within the session but never persists it — close the panel and it's gone
+5. **Read-only enforcement:** Zero database writes; the LLM cannot execute trades, modify positions, or alter activities
+
+**Key principles:**
+- **Historical vs. live separation:** Clearly distinguishes what the agent saw (historical snapshot) from what's happening now (live re-fetch)
+- **Ephemeral by design:** No chat persistence; lightweight advisory layer without bloating activity records
+- **Graceful degradation:** If live options chain or technicals are unavailable, the chat still functions with historical data only
+
+**Configuration:** Model configurable via `activity_chat.model` in `config.yaml` (default: `gpt-5.4-mini`).
 
 ## Summarization Agent
 

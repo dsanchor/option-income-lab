@@ -2027,3 +2027,34 @@ No breaking changes to your agents or trading logic. This is pure scheduler infr
 - **Validation:** `python3 -m py_compile src/dps_interpret_instructions.py` passes.
 - **Key Pattern:** When building a time-series narrative assistant over persisted scores, enforce a strict "narrate don't recompute" rule at the prompt level. The assistant must understand that the scores are ground truth, and its job is to explain the trajectory (current state, trend, history, outlook) by tying the score movements to the underlying signals (gap, RSI, MACD, ADX, P&L, midprice). This design follows the same read-only philosophy as the recently-added activity-chat feature (which separates historical agent decision context from live market data).
 - **For:** dsanchor
+
+## Learnings — README Documentation (2026-07-10)
+
+### Session README Update
+Updated README.md to document all user-facing changes from the July session commits. Made surgical edits to existing sections without reordering or rewriting unrelated content.
+
+**Sections updated:**
+- **Deterministic Position Scorer (DPS)** — Added DPS Insights subsection documenting the LLM narrative feature (gpt-5.4-mini, one-shot, narrates persisted DPS score/trend over snapshot history, no live fetch, no override)
+- **Supervisor Agent** — Added ex-dividend awareness note for CSP SELL decisions (informational entry-timing context when ex-div falls within trade window; non-blocking, surfaces typical price drop effect; deep-ITM rare assignment note; call side unchanged)
+- **Alpha Advisor Agent** — Added exclusion of identical held contract behavior and buyback-cost reference surfacing for roll scenarios
+- **Profit Target Gate** — Documented roll DTE target tuning (21-35 DTE primary, 45 DTE fallback), post-earnings block window (0-7 days hard block, 8-13 caution), and Annualized Return % ranking (replaces Net Credit descending)
+- **Events Calendar** — Clarified per-event-date active-position detection (scheduled sync and manual refresh both apply per-event logic)
+- **Position Lifecycle** — Noted optional per-share buyback_cost on manual close (input shown only for manual close reason)
+- **Dual-Mode Chat Experience** — Added Per-Activity Chat subsection (read-only advisory, two-tier historical-vs-live context separation, ephemeral panel, gpt-5.4-mini, zero DB writes; most important new user-facing feature of the session)
+
+**Doc conventions observed:**
+- README maintains consistent heading hierarchy (### for major features, #### for subsections)
+- Technical details use inline code formatting for field names, config keys, and model names
+- Behavior descriptions lead with user-visible outcome, followed by technical implementation
+- "How it works" numbered lists for multi-step processes
+- Bold for emphasis on key principles/constraints
+- Exact thresholds and field names quoted from code (21-35 DTE, gpt-5.4-mini, buyback_cost, delta < -0.70, etc.)
+- Skimmable formatting: bullet lists for features, tables for comparisons, bold headers for subsections
+- Internal refactors (DAL methods) briefly noted or skipped per task constraints
+
+**Accuracy focus:**
+- All DTE ranges, model names, field names, and thresholds verified against commit diffs
+- Per-activity Chat documented as the primary new user-facing feature
+- DPS Insights framed as LLM narration that never overrides the deterministic score
+- Roll ranking change clearly stated (Annualized Return % replaces Net Credit as sort key)
+- Ex-div awareness scoped to CSP SELL only with non-blocking informational framing

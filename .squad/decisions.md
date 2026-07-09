@@ -5378,3 +5378,80 @@ A Settings > Backup section to (1) EXPORT all data to a generic, DB-agnostic JSO
 
 Do NOT build the abstraction now. The generic JSON format IS the portability bridge (80% of the benefit). When a 2nd backend is actually added, extract a `StorageBackend` Protocol/ABC from CosmosDBService's public methods and add `CosmosStorage`. Tech-debt to watch: raw `cosmos.container.query_items("SELECT ... FROM c", partition_key=...)` calls that bypass the DAL (e.g. technical_analysis query in the activity-chat endpoint, DPS snapshot queries in web/app.py) — migrate these into CosmosDBService methods over time.
 
+# README Update — July Session Changes
+
+**Date:** 2026-07-10  
+**Author:** Linus (Quant Dev)  
+**Requested by:** dsanchor  
+**Status:** ✅ Complete
+
+## Summary
+
+Updated README.md to document all user-facing changes shipped in the July session. Made surgical, accurate edits to existing sections without reordering or rewriting unrelated content. Matched the README's existing tone, heading style, and formatting.
+
+## Changes Documented
+
+### 1. DPS Insights (NEW Feature)
+**Section:** `### Deterministic Position Scorer (DPS)` → new `#### DPS Insights (LLM Narrative)` subsection  
+**What:** One-shot LLM narrative of a position's DPS health over persisted snapshot history. Accessible via "🧠 DPS Insights" button. Uses `gpt-5.4-mini`. Narrates — does not override — the deterministic score.  
+**Key details:** No live fetch, historical context only, one-shot response, configurable via `dps_insights.model`.
+
+### 2. Per-Activity Chat (NEW Feature — PRIMARY)
+**Section:** `## Dual-Mode Chat Experience` → new `### Per-Activity Chat` subsection  
+**What:** Read-only LLM advisory conversation about specific agent decisions. Accessible via "Chat" button on activity detail pages. Two-tier context separation: historical agent decision vs. live re-fetched market data. Uses `gpt-5.4-mini`.  
+**Key details:** Ephemeral (no persistence), graceful degradation if live data unavailable, zero DB writes, configurable via `activity_chat.model`.
+
+### 3. Supervisor Ex-Dividend Awareness (CSP SELL)
+**Section:** `### Supervisor Agent (Quality Auditor)` → new paragraph after audit playbooks table  
+**What:** Non-blocking informational entry-timing note when ex-div falls within trade window for CSP SELL decisions only. Surfaces ex-div date and typical price drop effect. Deep-ITM (delta < -0.70) + near ex-div (~10 days): rare early-assignment note.  
+**Key details:** Non-blocking, does not raise challenge_strength, options already price dividends via put-call parity. Call side unchanged.
+
+### 4. Alpha Advisor — Identical Contract Exclusion
+**Section:** `### Alpha Advisor Agent (Parameter Relaxation)` → new paragraph after Hard gates  
+**What:** Alpha Advisor excludes the exact contract currently held (matching strike + expiration) from recommendations. Surfaces current buyback cost as reference for roll scenarios.
+
+### 5. Roll DTE Target, Post-Earnings, and Ranking
+**Section:** `### Profit Target Gate (Monitor Agents)` → new subsection `**Roll targets and timing:**` after gate description  
+**What:** 
+- **DTE target:** 21-35 DTE primary range, 45 DTE fallback cap (was 30-45 DTE primary)
+- **Post-earnings block:** 0-7 days hard block (was 0-13), 8-13 days caution zone
+- **Ranking:** Annualized Return % descending (replaces Net Credit descending) — normalizes premium by time, favors 21-35 DTE target
+
+### 6. Events Calendar — Per-Event-Date Active Position
+**Section:** `### Events Calendar` → updated `**Active position detection:**` paragraph  
+**What:** Clarified that scheduled sync and manual refresh both apply per-event-date logic (expiration >= event date) to ensure only positions exposed to the event are flagged.
+
+### 7. Position Lifecycle — Optional Buyback Cost on Manual Close
+**Section:** `### Position Lifecycle` → updated `**Position Actions:**` → Close bullet  
+**What:** Manual close now supports optional per-share `buyback_cost` field (input shown only for manual close reason; omitted for assigned/expired closes).
+
+## Commits Covered
+
+- `76c5dae` — Roll DTE target tuning + post-earnings block window changes
+- `439f0eb` — Roll candidate ranking: Net Credit → Annualized Return %
+- `995c377` — Removed dead 7-90 DTE window config (internal cleanup, minimal doc impact)
+- `4f0ae0f` — Optional per-share buyback_cost on manual position close
+- `5a76e8f` — Scheduler enabled-toggle persistence fix (bugfix, minimal doc impact)
+- `92c5a00` — Supervisor surfaces ex-dividend awareness for CSP SELL
+- `75740ca` — Calendar events active-position flag per-event-date refinement
+- `9db14c6` — Alpha Advisor excludes identical held contract + surfaces buyback cost
+- `65762ab` — NEW: Per-Activity Chat (read-only LLM advisory)
+- `a3145fb` — NEW: DPS Insights + DAL refactor (internal DAL changes briefly noted/skipped per constraints)
+
+## Validation
+
+- Re-read all edited sections to confirm they read cleanly and headings nest correctly
+- All thresholds, field names, and model names verified against commit diffs
+- No sections accidentally broken, no unrelated content touched
+- Documentation needs no tests per task constraints
+
+## README Documentation Conventions
+
+- Consistent heading hierarchy: `###` for major features, `####` for subsections
+- Technical details use inline code formatting for field names, config keys, and model names
+- Behavior descriptions lead with user-visible outcome, followed by technical implementation
+- "How it works" numbered lists for multi-step processes
+- Bold for emphasis on key principles/constraints
+- Exact thresholds and field names quoted from code
+- Skimmable formatting: bullet lists for features, tables for comparisons
+- Internal refactors briefly noted at most or skipped
