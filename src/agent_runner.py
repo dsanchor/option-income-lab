@@ -25,6 +25,8 @@ from .options_chain_filters import (
     filter_options_chain_by_delta,
     filter_options_chain_by_roll_direction,
     format_roll_candidates_table,
+    exclude_contract,
+    get_contract,
 )
 from .yfinance_data_provider import YFinanceDataProvider, create_provider, get_shared_provider, OPTIONS_CHAIN_SCHEMA_DESCRIPTION
 from .supervisor_instructions import get_supervisor_instructions, SUPERVISOR_OUTPUT_SCHEMA
@@ -1137,12 +1139,22 @@ Provide your alpha advisor analysis in the JSON format specified above."""
 {options_chain_text}"""
         return block
 
-    def _build_alpha_options_chain(self, data: dict, agent_type: str) -> str:
+    def _build_alpha_options_chain(
+        self,
+        data: dict,
+        agent_type: str,
+        current_strike: float = None,
+        current_expiration: str = None,
+    ) -> str:
         """Build a filtered options chain text for the alpha agent.
 
         For CC/open_call: calls only, delta-filtered.
         For CSP/open_put: puts only, delta-filtered.
         For buy_tracker: returns empty string (no options).
+        
+        For open position monitoring, excludes the EXACT currently-held contract
+        (same strike AND expiration) to prevent no-op roll suggestions, BUT
+        surfaces the current contract's buyback cost as a labeled reference.
         """
         if agent_type == "buy_tracker":
             return ""
@@ -1163,10 +1175,43 @@ Provide your alpha advisor analysis in the JSON format specified above."""
         else:
             return ""
         structured = filter_options_chain_by_type(structured, option_type)
+        # Capture current contract BEFORE delta filter (for buyback cost reference)
+        current_contract = None
+        if current_strike is not None and current_expiration is not None:
+            current_contract = get_contract(structured, current_strike, current_expiration, option_type)
+        # Apply delta filter to candidate chain
         structured = filter_options_chain_by_delta(structured)
-        if not structured.get("calls") and not structured.get("puts"):
+        # Exclude the EXACT current contract (same strike AND expiration)
+        if current_strike is not None and current_expiration is not None:
+            structured = exclude_contract(structured, current_strike, current_expiration, option_type)
+        # Build the response text
+        candidates_exist = bool(structured.get("calls") or structured.get("puts"))
+        # If no candidates AND no current_contract, return empty
+        if not candidates_exist and current_contract is None:
             return ""
-        return OPTIONS_CHAIN_SCHEMA_DESCRIPTION + "\n" + json.dumps(structured, indent=2)
+        result_parts = []
+        if candidates_exist:
+            result_parts.append(OPTIONS_CHAIN_SCHEMA_DESCRIPTION + "\n" + json.dumps(structured, indent=2))
+        # Append CURRENT POSITION reference block if available
+        if current_contract is not None:
+            buyback_cost = current_contract.get("ask") or current_contract.get("mark") or current_contract.get("last")
+            ref_block = {
+                "strike": float(current_strike),
+                "expiration": current_expiration,
+                "bid": current_contract.get("bid"),
+                "ask": current_contract.get("ask"),
+                "buyback_cost": buyback_cost,
+                "delta": current_contract.get("delta"),
+                "last": current_contract.get("last"),
+            }
+            ref_text = (
+                "\n\n=== CURRENT POSITION (buyback-cost reference — NOT a roll candidate) ===\n"
+                + json.dumps(ref_block, indent=2)
+                + "\n\nNote: buyback_cost is the ask (cost to buy-to-close the current short contract). "
+                + "Use it to compare closing vs rolling. Do NOT propose this exact strike+expiration as a roll/re-sell target."
+            )
+            result_parts.append(ref_text)
+        return "".join(result_parts)
 
     async def run_symbol_agent(
         self,
@@ -2179,7 +2224,11 @@ Output your activity in the required JSON format. Use the timestamp above in you
 
                 # ── Supervisor always runs; Alpha only on alerts / prolonged waits ──
                 market_data = self._build_market_data_block(data, symbol, exchange)
-                alpha_chain_text = self._build_alpha_options_chain(data, agent_type)
+                alpha_chain_text = self._build_alpha_options_chain(
+                    data, agent_type,
+                    current_strike=float(strike),
+                    current_expiration=expiration
+                )
                 alpha_market_data = self._build_market_data_block(data, symbol, exchange, options_chain_text=alpha_chain_text)
                 # Both supervisor + alpha run in parallel
                 supervisor_view, alpha_view = await asyncio.gather(

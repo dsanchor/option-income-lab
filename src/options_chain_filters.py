@@ -145,6 +145,158 @@ def filter_options_chain_by_delta(
     }
 
 
+def get_contract(
+    chain: dict,
+    current_strike: float,
+    current_expiration: str,
+    option_type: str,
+) -> Optional[dict]:
+    """Retrieve the EXACT contract dict for the given strike+expiration.
+    
+    Returns the contract dict (bid/ask/delta/etc.) for the specified strike and
+    expiration, or None if not found. Null-safe: None args → None.
+    
+    Parameters
+    ----------
+    chain : dict
+        Structured chain dict (calls/puts buckets).
+    current_strike : float
+        Strike of the contract to find.
+    current_expiration : str
+        Expiration of the contract to find (YYYY-MM-DD or YYYYMMDD).
+    option_type : str
+        "call" / "covered_call" / "open_call" → searches "calls" bucket.
+        "put" / "cash_secured_put" / "open_put" → searches "puts" bucket.
+    
+    Returns
+    -------
+    dict or None
+        The contract dict if found, otherwise None.
+    """
+    # Null-safe: if either strike or expiration is None, return None
+    if current_strike is None or current_expiration is None:
+        return None
+    
+    # Determine which bucket to search
+    if option_type in ("call", "covered_call", "open_call", "open_call_monitor"):
+        bucket_key = "calls"
+    elif option_type in ("put", "cash_secured_put", "open_put", "open_put_monitor"):
+        bucket_key = "puts"
+    else:
+        # Unknown type — return None
+        return None
+    
+    # Normalize expiration to chain key format (YYYYMMDD)
+    exp_key = str(current_expiration).replace("-", "")[:8]
+    
+    # Get the bucket
+    bucket = chain.get(bucket_key, {})
+    if not bucket or exp_key not in bucket:
+        # Expiration not in chain
+        return None
+    
+    # Search for the strike by float value (handles "65.0", "65.00", "65")
+    strikes_dict = bucket[exp_key]
+    for sk, contract in strikes_dict.items():
+        try:
+            if float(sk) == float(current_strike):
+                return contract
+        except (ValueError, TypeError):
+            # Non-numeric strike key — skip
+            continue
+    
+    # Strike not found in this expiration
+    return None
+
+
+def exclude_contract(
+    chain: dict,
+    current_strike: float,
+    current_expiration: str,
+    option_type: str,
+) -> dict:
+    """Return a copy of the chain with the EXACT current contract removed.
+    
+    Removes the contract matching BOTH the current strike AND current expiration.
+    A same-strike different-expiration (roll-out) or same-expiration different-strike
+    (roll-down/up) candidate is preserved — only the identical no-op contract is dropped.
+    
+    Parameters
+    ----------
+    chain : dict
+        Structured chain dict (output of filter_options_chain_by_delta).
+    current_strike : float
+        Strike of the currently-held contract.
+    current_expiration : str
+        Expiration of the currently-held contract (YYYY-MM-DD or YYYYMMDD).
+    option_type : str
+        "call" / "covered_call" / "open_call" → operates on "calls" bucket.
+        "put" / "cash_secured_put" / "open_put" → operates on "puts" bucket.
+    
+    Returns
+    -------
+    dict
+        Chain with the EXACT current contract removed (if found), otherwise unchanged.
+    """
+    # Null-safe: if either strike or expiration is None, return unchanged
+    if current_strike is None or current_expiration is None:
+        return chain
+    
+    # Determine which bucket to filter
+    if option_type in ("call", "covered_call", "open_call", "open_call_monitor"):
+        bucket_key = "calls"
+    elif option_type in ("put", "cash_secured_put", "open_put", "open_put_monitor"):
+        bucket_key = "puts"
+    else:
+        # Unknown type — return unchanged
+        return chain
+    
+    # Normalize expiration to chain key format (YYYYMMDD)
+    exp_key = str(current_expiration).replace("-", "")[:8]
+    
+    # Get the bucket
+    bucket = chain.get(bucket_key, {})
+    if not bucket or exp_key not in bucket:
+        # Expiration not in chain — nothing to exclude
+        return chain
+    
+    # Make a shallow copy of the chain to avoid mutating the original
+    result = {
+        "symbol": chain.get("symbol", ""),
+        "timestamp": chain.get("timestamp"),
+    }
+    if "current_position" in chain:
+        result["current_position"] = chain["current_position"]
+    
+    # Deep-ish copy of the affected bucket
+    other_key = "puts" if bucket_key == "calls" else "calls"
+    result[other_key] = chain.get(other_key, {})
+    
+    # Copy the bucket, removing the matching contract
+    filtered_bucket = {}
+    for exp, strikes_dict in bucket.items():
+        if exp == exp_key:
+            # This is the expiration we need to filter
+            kept = {}
+            for sk, contract in strikes_dict.items():
+                # Match strike by float value (handles "65.0", "65.00", "65")
+                try:
+                    if float(sk) != float(current_strike):
+                        kept[sk] = contract
+                except (ValueError, TypeError):
+                    # Non-numeric strike key — keep it
+                    kept[sk] = contract
+            # Only add this expiration if it still has strikes after filtering
+            if kept:
+                filtered_bucket[exp] = kept
+        else:
+            # Other expirations — keep as-is
+            filtered_bucket[exp] = strikes_dict
+    
+    result[bucket_key] = filtered_bucket
+    return result
+
+
 def filter_options_chain_by_roll_direction(
     chain: dict,
     current_strike: float,

@@ -513,7 +513,20 @@ action.
 6. **Default to suggesting.** Only return NONE when the blocking reason
    is a hard gate (earnings, DTE >45, fundamental failure) or when
    there truly is no viable contract in the chain.
-7. Provide a **one_liner** suitable for a Telegram notification.
+7. **ROLL/RE-SELL constraint (open positions only).** When suggesting a
+   roll or re-sell alternative for an open position (open_call, open_put,
+   covered_call, cash_secured_put where a contract is currently held),
+   the proposed strike and/or expiration MUST differ from the currently-
+   held contract. Rolling or re-selling into the IDENTICAL strike AND
+   expiration is a no-op that only pays the bid/ask spread. The current
+   contract's buyback cost (ask) is provided in the "CURRENT POSITION"
+   reference block at the end of the market data—use that value as the
+   buy-to-close cost when comparing closing vs rolling. The current
+   contract appears there for reference ONLY; do NOT propose it as a
+   roll/re-sell target. If the only "alternative" would be the same
+   contract, mark opportunity_strength as NONE (no viable relaxation
+   exists).
+8. Provide a **one_liner** suitable for a Telegram notification.
 
 {playbook}
 

@@ -4708,3 +4708,118 @@ pytest tests/test_calendar_active_position.py -q → 1 passed
 - **Per-event accuracy:** Each calendar event should be checked against active positions that extend through that specific date
 - **Consistency:** Scheduled sync now mirrors the correct web/manual sync logic
 - **Scope:** Changes apply to scheduled calendar sync only; web/manual sync and trading logic remain unchanged
+
+---
+
+## 2026-07-09: Alpha Exclude Identical Held Contract + Preserve Buyback Cost
+
+**Date:** 2026-07-09  
+**Requester:** @dsanchor  
+**Status:** ✅ Implemented  
+**Impact:** Alpha advisor accuracy, prevents no-op rolls, improves close vs roll cost comparison
+
+### Problem
+
+The alpha advisor was recommending rolling into the EXACT same contract (same strike AND expiration) as the currently-held position.
+
+**Example:** Held $65 call exp 2026-07-17 → Alpha proposed "ROLL at $65 strike, exp 2026-07-17" (buy back at ask ~$0.20, re-sell at bid ~$0.15 = guaranteed ~$0.05/share loss for no position change).
+
+**Root Cause:** `AgentRunner._build_alpha_options_chain()` filtered by option type + delta but did NOT exclude the currently-held contract from candidate selection. In the position-monitor flow, the held contract's strike/expiration were available but unused.
+
+**User Feedback (Pass 2):** After implementing the exclusion filter, "If you remove the current contract, you miss the buyback cost." The buyback (buy-to-close) cost is the CURRENT contract's ask price, needed for the alpha to compare "close now (pay buyback) vs roll to a different contract."
+
+### Solution: Two-Pass Implementation
+
+#### Pass 1: Exclude Identical Contract (No-Op Prevention)
+
+**Primary Fix:** Added `exclude_contract()` function to `src/options_chain_filters.py`
+- Removes the EXACT contract matching BOTH current strike AND current expiration
+- Preserves roll-out (same strike, different exp) and roll-up/down (different strike, same exp) candidates
+- Operates on correct bucket: "calls" or "puts" per option_type
+- Normalizes expiration: `str(exp).replace("-","")[:8]` (handles both "2026-07-17" and "20260717")
+- Robust strike matching by float: compares `float(key) == float(current_strike)` (handles "65.0"/"65.00"/"65")
+- Null-safe: if current_strike/current_expiration None, returns chain unchanged
+
+**Wired into Alpha Builder:** `src/agent_runner.py`
+- Updated `_build_alpha_options_chain` signature: added `current_strike=None`, `current_expiration=None` params
+- After delta filter (line 1166+), if both params provided, call `exclude_contract(structured, current_strike, current_expiration, option_type)`
+- Monitor call site (~line 2182): passes held position strike/expiration
+- SELL-flow call site (line 1329): unchanged (new positions have no current contract; params default None)
+
+**Instruction Guard:** Extended rule #7 in `src/alpha_instructions.py`
+- A proposed roll/re-sell alternative MUST change the strike and/or the expiration
+- NEVER propose rolling into the identical strike AND expiration
+- If only alternative would be identical contract, report opportunity_strength as NONE
+
+#### Pass 2: Preserve Buyback Cost Reference (Comparison Support)
+
+**Lookup Helper:** Added `get_contract()` function to `src/options_chain_filters.py`
+- Retrieves the current contract dict by strike/expiration from the full chain (BEFORE other filters)
+- Uses same normalization logic as `exclude_contract` for consistency
+- Pure lookup, null-safe, non-mutating
+
+**Reference Block:** Updated `_build_alpha_options_chain` in `src/agent_runner.py`
+- Capture current contract BEFORE delta filter (may already be filtered out by delta band)
+- After excluding from candidates, append labeled reference block:
+  ```
+  === CURRENT POSITION (buyback-cost reference — NOT a roll candidate) ===
+  {
+    "strike": <current_strike>,
+    "expiration": <current_expiration>,
+    "bid": <bid>,
+    "ask": <ask>,
+    "buyback_cost": <ask>,  // explicit field for clarity
+    "delta": <delta>,
+    "last": <last>
+  }
+  Note: buyback_cost is the ask (cost to buy-to-close). Use it to compare closing vs rolling. Do NOT propose this exact strike+expiration as a roll target.
+  ```
+- Graceful fallback: if candidates empty BUT current_contract present, return just reference block (still useful)
+
+**Instruction Guard Extended:** Rule #7 now states
+- Use the current position block's ask as buy-to-close cost when comparing close vs roll
+- Current contract is reference-only; must NEVER be selected as roll/re-sell target
+
+### Verification
+
+**Compilation:**
+```
+python3 -m py_compile src/options_chain_filters.py src/agent_runner.py src/alpha_instructions.py → OK
+```
+
+**Unit Tests:** 16 new tests
+- `tests/test_exclude_contract.py` (8 tests): exact match removal, strike variants, expiration formats, null handling, preserves roll-out/up/down candidates
+- `tests/test_get_contract.py` (8 tests): exact match retrieval, strike variants, expiration formats, null handling, missing contract, wrong bucket
+
+**Result:**
+```
+pytest tests/test_exclude_contract.py tests/test_get_contract.py -q → 16 passed
+```
+
+**Field Mapping Verified:**
+- ask = buyback cost per `yfinance_data_provider.py` schema (standard buy-to-close offer price)
+
+### Implementation Files Changed
+
+- `src/options_chain_filters.py` — added `exclude_contract()`, `get_contract()`
+- `src/agent_runner.py` — updated imports, modified `_build_alpha_options_chain`, monitor call site updated
+- `src/alpha_instructions.py` — extended rule #7
+- `tests/test_exclude_contract.py` — 8 new tests
+- `tests/test_get_contract.py` — 8 new tests
+- `.squad/agents/linus/history.md` — updated work history
+- `.squad/agents/rusty/history.md` — updated work history
+
+### Key Pattern
+
+When candidate chain must exclude a reference item (to prevent no-op selection) BUT the agent still needs its pricing:
+1. **Capture reference BEFORE filters** that might remove it (e.g., delta filter)
+2. **Surface as clearly-labeled REFERENCE block** separate from candidates
+3. **Make semantic purpose explicit** (e.g., "buyback_cost" not just "ask")
+4. **Reinforce in instructions** — reference is informational only, not selectable
+
+### Impact
+
+✅ Alpha can now correctly compare close cost (ask of held contract) vs rolling to candidates  
+✅ Held contract never appears as no-op roll target (data-layer enforcement)  
+✅ Works even when held contract's delta is outside alpha's kept band  
+✅ Instruction guard reinforces semantic constraint (roll MUST change strike and/or expiration)

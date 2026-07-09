@@ -1433,3 +1433,4 @@ Created `src/options_math.py` with `robust_mid(bid, ask, last=0.0)` helper that 
 
 ## Learnings
 - settings_config_save must call registry.update_task_enabled(name, enabled, scheduler.config) per task — writing enabled only to disk/cosmos + reschedule(cron) leaves the live registry stale, so the settings checkbox reverts on reload; monitor_agents is intentionally always-on. 2026-07-03 for dsanchor.
+- scheduled sync_calendar (src/main.py) must compute has_active_position PER event date (expiration >= event date) like web/app.py's _has_position_active_on — the old symbol-wide any(active) wrongly flagged events after a position's expiry. 2026-07-08 for dsanchor.
