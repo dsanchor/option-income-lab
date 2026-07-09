@@ -1993,3 +1993,37 @@ No breaking changes to your agents or trading logic. This is pure scheduler infr
 - **Validation:** `python3 -m py_compile src/activity_chat_instructions.py` passes.
 - **Key Pattern:** When building a chat assistant over agent decisions + live market data, enforce a strict context-tier contract at the prompt level. The assistant must understand which tier answers which question type, and NEVER conflate historical decision reasoning with current market conditions. Always surface data provenance ("the agent decided based on X at decision time; current data now shows Y").
 - **For:** dsanchor
+
+
+### DPS Insights Prompt Module (2026-07-09)
+- Created `src/dps_interpret_instructions.py` — provides system instructions for a ONE-SHOT "DPS Insights" summarizer that produces natural-language interpretations of a position's DPS (Deterministic Position Scorer) health over time.
+- Function `get_dps_interpret_instructions() -> str` returns a system prompt for an advisory, read-only agent that narrates DPS score trends and contextualize them with underlying market/technical signals.
+- **Context Contract** (EXACT headers that Rusty's endpoint will use):
+  1. `=== POSITION ===` — the position dict (symbol, type call/put, strike, expiration, premium/source, cost basis, quantity, etc.)
+  2. `=== DPS SNAPSHOT HISTORY (oldest first) ===` — JSON list of snapshots (oldest→newest), each may contain: `timestamp`, `underlying_price`, `strike`, `gap_absolute`, `gap_percent`, `rsi_14`, `macd_level`, `adx`, `midprice`, `pnl_pct`, and `dps_score` (the persisted DPS; may be missing on some rows).
+- **Snapshot Fields:**
+  - `timestamp`: When the snapshot was recorded
+  - `underlying_price`: Stock price at that moment
+  - `strike`: Option strike price
+  - `gap_absolute`: Absolute price distance from strike (proxy for delta/moneyness)
+  - `gap_percent`: Percentage distance from strike (OTM/ITM)
+  - `rsi_14`: 14-period RSI (momentum indicator)
+  - `macd_level`: MACD line value
+  - `adx`: Average Directional Index (trend strength)
+  - `midprice`: Option mid-price (bid-ask midpoint)
+  - `pnl_pct`: Unrealized P&L as percentage
+  - `dps_score`: The persisted DPS score (0-100 scale, higher = healthier position)
+- **Critical Rules Enforced:**
+  1. Interpret ONLY from the two provided blocks. Do NOT invent option-chain contracts, Greeks, prices, earnings/ex-div dates, or any value not present in the snapshots/position. If something isn't in the data, say it's not available.
+  2. **NARRATE, DON'T RECOMPUTE:** Treat the persisted `dps_score` values as authoritative; the job is to NARRATE and CONTEXTUALIZE them, not re-derive HOLD/WATCH/ROLL decisions or recalculate numeric scores. The DPS scorer owns the score computation; the insights agent owns the narrative.
+  3. **TREND:** Describe the direction of `dps_score` over the series (improving / worsening / flat / choppy), citing concrete first→last values and dates, and explain WHICH underlying signals moved with it (e.g., delta proxy via gap_percent narrowing, rsi_14 weakening, adx strengthening, pnl_pct rising). Tie the technicals to the score movement.
+  4. **HISTORY:** Call out notable inflection points (e.g., score peaked at X on date, dropped after Y), and the pnl_pct trajectory.
+  5. **SHORT-TERM OUTLOOK:** Give a hedged, probabilistic projection grounded in the observed trend and DTE (derive days-to-expiration from expiration vs the latest snapshot timestamp if possible). Never state certainty; frame as "if the current trend persists…". Note gamma/assignment risk if the score is deteriorating near expiration.
+  6. Handle sparse data gracefully: if there are <3 snapshots or dps_score is mostly missing, say the history is too short for a reliable trend and summarize what little is available.
+  7. READ-ONLY / ADVISORY: you interpret; you do not execute trades or modify anything.
+  8. Output: concise, well-structured natural-language prose (short sections or bullets: Current state / Trend / History / Short-term outlook). NOT JSON. Cite specific numbers and dates from the data. Domain-aware (delta≈assignment prob, theta, gamma near expiry, roll semantics).
+- **Output Style:** Natural-language prose (NOT JSON), structured with clear section headers (Current State / Trend / History / Short-Term Outlook). Concise, concrete, professional — matches the house style of `activity_chat_instructions.py` (Q&A conversational tone) but produces prose summaries rather than interactive chat.
+- **Target Model:** gpt-5.4-mini (model-agnostic prompt design).
+- **Validation:** `python3 -m py_compile src/dps_interpret_instructions.py` passes.
+- **Key Pattern:** When building a time-series narrative assistant over persisted scores, enforce a strict "narrate don't recompute" rule at the prompt level. The assistant must understand that the scores are ground truth, and its job is to explain the trajectory (current state, trend, history, outlook) by tying the score movements to the underlying signals (gap, RSI, MACD, ADX, P&L, midprice). This design follows the same read-only philosophy as the recently-added activity-chat feature (which separates historical agent decision context from live market data).
+- **For:** dsanchor

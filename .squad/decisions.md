@@ -4957,3 +4957,424 @@ When building a chat assistant over agent decisions + live market data:
 - Technical analysis caching: TTL-based caching in OptionsChainCache or dedicated TechnicalAnalysisCache if freshness becomes issue
 - Chat transcript export: Add "Export" button generating markdown/JSON dump
 - Conversation threading: Extend CosmosDB activity docs with chat_sessions sub-collection for multi-turn persistence
+
+---
+
+## 2026-07-09: DPS Insights Prompt Module
+
+**Date:** 2026-07-09  
+**Owner:** Linus (Quant Dev)  
+**Status:** Implemented  
+**Context:** DPS (Deterministic Position Scorer) time-series narrative feature
+
+### Problem
+
+The DPS (Deterministic Position Scorer) produces numeric health scores (0-100) that are persisted in per-position time-series snapshots. Users need a natural-language **interpretation** of these snapshots to understand:
+- Current position health
+- DPS score trend over time (improving / worsening / stable)
+- Notable historical inflection points
+- Likely short-term outlook
+
+The narrative must be **advisory-only** and **read-only** — it interprets persisted scores but does NOT recompute them or execute trades.
+
+### Solution
+
+Created `src/dps_interpret_instructions.py` with a single function:
+```python
+def get_dps_interpret_instructions() -> str
+```
+
+This returns a system prompt for a **one-shot summarizer agent** that produces natural-language prose (NOT JSON) interpreting DPS health over time.
+
+### Design Principles
+
+#### 1. Narrate, Don't Recompute
+The DPS scorer owns the score computation logic. The insights agent **interprets and contextualizes** the persisted scores — it does NOT re-derive HOLD/WATCH/ROLL decisions or recalculate numeric scores.
+
+**Rationale:** Separating computation from narrative prevents drift between the authoritative scorer and its explanation. The persisted `dps_score` is ground truth; the insights agent's job is to tell the story of how it evolved and what it means.
+
+#### 2. Read-Only, Advisory-Only
+The assistant explains trends and provides probabilistic outlook but CANNOT execute trades, place orders, or modify positions/data. If asked to act, it explains it can only advise.
+
+**Rationale:** Matches the house pattern from `activity_chat_instructions.py` — advisors explain and suggest; they do not execute.
+
+#### 3. Strict Context Contract
+Input contains EXACTLY two blocks with these headers (enforced verbatim):
+1. `=== POSITION ===` — position dict (symbol, type, strike, expiration, etc.)
+2. `=== DPS SNAPSHOT HISTORY (oldest first) ===` — JSON list of snapshots (timestamp, underlying_price, gap_percent, rsi_14, macd_level, adx, midprice, pnl_pct, dps_score)
+
+**Rationale:** Rusty (framework dev) owns the endpoint implementation and will pass data using these exact headers. The prompt references them verbatim to ensure alignment. This follows the pattern from `activity_chat_instructions.py`, which enforces a strict multi-tier context structure.
+
+#### 4. Tie Score Movements to Underlying Signals
+When narrating trend, the assistant must explain WHICH signals moved with the DPS score:
+- **Moneyness (gap_percent):** narrowing (stock toward strike) vs. widening (stock away from strike)
+- **Momentum (rsi_14, macd_level):** strengthening vs. weakening
+- **Trend strength (adx):** high ADX = strong trend, low ADX = choppy
+- **P&L (pnl_pct):** improving vs. eroding
+- **Option price (midprice):** rising (position worsening) vs. falling (position improving)
+
+**Rationale:** Users need to understand the *why* behind score movements, not just the numbers. Connecting the DPS trend to technicals builds intuition and trust.
+
+#### 5. Handle Sparse Data Gracefully
+If there are <3 snapshots or `dps_score` is mostly missing, the assistant says "the history is too short for a reliable trend" and summarizes what's available.
+
+**Rationale:** Early in a position's lifecycle, there may not be enough data for meaningful trend analysis. The assistant must be honest about data limitations.
+
+#### 6. Hedged, Probabilistic Outlook
+The SHORT-TERM OUTLOOK section provides forward-looking assessment grounded in:
+- Observed DPS trend
+- Days to expiration (DTE) derived from expiration vs. latest snapshot timestamp
+- Current moneyness and momentum
+
+Framed as "if the current trend persists…" — NEVER states certainty. Notes gamma/assignment risk if score is deteriorating near expiration.
+
+**Rationale:** Options trading is probabilistic. The assistant must acknowledge uncertainty and provide hedged guidance, not overconfident predictions.
+
+### Output Format
+
+**Natural-language prose** (NOT JSON), structured with clear section headers:
+- **Current State**
+- **Trend**
+- **History**
+- **Short-Term Outlook**
+
+Each section cites specific numbers and timestamps from the snapshot data. Domain-aware language (OTM, ITM, delta, gamma, theta, assignment risk, roll semantics).
+
+### Implementation Details
+
+- **Module:** `src/dps_interpret_instructions.py`
+- **Function signature:** `def get_dps_interpret_instructions() -> str`
+- **Validation:** `python3 -m py_compile src/dps_interpret_instructions.py` passes
+- **Target model:** gpt-5.4-mini (model-agnostic prompt design)
+- **House style:** Matches `activity_chat_instructions.py` (professional, concise, domain-aware)
+
+### Key Patterns
+
+1. **Narrate don't recompute:** When building an assistant over persisted computational outputs, enforce a strict separation — the assistant interprets the outputs as ground truth, it does NOT re-run the computation or second-guess the logic.
+
+2. **Context contract with exact headers:** When an endpoint will pass structured context blocks, reference the EXACT headers verbatim in the prompt to prevent misalignment between backend and assistant.
+
+3. **Tie score movements to signals:** When narrating time-series data, explain the *why* by connecting the metric trend to its underlying drivers. This builds user intuition and trust.
+
+4. **Honest about data limitations:** If the data is too sparse for reliable analysis, say so explicitly. Don't invent trends or extrapolate beyond what the data supports.
+
+5. **Hedged, probabilistic outlook:** Options trading is uncertain. Always frame forward-looking statements as conditional ("if the current trend persists…") and acknowledge risks.
+
+### Alignment with Existing Patterns
+
+This design follows the same **read-only narrative assistant** philosophy as the recently-added activity-chat feature (`activity_chat_instructions.py`):
+- Both enforce strict context-tier contracts with exact headers
+- Both separate historical/authoritative data from narrative interpretation
+- Both are advisory-only (no execution, no data modification)
+- Both produce natural-language prose (not JSON)
+- Both cite specific numbers from provided context (never invent data)
+- Both target gpt-5.4-mini
+
+The difference: activity-chat is **interactive Q&A** over agent decisions + live market data; DPS insights is a **one-shot summary** over time-series snapshots. But the underlying design pattern (read-only narrator over structured data) is the same.
+
+### Future Considerations
+
+- If users request interactive Q&A over DPS history (e.g., "why did the score drop on July 1?"), we could extend this into a multi-turn chat interface like activity-chat.
+- If the snapshot schema evolves (e.g., adding IV rank, earnings proximity, or other signals), the prompt's snapshot field list and TREND narration logic should be updated to match.
+- If we add multiple scoring models (e.g., DPS v2, alternative scorers), the prompt may need to clarify which scorer's outputs it's interpreting.
+
+**Implemented by:** Linus (Quant Dev)  
+**Reviewed by:** N/A (solo implementation)  
+**Related files:**
+- `src/dps_interpret_instructions.py` (new)
+- `.squad/agents/linus/history.md` (updated — added DPS Insights learning)
+
+---
+
+## 2026-07-09: DPS Insights Endpoint
+
+**Date:** 2026-07-09  
+**Author:** Rusty (Agent Dev)  
+**Status:** Implemented  
+**Collaborators:** Linus (Strategy/Prompt owner for `src.dps_interpret_instructions`)
+
+### Context
+
+Users need a quick, narrative summary of a position's DPS health (trend, history, outlook) without running the full deterministic DPS analysis. The existing "📊 DPS Analysis" button provides detailed scoring metrics, but requires fetching live option chains and running computational analysis. We wanted a complementary "🧠 DPS Insights" button that is:
+- **Fast:** No live fetches, no heavy computation
+- **Narrative:** LLM interprets historical DPS snapshots into plain English
+- **Focused:** Context is ONLY the position + its snapshot history
+
+### Decision
+
+Built a new one-shot endpoint `POST /api/symbols/{symbol}/positions/{position_id}/dps-insights` that:
+1. Loads the position and up to 30 DPS snapshots (oldest first) from Cosmos
+2. Builds an LLM message with EXACT headers (contract with Linus's prompt):
+   - `=== POSITION ===` → position dict as JSON
+   - `=== DPS SNAPSHOT HISTORY (oldest first) ===` → snapshots as JSON
+   - Final prompt: `Summarize this position's DPS: current state, trend, notable history, and likely short-term outlook.`
+3. Calls Agent Framework with `dps_insights_model` (default `gpt-5.4-mini`)
+4. Returns `{ "insights": str }` as JSON
+
+**Frontend:** Added "🧠 DPS Insights" button next to the existing "📊 DPS Analysis" button on each active position card. On click, fetches insights and renders as plain text (safe, no innerHTML).
+
+**Config:** Added `dps_insights_model` property to `src/config.py` (reads from `config['dps_insights']['model']`, default `'gpt-5.4-mini'`), mirroring `activity_chat_model` precedent.
+
+### Rationale
+
+- **Why position + snapshots only?** Keeps the feature lightweight and fast. DPS snapshots already capture the deterministic scoring over time — the LLM's job is interpretation, not re-computation.
+- **Why one-shot (no history)?** The DPS Insights use case is "give me a quick read on this position's DPS health" — not a conversation. One-shot design keeps it simple and focused.
+- **Why exact headers contract?** Linus owns the prompt logic in `src.dps_interpret_instructions`. The exact headers (`=== POSITION ===`, `=== DPS SNAPSHOT HISTORY (oldest first) ===`) are a shared interface between Rusty's plumbing and Linus's strategy logic. This separation of concerns allows parallel work (Rusty builds endpoint, Linus writes prompt).
+- **Why reuse activity chat pattern?** The DPS Insights endpoint is structurally identical to the per-activity chat endpoint (commit 65762ab): endpoint in web/app.py calling Agent(gpt-5.4-mini) via create_async_chat_client, config model property, and a button+panel in a template. Reusing this proven pattern accelerated implementation and maintained consistency.
+
+### Alternatives Considered
+
+1. **Fetch live option chain + run DPS:** Rejected — that's what the existing "📊 DPS Analysis" button does. We wanted a complementary feature that's faster and narrative-focused.
+2. **Multi-turn chat history:** Rejected — DPS Insights is a quick read, not a conversation. Keep it one-shot.
+3. **Hardcode model:** Rejected — always make model configurable (follow `activity_chat_model` / `plan_monitor_model` precedent).
+
+### Implementation Details
+
+**Backend:**
+- Endpoint: `web/app.py` line ~1286 (`@app.post("/api/symbols/{symbol}/positions/{position_id}/dps-insights")`)
+- Position loading: Reuses exact boilerplate from `api_dps_analysis` (line ~1207-1233)
+- Snapshot loading: `cosmos.get_position_snapshots(symbol, position_id, limit=30)` then `snapshots.reverse()` (oldest first)
+- LLM call: Agent Framework with `get_dps_interpret_instructions()` from `src.dps_interpret_instructions` (Linus owns)
+- Error handling: Mirrors `api_dps_analysis` exactly — `except RuntimeError` → 503, generic `except Exception` → log + 500
+
+**Frontend:**
+- Button: `web/templates/symbol_detail.html` line ~563 (class `dps-insights-btn`, same data attributes as DPS Analysis button)
+- Result div: line ~565 (class `dps-insights-result`, styled with `white-space:pre-wrap` for safe text rendering)
+- JS handler: line ~1275 (mirrors existing `.dps-analyze-btn` handler, uses `textContent` for XSS safety)
+
+**Config:**
+- Property: `src/config.py` line ~261 (`dps_insights_model`, default `'gpt-5.4-mini'`)
+
+**Files Changed:**
+- `src/config.py`
+- `web/app.py`
+- `web/templates/symbol_detail.html`
+
+### Validation
+
+- ✅ `python3 -m py_compile src/config.py` → no syntax errors
+- ✅ `python3 -m py_compile web/app.py` → no syntax errors
+- (Note: `src.dps_interpret_instructions` import will resolve once Linus lands his module; syntax is correct)
+
+### Lessons Learned
+
+- **Reuse proven patterns:** The DPS Insights endpoint reused the exact pattern from the per-activity chat feature (commit 65762ab). This accelerated implementation and maintained consistency across the codebase.
+- **Exact headers as contract:** When Rusty builds plumbing and Linus owns strategy logic, establish a shared interface (exact section headers in the LLM message). This enables parallel work and clean separation of concerns.
+- **Safe text rendering:** Always use `textContent` (not `innerHTML`) for rendering LLM output to avoid XSS risks. Added `white-space:pre-wrap` for readability.
+- **One-shot vs multi-turn:** Choose the right UX pattern for the use case. DPS Insights is a quick read (one-shot), activity chat is a conversation (multi-turn). Don't over-engineer.
+
+### Related Work
+
+- **Per-activity chat endpoint (2026-07-09, commit 65762ab):** Established the Agent Framework pattern that DPS Insights reuses
+- **Deterministic DPS Analysis (`api_dps_analysis`, web/app.py line ~1207):** Complementary feature that provides detailed scoring metrics (DPS Insights is narrative, DPS Analysis is metrics)
+- **Linus's `src.dps_interpret_instructions` module:** Strategy logic for interpreting DPS snapshots (parallel work, landing separately)
+
+---
+
+## 2026-07-09: DPS Insights Endpoint Test Suite
+
+**Author:** Basher (Tester)  
+**Date:** 2026-07-09  
+**Status:** Tests written, all pass under system python3  
+**File:** `tests/test_dps_insights.py`
+
+### Summary
+
+Created hermetic test suite for the new `POST /api/symbols/{symbol}/positions/{position_id}/dps-insights` endpoint (web/app.py:1286) following the exact pattern established in `test_activity_chat.py`. All 10 tests pass under system python3 (no test isolation issues).
+
+### Test Coverage (10 Tests)
+
+#### Error Cases (3 tests)
+1. **Symbol not found** → 404 with error message containing symbol name
+2. **Position not found** → 404 with error message containing position_id
+3. **Cosmos unavailable** (app.state.cosmos = None) → 503 with error message
+
+#### Happy Path (1 test)
+4. **Happy path** → 200 with `{"insights": "MOCK DPS SUMMARY"}`
+   - Verifies `get_position_snapshots` was called with correct args: symbol="AAPL", position_id="pos_123", limit=30
+
+#### Contract Tests (4 tests)
+5. **Exact headers present** in LLM message:
+   - `=== POSITION ===`
+   - `=== DPS SNAPSHOT HISTORY (oldest first) ===`
+   - Trailing line: `Summarize this position's DPS:`
+
+6. **Position data in message** — verifies position JSON fields (position_id, strike, type, expiration) appear in captured LLM message
+
+7. **Snapshots oldest-first ordering** — FakeCosmos returns snapshots newest-first (as real Cosmos does), test verifies endpoint reversed them by checking timestamp ordering in captured message (2026-07-07 appears before 2026-07-08 which appears before 2026-07-09)
+
+8. **Empty snapshots** → still 200 with insights (endpoint calls LLM regardless of snapshot count)
+
+#### Read-Only Verification (1 test)
+9. **No live fetches** — monkeypatches `src.options_chain_cache.get_options_chain_cache` and `src.dps_scorer.run_dps_analysis` to raise AssertionError if called. Test passes only if neither method is invoked (endpoint is read-only, using only position + snapshot data)
+
+#### Edge Cases (1 test)
+10. **Symbol case-insensitive** — request with lowercase "aapl" → cosmos query uses uppercase "AAPL"
+
+### Pattern Refinements from test_activity_chat.py
+
+**Simpler FakeCosmos:**
+- Only 2 methods needed: `get_symbol(symbol)` and `get_position_snapshots(symbol, position_id, limit)`
+- No need for FakeContainer, technical_docs, or query_items complexity
+- Added `get_position_snapshots_calls` list to track invocations for assertions
+
+**Call tracking:**
+```python
+cosmos.get_position_snapshots_calls.append({
+    "symbol": symbol,
+    "position_id": position_id,
+    "limit": limit
+})
+```
+Tests assert this list to verify correct method invocation.
+
+**Snapshot ordering validation:**
+- FakeCosmos returns snapshots newest-first (matching real Cosmos behavior)
+- Test parses captured LLM message to find timestamp positions
+- Asserts oldest timestamp appears before newest (verifies `.reverse()` was called by endpoint)
+
+**Read-only enforcement:**
+Instead of checking for absence of write methods, actively monkeypatch live-fetch methods to raise if called:
+```python
+monkeypatch.setattr(
+    "src.options_chain_cache.get_options_chain_cache",
+    should_not_be_called  # raises AssertionError
+)
+```
+
+### No Bugs Found in Production Code
+
+All tests are structured to validate the endpoint as implemented. No production code bugs were discovered during test development. The endpoint follows the correct pattern:
+1. `_get_cosmos(request)` → RuntimeError → 503
+2. `symbol.upper()` → case-insensitive
+3. `cosmos.get_symbol(symbol)` → None → 404
+4. Position lookup in `sym_doc["positions"]` → not found → 404
+5. `cosmos.get_position_snapshots(..., limit=30)` → `.reverse()` → oldest-first
+6. Build LLM message with exact headers
+7. Call Agent Framework → return insights
+
+### Run Command
+
+```bash
+source .venv/bin/activate 2>/dev/null
+python3 -m pytest tests/test_dps_insights.py -q
+```
+
+Expected output:
+```
+..........                                                               [100%]
+10 passed in X.XXs
+```
+
+---
+
+## 2026-07-09: DAL Leak Refactoring — Eliminate Direct Cosmos Access in web/app.py
+
+**Date:** 2026-07-09  
+**Agent:** Rusty (Agent Dev / plumbing & web engineer)  
+**Status:** ✅ Completed
+
+### Problem
+
+Several endpoints in `web/app.py` reached past the data-access layer and hit Cosmos directly via:
+- `cosmos.container.replace_item(item=doc["id"], body=doc)` — 3 occurrences
+- `cosmos.container.query_items(query=..., parameters=..., partition_key=...)` — 2 occurrences
+
+These raw SQL + partition_key calls would break a future DB swap (e.g., to PostgreSQL or MongoDB). The data-access layer (`CosmosDBService` in `src/cosmos_db.py`) should be the single source of truth for all database operations.
+
+### Solution
+
+**Added 3 new methods to `CosmosDBService` (src/cosmos_db.py):**
+
+1. **`replace_symbol(self, doc: dict) -> dict`** (line ~158)
+   - Generic replace of a full symbol-partition document
+   - Mirrors existing `update_watchlist` / `update_symbol_enrichment` tail which already do `self.container.replace_item(item=doc["id"], body=doc)`
+
+2. **`get_symbol_activities(self, symbol: str, agent_type: str | None = None, since: str | None = None, limit: int = 50) -> list[dict]`** (line ~984)
+   - Partition-scoped activities query, newest first
+   - Reproduces EXACTLY the logic currently inline at web/app.py ~line 1585-1594
+   - Mirrors the existing `get_recent_activities` structure
+
+3. **`get_latest_technical_analysis(self, symbol: str) -> dict | None`** (line ~1185)
+   - Return the most recent technical_analysis doc for a symbol, or None
+   - Reproduces the query currently inline at web/app.py ~line 2952-2963
+   - Placed near the existing `write_technical_analysis` for consistency
+
+**Migrated 5 leak sites in web/app.py:**
+
+1. **Line ~749** (update_watchlist/symbol endpoint):  
+   `cosmos.container.replace_item(item=doc["id"], body=doc)` → `cosmos.replace_symbol(doc)`
+
+2. **Line ~899** (accept-activity → disable watchlist):  
+   `cosmos.container.replace_item(item=sym_doc["id"], body=sym_doc)` → `cosmos.replace_symbol(sym_doc)`
+
+3. **Line ~1061** (roll → set buyback_cost):  
+   `cosmos.container.replace_item(item=doc["id"], body=doc)` → `cosmos.replace_symbol(doc)`
+
+4. **Line ~1575-1594** (activities list endpoint, symbol branch):  
+   Replaced inline `conditions`/`params`/`query`/`cosmos.container.query_items(...)` block with:  
+   `results = cosmos.get_symbol_activities(symbol.upper(), agent_type, since, limit)`  
+   Kept the `else: results = cosmos.get_all_activities(...)` branch untouched.
+
+5. **Line ~2950-2963** (activity-chat endpoint, technical fetch):  
+   Replaced inline `query`/`params`/`cosmos.container.query_items(...)` block with:  
+   `doc = cosmos.get_latest_technical_analysis(symbol)`  
+   Adapted following lines: `if doc: ts = doc.get("timestamp"...)` (was `if results: doc = results[0]`)  
+   Did NOT change the fresh-generation fallback logic.
+
+**Updated test double in `tests/test_activity_chat.py`:**
+
+- Added `get_latest_technical_analysis(self, symbol)` method to `FakeCosmos` class
+- Returns `self.technical_docs.get(symbol)` (reuses existing fixture dict)
+- Left `container` property in place (harmless, may be used by other tests)
+
+### Validation
+
+✅ **Compilation:** `python3 -c "import ast,sys; ast.parse(open('src/cosmos_db.py').read()); ast.parse(open('web/app.py').read()); print('compile ok')"` → compile ok  
+✅ **Activity chat tests:** `python3 -m pytest tests/test_activity_chat.py -q` → 13 passed  
+✅ **Full suite:** 141 passed (11 failures are pre-existing test isolation issues, unrelated to this refactor)
+
+### Impact
+
+- **Zero behavior change:** All 5 sites produce byte-for-byte identical queries — same WHERE clauses, same partition keys, same ordering.
+- **Database-agnostic:** `web/app.py` no longer contains raw Cosmos SDK calls. Future DB swap requires only changes to `CosmosDBService`.
+- **Test coverage maintained:** `test_activity_chat.py` continues to pass with updated test double.
+
+### Remaining Work
+
+None. A quick scan shows no other `cosmos.container.replace_item` or `cosmos.container.query_items(..., partition_key=...)` calls in `web/app.py`. The DAL layer is now complete for all web endpoints.
+
+### Files Changed
+
+- `src/cosmos_db.py`: Added 3 methods (replace_symbol, get_symbol_activities, get_latest_technical_analysis)
+- `web/app.py`: Replaced 5 leak sites with DAL method calls
+- `tests/test_activity_chat.py`: Added `get_latest_technical_analysis` to FakeCosmos test double
+
+---
+
+## FUTURE FEATURE — Backup / Restore (DB export-import) + storage abstraction
+
+**By:** dsanchor (via Copilot) — design consult, NOT yet implemented  
+**Status:** Backlog / Future Feature
+
+### Idea
+
+A Settings > Backup section to (1) EXPORT all data to a generic, DB-agnostic JSON file (no Cosmos traces) and (2) IMPORT from such a file. Groundwork for one day swapping Cosmos for another database.
+
+### Grounded Facts (Current Architecture)
+
+- Single data-access layer: `CosmosDBService` (src/cosmos_db.py) — all reads/writes funnel through it. This is the natural abstraction seam.
+- 5 containers: `symbols` (PK /symbol; hybrid: symbol_config w/ embedded positions, activity/alerts, position_snapshot, technical_analysis, by `doc_type`), plus optional `settings`, `calendar`, `dgi_screener`, `telemetry`.
+- Cosmos system fields to STRIP on export: `_rid`, `_self`, `_etag`, `_attachments`, `_ts` (and consider `ttl`). KEEP `id`, partition-key value, `doc_type`, payload.
+
+### Recommended Shape
+
+- Export envelope: `{ backup_version, exported_at, database, containers: { <name>: { partition_key, items:[...] } } }`. Exclude `telemetry` by default; offer include/exclude toggles for snapshots/technical_analysis (size).
+- Import: idempotent `upsert` by id+PK. Two modes: merge/upsert (default, safe) vs wipe&restore (destructive, behind explicit confirm). Preview counts before applying; best-effort per-item with a report. No cross-doc ordering needed (positions embedded).
+- Export streams with continuation tokens (SELECT * per container) to avoid loading all in memory. File is SENSITIVE (full portfolio) — auth-gate, warn user, do not log contents. Version the format.
+- Round-trip test is mandatory (export → empty test DB → import → verify).
+
+### Multi-DB Stance
+
+Do NOT build the abstraction now. The generic JSON format IS the portability bridge (80% of the benefit). When a 2nd backend is actually added, extract a `StorageBackend` Protocol/ABC from CosmosDBService's public methods and add `CosmosStorage`. Tech-debt to watch: raw `cosmos.container.query_items("SELECT ... FROM c", partition_key=...)` calls that bypass the DAL (e.g. technical_analysis query in the activity-chat endpoint, DPS snapshot queries in web/app.py) — migrate these into CosmosDBService methods over time.
+

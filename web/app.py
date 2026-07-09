@@ -746,7 +746,7 @@ async def api_update_symbol(request: Request, symbol: str):
             doc["total_shares"] = int(body["total_shares"])
 
         doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
-        updated = cosmos.container.replace_item(item=doc["id"], body=doc)
+        updated = cosmos.replace_symbol(doc)
 
         # Activities are kept when watchlist agents are toggled OFF.
         # CosmosDB TTL (30 days) handles cleanup automatically.
@@ -896,7 +896,7 @@ async def api_add_position_from_activity(request: Request, symbol: str,
         if agent_type in ("covered_call", "cash_secured_put"):
             sym_doc["watchlist"][agent_type] = False
             sym_doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
-            cosmos.container.replace_item(item=sym_doc["id"], body=sym_doc)
+            cosmos.replace_symbol(sym_doc)
 
         return JSONResponse(_clean_doc(doc), status_code=201)
     except ValueError as e:
@@ -1058,7 +1058,7 @@ async def api_manual_roll_position(request: Request, symbol: str,
                     p["buyback_cost"] = buyback_cost
                     break
             doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
-            doc = cosmos.container.replace_item(item=doc["id"], body=doc)
+            doc = cosmos.replace_symbol(doc)
 
         return JSONResponse(_clean_doc(doc), status_code=201)
     except ValueError as e:
@@ -1280,6 +1280,66 @@ async def api_dps_analysis(request: Request, symbol: str, position_id: str):
         return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
         logger.exception("DPS analysis failed for %s/%s", symbol, position_id)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/symbols/{symbol}/positions/{position_id}/dps-insights")
+async def api_dps_insights(request: Request, symbol: str, position_id: str):
+    """Generate LLM narrative summary of position's DPS health (one-shot)."""
+    try:
+        cosmos = _get_cosmos(request)
+        symbol = symbol.upper()
+
+        # Find the position
+        sym_doc = cosmos.get_symbol(symbol)
+        if not sym_doc:
+            return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
+
+        position = None
+        for pos in sym_doc.get("positions", []):
+            if pos.get("position_id") == position_id:
+                position = pos
+                break
+        if position is None:
+            return JSONResponse({"error": f"Position {position_id} not found"}, status_code=404)
+
+        # Get snapshots (oldest first)
+        snapshots = cosmos.get_position_snapshots(symbol, position_id, limit=30)
+        snapshots.reverse()
+
+        # Build LLM message with exact headers
+        message = f"""=== POSITION ===
+{json.dumps(position, indent=2, default=str)}
+
+=== DPS SNAPSHOT HISTORY (oldest first) ===
+{json.dumps(snapshots, indent=2, default=str)}
+
+Summarize this position's DPS: current state, trend, notable history, and likely short-term outlook."""
+
+        # Call LLM via Agent Framework
+        from agent_framework import Agent
+        from src.llm import create_async_chat_client
+        from src.dps_interpret_instructions import get_dps_interpret_instructions
+        from src.config import Config
+
+        cfg = Config()
+        model = cfg.dps_insights_model
+        client = create_async_chat_client(model, cfg.llm_config())
+        agent = Agent(
+            client=client,
+            name="DPSInsights",
+            instructions=get_dps_interpret_instructions()
+        )
+
+        result = await agent.run(message)
+        insights = result.text or str(result)
+
+        return JSONResponse({"insights": insights})
+
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        logger.exception("DPS insights failed for %s/%s", symbol, position_id)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -1514,24 +1574,7 @@ async def api_activities(request: Request, agent_type: str = None,
     try:
         cosmos = _get_cosmos(request)
         if symbol:
-            conditions = ["c.doc_type = 'activity'"]
-            params: List[dict] = []
-            if agent_type:
-                conditions.append("c.agent_type = @agent_type")
-                params.append({"name": "@agent_type", "value": agent_type})
-            if since:
-                conditions.append("c.timestamp >= @since")
-                params.append({"name": "@since", "value": since})
-            query = (
-                f"SELECT TOP @limit * FROM c "
-                f"WHERE {' AND '.join(conditions)} "
-                f"ORDER BY c.timestamp DESC"
-            )
-            params.append({"name": "@limit", "value": limit})
-            results = list(cosmos.container.query_items(
-                query=query, parameters=params,
-                partition_key=symbol.upper(),
-            ))
+            results = cosmos.get_symbol_activities(symbol.upper(), agent_type, since, limit)
         else:
             results = cosmos.get_all_activities(agent_type, since, limit)
         return JSONResponse([_clean_doc(r) for r in results])
@@ -2881,29 +2924,17 @@ async def api_activity_chat(request: Request, activity_id: str):
             logger.warning("Failed to load option chain for %s: %s", symbol, e)
             chain_data = f"(option chain unavailable: {e})"
         
-        # Get CURRENT technical analysis
-        from src.technical_analysis_agent import run_technical_analysis
-        from src.config import Config
-        from src.agent_runner import AgentRunner
-        
+        # Get CURRENT technical analysis (best-effort — never fatal to the chat)
         technical_data = "(technical analysis unavailable)"
         try:
+            from src.technical_analysis_agent import run_technical_analysis
+            from src.config import Config
+            from src.agent_runner import AgentRunner
+
             # Query most recent technical_analysis doc
-            query = (
-                "SELECT TOP 1 * FROM c "
-                "WHERE c.symbol = @symbol "
-                "AND c.doc_type = 'technical_analysis' "
-                "ORDER BY c.timestamp DESC"
-            )
-            params = [{"name": "@symbol", "value": symbol}]
-            results = list(cosmos.container.query_items(
-                query=query,
-                parameters=params,
-                partition_key=symbol,
-            ))
+            doc = cosmos.get_latest_technical_analysis(symbol)
             
-            if results:
-                doc = results[0]
+            if doc:
                 ts = doc.get("timestamp", "unknown")
                 analysis = doc.get("analysis", "")
                 technical_data = f"[Generated at: {ts}]\n\n{analysis}"
@@ -2954,7 +2985,8 @@ Technical Analysis:
         from agent_framework import Agent
         from src.llm import create_async_chat_client
         from src.activity_chat_instructions import get_activity_chat_instructions
-        
+        from src.config import Config
+
         cfg = Config()
         model = cfg.activity_chat_model
         client = create_async_chat_client(model, cfg.llm_config())

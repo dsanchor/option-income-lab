@@ -155,6 +155,17 @@ class CosmosDBService:
         doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
         return self.container.replace_item(item=doc["id"], body=doc)
 
+    def replace_symbol(self, doc: dict) -> dict:
+        """Generic replace of a full symbol-partition document.
+        
+        Args:
+            doc: Full document dict with "id" and partition key fields.
+        
+        Returns:
+            The updated document from Cosmos.
+        """
+        return self.container.replace_item(item=doc["id"], body=doc)
+
     def delete_symbol(self, symbol: str) -> None:
         """Delete a symbol config and ALL associated activities/alerts."""
         try:
@@ -974,6 +985,48 @@ class CosmosDBService:
             enable_cross_partition_query=True,
         ))
 
+    def get_symbol_activities(self, symbol: str,
+                              agent_type: str | None = None,
+                              since: str | None = None,
+                              limit: int = 50) -> list[dict]:
+        """Get activities for a single symbol (partition-scoped query).
+        
+        Returns activities for the given symbol, ordered newest first.
+        This is a partition-scoped query — all filtering/ordering happens
+        within the specified symbol's partition.
+        
+        Args:
+            symbol: Ticker symbol (partition key).
+            agent_type: Optional filter by agent_type.
+            since: Optional ISO timestamp filter (>= since).
+            limit: Max number of activities to return (default 50).
+        
+        Returns:
+            List of activity documents ordered by timestamp DESC.
+        """
+        conditions = ["c.doc_type = 'activity'"]
+        params: list[dict] = []
+        
+        if agent_type:
+            conditions.append("c.agent_type = @agent_type")
+            params.append({"name": "@agent_type", "value": agent_type})
+        if since:
+            conditions.append("c.timestamp >= @since")
+            params.append({"name": "@since", "value": since})
+        
+        query = (
+            f"SELECT TOP @limit * FROM c "
+            f"WHERE {' AND '.join(conditions)} "
+            f"ORDER BY c.timestamp DESC"
+        )
+        params.append({"name": "@limit", "value": limit})
+        
+        return list(self.container.query_items(
+            query=query,
+            parameters=params,
+            partition_key=symbol,
+        ))
+
     def count_alerts_by_symbol(self, agent_type: str,
                                 since: str | None = None) -> dict[str, int]:
         """Count alerts per symbol for dashboard aggregation."""
@@ -1127,6 +1180,29 @@ class CosmosDBService:
             "cached_resources": cached_resources or [],
         }
         return self.container.create_item(doc)
+
+    def get_latest_technical_analysis(self, symbol: str) -> dict | None:
+        """Get the most recent technical_analysis document for a symbol.
+        
+        Args:
+            symbol: Ticker symbol (partition key).
+        
+        Returns:
+            The latest technical_analysis document, or None if not found.
+        """
+        query = (
+            "SELECT TOP 1 * FROM c "
+            "WHERE c.symbol = @symbol "
+            "AND c.doc_type = 'technical_analysis' "
+            "ORDER BY c.timestamp DESC"
+        )
+        params = [{"name": "@symbol", "value": symbol}]
+        results = list(self.container.query_items(
+            query=query,
+            parameters=params,
+            partition_key=symbol,
+        ))
+        return results[0] if results else None
 
     # ── Telemetry ──────────────────────────────────────────────────────
 

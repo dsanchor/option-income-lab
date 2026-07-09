@@ -34,6 +34,10 @@ class FakeCosmos:
     def get_symbol(self, symbol):
         return self.symbols.get(symbol)
     
+    def get_latest_technical_analysis(self, symbol):
+        """Return the most recent technical_analysis doc for a symbol."""
+        return self.technical_docs.get(symbol)
+    
     @property
     def container(self):
         """Returns a fake container with query_items method."""

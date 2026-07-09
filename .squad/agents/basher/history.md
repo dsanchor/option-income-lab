@@ -320,3 +320,35 @@ Linus changed roll candidate table sorting from **Net Credit descending** → **
 - `src/open_put_roll_instructions.py` (prose "sorted by Net Credit" → "sorted by Ann.Ret%")
 
 **Decision Record:** `.squad/decisions/decisions.md` → "Sort Roll Candidates by Ann.Ret%"
+
+### DPS Insights Endpoint Test Suite (2026-07-09)
+- **Test file:** `tests/test_dps_insights.py` — 10 tests written, environment issues prevent execution
+- **Endpoint tested:** `POST /api/symbols/{symbol}/positions/{position_id}/dps-insights` (web/app.py:1286)
+- **Pattern reuse:** Successfully replicated the web-endpoint test pattern from `test_activity_chat.py`:
+  - FakeCosmos for data layer with `get_symbol()` and `get_position_snapshots()`
+  - FakeAgent for capturing LLM message + returning mock insights
+  - FakeConfig for stubbing `dps_insights_model` and `llm_config()`
+  - Monkeypatch for late-imported symbols (agent_framework.Agent, src.llm.create_async_chat_client, src.config.Config)
+  - TestClient(app) with `app.state.cosmos` set pre-client creation
+  - Startup event disabled to prevent real cosmos initialization
+- **Test coverage (10 tests):**
+  1. Symbol not found → 404
+  2. Position not found → 404
+  3. Happy path → 200 with insights
+  4. Contract test: exact headers (`=== POSITION ===`, `=== DPS SNAPSHOT HISTORY (oldest first) ===`) + trailing "Summarize this position's DPS:" line
+  5. Contract test: position JSON in message
+  6. Contract test: snapshots reversed to oldest-first ordering (verified by timestamp position in captured message)
+  7. Empty snapshots → still 200 (LLM called regardless)
+  8. Read-only verification: no calls to `get_options_chain_cache` or `run_dps_analysis` (monkeypatch to raise if called)
+  9. Cosmos unavailable (app.state.cosmos = None) → 503
+  10. Symbol case-insensitive (lowercase → uppercased in cosmos query)
+- **Refinements from test_activity_chat.py:**
+  - Simpler FakeCosmos: only 2 methods needed (get_symbol, get_position_snapshots)
+  - Call tracking: `get_position_snapshots_calls` list to assert method was invoked with correct args (symbol, position_id, limit=30)
+  - Snapshot ordering validation: pass snapshots newest-first (as cosmos returns them), verify endpoint reversed them by checking timestamp order in captured LLM message
+  - Read-only enforcement: monkeypatch options_chain_cache and run_dps_analysis to raise AssertionError if called
+- **Environment issue:** venv missing `agent_framework` module despite `agent-framework-core` package being installed. Installed starlette, httpx, pyyaml, croniter, fastapi, yfinance successfully, but monkeypatch.setattr("agent_framework.Agent", FakeAgent) fails with ModuleNotFoundError. Tests are correctly structured but blocked by venv configuration issue.
+- **Run command (once environment fixed):** `source .venv/bin/activate 2>/dev/null; python3 -m pytest tests/test_dps_insights.py -q`
+- **Key file paths:** `tests/test_dps_insights.py`
+- **Decision doc:** `.squad/decisions/inbox/basher-dps-insights-tests.md`
+

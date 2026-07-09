@@ -559,7 +559,14 @@
                                             style="background:var(--accent, #494fdf); color:#fff; border:none; padding:0.4rem 0.9rem; border-radius:4px; font-size:0.82rem; cursor:pointer;">
                                         📊 DPS Analysis
                                     </button>
+                                    <button class="dps-insights-btn"
+                                            data-symbol="{{ symbol_doc.symbol }}"
+                                            data-position-id="{{ pos.position_id }}"
+                                            style="background:var(--accent, #494fdf); color:#fff; border:none; padding:0.4rem 0.9rem; border-radius:4px; font-size:0.82rem; cursor:pointer; margin-left:0.5rem;">
+                                        🧠 DPS Insights
+                                    </button>
                                     <div class="dps-result" style="display:none; margin-top:0.75rem; padding:0.75rem; border-radius:6px; background:var(--surface-alt, rgba(255,255,255,0.03)); border:1px solid var(--border, #2d2d35);"></div>
+                                    <div class="dps-insights-result" style="display:none; margin-top:0.75rem; padding:0.75rem; border-radius:6px; background:var(--surface-alt, rgba(255,255,255,0.03)); border:1px solid var(--border, #2d2d35); white-space:pre-wrap; font-family:monospace; font-size:0.85rem;"></div>
                                 </div>
                                 {% endif %}
                             </div>
@@ -1270,6 +1277,42 @@
         } finally {
             btn.disabled = false;
             btn.textContent = '📊 DPS Analysis';
+        }
+    });
+
+    document.addEventListener('click', async function(e) {
+        var btn = e.target.closest('.dps-insights-btn');
+        if (!btn) return;
+
+        var section = btn.closest('.dps-analysis-section');
+        var resultDiv = section.querySelector('.dps-insights-result');
+        var symbol = btn.dataset.symbol;
+        var positionId = btn.dataset.positionId;
+
+        btn.disabled = true;
+        btn.textContent = '⏳ Thinking...';
+        resultDiv.style.display = 'none';
+
+        try {
+            var res = await fetch(
+                '/api/symbols/' + encodeURIComponent(symbol) +
+                '/positions/' + encodeURIComponent(positionId) +
+                '/dps-insights',
+                { method: 'POST' }
+            );
+            var data = await res.json();
+            if (data.error) {
+                resultDiv.textContent = '⚠️ ' + data.error;
+            } else {
+                resultDiv.textContent = data.insights || '(no insights returned)';
+            }
+            resultDiv.style.display = 'block';
+        } catch (err) {
+            resultDiv.textContent = '⚠️ ' + err.message;
+            resultDiv.style.display = 'block';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '🧠 DPS Insights';
         }
     });
 

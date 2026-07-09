@@ -257,6 +257,11 @@ class Config:
         """Activity chat model (default: 'gpt-5.4-mini')."""
         return str(self.config.get('activity_chat', {}).get('model', 'gpt-5.4-mini'))
 
+    @property
+    def dps_insights_model(self) -> str:
+        """DPS insights model (default: 'gpt-5.4-mini')."""
+        return str(self.config.get('dps_insights', {}).get('model', 'gpt-5.4-mini'))
+
     # ── Options Chain Scheduler ────────────────────────────────────────
 
     @property

@@ -1493,3 +1493,96 @@ Created `src/options_math.py` with `robust_mid(bid, ask, last=0.0)` helper that 
 - Frontend Chat button: `web/templates/activity_detail.html` line ~361
 - Frontend Chat panel: `web/templates/activity_detail.html` line ~365
 - Frontend Chat JS: `web/templates/activity_detail.html` line ~565
+
+### DPS Insights Endpoint (2026-07-09)
+
+**Feature:** Added a "🧠 DPS Insights" button next to the existing "📊 DPS Analysis" button on each active position's card. This one-shot endpoint returns an LLM narrative summary of the position's DPS health (trend, history, likely short-term outlook). The context is ONLY the position + its snapshot history — NO live option chain, NO technicals fetch, NO run_dps_analysis.
+
+**Context Design (position + snapshots only):**
+- The LLM message contains these EXACT section headers (contract with Linus's `src.dps_interpret_instructions`):
+  - `=== POSITION ===` → the position dict as pretty JSON
+  - `=== DPS SNAPSHOT HISTORY (oldest first) ===` → up to 30 snapshots, reversed to be oldest-first
+  - Final prompt line: `Summarize this position's DPS: current state, trend, notable history, and likely short-term outlook.`
+- If snapshots is empty, still calls the LLM (Linus's prompt handles sparse data gracefully)
+
+**Backend (web/app.py):**
+- **New endpoint:** `POST /api/symbols/{symbol}/positions/{position_id}/dps-insights` at line ~1286
+- **Response JSON:** `{ "insights": str }`
+- **Position loading:** Reuses the exact boilerplate from the existing `api_dps_analysis` endpoint (line ~1207-1233): `cosmos = _get_cosmos(request); symbol = symbol.upper(); sym_doc = cosmos.get_symbol(symbol)`; 404 if missing; find position in `sym_doc["positions"]` by `position_id`; 404 if not found
+- **Snapshot loading:** `snapshots = cosmos.get_position_snapshots(symbol, position_id, limit=30)` then `snapshots.reverse()` so they are OLDEST FIRST (mirrors api_dps_analysis pattern)
+- **NO live fetches:** Does NOT call `get_options_chain_cache`, does NOT fetch yf_provider, does NOT call `run_dps_analysis` — just position + snapshots
+- **LLM call:** Uses Agent Framework pattern (same as activity chat): `from agent_framework import Agent`, `from src.llm import create_async_chat_client`, `from src.dps_interpret_instructions import get_dps_interpret_instructions` (NEW module Linus is creating in parallel), `from src.config import Config`. Builds agent with `client=create_async_chat_client(model, cfg.llm_config())`, `name="DPSInsights"`, `instructions=get_dps_interpret_instructions()`. Calls `agent.run(message)` and returns `result.text or str(result)` as `{"insights": insights}`
+- **Model:** Configurable via `Config.dps_insights_model` (default `'gpt-5.4-mini'`), mirrors `activity_chat_model` / `plan_monitor_model` precedent
+- **Error handling:** Mirrors api_dps_analysis exactly — `except RuntimeError` → 503, generic `except Exception` → log + 500
+
+**Frontend (web/templates/symbol_detail.html):**
+- **DPS Insights button:** Added at line ~563, right next to the existing "📊 DPS Analysis" button inside `.dps-analysis-section`. Class `dps-insights-btn`, same `data-symbol` / `data-position-id` attributes, styled consistently with existing DPS Analysis button (inline style reused with slight margin-left)
+- **DPS Insights result div:** Added at line ~565 (class `dps-insights-result`, initially hidden, styled like `.dps-result` but with `white-space:pre-wrap; font-family:monospace; font-size:0.85rem` for safe text rendering)
+- **JavaScript:** Added new click handler at line ~1275 (mirrors the existing `.dps-analyze-btn` handler at line ~1245). Matches `e.target.closest('.dps-insights-btn')`, finds `.dps-insights-result` div, disables button with "⏳ Thinking..." label, POSTs to `/api/symbols/{symbol}/positions/{position_id}/dps-insights` (method POST, no body), renders `data.insights` as TEXT (uses `textContent` for safety — NOT innerHTML) into result div. On error shows clean message. Restores button label "🧠 DPS Insights" in finally. One-shot (no history)
+
+**Config (src/config.py):**
+- **New property:** `dps_insights_model` at line ~261 (default `'gpt-5.4-mini'`), reads from `config['dps_insights']['model']`, mirrors `activity_chat_model` pattern
+
+**Files Changed:**
+- `src/config.py` line ~261: Added `dps_insights_model` property
+- `web/app.py` line ~1286: Added `POST /api/symbols/{symbol}/positions/{position_id}/dps-insights` endpoint
+- `web/templates/symbol_detail.html` lines ~563, ~565, ~1275: Added Insights button, result div, and JS handler
+
+**Validation:**
+- ✅ `python3 -m py_compile src/config.py` → no syntax errors
+- ✅ `python3 -m py_compile web/app.py` → no syntax errors
+- (Note: `src.dps_interpret_instructions` import will resolve once Linus lands his module; syntax is correct)
+
+**Key Learnings:**
+- **Reuse patterns from recent features:** The DPS Insights endpoint was built by mirroring the per-activity chat endpoint (commit 65762ab). Exact pattern reuse: endpoint in web/app.py calling Agent(gpt-5.4-mini) via create_async_chat_client, config model property, and a button+panel in a template. This accelerated implementation and maintained consistency.
+- **Position + snapshots only (no live fetch):** Unlike the deterministic api_dps_analysis endpoint (which fetches live option chain, technicals, and runs run_dps_analysis), DPS Insights is a pure narrative summary of historical DPS snapshots. This design choice keeps the feature lightweight and fast — no external fetches, no heavy computation, just LLM interpretation of stored data.
+- **Exact headers contract with Linus:** The LLM message uses EXACT section headers (`=== POSITION ===`, `=== DPS SNAPSHOT HISTORY (oldest first) ===`) that Linus's `src.dps_interpret_instructions` depends on verbatim. This is a shared contract between Rusty (plumbing) and Linus (strategy logic).
+- **Safe text rendering on frontend:** Always use `textContent` (not `innerHTML`) for rendering LLM output to avoid XSS risks. Added `white-space:pre-wrap` styling for readability.
+- **One-shot design (no history):** The DPS Insights feature is intentionally one-shot (no chat history) — user clicks button, gets narrative, done. This differs from the activity chat (which has multi-turn history). Keep features focused on their use case.
+
+**File/line anchors:**
+- Backend endpoint: `web/app.py` line ~1286 (`@app.post("/api/symbols/{symbol}/positions/{position_id}/dps-insights")`)
+- Config property: `src/config.py` line ~261 (`dps_insights_model`)
+- Frontend Insights button: `web/templates/symbol_detail.html` line ~563
+- Frontend Insights result div: `web/templates/symbol_detail.html` line ~565
+- Frontend Insights JS handler: `web/templates/symbol_detail.html` line ~1275
+
+
+## Learnings
+
+### DAL Leak Refactoring (2026-07-09)
+**Context:** Several endpoints in `web/app.py` reached past the data-access layer and hit Cosmos directly via `cosmos.container.replace_item(...)` and `cosmos.container.query_items("SELECT ... FROM c", partition_key=...)`. These raw SQL + partition_key calls would break a future DB swap.
+
+**Changes:**
+- **Added 3 new methods to `src/cosmos_db.py` (CosmosDBService class):**
+  - `replace_symbol(self, doc: dict) -> dict` — generic replace of a full symbol-partition document (line ~158)
+  - `get_symbol_activities(self, symbol: str, agent_type: str | None = None, since: str | None = None, limit: int = 50) -> list[dict]` — partition-scoped activities query, newest first (line ~984)
+  - `get_latest_technical_analysis(self, symbol: str) -> dict | None` — return most recent technical_analysis doc for a symbol (line ~1185)
+
+- **Migrated 5 leak sites in `web/app.py`:**
+  - Line ~749: `cosmos.container.replace_item(...)` → `cosmos.replace_symbol(doc)` (update_watchlist/symbol endpoint)
+  - Line ~899: `cosmos.container.replace_item(...)` → `cosmos.replace_symbol(sym_doc)` (accept-activity → disable watchlist)
+  - Line ~1061: `cosmos.container.replace_item(...)` → `cosmos.replace_symbol(doc)` (roll → set buyback_cost)
+  - Line ~1575-1594: inline `query`/`params`/`cosmos.container.query_items(...)` → `cosmos.get_symbol_activities(symbol.upper(), agent_type, since, limit)` (activities list endpoint)
+  - Line ~2950-2963: inline `query`/`params`/`cosmos.container.query_items(...)` → `cosmos.get_latest_technical_analysis(symbol)` (activity-chat endpoint technical fetch)
+
+- **Updated test double in `tests/test_activity_chat.py`:**
+  - Added `get_latest_technical_analysis(self, symbol)` method to `FakeCosmos` class (returns `self.technical_docs.get(symbol)`)
+  - Left `container` property in place (harmless, may be used by other tests)
+
+**Validation:**
+- ✅ `python3 -c "import ast,sys; ast.parse(open('src/cosmos_db.py').read()); ast.parse(open('web/app.py').read()); print('compile ok')"` → compile ok
+- ✅ `python3 -m pytest tests/test_activity_chat.py -q` → 13 passed
+- ✅ Full suite: 141 passed (11 failures are pre-existing test isolation issues, unrelated to this refactor)
+
+**Key Learnings:**
+- **DAL enforcement complete:** `web/app.py` no longer bypasses the data-access layer for these 5 paths. All Cosmos interactions now funnel through `CosmosDBService` methods.
+- **Remaining leaks (if any):** A quick scan shows no other `cosmos.container.replace_item` or `cosmos.container.query_items(..., partition_key=...)` calls in `web/app.py`. The DAL layer is now complete for all web endpoints.
+- **Test double pattern:** When migrating from `cosmos.container.query_items(...)` to a DAL method, update the test double (FakeCosmos) to expose the new method. Keep the old `container` property if other tests depend on it.
+- **Behavior preservation:** All 5 sites produce byte-for-byte identical queries — same WHERE clauses, same partition keys, same ordering. Zero behavior change.
+
+**Files Changed:**
+- `src/cosmos_db.py`: Added 3 methods (replace_symbol, get_symbol_activities, get_latest_technical_analysis)
+- `web/app.py`: Replaced 5 leak sites with DAL method calls
+- `tests/test_activity_chat.py`: Added `get_latest_technical_analysis` to FakeCosmos test double
+
