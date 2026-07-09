@@ -566,7 +566,7 @@
                                         🧠 DPS Insights
                                     </button>
                                     <div class="dps-result" style="display:none; margin-top:0.75rem; padding:0.75rem; border-radius:6px; background:var(--surface-alt, rgba(255,255,255,0.03)); border:1px solid var(--border, #2d2d35);"></div>
-                                    <div class="dps-insights-result" style="display:none; margin-top:0.75rem; padding:0.75rem; border-radius:6px; background:var(--surface-alt, rgba(255,255,255,0.03)); border:1px solid var(--border, #2d2d35); white-space:pre-wrap; font-family:monospace; font-size:0.85rem;"></div>
+                                    <div class="dps-insights-result markdown-body" style="display:none; margin-top:0.75rem; padding:0.75rem; border-radius:6px; background:var(--surface-alt, rgba(255,255,255,0.03)); border:1px solid var(--border, #2d2d35); font-size:0.9rem; line-height:1.55;"></div>
                                 </div>
                                 {% endif %}
                             </div>
@@ -1303,6 +1303,8 @@
             var data = await res.json();
             if (data.error) {
                 resultDiv.textContent = '⚠️ ' + data.error;
+            } else if (data.insights && typeof marked !== 'undefined') {
+                resultDiv.innerHTML = marked.parse(data.insights);
             } else {
                 resultDiv.textContent = data.insights || '(no insights returned)';
             }

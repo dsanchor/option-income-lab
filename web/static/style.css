@@ -600,45 +600,45 @@ textarea:focus { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
 .chat-msg.assistant .chat-bubble.markdown-body { white-space: normal; }
 
 /* ── Rendered Markdown inside chat bubbles ── */
-.chat-bubble.markdown-body h1,
-.chat-bubble.markdown-body h2,
-.chat-bubble.markdown-body h3,
-.chat-bubble.markdown-body h4 { margin: 0.5em 0 0.25em; font-weight: 500; }
-.chat-bubble.markdown-body h1 { font-size: 1.15em; }
-.chat-bubble.markdown-body h2 { font-size: 1.05em; }
-.chat-bubble.markdown-body h3 { font-size: 1em; }
-.chat-bubble.markdown-body h4 { font-size: 0.95em; }
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 { margin: 0.5em 0 0.25em; font-weight: 500; }
+.markdown-body h1 { font-size: 1.15em; }
+.markdown-body h2 { font-size: 1.05em; }
+.markdown-body h3 { font-size: 1em; }
+.markdown-body h4 { font-size: 0.95em; }
 
-.chat-bubble.markdown-body p { margin: 0.4em 0; }
-.chat-bubble.markdown-body p:first-child { margin-top: 0; }
-.chat-bubble.markdown-body p:last-child { margin-bottom: 0; }
+.markdown-body p { margin: 0.4em 0; }
+.markdown-body p:first-child { margin-top: 0; }
+.markdown-body p:last-child { margin-bottom: 0; }
 
-.chat-bubble.markdown-body ul,
-.chat-bubble.markdown-body ol { margin: 0.4em 0; padding-left: 1.5em; }
-.chat-bubble.markdown-body li { margin: 0.2em 0; }
+.markdown-body ul,
+.markdown-body ol { margin: 0.4em 0; padding-left: 1.5em; }
+.markdown-body li { margin: 0.2em 0; }
 
-.chat-bubble.markdown-body code {
+.markdown-body code {
     font-family: var(--font-mono);
     background: rgba(0,0,0,0.25);
     padding: 0.15em 0.4em;
     border-radius: 3px;
     font-size: 0.88em;
 }
-.chat-bubble.markdown-body pre {
+.markdown-body pre {
     background: rgba(0,0,0,0.3);
     border-radius: 6px;
     padding: 0.6em 0.8em;
     overflow-x: auto;
     margin: 0.5em 0;
 }
-.chat-bubble.markdown-body pre code {
+.markdown-body pre code {
     background: none;
     padding: 0;
     font-size: 0.85em;
     line-height: 1.5;
 }
 
-.chat-bubble.markdown-body table {
+.markdown-body table {
     display: block;
     overflow-x: auto;
     border-collapse: collapse;
@@ -646,48 +646,53 @@ textarea:focus { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
     width: 100%;
     font-size: 0.85em;
 }
-.chat-bubble.markdown-body th,
-.chat-bubble.markdown-body td {
+.markdown-body th,
+.markdown-body td {
     border: 1px solid var(--border);
     padding: 0.5em 0.75em;
     text-align: left;
     vertical-align: top;
 }
-.chat-bubble.markdown-body th {
+.markdown-body th {
     background: var(--surface-elevated);
     font-weight: 600;
     color: var(--text-primary);
 }
-.chat-bubble.markdown-body tbody tr:nth-child(odd) {
+.markdown-body tbody tr:nth-child(odd) {
     background: rgba(255, 255, 255, 0.02);
 }
-.chat-bubble.markdown-body tbody tr:nth-child(even) {
+.markdown-body tbody tr:nth-child(even) {
     background: rgba(0, 0, 0, 0.1);
 }
-.chat-bubble.markdown-body td br {
+.markdown-body td br {
     display: block;
     content: "";
     margin: 0.35em 0;
 }
 
-.chat-bubble.markdown-body blockquote {
+.markdown-body blockquote {
     border-left: 3px solid var(--accent-blue);
     margin: 0.5em 0;
     padding: 0.25em 0.75em;
     color: var(--text-muted);
 }
 
-.chat-bubble.markdown-body a { color: var(--accent-blue); text-decoration: underline; }
-.chat-bubble.markdown-body a:hover { color: #6b70ff; }
+.markdown-body a { color: var(--accent-blue); text-decoration: underline; }
+.markdown-body a:hover { color: #6b70ff; }
 
-.chat-bubble.markdown-body hr {
+.markdown-body hr {
     border: none;
     border-top: 1px solid var(--border);
     margin: 0.6em 0;
 }
 
-.chat-bubble.markdown-body strong { font-weight: 600; }
-.chat-bubble.markdown-body em { font-style: italic; }
+.markdown-body strong { font-weight: 600; }
+.markdown-body em { font-style: italic; }
+
+/* ── DPS Insights rendered markdown ── */
+.dps-insights-result.markdown-body { text-align: justify; }
+.dps-insights-result.markdown-body > :first-child { margin-top: 0; }
+.dps-insights-result.markdown-body > :last-child { margin-bottom: 0; }
 
 .chat-input-row {
     display: flex;
