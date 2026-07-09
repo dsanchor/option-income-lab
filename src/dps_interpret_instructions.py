@@ -120,11 +120,13 @@ Keep answers concise, concrete, and grounded in the provided numbers. Avoid jarg
 
 # OUTPUT STYLE
 
-- **Concise and structured:** Use short sections or bullet points with headers like:
-  - **Current State**
-  - **Trend**
-  - **History**
-  - **Short-Term Outlook**
+- **Format as clean Markdown.** Structure the response with `###` section headings and a BLANK LINE between every heading, paragraph, and list. Do NOT emit one long paragraph — separate blocks so it renders correctly. Use these four sections in order:
+  - `### Current State`
+  - `### Trend`
+  - `### History`
+  - `### Short-Term Outlook`
+- **Use bullet lists** (`-`) for enumerations of drivers/signals, one item per line.
+- **Keep it narrow-container friendly:** short paragraphs and bullets; avoid very long unbroken tokens. Do NOT emit wide Markdown tables (they force horizontal scroll) — prefer bullet lists.
 - **Professional and concrete:** Cite specific numbers (timestamps, scores, prices, percentages, RSI/MACD/ADX values) from the snapshots.
 - **Natural language prose:** NOT JSON. Write complete sentences. Be tight and clear.
 - **Domain-aware:** Use options terminology correctly (OTM, ITM, assignment risk, roll, theta, gamma, etc.).
@@ -133,19 +135,24 @@ Keep answers concise, concrete, and grounded in the provided numbers. Avoid jarg
 
 # EXAMPLE OUTPUT
 
-**Current State:**
+### Current State
+
 As of July 8, 2026 (latest snapshot), the DPS score is 83 (healthy). The position is a covered call on AAPL at a $185 strike expiring July 18 (10 DTE). The stock is trading at $178.50, 3.5% below the strike. The option midprice is $0.95, and unrealized P&L is +8.2%. RSI is 54 (neutral), MACD is slightly positive, and ADX is 22 (weak trend).
 
-**Trend:**
+### Trend
+
 The DPS score has improved from 68 on June 28 to 83 on July 8 (15-point gain over 10 days). This improvement was driven by:
+
 - The stock drifting lower from $183 to $178.50, widening the OTM cushion from 1.1% to 3.5%.
 - RSI cooling from overbought 72 to neutral 54, reducing bullish momentum pressure.
 - The option midprice decaying from $1.80 to $0.95 due to theta and reduced directional risk.
 
-**History:**
+### History
+
 The score briefly dipped to 65 on July 1 when the stock spiked to $184 (0.5% from strike) and RSI reached 78, signaling high assignment risk. Since then, the stock has pulled back and the score has recovered steadily. Unrealized P&L has remained positive throughout, ranging from +5.1% to +8.2%.
 
-**Short-Term Outlook:**
+### Short-Term Outlook
+
 If the stock remains range-bound below $182 over the next 10 days, the DPS score should stay elevated as theta decay continues and the position expires worthless (ideal outcome for a covered call). However, with earnings potentially approaching (not confirmed in the data), any surprise rally above $182 could compress the OTM cushion and trigger assignment risk. Monitor closely and consider rolling out if the stock breaks above $182 with strong volume or RSI re-enters overbought territory above 70.
 
 ---
@@ -158,5 +165,5 @@ If the stock remains range-bound below $182 over the next 10 days, the DPS score
 - Cite specific numbers and dates from the snapshots.
 - Give hedged, probabilistic outlook. Never claim certainty.
 - Handle sparse data gracefully.
-- Output natural-language prose (NOT JSON), structured with clear section headers.
+- Output natural-language prose (NOT JSON), structured as clean Markdown with `###` section headings and blank lines between blocks so it renders correctly.
 """.strip()

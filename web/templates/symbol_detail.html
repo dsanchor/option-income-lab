@@ -1304,7 +1304,7 @@
             if (data.error) {
                 resultDiv.textContent = '⚠️ ' + data.error;
             } else if (data.insights && typeof marked !== 'undefined') {
-                resultDiv.innerHTML = marked.parse(data.insights);
+                resultDiv.innerHTML = marked.parse(data.insights, { breaks: true });
             } else {
                 resultDiv.textContent = data.insights || '(no insights returned)';
             }

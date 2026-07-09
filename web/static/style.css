@@ -690,7 +690,12 @@ textarea:focus { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
 .markdown-body em { font-style: italic; }
 
 /* ── DPS Insights rendered markdown ── */
-.dps-insights-result.markdown-body { text-align: justify; }
+.dps-insights-result.markdown-body {
+    text-align: justify;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
 .dps-insights-result.markdown-body > :first-child { margin-top: 0; }
 .dps-insights-result.markdown-body > :last-child { margin-bottom: 0; }
 

@@ -675,7 +675,7 @@ async function submitRecommendation(e) {
         bubble.className = 'chat-bubble';
         if (role === 'assistant' && typeof marked !== 'undefined') {
             bubble.classList.add('markdown-body');
-            bubble.innerHTML = marked.parse(content);
+            bubble.innerHTML = marked.parse(content, { breaks: true });
         } else {
             bubble.textContent = content;
         }
