@@ -1969,3 +1969,27 @@ No breaking changes to your agents or trading logic. This is pure scheduler infr
 - **Verification:** Added 8 unit tests in `tests/test_get_contract.py` covering exact match, strike key variants ("65.00"/"65"), expiration format variants ("2026-07-17"/"20260717"), None args → None, missing contract → None, wrong bucket → None, puts, option_type variants. All tests pass. Combined with the existing 8 `test_exclude_contract.py` tests → 16 total tests pass.
 - **Key Pattern:** When the candidate chain excludes a reference item (for good reason — to prevent no-op selection), but the agent still needs its pricing for comparison, surface it as a clearly-labeled REFERENCE block separate from the candidates. Capture the reference BEFORE filters that might remove it (e.g., delta filter). Always make the semantic purpose explicit ("buyback_cost" not just "ask").
 - **For:** dsanchor
+
+### Activity Chat Instructions Module (2026-07-09)
+- Created `src/activity_chat_instructions.py` exposing `get_activity_chat_instructions()` that returns the system prompt for a per-activity chat assistant (natural-language Q&A over a specific trading activity/alert).
+- **Two-Tier Context Contract:** The chat receives TWO distinct context tiers that must NOT be conflated:
+  1. **AGENT DECISION context** — the historical, exact outputs from monitor/supervisor/alpha agents at the time they made their decision, PLUS the position state at that moment. This is the EXACT historical record.
+  2. **CURRENT MARKET DATA** — the option chain (filtered for the position) and technical data, re-fetched LIVE now. This is NOT what the agents used; it reflects the present moment for user decision-making.
+- **Exact Section Headers** (must match Rusty's endpoint implementation):
+  - `=== AGENT DECISION (historical, exact — what the agents actually decided) ===`
+  - `=== POSITION ===`
+  - `=== CURRENT MARKET DATA (LIVE NOW — NOT what the agents used) ===`
+  - `=== CONVERSATION SO FAR ===`
+  - `=== USER QUESTION ===`
+- **Critical Rules Enforced:**
+  1. To explain WHY an agent decided something (e.g., "why didn't it roll?"), reason ONLY from the AGENT DECISION block. Do NOT use CURRENT MARKET DATA to reconstruct a past decision — the chain moves, so current numbers may differ. If current data contradicts the past decision, frame it as "conditions have changed since the decision," never "the agent was wrong about current numbers."
+  2. For "what should I do now / is there a better roll?" questions, use CURRENT MARKET DATA, and ALWAYS remind the user these figures are current (live) and were NOT the basis of the original agent decision.
+  3. NEVER invent option-chain contracts, strikes, premiums, Greeks, or technical values not present in the provided context. If data is absent, say so explicitly.
+  4. READ-ONLY / ADVISORY ONLY: the assistant explains and suggests. It MUST NOT claim to execute trades, place/close/roll orders, or modify the position or data. If asked to act, explain it can only advise and the user must act in the app.
+  5. Domain competence: understands CSP/CC mechanics, rolling (roll-out/up/down), delta as ~assignment probability, gamma risk near expiration, theta decay, IV, earnings and ex-dividend timing. Keep answers concise, concrete, grounded in provided numbers (cite specific strikes/expirations/premiums).
+  6. Be honest about uncertainty and tradeoffs; do not overstate confidence.
+- **Output Style:** Free-form natural language (NOT JSON like monitor/supervisor/alpha). Concise, concrete, professional — match the Q&A conversational tone, not the structured decision-engine tone of other instruction modules.
+- **Target Model:** gpt-5.4-mini (model-agnostic prompt design).
+- **Validation:** `python3 -m py_compile src/activity_chat_instructions.py` passes.
+- **Key Pattern:** When building a chat assistant over agent decisions + live market data, enforce a strict context-tier contract at the prompt level. The assistant must understand which tier answers which question type, and NEVER conflate historical decision reasoning with current market conditions. Always surface data provenance ("the agent decided based on X at decision time; current data now shows Y").
+- **For:** dsanchor

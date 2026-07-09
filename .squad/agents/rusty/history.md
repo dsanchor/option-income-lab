@@ -1434,3 +1434,62 @@ Created `src/options_math.py` with `robust_mid(bid, ask, last=0.0)` helper that 
 ## Learnings
 - settings_config_save must call registry.update_task_enabled(name, enabled, scheduler.config) per task — writing enabled only to disk/cosmos + reschedule(cron) leaves the live registry stale, so the settings checkbox reverts on reload; monitor_agents is intentionally always-on. 2026-07-03 for dsanchor.
 - scheduled sync_calendar (src/main.py) must compute has_active_position PER event date (expiration >= event date) like web/app.py's _has_position_active_on — the old symbol-wide any(active) wrongly flagged events after a position's expiry. 2026-07-08 for dsanchor.
+
+### Activity Chat Endpoint (2026-07-09)
+
+**Feature:** Added a "Chat" button on each activity detail page that opens a chat interface to discuss that specific activity with an LLM. The assistant is read-only and advisory.
+
+**Context Design (LIVE-fetch, no snapshots):**
+- The chat message sent to the LLM contains these EXACT section headers (contract with Linus's instructions module):
+  - `=== AGENT DECISION (historical, exact — what the agents actually decided) ===` → the persisted activity doc as pretty JSON
+  - `=== POSITION ===` → the linked position dict from symbol's positions[] array
+  - `=== CURRENT MARKET DATA (LIVE NOW — NOT what the agents used) ===` → CURRENT filtered option chain for the position + CURRENT technical analysis
+  - `=== CONVERSATION SO FAR ===` → prior turns from the front-end, or "(none)"
+  - `=== USER QUESTION ===` → the latest user message
+
+**Backend (web/app.py):**
+- **New endpoint:** `POST /api/activities/{activity_id}/chat` at line ~2815
+- **Request JSON:** `{ "message": str, "history": [{"role":"user"|"assistant","content":str}, ...] }`
+- **Response JSON:** `{ "answer": str }`
+- **Activity loading:** Reuses `cosmos.get_activity_by_id(activity_id)` pattern from `activity_detail_page` (line ~2818)
+- **Position loading:** Positions are embedded in symbol_config — `cosmos.get_symbol(symbol)["positions"]`; matched by `position_id`. If no position_id (e.g. SELL alert with no open position), passes `"(no linked position)"`
+- **CURRENT option chain:** Uses `src.options_chain_cache.get_options_chain_cache().get_or_load(symbol)` to get current chain, then filters it using `src.options_chain_filters.filter_options_chain_for_position(chain, strike, option_type, num_strikes=10)` to send only relevant strikes (matching how monitor builds roll chains). If no position, sends compact chain
+- **CURRENT technical analysis:** Queries most recent `technical_analysis` doc from Cosmos (doc_type='technical_analysis', ORDER BY timestamp DESC). If no persisted doc, generates fresh via `src.technical_analysis_agent.run_technical_analysis()` (best-effort; never fails the whole request). Includes timestamp
+- **LLM call:** Uses Agent Framework pattern (reuses `from src.llm import create_async_chat_client`, `from agent_framework import Agent`). Imports instructions from `src.activity_chat_instructions.get_activity_chat_instructions()` (Linus owns that module)
+- **Model:** Configurable via `Config.activity_chat_model` (default `'gpt-5.4-mini'`), mirrors `plan_monitor_model` precedent
+- **Error handling:** Returns clean JSON errors with proper status codes (mirror `api_delete_activity` pattern at line ~2797)
+- **Ephemeral:** Does NOT persist chat history server-side (front-end holds it)
+
+**Frontend (web/templates/activity_detail.html):**
+- **Chat button:** Added next to Delete Activity button at line ~361 (class="btn btn-primary", id="btnChatActivity")
+- **Chat panel:** Card-style panel (initially hidden) with scrollable messages area, text input, and Send button (lines ~365-379). Consistent styling with existing template (reuses CSS vars like `--bg-secondary`, `--text-primary`, `--border-color`)
+- **JavaScript:** Keeps in-memory `chatHistory` array. On send: appends user msg, POSTs to `/api/activities/{activity_id}/chat` with `{message, history}`, renders returned `answer`, appends to history. Disables input while awaiting. Handles errors gracefully (shows error message). The activity_id is available from template context (reused pattern from btnDeleteActivity's JS ~line 531+)
+- **Ephemeral:** History resets on page reload (no persistence)
+
+**Config (src/config.py):**
+- **New property:** `activity_chat_model` at line ~256 (default `'gpt-5.4-mini'`), reads from `config['activity_chat']['model']`, mirrors `plan_monitor_model` pattern
+
+**Files Changed:**
+- `src/config.py` line ~256: Added `activity_chat_model` property
+- `web/app.py` line ~2815: Added `POST /api/activities/{activity_id}/chat` endpoint
+- `web/templates/activity_detail.html` lines ~361-379, ~565-651: Added Chat button, panel, and JS handler
+
+**Validation:**
+- ✅ `python3 -c "import ast; ast.parse(open('web/app.py').read())"` → no syntax errors
+- ✅ `python3 -c "import ast; ast.parse(open('src/config.py').read())"` → no syntax errors
+- (Note: `src.activity_chat_instructions` import will resolve once Linus lands his module; syntax is correct)
+
+**Key Learnings:**
+- **LIVE-fetch design (no snapshots):** The activity chat fetches CURRENT option chain and CURRENT technical analysis at chat time, NOT what the agents used historically. This allows the user to compare the agent's historical decision (from the persisted activity doc) with fresh market data. The EXACT section headers are a contract with Linus's system prompt (he depends on them verbatim).
+- **Technical analysis query:** Cosmos does NOT have a `get_technical_analysis(symbol)` method — must query directly: `SELECT TOP 1 * FROM c WHERE c.symbol = @symbol AND c.doc_type = 'technical_analysis' ORDER BY c.timestamp DESC`. This retrieves the most recent generated technical analysis doc. If none exists, fall back to fresh generation via `run_technical_analysis()` (best-effort, never fail the request).
+- **Option chain filtering:** Reuse `filter_options_chain_for_position` from `src.options_chain_filters` to send only relevant strikes around the position's current strike (±10 strikes). This keeps the LLM context focused and mirrors how the monitor builds roll chains.
+- **Agent Framework pattern:** Reuse the existing Agent + create_async_chat_client pattern from `src/agent_runner.py` (line ~880-886). The instructions come from a separate module (`src.activity_chat_instructions`) to keep concerns separated (Rusty handles plumbing, Linus owns strategy logic).
+- **Config model property:** Always add a config property for model selection (never hardcode). Follow the `plan_monitor_model` precedent: read from `config['task_name']['model']` with a sensible default like `'gpt-5.4-mini'`.
+- **Ephemeral chat history:** The chat history is kept in-memory on the front-end and passed with each request. Server does NOT persist chat history (keeps the design simple and stateless). History resets on page reload.
+
+**File/line anchors:**
+- Backend endpoint: `web/app.py` line ~2815 (`@app.post("/api/activities/{activity_id}/chat")`)
+- Config property: `src/config.py` line ~256 (`activity_chat_model`)
+- Frontend Chat button: `web/templates/activity_detail.html` line ~361
+- Frontend Chat panel: `web/templates/activity_detail.html` line ~365
+- Frontend Chat JS: `web/templates/activity_detail.html` line ~565

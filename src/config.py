@@ -252,6 +252,11 @@ class Config:
         """Plan monitor model (default: 'gpt-5.4-mini')."""
         return str(self.config.get('plan_monitor', {}).get('model', 'gpt-5.4-mini'))
 
+    @property
+    def activity_chat_model(self) -> str:
+        """Activity chat model (default: 'gpt-5.4-mini')."""
+        return str(self.config.get('activity_chat', {}).get('model', 'gpt-5.4-mini'))
+
     # ── Options Chain Scheduler ────────────────────────────────────────
 
     @property

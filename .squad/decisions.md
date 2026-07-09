@@ -4823,3 +4823,137 @@ When candidate chain must exclude a reference item (to prevent no-op selection) 
 ✅ Held contract never appears as no-op roll target (data-layer enforcement)  
 ✅ Works even when held contract's delta is outside alpha's kept band  
 ✅ Instruction guard reinforces semantic constraint (roll MUST change strike and/or expiration)
+
+---
+
+## 2026-07-09: Per-Activity Chat Feature — Two-Tier Context & Live-Fetch Design
+
+**Decision owners:** Linus (prompt design), Rusty (endpoint + frontend), Basher (testing), dsanchor (feature request)  
+**Status:** Implemented & Validated (13 tests passing)  
+**Date decided:** 2026-07-09
+
+### Context
+
+Users requested a "Chat" button on activity detail pages to consult/discuss a specific trading activity (monitor/supervisor/alpha decision) with an LLM. The feature must compare the historical agent decision against current market data while maintaining data provenance clarity and read-only/advisory-only semantics.
+
+**Design fork (resolved):**
+- ~~Snapshot the filtered option chain + technicals into the activity doc at generation time~~ (would require schema changes, redundant storage)
+- ✅ **Live-fetch at chat time:** Fetch CURRENT market data when user opens chat, clearly labeled as current (not what agents used historically)
+
+### Decision: Two-Tier Context Separation
+
+#### Tier 1: AGENT DECISION (Historical, Exact)
+- Persisted outputs of monitor/supervisor/alpha agents PLUS position state at decision time
+- Exact historical record: what agents decided and why
+- Used ONLY to explain past agent reasoning
+
+#### Tier 2: CURRENT MARKET DATA (Live, Re-fetched)
+- Option chain (filtered for position) and technical analysis fetched LIVE at chat time
+- Reflects present moment for user decision-making
+- Always flagged as current/not-what-agents-used
+
+### Message Format: Five Exact Section Headers
+
+The system enforces these headers (Linus's system prompt + Rusty's endpoint construction):
+```
+=== AGENT DECISION (historical, exact — what the agents actually decided) ===
+[activity doc as JSON]
+
+=== POSITION ===
+[position dict from symbol's positions[] array]
+
+=== CURRENT MARKET DATA (LIVE NOW — NOT what the agents used) ===
+[filtered option chain + current technical analysis]
+
+=== CONVERSATION SO FAR ===
+[prior turns, or "(none)"]
+
+=== USER QUESTION ===
+[latest user message]
+```
+
+### Critical Rules
+
+1. **Explaining past decisions:** Reason ONLY from AGENT DECISION block. Never use CURRENT MARKET DATA to reconstruct a past decision. If current contradicts past, frame as "conditions have changed."
+2. **Advising on current actions:** Use CURRENT MARKET DATA, always flag as live and NOT basis of original decision.
+3. **Never invent data:** Do not fabricate strikes, premiums, Greeks, or technicals not present in context. If data missing, say so.
+4. **Read-only/advisory-only:** Assistant explains and suggests. MUST NOT claim to execute trades. If asked to act, explain it can only advise.
+5. **Domain competence:** Understands CSP/CC mechanics, rolling, delta, gamma, theta, IV, earnings/ex-div timing. Concise, concrete, grounded in numbers.
+6. **Honest about uncertainty:** Acknowledge tradeoffs and limitations. Do not overstate confidence.
+
+### Implementation Details
+
+**Backend endpoint:** `POST /api/activities/{activity_id}/chat` (web/app.py)
+- Loads activity from CosmosDB
+- Fetches current option chain via cache, filters for position (±10 strikes)
+- Fetches current technical analysis; best-effort fresh-gen fallback if no recent persisted doc
+- Builds message with 5 exact headers
+- Calls Agent(gpt-5.4-mini) via create_async_chat_client
+- All error paths graceful: missing chain/technicals never block request
+
+**Frontend:** "Chat" button on activity_detail.html (next to "Delete Activity")
+- Ephemeral chat panel with message input, send button, history display
+- Conversation history held in browser only (not persisted to DB)
+- XSS-safe textContent for rendering
+
+**Configuration:**
+- Added Config.activity_chat_model property (default 'gpt-5.4-mini')
+- Reads from config['activity_chat']['model'] for production override
+
+### Rationale
+
+**Why two-tier context:** Market moves constantly. Option chain NOW ≠ chain at decision time. If chat uses current data to explain past decisions, it generates false explanations ("agent was wrong" when actually market moved).
+
+**Why live-fetch, no snapshots:**
+- Keeps activity docs lean (no redundant chain/technical data stored)
+- Users can ask "Is this still valid NOW?" and get real current answer
+- Reduces schema complexity; activity struct unchanged
+
+**Why five exact headers:** Clear parse anchors for LLM reasoning. Unambiguous separation of historical vs. current. Prevents the model from conflating data sources.
+
+**Why gpt-5.4-mini:** Cost-effective for Q&A over provided context. No code gen needed. Consistent with plan_monitor_model precedent (all advisory tasks should have configurable models).
+
+**Why read-only enforcement:** Advisory chat is non-transactional. Preventing execution claims avoids user confusion and potential errors.
+
+### Files Changed
+
+- `src/activity_chat_instructions.py` (new, 95 lines) — System prompt with strict two-tier contract
+- `src/config.py` (~line 256) — Added activity_chat_model property
+- `web/app.py` (~line 2815) — Added api_activity_chat endpoint
+- `web/templates/activity_detail.html` (~lines 361–379, 565–651) — Added Chat button, panel, JS handler
+- `tests/test_activity_chat.py` (new, 415 lines, 13 tests) — Comprehensive hermetic endpoint testing
+
+### Validation
+
+✅ py_compile: all modified Python files  
+✅ pytest: tests/test_activity_chat.py → 13 passed  
+✅ Contract tests: all 5 headers present, activity JSON in message, live chain data verified  
+✅ Read-only enforcement: zero cosmos write/delete calls detected  
+✅ Graceful degradation: chain unavailable, missing technicals, no linked position all handled  
+
+### Bugs Found
+
+None.
+
+### Pattern for Future Chat Features
+
+When building a chat assistant over agent decisions + live market data:
+1. Enforce strict context-tier contract at the prompt level.
+2. Assistant must understand which tier answers which question type.
+3. NEVER conflate historical decision reasoning with current market conditions.
+4. Always surface data provenance: "agent decided based on X at decision time; current data now shows Y."
+5. Use exact section headers to anchor LLM parsing.
+
+### Dependencies & Coordination
+
+- Linus (system prompt) ← Rusty (exact section headers from endpoint)
+- Rusty (endpoint) ← Linus (system prompt)
+- Basher (test suite) → All (validates contract + read-only)
+- Coordinator: Fixed AgentRunner construction (was AgentRunner(cfg), now AgentRunner(llm=..., model=...))
+
+### Future Considerations
+
+- Persistent chat history: Store chat sessions in Cosmos if users request (new container or extend activity docs)
+- Technical analysis caching: TTL-based caching in OptionsChainCache or dedicated TechnicalAnalysisCache if freshness becomes issue
+- Chat transcript export: Add "Export" button generating markdown/JSON dump
+- Conversation threading: Extend CosmosDB activity docs with chat_sessions sub-collection for multi-turn persistence

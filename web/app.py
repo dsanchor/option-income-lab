@@ -2811,6 +2811,172 @@ async def api_delete_activity(request: Request, activity_id: str):
 
 
 # ===========================================================================
+# REST API — Activity Chat
+# ===========================================================================
+
+@app.post("/api/activities/{activity_id}/chat")
+async def api_activity_chat(request: Request, activity_id: str):
+    """Chat endpoint for discussing a specific activity with an LLM.
+    
+    Provides LIVE context: current option chain (filtered for position),
+    current technical analysis, the historical activity record, and linked position.
+    """
+    try:
+        # Parse request body
+        body = await request.json()
+        user_message = body.get("message", "").strip()
+        history = body.get("history", [])
+        
+        if not user_message:
+            return JSONResponse({"error": "Message cannot be empty"}, status_code=400)
+        
+        # Load activity and related data
+        cosmos = _get_cosmos(request)
+        activity = cosmos.get_activity_by_id(activity_id)
+        if not activity:
+            return JSONResponse({"error": "Activity not found"}, status_code=404)
+        
+        symbol = activity.get("symbol", "")
+        position_id = activity.get("position_id")
+        
+        # Load position from symbol config
+        position_data = "(no linked position)"
+        sym_doc = cosmos.get_symbol(symbol)
+        if sym_doc and position_id:
+            positions = sym_doc.get("positions", [])
+            matched = [p for p in positions if p.get("position_id") == position_id]
+            if matched:
+                position_data = json.dumps(matched[0], indent=2, default=str)
+        
+        # Get CURRENT option chain
+        from src.options_chain_cache import get_options_chain_cache
+        from src.options_chain_filters import filter_options_chain_for_position
+        
+        chain_data = "(option chain unavailable)"
+        try:
+            cache = get_options_chain_cache()
+            full_chain = cache.get_or_load(symbol)
+            # Parse the JSON string to dict
+            chain_dict = json.loads(full_chain) if isinstance(full_chain, str) else full_chain
+            
+            # Filter for position if we have one
+            if sym_doc and position_id and matched:
+                pos = matched[0]
+                strike = pos.get("strike")
+                option_type = pos.get("type", "").upper()
+                if strike:
+                    filtered_chain = filter_options_chain_for_position(
+                        chain_dict, 
+                        current_strike=strike,
+                        option_type=option_type,
+                        num_strikes=10
+                    )
+                    chain_data = json.dumps(filtered_chain, indent=2, default=str)
+                else:
+                    chain_data = json.dumps(chain_dict, indent=2, default=str)
+            else:
+                # No position — provide compact chain
+                chain_data = json.dumps(chain_dict, indent=2, default=str)
+        except Exception as e:
+            logger.warning("Failed to load option chain for %s: %s", symbol, e)
+            chain_data = f"(option chain unavailable: {e})"
+        
+        # Get CURRENT technical analysis
+        from src.technical_analysis_agent import run_technical_analysis
+        from src.config import Config
+        from src.agent_runner import AgentRunner
+        
+        technical_data = "(technical analysis unavailable)"
+        try:
+            # Query most recent technical_analysis doc
+            query = (
+                "SELECT TOP 1 * FROM c "
+                "WHERE c.symbol = @symbol "
+                "AND c.doc_type = 'technical_analysis' "
+                "ORDER BY c.timestamp DESC"
+            )
+            params = [{"name": "@symbol", "value": symbol}]
+            results = list(cosmos.container.query_items(
+                query=query,
+                parameters=params,
+                partition_key=symbol,
+            ))
+            
+            if results:
+                doc = results[0]
+                ts = doc.get("timestamp", "unknown")
+                analysis = doc.get("analysis", "")
+                technical_data = f"[Generated at: {ts}]\n\n{analysis}"
+            else:
+                # No persisted doc — generate fresh (best-effort)
+                logger.info("No persisted technical analysis for %s; generating fresh", symbol)
+                cfg = Config()
+                runner = AgentRunner(llm=cfg.llm_config(), model=cfg.model_deployment)
+                result = await run_technical_analysis(cfg, runner, cosmos, symbol)
+                if "analysis" in result:
+                    technical_data = f"[Generated fresh]\n\n{result['analysis']}"
+                else:
+                    technical_data = "(technical analysis generation failed)"
+        except Exception as e:
+            logger.warning("Failed to load technical analysis for %s: %s", symbol, e, exc_info=True)
+            technical_data = f"(technical analysis unavailable: {e})"
+        
+        # Build conversation history string
+        conversation_str = "(none)"
+        if history:
+            lines = []
+            for turn in history:
+                role = turn.get("role", "unknown")
+                content = turn.get("content", "")
+                lines.append(f"{role.upper()}: {content}")
+            conversation_str = "\n\n".join(lines)
+        
+        # Build the complete prompt with exact headers
+        message = f"""=== AGENT DECISION (historical, exact — what the agents actually decided) ===
+{json.dumps(activity, indent=2, default=str)}
+
+=== POSITION ===
+{position_data}
+
+=== CURRENT MARKET DATA (LIVE NOW — NOT what the agents used) ===
+{chain_data}
+
+Technical Analysis:
+{technical_data}
+
+=== CONVERSATION SO FAR ===
+{conversation_str}
+
+=== USER QUESTION ===
+{user_message}"""
+        
+        # Call LLM via Agent Framework
+        from agent_framework import Agent
+        from src.llm import create_async_chat_client
+        from src.activity_chat_instructions import get_activity_chat_instructions
+        
+        cfg = Config()
+        model = cfg.activity_chat_model
+        client = create_async_chat_client(model, cfg.llm_config())
+        agent = Agent(
+            client=client,
+            name="ActivityChat",
+            instructions=get_activity_chat_instructions()
+        )
+        
+        result = await agent.run(message)
+        answer = result.text or str(result)
+        
+        return JSONResponse({"answer": answer})
+        
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        logger.exception("Activity chat error for %s", activity_id)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ===========================================================================
 # Page Routes — Activity Detail
 # ===========================================================================
 

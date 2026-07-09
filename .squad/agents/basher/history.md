@@ -245,6 +245,57 @@ Linus updated roll agent instructions with new DTE targets and post-earnings win
 
 **Decision Record:** `.squad/decisions/decisions.md` → "Roll DTE Target and Post-Earnings Window Update"
 
+### Web Endpoint Testing Pattern — Activity Chat Tests (2026-07-09)
+
+**Test file:** `tests/test_activity_chat.py` — 13 hermetic tests for `POST /api/activities/{activity_id}/chat` endpoint (web/app.py:2817)
+
+**Pattern established:** TestClient + monkeypatch + FakeCosmos for web endpoint tests with NO network, NO real LLM, NO real Cosmos
+
+**Key components:**
+
+1. **FakeCosmos class**: In-memory fake for CosmosDBService
+   - Implements `get_activity_by_id(id)`, `get_symbol(symbol)`
+   - Provides `.container` property with `query_items(query, parameters, partition_key)` method
+   - Stores activities, symbols, and technical_docs dicts in memory
+
+2. **FakeAgent class**: Captures LLM messages for contract assertions
+   - Uses module-level `captured_messages` list to store messages across test invocations
+   - Returns object with `.text = "MOCK ANSWER"` attribute
+   - Enables assertions on message content (section headers, data inclusion)
+
+3. **FakeConfig class**: Stubs config properties
+   - Must include `activity_chat_model`, `model_deployment` (for AgentRunner fallback), and `llm_config()` method
+   - Returns minimal valid values
+
+4. **FakeOptionsChainCache class**: Returns JSON chain data or raises on demand
+   - `get_or_load(symbol)` returns JSON string
+   - `should_raise` flag for degradation testing
+
+5. **test_app fixture**: Sets up TestClient with all mocks
+   - **Critical**: Disable startup event with `app.router.on_startup = []` to prevent CosmosDB initialization
+   - Set `app.state.cosmos` and `app.state.yf_provider` BEFORE creating TestClient
+   - Use `TestClient(app, raise_server_exceptions=False)` to capture 4xx/5xx responses
+   - Monkeypatch late-imported symbols: `agent_framework.Agent`, `src.llm.create_async_chat_client`, `src.config.Config`, `src.options_chain_cache.get_options_chain_cache`
+
+**Testing patterns:**
+
+- **Contract tests**: Assert captured LLM message contains all 5 required section headers, activity JSON, chain data, conversation history
+- **Degradation tests**: Chain unavailable, technical analysis unavailable, missing position — all gracefully handled with 200 responses
+- **Read-only validation**: Attach fake write methods to cosmos and assert they're never called
+- **Edge cases**: Empty/blank message (400), unknown activity (404), missing position_id (graceful), history formatting
+
+**Run command:**
+```bash
+source .venv/bin/activate 2>/dev/null
+python3 -m pytest tests/test_activity_chat.py -q
+```
+
+**Key insight**: Late imports inside endpoint functions (e.g., `from agent_framework import Agent` inside `api_activity_chat`) require monkeypatching the SOURCE module attribute, NOT the function's local namespace. Use `monkeypatch.setattr("agent_framework.Agent", FakeAgent)` BEFORE the endpoint executes.
+
+**Files changed:** `tests/test_activity_chat.py` (new file, 415 lines)
+
+**Related endpoint:** `POST /api/activities/{activity_id}/chat` in `web/app.py:2817`
+
 ### Cross-Agent Note: Roll Candidate Ranking by Ann.Ret% (2026-07-01)
 
 Linus changed roll candidate table sorting from **Net Credit descending** → **Ann.Ret% (annualized return) descending**. This affects test expectations for candidate ordering if your test suite validates roll candidate rankings.
