@@ -4529,75 +4529,119 @@ async def chat_api(request: Request):
     
     # Build context based on mode
     if mode == "portfolio":
-        # Existing portfolio mode logic
+        selected_agents = body.get("selected_agents")
+        if selected_agents:
+            selected_agent_set = set(selected_agents)
+            selected_agent_keys = [
+                key for key in AGENT_TYPES if key in selected_agent_set
+            ]
+        else:
+            selected_agent_keys = list(AGENT_TYPES.keys())
+
+        try:
+            activities_limit = int(body.get("activities_limit", 3))
+        except (TypeError, ValueError):
+            activities_limit = 3
+        activities_limit = max(1, min(activities_limit, 50))
+
         cosmos = getattr(request.app.state, "cosmos", None)
         if cosmos:
             try:
-                # Build set of closed position IDs to exclude
-                closed_position_ids: set = set()
                 all_symbols = cosmos.list_symbols() if cosmos else []
-                for sym_cfg in all_symbols:
-                    for pos in sym_cfg.get("positions", []):
-                        if pos.get("status") != "active":
-                            closed_position_ids.add(pos["position_id"])
 
-                for agent_key, meta in AGENT_TYPES.items():
-                    alerts = cosmos.get_all_alerts(
-                        agent_type=agent_key, limit=20)
-                    activities = cosmos.get_all_activities(
-                        agent_type=agent_key, limit=20)
-
-                    # Filter out activities/alerts linked to closed positions
-                    if closed_position_ids:
-                        activities = [d for d in activities
-                                      if d.get("position_id") not in closed_position_ids]
-                        closed_activity_ids = {d.get("id") for d in cosmos.get_all_activities(
-                            agent_type=agent_key, limit=100)
-                            if d.get("position_id") in closed_position_ids}
-                        alerts = [s for s in alerts
-                                  if s.get("position_id") not in closed_position_ids
-                                  and s.get("activity_id") not in closed_activity_ids]
-
-                    if not alerts and not activities:
-                        continue
-
+                for agent_key in selected_agent_keys:
+                    meta = AGENT_TYPES[agent_key]
+                    is_pm = meta["is_position_monitor"]
                     context_parts.append(f"\n--- {meta['label']} ---")
 
-                    # Group by symbol
-                    sym_data: Dict[str, Dict[str, list]] = defaultdict(
-                        lambda: {"alerts": [], "activities": []})
-                    for s in alerts:
-                        sym_data[s.get("symbol", "?")]["alerts"].append(s)
-                    for d in activities:
-                        sym_data[d.get("symbol", "?")]["activities"].append(d)
+                    if is_pm:
+                        ptype = (
+                            "call" if agent_key == "open_call_monitor"
+                            else "put"
+                        )
+                        for sym_cfg in all_symbols:
+                            sym = sym_cfg["symbol"]
+                            for pos in sym_cfg.get("positions", []):
+                                if (pos.get("status") == "active"
+                                        and pos.get("type") == ptype):
+                                    context_parts.append(
+                                        f"\n## {sym} ${pos.get('strike')} "
+                                        f"exp {pos.get('expiration')}"
+                                    )
+                                    context_parts.append("Open position:")
+                                    position_doc = (
+                                        _clean_doc(pos)
+                                        if isinstance(pos, dict) else pos
+                                    )
+                                    context_parts.append(
+                                        json.dumps(position_doc, indent=2,
+                                                   default=str)
+                                    )
 
-                    for sym, data in sym_data.items():
-                        context_parts.append(f"\n## {sym}")
-                        if data["alerts"]:
-                            context_parts.append(
-                                f"Alerts (last {len(data['alerts'])}):")
-                            for s in data["alerts"][:2]:
+                                    acts = cosmos.get_recent_activities(
+                                        sym, agent_key,
+                                        max_entries=activities_limit,
+                                        position_id=pos.get("position_id"),
+                                        include_alerts=True
+                                    )
+                                    context_parts.append(
+                                        f"Activities (last {len(acts)}):"
+                                    )
+                                    if acts:
+                                        for act in acts:
+                                            context_parts.append(
+                                                json.dumps(
+                                                    _clean_doc(act), indent=2,
+                                                    default=str
+                                                )
+                                            )
+                                    else:
+                                        context_parts.append(
+                                            "No activities recorded."
+                                        )
+                    else:
+                        for sym_cfg in all_symbols:
+                            sym = sym_cfg["symbol"]
+                            if sym_cfg.get("watchlist", {}).get(agent_key):
+                                display_name = sym_cfg.get("display_name", sym)
+                                context_parts.append(f"\n## {display_name}")
+                                acts = cosmos.get_recent_activities(
+                                    sym, agent_key,
+                                    max_entries=activities_limit,
+                                    include_alerts=True
+                                )
                                 context_parts.append(
-                                    json.dumps(_clean_doc(s), indent=2,
-                                               default=str))
-                        if data["activities"]:
-                            context_parts.append(
-                                f"Activities (last {len(data['activities'])}):")
-                            for d in data["activities"][:4]:
-                                context_parts.append(
-                                    json.dumps(_clean_doc(d), indent=2,
-                                               default=str))
+                                    f"Activities (last {len(acts)}):"
+                                )
+                                if acts:
+                                    for act in acts:
+                                        context_parts.append(
+                                            json.dumps(
+                                                _clean_doc(act), indent=2,
+                                                default=str
+                                            )
+                                        )
+                                else:
+                                    context_parts.append(
+                                        "No activities recorded."
+                                    )
             except Exception:
                 context_parts.append("(Error loading context from CosmosDB)")
-        
-        context_text = ("\n".join(context_parts) if context_parts
-                        else "No recent activities available.")
-        
+
+        context_text = (
+            "\n".join(context_parts) if context_parts else
+            "No open positions or watchlist symbols found for the selected "
+            "agents."
+        )
+
         system_prompt = (
-            "You are an Option Income Lab advisor. You have access to recent "
-            "analysis activities for the user's portfolio. Answer questions about "
-            "positions, risks, and recommended actions based on this data.\n\n"
-            f"Recent analysis data:\n{context_text}"
+            "You are an Option Income Lab advisor. For the selected agents, "
+            "you have each open position for position monitors and each "
+            "watchlist symbol for following agents, plus up to "
+            f"{activities_limit} recent activities or alerts for each row. "
+            "Answer questions about positions, risks, and recommended actions "
+            "based on this data.\n\n"
+            f"Portfolio context:\n{context_text}"
         )
     
     elif mode == "quick-analysis":

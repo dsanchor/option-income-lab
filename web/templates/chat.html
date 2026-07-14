@@ -28,6 +28,51 @@
     </div>
 </div>
 
+<!-- Portfolio Configuration Form -->
+<div id="portfolioConfigForm" class="card" style="display: none;">
+    <div class="card-header">
+        <h2>💼 Portfolio Chat</h2>
+        <button onclick="backToModeSelection()" class="btn-sm">
+            ← Back
+        </button>
+    </div>
+    <div style="padding: 1rem 1.25rem;">
+        <div style="margin-bottom: 1rem;">
+            <label style="display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">Agents</label>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <input type="checkbox" class="portfolio-agent-checkbox" value="open_call_monitor" data-label="Open Call Monitor" checked>
+                    Open Call Monitor
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <input type="checkbox" class="portfolio-agent-checkbox" value="open_put_monitor" data-label="Open Put Monitor" checked>
+                    Open Put Monitor
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <input type="checkbox" class="portfolio-agent-checkbox" value="covered_call" data-label="Following · Covered Call" checked>
+                    Following · Covered Call
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <input type="checkbox" class="portfolio-agent-checkbox" value="cash_secured_put" data-label="Following · Cash-Secured Put" checked>
+                    Following · Cash-Secured Put
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <input type="checkbox" class="portfolio-agent-checkbox" value="buy_tracker" data-label="Following · Buy Tracker" checked>
+                    Following · Buy Tracker
+                </label>
+            </div>
+        </div>
+        <div style="max-width: 18rem; margin-bottom: 1rem;">
+            <label style="display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.3rem;">Max activities per position/symbol</label>
+            <input type="number" id="activitiesLimitInput" value="3" min="1" class="input-field" style="width: 100%; padding: 0.6rem 0.8rem; font-size: 0.9rem;">
+        </div>
+        <button id="portfolioStartBtn" onclick="configureAndStartPortfolioChat()" class="btn btn-primary">
+            Start Chat
+        </button>
+    </div>
+    <div id="portfolioConfigError" class="alert alert-error" style="display:none; margin: 0 1.25rem 1rem;"></div>
+</div>
+
 <!-- Quick Analysis Form -->
 <div id="quickAnalysisForm" class="card" style="display: none;">
     <div class="card-header">
@@ -96,8 +141,12 @@
     const sendBtn = document.getElementById('chatSend');
     const errorEl = document.getElementById('chatError');
     const modeSelectorEl = document.getElementById('modeSelector');
+    const portfolioConfigFormEl = document.getElementById('portfolioConfigForm');
     const quickAnalysisFormEl = document.getElementById('quickAnalysisForm');
     const chatInterfaceEl = document.getElementById('chatInterface');
+    const activitiesLimitInputEl = document.getElementById('activitiesLimitInput');
+    const portfolioStartBtnEl = document.getElementById('portfolioStartBtn');
+    const portfolioConfigErrorEl = document.getElementById('portfolioConfigError');
     const symbolInputEl = document.getElementById('symbolInput');
     const marketInputEl = document.getElementById('marketInput');
     const optionTypeInputEl = document.getElementById('optionTypeInput');
@@ -112,6 +161,27 @@
     let symbolData = null;
     let history = [];
     let awaitingFirstAnalysis = false;
+    let portfolioConfig = {
+        selected_agents: [
+            'open_call_monitor',
+            'open_put_monitor',
+            'covered_call',
+            'cash_secured_put',
+            'buy_tracker'
+        ],
+        selected_agent_labels: [
+            'Open Call Monitor',
+            'Open Put Monitor',
+            'Following · Covered Call',
+            'Following · Cash-Secured Put',
+            'Following · Buy Tracker'
+        ],
+        activities_limit: 3
+    };
+
+    function getPortfolioAgentCheckboxes() {
+        return Array.from(document.querySelectorAll('.portfolio-agent-checkbox'));
+    }
 
     // Check if fetch button should be enabled
     function checkFetchButtonState() {
@@ -121,13 +191,22 @@
         fetchBtnEl.disabled = !(symbol && market && optionType);
     }
 
+    function checkPortfolioStartButtonState() {
+        const checkedCount = getPortfolioAgentCheckboxes()
+            .filter(cb => cb.checked).length;
+        const limit = Number(activitiesLimitInputEl.value);
+        portfolioStartBtnEl.disabled = !(checkedCount >= 1 && Number.isInteger(limit) && limit >= 1);
+    }
+
     // Mode selection
     window.selectMode = function(mode) {
         currentMode = mode;
         modeSelectorEl.style.display = 'none';
         
         if (mode === 'portfolio') {
-            startPortfolioChat();
+            portfolioConfigFormEl.style.display = 'block';
+            checkPortfolioStartButtonState();
+            activitiesLimitInputEl.focus();
         } else if (mode === 'quick-analysis') {
             quickAnalysisFormEl.style.display = 'block';
             checkFetchButtonState();
@@ -141,8 +220,10 @@
         symbolData = null;
         history = [];
         modeSelectorEl.style.display = 'block';
+        portfolioConfigFormEl.style.display = 'none';
         quickAnalysisFormEl.style.display = 'none';
         chatInterfaceEl.style.display = 'none';
+        portfolioConfigErrorEl.style.display = 'none';
         fetchErrorEl.style.display = 'none';
         fetchProgressEl.style.display = 'none';
         errorEl.style.display = 'none';
@@ -151,18 +232,65 @@
         symbolInputEl.value = '';
         marketInputEl.value = '';
         optionTypeInputEl.value = '';
+        getPortfolioAgentCheckboxes().forEach(cb => { cb.checked = true; });
+        activitiesLimitInputEl.value = '3';
+        portfolioConfig = {
+            selected_agents: [
+                'open_call_monitor',
+                'open_put_monitor',
+                'covered_call',
+                'cash_secured_put',
+                'buy_tracker'
+            ],
+            selected_agent_labels: [
+                'Open Call Monitor',
+                'Open Put Monitor',
+                'Following · Covered Call',
+                'Following · Cash-Secured Put',
+                'Following · Buy Tracker'
+            ],
+            activities_limit: 3
+        };
         awaitingFirstAnalysis = false;
+        checkPortfolioStartButtonState();
+    };
+
+    window.configureAndStartPortfolioChat = function() {
+        const checked = getPortfolioAgentCheckboxes().filter(cb => cb.checked);
+        const limit = Number(activitiesLimitInputEl.value);
+
+        if (!checked.length) {
+            portfolioConfigErrorEl.textContent = '⚠️ Please select at least one agent';
+            portfolioConfigErrorEl.style.display = 'block';
+            return;
+        }
+
+        if (!Number.isInteger(limit) || limit < 1) {
+            portfolioConfigErrorEl.textContent = '⚠️ Activities limit must be at least 1';
+            portfolioConfigErrorEl.style.display = 'block';
+            return;
+        }
+
+        portfolioConfigErrorEl.style.display = 'none';
+        portfolioConfig = {
+            selected_agents: checked.map(cb => cb.value),
+            selected_agent_labels: checked.map(cb => cb.dataset.label || cb.value),
+            activities_limit: limit
+        };
+        startPortfolioChat();
     };
 
     // Start portfolio chat
     function startPortfolioChat() {
         chatModeLabelEl.textContent = '💼 Portfolio Chat';
-        chatSymbolLabelEl.textContent = '';
+        chatSymbolLabelEl.textContent = `Last ${portfolioConfig.activities_limit} · ${portfolioConfig.selected_agent_labels.length} agent(s)`;
+        portfolioConfigFormEl.style.display = 'none';
         chatInterfaceEl.style.display = 'flex';
         
         // Add initial message
         addMessage('assistant', 
-            "Hello! I'm your Option Income Lab advisor. I have access to your recent analysis activities. " +
+            "Hello! I'm your Option Income Lab advisor. I have access to your selected portfolio agents " +
+            `(${portfolioConfig.selected_agent_labels.join(', ')}) with up to ${portfolioConfig.activities_limit} recent activities per position or symbol. ` +
             "Ask me about your positions, risks, or recommended actions."
         );
         
@@ -322,6 +450,9 @@
             
             if (currentMode === 'quick-analysis') {
                 payload.symbol_data = symbolData;
+            } else if (currentMode === 'portfolio') {
+                payload.selected_agents = portfolioConfig.selected_agents;
+                payload.activities_limit = portfolioConfig.activities_limit;
             }
             
             const res = await fetch('/api/chat', {
@@ -359,6 +490,11 @@
     symbolInputEl.addEventListener('input', checkFetchButtonState);
     marketInputEl.addEventListener('input', checkFetchButtonState);
     optionTypeInputEl.addEventListener('change', checkFetchButtonState);
+    getPortfolioAgentCheckboxes().forEach(cb => {
+        cb.addEventListener('change', checkPortfolioStartButtonState);
+    });
+    activitiesLimitInputEl.addEventListener('input', checkPortfolioStartButtonState);
+    checkPortfolioStartButtonState();
     
     // Enter key on symbol input
     symbolInputEl.addEventListener('keydown', function(e) {
