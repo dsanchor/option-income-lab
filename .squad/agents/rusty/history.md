@@ -1586,3 +1586,20 @@ Created `src/options_math.py` with `robust_mid(bid, ask, last=0.0)` helper that 
 - `web/app.py`: Replaced 5 leak sites with DAL method calls
 - `tests/test_activity_chat.py`: Added `get_latest_technical_analysis` to FakeCosmos test double
 
+
+## Learnings
+
+### Portfolio Chat Configuration Context (2026-07-14)
+**Status:** ✅ Completed  
+**Files:**
+- `web/templates/chat.html` — added intermediate Portfolio Chat configuration form with multi-select agent checkboxes and activities limit input.
+- `web/app.py` — rewrote the `mode == "portfolio"` context builder in `chat_api`.
+
+**Context contract:**
+- Portfolio chat requests may include `selected_agents: list[str]` and `activities_limit: int`.
+- Missing or empty `selected_agents` falls back to all keys in `AGENT_TYPES` for backward compatibility.
+- `activities_limit` defaults to 3 and is clamped server-side to 1..50.
+
+**Agent mapping:**
+- Position monitors (`open_call_monitor`, `open_put_monitor`) seed context from active positions: call monitor reads active `type == "call"`, put monitor reads active `type == "put"`. Each row always includes the open position document plus up to N recent activities/alerts via `get_recent_activities(..., position_id=..., include_alerts=True)`.
+- Following agents (`covered_call`, `cash_secured_put`, `buy_tracker`) seed context from `sym_cfg.watchlist[agent_key]`. Each row always includes the watchlist symbol header plus up to N recent activities/alerts via `get_recent_activities(..., include_alerts=True)`.

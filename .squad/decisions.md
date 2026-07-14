@@ -5445,6 +5445,37 @@ Updated README.md to document all user-facing changes shipped in the July sessio
 - No sections accidentally broken, no unrelated content touched
 - Documentation needs no tests per task constraints
 
+# Portfolio Chat Context Contract
+
+**Date:** 2026-07-14  
+**Author:** Rusty (Agent Dev)  
+**Status:** ✅ Implemented  
+**Impact:** User-scoped advisor context, improved chat UX, server-side backward compatibility
+
+## Decision
+
+Portfolio Chat now has an intermediate configuration step and sends two request fields to `/api/chat` when `mode == "portfolio"`:
+
+- `selected_agents`: ordered subset of `AGENT_TYPES` selected by the user
+- `activities_limit`: maximum recent activities/alerts per open position or watchlist symbol
+
+The server remains the source of truth for context construction. It iterates selected agents in `AGENT_TYPES` order, uses active positions for position monitors, uses watchlist membership for following agents, and always includes the open position/watchlist row even when there are fewer than N or zero activities.
+
+## Rationale
+
+This avoids dumping all portfolio activity by default and lets the user scope advisor context before the chat begins. Server-side construction preserves backward compatibility and keeps CosmosDB access partition-scoped through `get_recent_activities(..., include_alerts=True)`.
+
+## Implementation
+
+- **web/app.py:** `/api/chat` branch for `mode == "portfolio"` accepts `selected_agents` (list) and `activities_limit` (int) from request body; builds per-position and per-watchlist-symbol context filtered by selected agents
+- **web/templates/chat.html:** New `#portfolioConfigForm` with 5 agent checkboxes + activities limit numeric field (default: 3), shown before chat begins
+- **tests/test_chat.py:** 13 passing tests validate context construction and request handling
+
+## Validation
+
+- AST parse: ✅ OK
+- Test suite: `pytest tests/ -k chat` → 13 passed
+
 ## README Documentation Conventions
 
 - Consistent heading hierarchy: `###` for major features, `####` for subsections
