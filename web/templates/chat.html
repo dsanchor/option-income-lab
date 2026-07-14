@@ -289,9 +289,10 @@
         
         // Add initial message
         addMessage('assistant', 
-            "Hello! I'm your Option Income Lab advisor. I have access to your selected portfolio agents " +
-            `(${portfolioConfig.selected_agent_labels.join(', ')}) with up to ${portfolioConfig.activities_limit} recent activities per position or symbol. ` +
-            "Ask me about your positions, risks, or recommended actions."
+            "Hello! I'm your Option Income Lab advisor. I have access to your selected agents " +
+            `(${portfolioConfig.selected_agent_labels.join(', ')}), covering all of your open positions and tracked follow-ups, ` +
+            `with up to ${portfolioConfig.activities_limit} recent activities each. ` +
+            "Ask me about your positions, follow-ups, risks, or recommended actions."
         );
         
         inputEl.focus();
