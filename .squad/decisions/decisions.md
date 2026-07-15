@@ -2859,3 +2859,73 @@ Portfolio Chat already builds context from selected agents and recent activities
 - Backend reads only existing `symbol_config.enrichment` from CosmosDB via `cosmos.list_symbols()`; no live yfinance fetches are performed.
 - Symbols are collected only if they actually appear in selected agent context, de-duplicated across agents, then sorted alphabetically for one consolidated section.
 - Missing or empty enrichment emits `No enrichment data available.` for that symbol.
+# Decision: README Modularization
+
+**Date:** 2026-07-15  
+**Status:** APPROVED  
+**Author:** Danny (Lead)
+
+## Context
+
+The project's README.md had grown to ~1720 lines, mixing high-level overview with detailed implementation documentation. This created several problems:
+- New contributors struggled to understand "what this project does" vs "how it works in detail"
+- Onboarding took longer — users had to scroll through the entire file to find setup instructions
+- Maintenance was difficult — feature updates required editing a single monolithic file
+- The README couldn't serve as both a marketing page and a technical reference
+
+## Decision
+
+Split the README into a lightweight index (~135 lines) and a structured `docs/` directory containing 11 topic-specific files. The README now serves as an **index + quick start**, while detailed content lives in dedicated documentation files.
+
+### New Structure
+
+- **README.md** (~135 lines)
+  - Title, philosophy, architecture overview (1 paragraph)
+  - Documentation table (links to all docs/*.md)
+  - Feature highlights (2-3 lines each with links)
+  - Quick Start (minimal commands)
+  - Acknowledgments
+
+- **docs/** directory (11 files, 1691 lines total)
+  - `concepts.md` — Core system concepts (Activity vs Alert, DPS, Supervisor, Alpha Advisor, Position Lifecycle)
+  - `architecture.md` — System design, agent pipeline, data flow, pre-fetch architecture, CosmosDB model, project structure
+  - `chat.md` — Dual-mode chat experience
+  - `screener.md` — DGI Screener, Momentum Analysis, Buy Tracker, Category-Based Strategy Skills
+  - `agents.md` — Summarization Agent, Symbol Report, Action Plans
+  - `output.md` — Activity & alert documents, example JSON, Telegram notifications
+  - `web-dashboard.md` — Dashboard UI, pages, features
+  - `local-setup.md` — Local setup, prerequisites, Python venv, Docker
+  - `deployment.md` — Azure deployment, CosmosDB provisioning, environment variables
+  - `troubleshooting.md` — Common errors and fixes
+  - `development.md` — Skills architecture, instruction files, SDK information
+
+### Principles
+
+1. **README as index** — The README is a lightweight landing page with links to detailed docs
+2. **VERBATIM content migration** — All content moved without summarization (code blocks, tables, JSON examples, CLI snippets preserved exactly)
+3. **Breadcrumbs** — Every `docs/*.md` file has `[← Back to README](../README.md)` under the H1 title
+4. **Maintenance discipline** — When features change, update BOTH the relevant `docs/*.md` file AND the corresponding highlight in the README's Features section
+5. **Single source of truth** — Detail lives in `docs/`, the README links to it (no duplication)
+
+## Rationale
+
+- **Faster onboarding** — New users can read the README in <2 minutes and understand what the project does
+- **Better navigation** — Topic-specific files make it easier to find specific information
+- **Easier maintenance** — Changes to a feature only require editing one focused doc file
+- **Improved discoverability** — Documentation table acts as a clear table of contents
+- **Preserved completeness** — All original content is still accessible, just reorganized
+
+## Alternatives Considered
+
+1. **Keep monolithic README** — Rejected: continued growth would make it increasingly unwieldy
+2. **Use wiki or external docs site** — Rejected: docs should live in the repo for version control and contributor accessibility
+3. **Summarize content in docs files** — Rejected: verbatim migration preserves all details without information loss
+
+## Implementation
+
+Completed 2026-07-15. All headings from the original README verified present in the new structure. No content lost. Code fences balanced across all files.
+
+## Open Questions
+
+None. Structure is complete and verified.
+

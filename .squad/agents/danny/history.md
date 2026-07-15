@@ -557,3 +557,31 @@ Rusty completed scheduler UI polish:
 - **Impact:** All 8 tasks now uniformly show Last Run + Next Run; accurate timestamps survive scheduler restarts
 - **Files:** web/app.py (+100 lines), web/templates/settings_config.html (+24 lines)
 - **Decision:** `.squad/decisions.md` (Decision #8)
+
+## Learnings
+
+### README Modularization (2026-07-15)
+
+- The project adopted a **docs/ structure** with the README as a lightweight index/overview (~135 lines, down from 1720)
+- **Documentation split**: Content moved VERBATIM into 11 topic-specific files:
+  - `docs/concepts.md` — Core system concepts (Activity vs Alert, DPS, Supervisor, Alpha Advisor, Position Lifecycle)
+  - `docs/architecture.md` — System design, agent pipeline, data flow, pre-fetch architecture, CosmosDB model, project structure
+  - `docs/chat.md` — Dual-mode chat (Portfolio Chat, Quick Analysis, Per-Activity Chat)
+  - `docs/screener.md` — DGI Screener, Momentum Analysis, Buy Tracker, Category-Based Strategy Skills
+  - `docs/agents.md` — Summarization Agent, Symbol Report, Action Plans
+  - `docs/output.md` — Activity & alert documents, example JSON, Telegram notifications
+  - `docs/web-dashboard.md` — Dashboard UI, pages, features
+  - `docs/local-setup.md` — Local setup, prerequisites, Python venv, Docker
+  - `docs/deployment.md` — Azure deployment, CosmosDB provisioning, environment variables
+  - `docs/troubleshooting.md` — Common errors and fixes
+  - `docs/development.md` — Skills architecture, instruction files, SDK information
+- **README convention**: README must remain a lightweight index with:
+  - Philosophy (the "why")
+  - Architecture overview (1 paragraph + bullet list of agents)
+  - Documentation table (links to all docs/*.md files)
+  - Features highlights (2-3 lines per feature with links to details)
+  - Quick Start (minimal commands to get running)
+  - Acknowledgments
+- **Breadcrumbs**: Every `docs/*.md` file starts with `[← Back to README](../README.md)` immediately under the H1 title
+- **Maintenance**: When features change, update BOTH the relevant `docs/*.md` file AND the corresponding highlight in the README's Features section
+- All code blocks, tables, JSON examples, and CLI snippets were moved VERBATIM — no content was lost or summarized
