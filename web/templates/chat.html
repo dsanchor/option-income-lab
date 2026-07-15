@@ -66,6 +66,10 @@
             <label style="display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.3rem;">Max activities per position/symbol</label>
             <input type="number" id="activitiesLimitInput" value="3" min="1" class="input-field" style="width: 100%; padding: 0.6rem 0.8rem; font-size: 0.9rem;">
         </div>
+        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; margin-bottom: 1rem;">
+            <input type="checkbox" id="includeSymbolDataInput">
+            Include symbol data (fundamentals, technicals, quality)
+        </label>
         <button id="portfolioStartBtn" onclick="configureAndStartPortfolioChat()" class="btn btn-primary">
             Start Chat
         </button>
@@ -145,6 +149,7 @@
     const quickAnalysisFormEl = document.getElementById('quickAnalysisForm');
     const chatInterfaceEl = document.getElementById('chatInterface');
     const activitiesLimitInputEl = document.getElementById('activitiesLimitInput');
+    const includeSymbolDataInputEl = document.getElementById('includeSymbolDataInput');
     const portfolioStartBtnEl = document.getElementById('portfolioStartBtn');
     const portfolioConfigErrorEl = document.getElementById('portfolioConfigError');
     const symbolInputEl = document.getElementById('symbolInput');
@@ -176,7 +181,8 @@
             'Following · Cash-Secured Put',
             'Following · Buy Tracker'
         ],
-        activities_limit: 3
+        activities_limit: 3,
+        include_symbol_data: false
     };
 
     function getPortfolioAgentCheckboxes() {
@@ -234,6 +240,7 @@
         optionTypeInputEl.value = '';
         getPortfolioAgentCheckboxes().forEach(cb => { cb.checked = true; });
         activitiesLimitInputEl.value = '3';
+        includeSymbolDataInputEl.checked = false;
         portfolioConfig = {
             selected_agents: [
                 'open_call_monitor',
@@ -249,7 +256,8 @@
                 'Following · Cash-Secured Put',
                 'Following · Buy Tracker'
             ],
-            activities_limit: 3
+            activities_limit: 3,
+            include_symbol_data: false
         };
         awaitingFirstAnalysis = false;
         checkPortfolioStartButtonState();
@@ -275,7 +283,8 @@
         portfolioConfig = {
             selected_agents: checked.map(cb => cb.value),
             selected_agent_labels: checked.map(cb => cb.dataset.label || cb.value),
-            activities_limit: limit
+            activities_limit: limit,
+            include_symbol_data: includeSymbolDataInputEl.checked
         };
         startPortfolioChat();
     };
@@ -283,7 +292,8 @@
     // Start portfolio chat
     function startPortfolioChat() {
         chatModeLabelEl.textContent = '💼 Portfolio Chat';
-        chatSymbolLabelEl.textContent = `Last ${portfolioConfig.activities_limit} · ${portfolioConfig.selected_agent_labels.length} agent(s)`;
+        chatSymbolLabelEl.textContent = `Last ${portfolioConfig.activities_limit} · ${portfolioConfig.selected_agent_labels.length} agent(s)` +
+            (portfolioConfig.include_symbol_data ? ' · symbol data' : '');
         portfolioConfigFormEl.style.display = 'none';
         chatInterfaceEl.style.display = 'flex';
         
@@ -292,6 +302,7 @@
             "Hello! I'm your Option Income Lab advisor. I have access to your selected agents " +
             `(${portfolioConfig.selected_agent_labels.join(', ')}), covering all of your open positions and tracked follow-ups, ` +
             `with up to ${portfolioConfig.activities_limit} recent activities each. ` +
+            (portfolioConfig.include_symbol_data ? "Symbol fundamentals, technicals, and quality metrics are included. " : "") +
             "Ask me about your positions, follow-ups, risks, or recommended actions."
         );
         
@@ -454,6 +465,7 @@
             } else if (currentMode === 'portfolio') {
                 payload.selected_agents = portfolioConfig.selected_agents;
                 payload.activities_limit = portfolioConfig.activities_limit;
+                payload.include_symbol_data = portfolioConfig.include_symbol_data;
             }
             
             const res = await fetch('/api/chat', {

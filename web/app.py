@@ -4530,6 +4530,7 @@ async def chat_api(request: Request):
     # Build context based on mode
     if mode == "portfolio":
         selected_agents = body.get("selected_agents")
+        include_symbol_data = bool(body.get("include_symbol_data", False))
         if selected_agents:
             selected_agent_set = set(selected_agents)
             selected_agent_keys = [
@@ -4548,6 +4549,14 @@ async def chat_api(request: Request):
         if cosmos:
             try:
                 all_symbols = cosmos.list_symbols() if cosmos else []
+                sym_cfg_by_symbol = {c["symbol"]: c for c in all_symbols}
+                context_symbols: List[str] = []
+                seen_context_symbols = set()
+
+                def remember_context_symbol(symbol: str) -> None:
+                    if symbol not in seen_context_symbols:
+                        seen_context_symbols.add(symbol)
+                        context_symbols.append(symbol)
 
                 for agent_key in selected_agent_keys:
                     meta = AGENT_TYPES[agent_key]
@@ -4564,6 +4573,7 @@ async def chat_api(request: Request):
                             for pos in sym_cfg.get("positions", []):
                                 if (pos.get("status") == "active"
                                         and pos.get("type") == ptype):
+                                    remember_context_symbol(sym)
                                     context_parts.append(
                                         f"\n## {sym} ${pos.get('strike')} "
                                         f"exp {pos.get('expiration')}"
@@ -4603,6 +4613,7 @@ async def chat_api(request: Request):
                         for sym_cfg in all_symbols:
                             sym = sym_cfg["symbol"]
                             if sym_cfg.get("watchlist", {}).get(agent_key):
+                                remember_context_symbol(sym)
                                 display_name = sym_cfg.get("display_name", sym)
                                 context_parts.append(f"\n## {display_name}")
                                 acts = cosmos.get_recent_activities(
@@ -4625,6 +4636,28 @@ async def chat_api(request: Request):
                                     context_parts.append(
                                         "No activities recorded."
                                     )
+
+                if include_symbol_data and context_symbols:
+                    context_parts.append("\n=== SYMBOL DATA ===")
+                    for sym in sorted(context_symbols):
+                        sym_cfg = sym_cfg_by_symbol.get(sym, {})
+                        display_name = sym_cfg.get("display_name", sym)
+                        context_parts.append(f"\n## {display_name} ({sym})")
+                        enrichment = sym_cfg.get("enrichment")
+                        if enrichment:
+                            enrichment_doc = (
+                                _clean_doc(enrichment)
+                                if isinstance(enrichment, dict)
+                                else enrichment
+                            )
+                            context_parts.append(
+                                json.dumps(enrichment_doc, indent=2,
+                                          default=str)
+                            )
+                        else:
+                            context_parts.append(
+                                "No enrichment data available."
+                            )
             except Exception:
                 context_parts.append("(Error loading context from CosmosDB)")
 
@@ -4639,6 +4672,8 @@ async def chat_api(request: Request):
             "you have each open position for position monitors and each "
             "watchlist symbol for following agents, plus up to "
             f"{activities_limit} recent activities or alerts for each row. "
+            "When present, the SYMBOL DATA section provides fundamentals, "
+            "technicals, and quality metrics per symbol. "
             "Answer questions about positions, risks, and recommended actions "
             "based on this data.\n\n"
             f"Portfolio context:\n{context_text}"
