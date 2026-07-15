@@ -2836,3 +2836,26 @@ The shorter 21-35 DTE primary target accelerates theta capture and tightens risk
 - ✅ Python compile check passed
 - ✅ Stale-string grep clean
 - ✅ No test assertions affected
+
+---
+
+### Portfolio Chat Symbol Data Toggle
+
+**Date:** 2026-07-15  
+**Agent:** Rusty  
+**Status:** Implemented
+
+## Decision
+
+Add an optional `include_symbol_data` flag to Portfolio Chat requests. The flag defaults to `false` for backward compatibility; when true, the backend appends a single `=== SYMBOL DATA ===` section with persisted per-symbol enrichment data.
+
+## Rationale
+
+Portfolio Chat already builds context from selected agents and recent activities. Enrichment data can be high-value but larger, so it should be opt-in from the configuration screen rather than always included.
+
+## Contract
+
+- Frontend sends `include_symbol_data` from the Portfolio Chat config checkbox.
+- Backend reads only existing `symbol_config.enrichment` from CosmosDB via `cosmos.list_symbols()`; no live yfinance fetches are performed.
+- Symbols are collected only if they actually appear in selected agent context, de-duplicated across agents, then sorted alphabetically for one consolidated section.
+- Missing or empty enrichment emits `No enrichment data available.` for that symbol.

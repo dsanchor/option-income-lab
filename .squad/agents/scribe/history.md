@@ -9,6 +9,7 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 
 ## Recent Updates
 
+📌 2026-07-15T08:43:28Z: Processed Rusty symbol-data-toggle — orchestration log, session log, decision merge, Rusty history summarization (13.8KB → 6.3KB), git commit  
 📌 2026-06-26T15:06:04Z: Processed Rusty scheduler analysis — orchestration log, session log, decision merge (DPS fix), cross-agent history updates (danny, linus), git commit (0220c94), no archival needed  
 📌 2026-04-08T12:55:00Z: Spawned Rusty (error count metric) — orchestration log, session log, decision merge, history update, git commit  
 📌 2026-04-02T22:13:22Z: Merged spawn manifest tasks (2 Rusty items) — orchestration log, session log, decision merge, history update, git commit
