@@ -25,56 +25,73 @@
       </script>
     </div>
     
-    <div class="watchlist-toggles">
-        <div class="toggle-group">
-            <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
-                <label class="switch">
-                    <input type="checkbox" id="toggle-cc" {% if symbol_doc.watchlist.covered_call %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
-                    <span class="slider"></span>
-                </label>
-                <span>Call Watchlist</span>
-            </span>
-            <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
-                <label class="switch">
-                    <input type="checkbox" id="toggle-csp" {% if symbol_doc.watchlist.cash_secured_put %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
-                    <span class="slider"></span>
-                </label>
-                <span>Put Watchlist</span>
-            </span>
-            <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
-                <label class="switch">
-                    <input type="checkbox" id="toggle-bt" {% if symbol_doc.watchlist.buy_tracker %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
-                    <span class="slider"></span>
-                </label>
-                <span>Buy Tracker</span>
-            </span>
-            {% if is_paused %}
-            <span class="badge badge-waiting">⏸ Paused until earnings · {{ symbol_doc.watchlist_pause.until }}</span>
-            <button id="resume-watchlist" class="btn-trigger" type="button">Resume now</button>
-            {% else %}
-            <button id="pause-watchlist" class="btn-trigger" type="button" {% if not next_earnings_date %}disabled title="No upcoming earnings date found. Sync the calendar first."{% else %}title="Pause covered call, cash-secured put, and buy tracker until {{ next_earnings_date }}"{% endif %}>Pause until earnings</button>
-            {% endif %}
-            <span class="toggle-item">
-                <label class="switch">
-                    <input type="checkbox" id="toggle-notifications" {% if symbol_doc.telegram_notifications_enabled is not defined or symbol_doc.telegram_notifications_enabled %}checked{% endif %}>
-                    <span class="slider"></span>
-                </label>
-                <span>Notifications</span>
-            </span>
+    <div class="symbol-controls">
+        <div class="card symbol-control-card">
+            <div class="card-header">
+                <h2>Watchlist &amp; alerts</h2>
+                <div class="card-header-actions">
+                    {% if is_paused %}
+                    <span class="badge badge-waiting">⏸ Paused until earnings · {{ symbol_doc.watchlist_pause.until }}</span>
+                    <button id="resume-watchlist" class="btn-trigger" type="button">Resume now</button>
+                    {% else %}
+                    <button id="pause-watchlist" class="btn-trigger" type="button" {% if not next_earnings_date %}disabled title="No upcoming earnings date found. Sync the calendar first."{% else %}title="Pause covered call, cash-secured put, and buy tracker until {{ next_earnings_date }}"{% endif %}>⏸ Pause until earnings</button>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="symbol-control-body">
+                {% if is_paused %}
+                <div class="pause-banner">⏸ Covered call, put, and buy tracker agents are paused until earnings. Notifications stay active.</div>
+                {% endif %}
+                <div class="toggle-grid">
+                    <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
+                        <label class="switch">
+                            <input type="checkbox" id="toggle-cc" {% if symbol_doc.watchlist.covered_call %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                        <span>Call Watchlist</span>
+                    </span>
+                    <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
+                        <label class="switch">
+                            <input type="checkbox" id="toggle-csp" {% if symbol_doc.watchlist.cash_secured_put %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                        <span>Put Watchlist</span>
+                    </span>
+                    <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
+                        <label class="switch">
+                            <input type="checkbox" id="toggle-bt" {% if symbol_doc.watchlist.buy_tracker %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                        <span>Buy Tracker</span>
+                    </span>
+                    <span class="toggle-item">
+                        <label class="switch">
+                            <input type="checkbox" id="toggle-notifications" {% if symbol_doc.telegram_notifications_enabled is not defined or symbol_doc.telegram_notifications_enabled %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                        <span>Notifications</span>
+                    </span>
+                </div>
+            </div>
         </div>
-        <div class="chip-group">
-            <a href="/symbols/{{ symbol_doc.symbol }}/options-chain" class="chip-link">
-                <span>📈</span> Option Chain
-            </a>
-            <a href="/symbols/{{ symbol_doc.symbol }}/chat" class="chip-link">
-                <span>💬</span> Chat
-            </a>
-            <a href="/symbols/{{ symbol_doc.symbol }}/report" class="chip-link">
-                <span>📊</span> Report
-            </a>
-            <a href="/symbols/{{ symbol_doc.symbol }}/technical-analysis" class="chip-link">
-                <span>🔬</span> Technical Analysis
-            </a>
+        <div class="card symbol-control-card">
+            <div class="card-header"><h2>Views &amp; actions</h2></div>
+            <div class="symbol-control-body">
+                <div class="chip-group">
+                    <a href="/symbols/{{ symbol_doc.symbol }}/options-chain" class="chip-link">
+                        <span>📈</span> Option Chain
+                    </a>
+                    <a href="/symbols/{{ symbol_doc.symbol }}/chat" class="chip-link chip-link-primary">
+                        <span>💬</span> Chat
+                    </a>
+                    <a href="/symbols/{{ symbol_doc.symbol }}/report" class="chip-link chip-link-primary">
+                        <span>📊</span> Report
+                    </a>
+                    <a href="/symbols/{{ symbol_doc.symbol }}/technical-analysis" class="chip-link">
+                        <span>🔬</span> Technical Analysis
+                    </a>
+                </div>
+            </div>
         </div>
     </div>
 </div>

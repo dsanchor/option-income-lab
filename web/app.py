@@ -1773,8 +1773,8 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
                 "recent_activities": recent,
                 "risk_flags": latest_by_key.get(key, {}).get(
                     "risk_flags", []),
-                "paused": is_watchlist_paused(sym_cfg),
-                "paused_until": pause_doc.get("until"),
+                "paused": is_watchlist_paused(sym_cfg) and not is_pm,
+                "paused_until": pause_doc.get("until") if not is_pm else None,
             }
             if is_pm:
                 dec = latest_by_key.get(key, {})

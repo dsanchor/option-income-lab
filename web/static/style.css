@@ -1384,6 +1384,41 @@ tbody tr:hover { background: var(--bg-hover); }
 }
 
 /* ── Toggle & chip groups (symbol detail) ── */
+.symbol-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+    gap: 1rem;
+    align-items: stretch;
+    margin-top: 0.5rem;
+}
+.symbol-control-card {
+    margin-bottom: 1rem;
+}
+.card-header-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+.symbol-control-body {
+    padding: 1rem 1.25rem;
+}
+.toggle-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 0.85rem 1.25rem;
+    align-items: center;
+}
+.pause-banner {
+    margin-bottom: 0.85rem;
+    padding: 0.45rem 0.75rem;
+    border: 1px solid rgba(236,126,0,0.3);
+    border-radius: var(--radius-pill);
+    background: rgba(236,126,0,0.1);
+    color: var(--accent-orange);
+    font-size: 0.85rem;
+}
 .watchlist-toggles {
     display: flex;
     gap: 1.5rem;
@@ -1395,6 +1430,20 @@ tbody tr:hover { background: var(--bg-hover); }
 .toggle-group { display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; }
 .toggle-item { display: flex; align-items: center; gap: 0.4rem; }
 .chip-group { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+.chip-link-primary {
+    color: var(--accent);
+    border-color: rgba(0,168,126,0.45);
+    background: rgba(0,168,126,0.08);
+}
+.chip-link-primary:hover {
+    background: rgba(0,168,126,0.15);
+}
+
+@media (max-width: 900px) {
+    .symbol-controls {
+        grid-template-columns: 1fr;
+    }
+}
 
 /* ── Filter panel (DGI screener / watchlist) ── */
 .filter-panel { padding: 1rem 1.25rem; }
