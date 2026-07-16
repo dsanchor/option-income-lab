@@ -363,6 +363,7 @@ tbody td.num { text-align: right; font-family: var(--font-mono); }
 tbody td:last-child, thead th:last-child { text-align: right; width: 1%; white-space: nowrap; }
 .clickable-row { cursor: pointer; transition: background 0.15s; }
 .clickable-row:hover { background: var(--bg-hover); }
+.paused-shadow { opacity: 0.55; }
 
 /* ── Badges ── */
 .badge {

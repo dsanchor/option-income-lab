@@ -469,6 +469,40 @@ class OptionsAgentScheduler:
         """Execute calendar sync (bridges async to sync for scheduler)."""
         _run_async(self._run_calendar_sync_async())
 
+    def run_watchlist_reactivation_job(self):
+        """Execute watchlist pause reactivation (bridges async to sync for scheduler)."""
+        _run_async(self._run_watchlist_reactivation_async())
+
+    async def _run_watchlist_reactivation_async(self):
+        """Clear expired watchlist pauses after their earnings date has passed."""
+        reactivation_config = self.config.config.get('watchlist_reactivation', {})
+        if not reactivation_config.get('enabled', True):
+            print("⏭️  Watchlist reactivation disabled in config")
+            return
+
+        now_tz = _now_local()
+        today = now_tz.strftime("%Y-%m-%d")
+        print(f"\n{'⏯️'*35}")
+        print(f"⏯️ Watchlist Reactivation - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"{'⏯️'*35}\n")
+
+        cleared = 0
+        errors = 0
+        for sym_doc in self.cosmos.get_paused_symbols():
+            symbol = sym_doc.get("symbol", "")
+            until = (sym_doc.get("watchlist_pause") or {}).get("until")
+            if not symbol or not until or until >= today:
+                continue
+            try:
+                self.cosmos.clear_watchlist_pause(symbol)
+                cleared += 1
+                print(f"  ✓ {symbol}: watchlist pause expired after {until}; resumed")
+            except Exception as e:
+                errors += 1
+                print(f"  ✗ {symbol}: failed to clear watchlist pause: {e}")
+
+        print(f"\nWatchlist Reactivation Complete: {cleared} pauses cleared, {errors} errors")
+
     async def _run_calendar_sync_async(self):
         """Fetch earnings and ex-dividend dates from yfinance and store in CosmosDB."""
         calendar_config = self.config.config.get('calendar_sync', {})
@@ -647,6 +681,14 @@ class OptionsAgentScheduler:
             "calendar_sync",
             "0 5 * * 1-5",
             self.run_calendar_sync_job,
+            has_extra_config=False,
+        )
+        self.registry.register(
+            "watchlist_reactivation",
+            "Watchlist Reactivation",
+            "watchlist_reactivation",
+            "0 6 * * 1-5",
+            self.run_watchlist_reactivation_job,
             has_extra_config=False,
         )
         self.registry.register(

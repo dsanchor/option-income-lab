@@ -27,27 +27,33 @@
     
     <div class="watchlist-toggles">
         <div class="toggle-group">
-            <span class="toggle-item">
+            <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
                 <label class="switch">
-                    <input type="checkbox" id="toggle-cc" {% if symbol_doc.watchlist.covered_call %}checked{% endif %}>
+                    <input type="checkbox" id="toggle-cc" {% if symbol_doc.watchlist.covered_call %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
                     <span class="slider"></span>
                 </label>
                 <span>Call Watchlist</span>
             </span>
-            <span class="toggle-item">
+            <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
                 <label class="switch">
-                    <input type="checkbox" id="toggle-csp" {% if symbol_doc.watchlist.cash_secured_put %}checked{% endif %}>
+                    <input type="checkbox" id="toggle-csp" {% if symbol_doc.watchlist.cash_secured_put %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
                     <span class="slider"></span>
                 </label>
                 <span>Put Watchlist</span>
             </span>
-            <span class="toggle-item">
+            <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
                 <label class="switch">
-                    <input type="checkbox" id="toggle-bt" {% if symbol_doc.watchlist.buy_tracker %}checked{% endif %}>
+                    <input type="checkbox" id="toggle-bt" {% if symbol_doc.watchlist.buy_tracker %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
                     <span class="slider"></span>
                 </label>
                 <span>Buy Tracker</span>
             </span>
+            {% if is_paused %}
+            <span class="badge badge-waiting">⏸ Paused until earnings · {{ symbol_doc.watchlist_pause.until }}</span>
+            <button id="resume-watchlist" class="btn-trigger" type="button">Resume now</button>
+            {% else %}
+            <button id="pause-watchlist" class="btn-trigger" type="button" {% if not next_earnings_date %}disabled title="No upcoming earnings date found. Sync the calendar first."{% else %}title="Pause covered call, cash-secured put, and buy tracker until {{ next_earnings_date }}"{% endif %}>Pause until earnings</button>
+            {% endif %}
             <span class="toggle-item">
                 <label class="switch">
                     <input type="checkbox" id="toggle-notifications" {% if symbol_doc.telegram_notifications_enabled is not defined or symbol_doc.telegram_notifications_enabled %}checked{% endif %}>
@@ -1498,6 +1504,45 @@
             }
         });
     });
+
+    var pauseWatchlistBtn = document.getElementById('pause-watchlist');
+    if (pauseWatchlistBtn) {
+        pauseWatchlistBtn.addEventListener('click', async function() {
+            try {
+                var res = await fetch('/api/symbols/' + SYMBOL + '/pause', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                if (res.ok) {
+                    window.location.reload();
+                } else {
+                    var data = await res.json();
+                    alert('Error: ' + (data.error || 'Failed to pause watchlist'));
+                }
+            } catch(e) {
+                alert('Network error: ' + e.message);
+            }
+        });
+    }
+
+    var resumeWatchlistBtn = document.getElementById('resume-watchlist');
+    if (resumeWatchlistBtn) {
+        resumeWatchlistBtn.addEventListener('click', async function() {
+            try {
+                var res = await fetch('/api/symbols/' + SYMBOL + '/pause', {
+                    method: 'DELETE'
+                });
+                if (res.ok) {
+                    window.location.reload();
+                } else {
+                    var data = await res.json();
+                    alert('Error: ' + (data.error || 'Failed to resume watchlist'));
+                }
+            } catch(e) {
+                alert('Network error: ' + e.message);
+            }
+        });
+    }
 
     // Toggle notifications
     var toggleNotifications = document.getElementById('toggle-notifications');

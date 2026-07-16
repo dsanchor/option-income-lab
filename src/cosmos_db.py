@@ -17,6 +17,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def is_watchlist_paused(sym_doc: dict, today: str | None = None) -> bool:
+    """Return True when a symbol's watchlist pause is active through today."""
+    pause = sym_doc.get("watchlist_pause") or {}
+    until = pause.get("until")
+    if not until:
+        return False
+    today = today or datetime.now().strftime("%Y-%m-%d")
+    return str(until) >= today
+
+
 class CosmosDBService:
     """Service layer for CosmosDB operations."""
 
@@ -192,31 +202,81 @@ class CosmosDBService:
 
     def get_covered_call_symbols(self) -> list[dict]:
         """Get all symbols enabled for covered call watching."""
+        today = datetime.now().strftime("%Y-%m-%d")
         query = (
             "SELECT * FROM c WHERE c.doc_type = 'symbol_config' "
-            "AND c.watchlist.covered_call = true"
+            "AND c.watchlist.covered_call = true "
+            "AND (NOT IS_DEFINED(c.watchlist_pause) "
+            "OR NOT IS_DEFINED(c.watchlist_pause.until) "
+            "OR c.watchlist_pause.until < @today)"
         )
         return list(self.container.query_items(
             query=query,
+            parameters=[{"name": "@today", "value": today}],
             enable_cross_partition_query=True,
         ))
 
     def get_cash_secured_put_symbols(self) -> list[dict]:
         """Get all symbols enabled for cash-secured put watching."""
+        today = datetime.now().strftime("%Y-%m-%d")
         query = (
             "SELECT * FROM c WHERE c.doc_type = 'symbol_config' "
-            "AND c.watchlist.cash_secured_put = true"
+            "AND c.watchlist.cash_secured_put = true "
+            "AND (NOT IS_DEFINED(c.watchlist_pause) "
+            "OR NOT IS_DEFINED(c.watchlist_pause.until) "
+            "OR c.watchlist_pause.until < @today)"
         )
         return list(self.container.query_items(
             query=query,
+            parameters=[{"name": "@today", "value": today}],
             enable_cross_partition_query=True,
         ))
 
     def get_buy_tracker_symbols(self) -> list[dict]:
         """Get all symbols enabled for buy tracker watching."""
+        today = datetime.now().strftime("%Y-%m-%d")
         query = (
             "SELECT * FROM c WHERE c.doc_type = 'symbol_config' "
-            "AND c.watchlist.buy_tracker = true"
+            "AND c.watchlist.buy_tracker = true "
+            "AND (NOT IS_DEFINED(c.watchlist_pause) "
+            "OR NOT IS_DEFINED(c.watchlist_pause.until) "
+            "OR c.watchlist_pause.until < @today)"
+        )
+        return list(self.container.query_items(
+            query=query,
+            parameters=[{"name": "@today", "value": today}],
+            enable_cross_partition_query=True,
+        ))
+
+    def set_watchlist_pause(self, symbol: str, until: str, scope: list[str]) -> dict:
+        """Pause following watchlist agents for a symbol until a date."""
+        doc = self.get_symbol(symbol)
+        if doc is None:
+            raise ValueError(f"Symbol {symbol} not found")
+        now = datetime.now(timezone.utc).isoformat()
+        doc["watchlist_pause"] = {
+            "until": until,
+            "reason": "earnings",
+            "scope": scope,
+            "set_at": now,
+        }
+        doc["updated_at"] = now
+        return self.container.replace_item(item=doc["id"], body=doc)
+
+    def clear_watchlist_pause(self, symbol: str) -> dict:
+        """Clear a symbol's watchlist pause if present."""
+        doc = self.get_symbol(symbol)
+        if doc is None:
+            raise ValueError(f"Symbol {symbol} not found")
+        doc.pop("watchlist_pause", None)
+        doc["updated_at"] = datetime.now(timezone.utc).isoformat()
+        return self.container.replace_item(item=doc["id"], body=doc)
+
+    def get_paused_symbols(self) -> list[dict]:
+        """Return symbol configs that currently have a watchlist pause document."""
+        query = (
+            "SELECT * FROM c WHERE c.doc_type = 'symbol_config' "
+            "AND IS_DEFINED(c.watchlist_pause)"
         )
         return list(self.container.query_items(
             query=query,
@@ -1587,6 +1647,33 @@ class CosmosDBService:
         except Exception as exc:
             logger.warning("Failed to read calendar events: %s", exc)
             return []
+
+    def get_next_earnings_date(self, symbol: str) -> str | None:
+        """Return the next stored earnings date for a symbol, or None."""
+        if not self.calendar_container:
+            self._init_calendar_container()
+        if not self.calendar_container:
+            return None
+        today = datetime.now().strftime("%Y-%m-%d")
+        query = (
+            "SELECT c.date FROM c "
+            "WHERE c.type = @type AND c.symbol = @symbol AND c.date >= @today "
+            "ORDER BY c.date ASC"
+        )
+        try:
+            items = list(self.calendar_container.query_items(
+                query=query,
+                parameters=[
+                    {"name": "@type", "value": "earnings"},
+                    {"name": "@symbol", "value": symbol},
+                    {"name": "@today", "value": today},
+                ],
+                partition_key=symbol,
+            ))
+            return items[0].get("date") if items else None
+        except Exception as exc:
+            logger.warning("Failed to read next earnings date for %s: %s", symbol, exc)
+            return None
 
     def delete_calendar_events_for_symbol(self, symbol: str):
         """Delete all calendar events for a symbol."""

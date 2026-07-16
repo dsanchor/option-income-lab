@@ -87,6 +87,10 @@ Track P&L across all positions with summary cards (total premium, buyback costs,
 Monthly calendar view of earnings and ex-dividend dates for tracked symbols. Color-coded badges show position exposure (earnings with active position = orange, ex-div with call = red). Daily sync from Yahoo Finance.
 → [Events Calendar](docs/concepts.md#events-calendar)
 
+### ⏸ Pause Watchlist Until Earnings
+Suspend a symbol's following agents (Covered Call, Cash-Secured Put, Buy Tracker) until its next earnings date to save LLM tokens. Toggles show shadowed on the symbol detail and dashboard; auto-resumes after earnings via a daily reactivation job.
+→ [Pause Watchlist Until Earnings](docs/concepts.md#pause-watchlist-until-earnings)
+
 ### 💬 Chat & Reports
 - **Portfolio Chat** — Analyze tracked symbols with CosmosDB context (positions, activities, alerts)
 - **Quick Analysis** — Fetch live Yahoo data for any symbol without saving to database

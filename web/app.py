@@ -21,6 +21,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from src.cosmos_db import is_watchlist_paused
+
 try:
     import yfinance as yf
 except ImportError:
@@ -754,6 +756,71 @@ async def api_update_symbol(request: Request, symbol: str):
         return JSONResponse(_clean_doc(updated))
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/symbols/{symbol}/pause")
+async def api_pause_symbol_watchlist(request: Request, symbol: str):
+    try:
+        cosmos = _get_cosmos(request)
+        symbol = symbol.upper()
+        doc = cosmos.get_symbol(symbol)
+        if not doc:
+            return JSONResponse({"error": f"Symbol {symbol} not found"},
+                                status_code=404)
+
+        body = {}
+        raw_body = await request.body()
+        if raw_body:
+            try:
+                body = json.loads(raw_body)
+            except json.JSONDecodeError:
+                return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+        until = body.get("until") if isinstance(body, dict) else None
+        if until:
+            try:
+                datetime.strptime(until, "%Y-%m-%d")
+            except ValueError:
+                return JSONResponse({"error": "Invalid until date; expected YYYY-MM-DD"},
+                                    status_code=400)
+        else:
+            until = cosmos.get_next_earnings_date(symbol)
+            if not until:
+                return JSONResponse({
+                    "error": "No upcoming earnings date found for this symbol. Sync the calendar first."
+                }, status_code=400)
+
+        updated = cosmos.set_watchlist_pause(
+            symbol,
+            until,
+            ["covered_call", "cash_secured_put", "buy_tracker"],
+        )
+        return JSONResponse(_clean_doc(updated))
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.delete("/api/symbols/{symbol}/pause")
+async def api_clear_symbol_watchlist_pause(request: Request, symbol: str):
+    try:
+        cosmos = _get_cosmos(request)
+        symbol = symbol.upper()
+        doc = cosmos.get_symbol(symbol)
+        if not doc:
+            return JSONResponse({"error": f"Symbol {symbol} not found"},
+                                status_code=404)
+        updated = cosmos.clear_watchlist_pause(symbol)
+        return JSONResponse(_clean_doc(updated))
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -1686,6 +1753,8 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
         for key, group in groups.items():
             # Extract the base symbol from the key for linking
             base_symbol = key.split("_")[0] if "_" in key else key
+            sym_cfg = sym_cfg_map.get(base_symbol, {})
+            pause_doc = sym_cfg.get("watchlist_pause") or {}
             recent = [
                 {
                     "activity": a.get("activity", "N/A"),
@@ -1704,6 +1773,8 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
                 "recent_activities": recent,
                 "risk_flags": latest_by_key.get(key, {}).get(
                     "risk_flags", []),
+                "paused": is_watchlist_paused(sym_cfg),
+                "paused_until": pause_doc.get("until"),
             }
             if is_pm:
                 dec = latest_by_key.get(key, {})
@@ -2226,6 +2297,8 @@ async def symbol_detail_page(request: Request, symbol: str):
         float(p.get("strike", 0)) * 100
         for p in active_positions if p.get("type") == "put"
     )
+    next_earnings_date = cosmos.get_next_earnings_date(symbol.upper())
+    is_paused = is_watchlist_paused(doc)
 
     return templates.TemplateResponse("symbol_detail.html", {
         "request": request,
@@ -2237,6 +2310,8 @@ async def symbol_detail_page(request: Request, symbol: str):
         "agent_types": AGENT_TYPES,
         "summary_in_calls": summary_in_calls,
         "summary_put_exposure": summary_put_exposure,
+        "next_earnings_date": next_earnings_date,
+        "is_paused": is_paused,
     })
 
 

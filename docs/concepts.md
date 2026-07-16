@@ -187,7 +187,17 @@ The **Events Calendar** (`/symbols/calendar`) displays a monthly calendar view o
 
 **Data source:** Yahoo Finance via `yfinance` library. Earnings dates from `earnings_dates`, ex-dividend dates from `dividends` history. Cached per-symbol in the `calendar` container.
 
-## Supervisor Agent (Quality Auditor)
+## Pause Watchlist Until Earnings
+
+To save LLM tokens, a symbol's **following agents** (Covered Call, Cash-Secured Put, Buy Tracker) can be suspended until its next earnings date. Near earnings the earnings gate returns `WAIT` anyway, so running them wastes tokens.
+
+**How it works:**
+- On the symbol detail page, **Pause until earnings** stores a `watchlist_pause` object on the `symbol_config` doc: `{ until: <next earnings date>, reason: "earnings", scope: [covered_call, cash_secured_put, buy_tracker], set_at }`. The button is disabled when no upcoming earnings date is stored (sync the calendar first).
+- The `watchlist.*` toggle flags are **left unchanged** — the pause is a separate suspension layer that preserves user intent. While paused, the three toggles render shadowed/disabled with a `⏸ Paused until earnings · <date>` badge, and the symbol's rows appear shadowed on the main dashboard.
+- Gating is enforced two ways: the watchlist queries (`get_covered_call_symbols` / `get_cash_secured_put_symbols` / `get_buy_tracker_symbols`) exclude symbols whose pause is still active (`watchlist_pause.until >= today`), and each following agent re-checks `is_watchlist_paused()` on the per-symbol manual path. Position monitors (Open Call / Open Put) are **not** affected.
+- **Auto-resume:** the pause clears the day after earnings. This happens at query level (`until < today` symbols are no longer excluded) and via a daily **Watchlist Reactivation** scheduled job (default `0 6 * * 1-5`) that deletes expired `watchlist_pause` objects. The **Resume now** button (`DELETE /api/symbols/{symbol}/pause`) clears it manually at any time.
+
+
 
 The Supervisor is a separate LLM instance that acts as a quality gate, reviewing primary agent decisions for data errors, blind spots, and unaddressed risks. It runs as **Phase 3a** (in parallel with Alpha Advisor) after the primary decision is written but before Telegram notifications.
 

@@ -88,8 +88,13 @@
             </thead>
             <tbody>
                 {% for row in agent.rows %}
-                <tr class="clickable-row" data-href="/symbols/{{ row.symbol }}">
-                    <td><strong>{{ row.display }}</strong></td>
+                <tr class="clickable-row {% if row.paused %}paused-shadow{% endif %}" data-href="/symbols/{{ row.symbol }}">
+                    <td>
+                        <strong>{{ row.display }}</strong>
+                        {% if row.paused %}
+                        <span class="badge badge-waiting" title="Following agents paused until earnings">⏸ {{ row.paused_until }}</span>
+                        {% endif %}
+                    </td>
                     <td class="num mono">{{ "$%.2f" | format(row.underlying_price) if row.underlying_price else "—" }}</td>
                     {% if agent.key != "buy_tracker" %}
                     <td class="num mono">

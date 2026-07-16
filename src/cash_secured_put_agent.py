@@ -1,5 +1,5 @@
 from .agent_runner import AgentRunner
-from .cosmos_db import CosmosDBService
+from .cosmos_db import CosmosDBService, is_watchlist_paused
 from .context import ContextProvider
 from .cash_secured_put_instructions import TV_CASH_SECURED_PUT_INSTRUCTIONS
 import random
@@ -29,6 +29,9 @@ async def run_cash_secured_put_analysis(config, runner: AgentRunner,
             return
         if not sym_doc.get("watchlist", {}).get("cash_secured_put", False):
             print(f"Symbol {symbol} not enabled for cash-secured put — skipping")
+            return
+        if is_watchlist_paused(sym_doc):
+            print(f"Symbol {symbol} paused until earnings — skipping")
             return
         csp_symbols = [sym_doc]
     else:
