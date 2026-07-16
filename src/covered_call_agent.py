@@ -1,5 +1,5 @@
 from .agent_runner import AgentRunner
-from .cosmos_db import CosmosDBService, is_watchlist_paused
+from .cosmos_db import CosmosDBService
 from .context import ContextProvider
 from .covered_call_instructions import TV_COVERED_CALL_INSTRUCTIONS
 import random
@@ -29,9 +29,6 @@ async def run_covered_call_analysis(config, runner: AgentRunner,
             return
         if not sym_doc.get("watchlist", {}).get("covered_call", False):
             print(f"Symbol {symbol} not enabled for covered call — skipping")
-            return
-        if is_watchlist_paused(sym_doc):
-            print(f"Symbol {symbol} paused until earnings — skipping")
             return
         cc_symbols = [sym_doc]
     else:

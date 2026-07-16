@@ -1,5 +1,5 @@
 from .agent_runner import AgentRunner
-from .cosmos_db import CosmosDBService, is_watchlist_paused
+from .cosmos_db import CosmosDBService
 from .context import ContextProvider
 from .buy_tracker_instructions import BUY_TRACKER_INSTRUCTIONS
 import random
@@ -29,9 +29,6 @@ async def run_buy_tracker_analysis(config, runner: AgentRunner,
             return
         if not sym_doc.get("watchlist", {}).get("buy_tracker", False):
             print(f"Symbol {symbol} not enabled for buy tracker — skipping")
-            return
-        if is_watchlist_paused(sym_doc):
-            print(f"Symbol {symbol} paused until earnings — skipping")
             return
         buy_tracker_symbols = [sym_doc]
     else:

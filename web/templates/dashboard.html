@@ -92,7 +92,7 @@
                     <td>
                         <strong>{{ row.display }}</strong>
                         {% if row.paused %}
-                        <span class="badge badge-waiting" title="Following agents paused until earnings">⏸ {{ row.paused_until }}</span>
+                        <span class="badge badge-waiting badge-pause" title="Following agents paused until earnings">⏸ {{ row.paused_until }}</span>
                         {% endif %}
                     </td>
                     <td class="num mono">{% if row.paused %}—{% else %}{{ "$%.2f" | format(row.underlying_price) if row.underlying_price else "—" }}{% endif %}</td>

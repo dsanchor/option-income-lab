@@ -387,6 +387,7 @@ tbody td:last-child, thead th:last-child { text-align: right; width: 1%; white-s
 /* Info (N/A) stays blue */
 .badge-info { background: rgba(73,79,223,0.2); color: var(--accent-blue); }
 .badge-waiting { background: rgba(236,126,0,0.15); color: var(--accent-orange); font-size: 0.75rem; }
+.badge-pause { font-size: 0.65rem; }
 
 /* Trend timeline cells */
 .trend-cell { white-space: normal; }
