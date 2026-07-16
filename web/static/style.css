@@ -1384,14 +1384,18 @@ tbody tr:hover { background: var(--bg-hover); }
 }
 
 /* ── Toggle & chip groups (symbol detail) ── */
+.symbol-toolbar-wrap {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
 .symbol-toolbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     flex-wrap: wrap;
-    gap: 0.75rem;
-    padding: 0.4rem 0;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    gap: 0.55rem 0.75rem;
+}
+.symbol-toolbar-date {
+    margin-top: 0.4rem;
 }
 .toolbar-cluster {
     display: flex;
