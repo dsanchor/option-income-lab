@@ -95,10 +95,10 @@
                         <span class="badge badge-waiting" title="Following agents paused until earnings">⏸ {{ row.paused_until }}</span>
                         {% endif %}
                     </td>
-                    <td class="num mono">{{ "$%.2f" | format(row.underlying_price) if row.underlying_price else "—" }}</td>
+                    <td class="num mono">{% if row.paused %}—{% else %}{{ "$%.2f" | format(row.underlying_price) if row.underlying_price else "—" }}{% endif %}</td>
                     {% if agent.key != "buy_tracker" %}
                     <td class="num mono">
-                        {% if row.strike_pct is not none %}
+                        {% if row.paused %}—{% elif row.strike_pct is not none %}
                         {% if row.option_type == "call" %}
                         <span style="color: var({{ '--accent-red' if row.strike_pct > 0 else '--accent-green' }})">{{ "%+.1f%%" | format(row.strike_pct) }}</span>
                         {% else %}
@@ -108,7 +108,7 @@
                     </td>
                     {% endif %}
                     <td class="trend-cell">
-                        {% if row.recent_activities %}
+                        {% if row.paused %}—{% elif row.recent_activities %}
                         {% for act in row.recent_activities %}
                             {% if not loop.first %}<span class="trend-arrow">›</span>{% endif %}
                             <a href="/activities/{{ act.id }}" class="badge badge-{{ act.activity | lower if act.activity else 'info' }}" title="{{ act.reason if act.reason else act.timestamp[:16] }}">{{ act.activity or "N/A" }}</a>
@@ -144,16 +144,18 @@
                     </td>
                     {% else %}
                     {% if agent.key == "buy_tracker" %}
-                    <td>{{ row.entry_zone if row.entry_zone else "—" }}</td>
+                    <td>{% if row.paused %}—{% else %}{{ row.entry_zone if row.entry_zone else "—" }}{% endif %}</td>
                     <td><div class="flags-wrap">
+                        {% if not row.paused %}
                         {% for trigger in (row.technical_triggers or [])[:3] %}
                         <span class="flag">{{ trigger }}</span>
-                        {% endfor %}</div>
+                        {% endfor %}
+                        {% endif %}</div>
                     </td>
                     {% else %}
-                    <td class="num metric-value">{{ row.strike if row.strike else "—" }}</td>
-                    <td>{{ row.expiration if row.expiration else "—" }}</td>
-                    <td class="num metric-value">{{ "$%.2f" | format(row.premium) if row.premium else "—" }}</td>
+                    <td class="num metric-value">{% if row.paused %}—{% else %}{{ row.strike if row.strike else "—" }}{% endif %}</td>
+                    <td>{% if row.paused %}—{% else %}{{ row.expiration if row.expiration else "—" }}{% endif %}</td>
+                    <td class="num metric-value">{% if row.paused %}—{% else %}{{ "$%.2f" | format(row.premium) if row.premium else "—" }}{% endif %}</td>
                     {% endif %}
                     {% endif %}
                     <td>
