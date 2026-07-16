@@ -5524,3 +5524,47 @@ Gate the pause badge rendering in `_build_dashboard_tables` with `and not is_pm`
 - Users cannot misinterpret monitor visibility as affected by watchlist pause
 - UI accurately reflects the underlying execution model
 
+# Decision: Symbol Detail Controls — Single Compact Toolbar
+
+Date: 2026-07-16
+Owner: Rusty (Agent Dev)
+Status: ✅ Implemented
+Impact: UX / Minimize Vertical Footprint
+
+## Context
+
+Symbol detail controls were initially grouped into two cards:
+1. **Watchlist & alerts** — 4 toggles (alerts, watchlist, notifications, dividend tracking) + pause/resume header action
+2. **Views & actions** — 4 navigation chips (Option Chain, Technical Analysis, etc.)
+
+The two-card layout consumed excessive vertical space on the detail page, conflicting with the minimize-footprint UX goal.
+
+## Decision
+
+Consolidate all symbol detail controls into a **single compact horizontal toolbar**:
+
+**Layout:**
+- **Left section:** All 4 toggles + Pause button (left-aligned, equal height)
+- **Right section:** Navigation chips Option Chain and Technical Analysis (icon-only for compactness)
+
+**Key Properties:**
+- Single horizontal row, minimal height
+- Toggle buttons show icon + label for clarity
+- Secondary nav buttons (Option Chain, Technical Analysis) rendered icon-only to save space
+- All element IDs preserved for backward compatibility
+- Pure HTML/CSS refactor; no JavaScript behavior changes
+
+## Consequences
+
+- ✅ Symbol detail page now requires significantly less vertical scrolling
+- ✅ All functionality preserved (4 toggles, pause, 4 nav chips) in single compact row
+- ✅ UX aligns with minimize-footprint design goal
+- ✅ Backward compatibility maintained (element IDs unchanged)
+- ✅ Mobile-friendly: horizontal scrolling for overflow if needed
+
+## Implementation Notes
+
+- Files: `web/templates/symbol_detail.html` (layout), `web/static/style.css` (toolbar styling)
+- Commit: 767ab5e ("refactor: collapse symbol detail controls into a single compact toolbar")
+- No API or backend changes required
+

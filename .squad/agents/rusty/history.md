@@ -97,3 +97,6 @@ The Portfolio Chat context contract now accepts `include_symbol_data` (default `
 - Gating is layered: Cosmos watchlist queries exclude active pauses, manual/per-symbol following-agent runs check `is_watchlist_paused(sym_doc)`, and the dashboard/detail UI shadows paused symbols/rows without affecting position monitors.
 - API endpoints: `POST /api/symbols/{symbol}/pause` sets the pause using the next calendar earnings date (or optional `until` override); `DELETE /api/symbols/{symbol}/pause` resumes immediately.
 - Scheduler registration: `watchlist_reactivation` / “Watchlist Reactivation” runs weekdays at `0 6 * * 1-5`, respects `watchlist_reactivation.enabled` defaulting true, and clears expired pauses.
+
+### July 2026 — Symbol Detail Compact Toolbar (2026-07-16)
+- Symbol detail controls were consolidated into a SINGLE compact horizontal toolbar (toggles | pause | nav chips) to minimize vertical space; the two-card layout was rejected for taking too much room.
