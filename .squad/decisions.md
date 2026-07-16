@@ -5506,3 +5506,21 @@ An active pause is `watchlist_pause.until >= today` using local `YYYY-MM-DD`. Wa
 - UI can shadow paused symbols/rows using one pause field without hiding data.
 - Calendar sync must have an upcoming earnings date unless callers provide an explicit `until` override.
 
+# Decision: Position Monitor Badge Isolation from Watchlist Pause
+
+Date: 2026-07-16
+Owner: Coordinator
+Status: Implemented
+
+## Context
+The dashboard "paused until earnings" badge was being rendered on all monitor rows, including position-monitor rows (open_call_monitor, open_put_monitor). However, position monitors are unaffected by watchlist pause and continue running independently. Displaying the pause badge on monitor rows is misleading and contradicts the design intent: pause only suspends following-agent runs, not position monitoring.
+
+## Decision
+Gate the pause badge rendering in `_build_dashboard_tables` with `and not is_pm` (position-monitor check). The badge renders only on watchlist rows, never on position-monitor rows. Position monitors always display their active state, unrelated to watchlist pause status.
+
+## Consequences
+- Dashboard is semantically correct: pause badge only appears where pause actually applies (following-agent watchlist rows)
+- Position monitors are visually decoupled from watchlist pause state
+- Users cannot misinterpret monitor visibility as affected by watchlist pause
+- UI accurately reflects the underlying execution model
+

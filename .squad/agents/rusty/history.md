@@ -87,6 +87,10 @@ The Portfolio Chat context contract now accepts `include_symbol_data` (default `
 
 ## Learnings
 
+### July 2026 — Symbol Detail Controls Regrouping (2026-07-16)
+- Symbol detail controls were regrouped into two cards: Watchlist & alerts contains the 4 toggles with the pause/resume control as a header action; Views & actions contains the 4 navigation chips.
+- Notifications intentionally stays active during watchlist pause and is not shadowed or disabled, because position monitors still run and can still notify.
+
 ### July 2026 — Watchlist Pause Until Earnings (2026-07-16)
 - `symbol_config.watchlist_pause` is an optional pause-layer object with `until` (`YYYY-MM-DD`), `reason: earnings`, `scope: [covered_call, cash_secured_put, buy_tracker]`, and `set_at` UTC ISO timestamp. It does not mutate `watchlist.*` flags, preserving user intent.
 - Active pause semantics: `watchlist_pause.until >= today` (local `YYYY-MM-DD`). Expired pauses (`until < today`) are treated as inactive by scheduler queries and are cleared by a registered reactivation job.
