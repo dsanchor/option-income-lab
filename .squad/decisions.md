@@ -5486,3 +5486,23 @@ This avoids dumping all portfolio activity by default and lets the user scope ad
 - Exact thresholds and field names quoted from code
 - Skimmable formatting: bullet lists for features, tables for comparisons
 - Internal refactors briefly noted at most or skipped
+# Decision: Watchlist Pause Until Earnings
+
+Date: 2026-07-16
+Owner: Rusty
+Status: Proposed
+
+## Context
+Near earnings, the following agents often spend LLM tokens only for the earnings gate to return WAIT. Users need a temporary suspension for a symbol's following-agent watchlist runs while preserving their underlying watchlist intent.
+
+## Decision
+Add a separate `symbol_config.watchlist_pause` layer instead of flipping `watchlist.*` booleans. The pause applies only to `covered_call`, `cash_secured_put`, and `buy_tracker`; it does not affect `open_call_monitor` or `open_put_monitor` position monitors.
+
+An active pause is `watchlist_pause.until >= today` using local `YYYY-MM-DD`. Watchlist scheduler queries exclude active pauses. Manual/per-symbol following-agent paths also check the pause helper. Expired pauses are query-inactive and are cleared by a weekday 06:00 `watchlist_reactivation` scheduler job.
+
+## Consequences
+- User watchlist preferences remain intact and resume automatically after earnings.
+- Token savings apply to all three following agents while position risk monitoring continues.
+- UI can shadow paused symbols/rows using one pause field without hiding data.
+- Calendar sync must have an upcoming earnings date unless callers provide an explicit `until` override.
+

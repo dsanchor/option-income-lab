@@ -84,3 +84,12 @@
 
 ### July 2026 — DAL Leak Refactoring (2026-07-09)
 The Portfolio Chat context contract now accepts `include_symbol_data` (default `false`) alongside `selected_agents` and `activities_limit`. When enabled, the backend appends one consolidated `=== SYMBOL DATA ===` section after agent context, using persisted `symbol_config.enrichment` only and de-duplicating symbols across selected position monitors and following agents before sorting alphabetically.
+
+## Learnings
+
+### July 2026 — Watchlist Pause Until Earnings (2026-07-16)
+- `symbol_config.watchlist_pause` is an optional pause-layer object with `until` (`YYYY-MM-DD`), `reason: earnings`, `scope: [covered_call, cash_secured_put, buy_tracker]`, and `set_at` UTC ISO timestamp. It does not mutate `watchlist.*` flags, preserving user intent.
+- Active pause semantics: `watchlist_pause.until >= today` (local `YYYY-MM-DD`). Expired pauses (`until < today`) are treated as inactive by scheduler queries and are cleared by a registered reactivation job.
+- Gating is layered: Cosmos watchlist queries exclude active pauses, manual/per-symbol following-agent runs check `is_watchlist_paused(sym_doc)`, and the dashboard/detail UI shadows paused symbols/rows without affecting position monitors.
+- API endpoints: `POST /api/symbols/{symbol}/pause` sets the pause using the next calendar earnings date (or optional `until` override); `DELETE /api/symbols/{symbol}/pause` resumes immediately.
+- Scheduler registration: `watchlist_reactivation` / “Watchlist Reactivation” runs weekdays at `0 6 * * 1-5`, respects `watchlist_reactivation.enabled` defaulting true, and clears expired pauses.

@@ -28,6 +28,10 @@
 
 ## Learnings
 
+### Watchlist Pause Semantics (2026-07-16)
+- Tested `src.cosmos_db.is_watchlist_paused`: missing/empty `watchlist_pause` or missing `until` is not paused; `until >= today` is paused, including the inclusive boundary where `until == today`.
+- The watchlist reactivation job predicate is `until < today`: expired pauses reactivate, while future and same-day pauses remain active.
+
 ### Economics Contract Multiplier Test Expectations (2026-07-01)
 - Economics report tests were stale after `web/app.py` added `CONTRACT_MULTIPLIER = 100` for option contract dollar amounts. Updated `tests/test_economics.py` expectations to ×100 dollar values while leaving ratios, per-share fields, counts, filters, and ordering semantics unmultiplied for dsanchor.
 
