@@ -165,6 +165,93 @@ class CosmosDBService:
         doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
         return self.container.replace_item(item=doc["id"], body=doc)
 
+    # ── Enrichment History (Tech Timing / Momentum time-series) ────────
+
+    def record_enrichment_snapshot(
+        self,
+        symbol: str,
+        tech_timing,
+        momentum: str,
+        retention_days: int = 90,
+        today: str | None = None,
+    ) -> dict | None:
+        """Append a daily tech-timing/momentum snapshot for a symbol.
+
+        Stores a single time-series document per symbol
+        (``doc_type == "enrichment_history"``) holding a ``points`` array of
+        ``{date, tech_timing, momentum}`` entries.  One point per day: writing
+        again on the same day overwrites that day's point.  Points older than
+        ``retention_days`` are pruned on every write (rolling window), so no
+        Cosmos TTL is required and sibling activity/alert docs are untouched.
+
+        Args:
+            symbol: Ticker symbol (partition key).
+            tech_timing: Technical timing score (0-100) or None.
+            momentum: Momentum label (e.g. "Bullish", "Bearish").
+            retention_days: Rolling window length in days (default 90).
+            today: Override for the snapshot date (YYYY-MM-DD); defaults to today.
+
+        Returns:
+            The upserted document, or None if the input has no usable score.
+        """
+        if tech_timing is None:
+            return None
+
+        day = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        doc_id = f"enrichhist_{symbol}"
+
+        try:
+            doc = self.container.read_item(item=doc_id, partition_key=symbol)
+        except CosmosResourceNotFoundError:
+            doc = {
+                "id": doc_id,
+                "symbol": symbol,
+                "doc_type": "enrichment_history",
+                "points": [],
+            }
+
+        try:
+            score = round(float(tech_timing), 2)
+        except (TypeError, ValueError):
+            return None
+
+        points = [p for p in doc.get("points", []) if p.get("date") != day]
+        points.append({
+            "date": day,
+            "tech_timing": score,
+            "momentum": momentum or "",
+        })
+
+        # Prune to the rolling retention window and keep chronological order.
+        cutoff = (
+            datetime.strptime(day, "%Y-%m-%d")
+            - timedelta(days=retention_days)
+        ).strftime("%Y-%m-%d")
+        points = sorted(
+            (p for p in points if p.get("date", "") >= cutoff),
+            key=lambda p: p.get("date", ""),
+        )
+
+        doc["points"] = points
+        doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        return self.container.upsert_item(doc)
+
+    def get_enrichment_history(self, symbol: str) -> list[dict]:
+        """Return the tech-timing/momentum time-series for a symbol.
+
+        Returns a chronologically ordered list of
+        ``{date, tech_timing, momentum}`` points, or an empty list if none.
+        """
+        doc_id = f"enrichhist_{symbol}"
+        try:
+            doc = self.container.read_item(item=doc_id, partition_key=symbol)
+        except CosmosResourceNotFoundError:
+            return []
+        return sorted(
+            doc.get("points", []),
+            key=lambda p: p.get("date", ""),
+        )
+
     def replace_symbol(self, doc: dict) -> dict:
         """Generic replace of a full symbol-partition document.
         

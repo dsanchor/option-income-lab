@@ -33,7 +33,7 @@ Eight specialized AI agents power the platform:
 - **Report Agent** — On-demand deep-dive analysis combining technicals, dividends, options chain, and risk assessment
 - **DGI Screener** — Ranks S&P 500 stocks by composite quality score (70% fundamental + 30% technical timing)
 - **Buy Tracker** — AI-powered DCA timing agent evaluating 5 dimensions for patient accumulation
-- **Portfolio Enrichment** — Background process updating watchlist with DGI scores, momentum signals, and categories
+- **Portfolio Enrichment** — Background process updating watchlist with DGI scores, momentum signals, and categories. Also records a **daily tech-timing + momentum snapshot** per symbol (rolling 90-day history), shown as a chart in the symbol detail modal — the line is the tech-timing score (0–100) and the background band color reflects the momentum of each period.
 
 **Data source:** Yahoo Finance via `yfinance` Python library — zero auth, no browser, 23+ option expirations with computed Greeks.
 

@@ -696,6 +696,11 @@ async def api_create_symbol(request: Request):
                 enrichment = enrich_symbol(symbol)
                 if enrichment:
                     cosmos.update_symbol_enrichment(symbol, enrichment)
+                    cosmos.record_enrichment_snapshot(
+                        symbol,
+                        (enrichment.get("technicals") or {}).get("score"),
+                        enrichment.get("momentum", ""),
+                    )
             except Exception:
                 pass
         threading.Thread(target=_enrich, daemon=True).start()
@@ -4115,6 +4120,23 @@ async def trigger_portfolio_enrichment(request: Request):
 
     threading.Thread(target=_run, daemon=True).start()
     return JSONResponse({"status": "triggered", "agent_type": "portfolio_enrichment"})
+
+
+@app.get("/api/symbols/{symbol}/enrichment-history")
+async def get_enrichment_history(request: Request, symbol: str):
+    """Return the rolling tech-timing / momentum history for a symbol.
+
+    Response: {"symbol": "AAPL", "points": [{date, tech_timing, momentum}, ...]}
+    ordered chronologically (oldest first). Empty list when no history yet.
+    """
+    cosmos = getattr(request.app.state, "cosmos", None)
+    if cosmos is None:
+        return JSONResponse({"error": "CosmosDB not available"}, status_code=503)
+    try:
+        points = cosmos.get_enrichment_history(symbol.upper())
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse({"symbol": symbol.upper(), "points": points})
 
 
 @app.post("/api/trigger/plan_monitor")

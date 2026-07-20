@@ -798,6 +798,13 @@
             <button class="modal-close" id="summaryDetailClose">&times;</button>
         </div>
         <div id="summaryDetailBody"></div>
+        <div id="summaryTimingChartContainer" style="margin:1rem 1.25rem 0;">
+            <h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.5rem;">Tech Timing — 90d History <span style="text-transform:none;letter-spacing:0;font-weight:normal;">(background = momentum)</span></h4>
+            <div style="background:var(--bg-input);border-radius:var(--radius);padding:0.75rem 1rem;position:relative;height:240px;">
+                <canvas id="summaryTimingChart"></canvas>
+            </div>
+            <div id="summaryTimingLegend" style="display:flex;flex-wrap:wrap;gap:0.5rem 0.9rem;margin-top:0.5rem;font-size:0.72rem;color:var(--text-muted);"></div>
+        </div>
         <div id="summaryRadarChartContainer" style="margin:1rem 1.25rem 0;">
             <h4 style="font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.5rem;">Score Contribution</h4>
             <div style="background:var(--bg-input);border-radius:var(--radius);padding:0.75rem 1rem;max-width:500px;margin:0 auto;">
@@ -2196,6 +2203,90 @@
         return html;
     }
 
+    // ── Tech Timing history chart (momentum background bands) ──
+    var _timingCharts = {};
+    var MOMENTUM_BAND = {
+        'bullish': 'rgba(34,197,94,0.16)',
+        'bullish (overextended)': 'rgba(234,179,8,0.17)',
+        'weakening': 'rgba(249,115,22,0.16)',
+        'neutral': 'rgba(148,163,184,0.13)',
+        'bearish': 'rgba(239,68,68,0.16)',
+        'bearish (oversold)': 'rgba(59,130,246,0.17)'
+    };
+    function momentumBand(m) {
+        return MOMENTUM_BAND[(m || '').toLowerCase()] || 'rgba(148,163,184,0.07)';
+    }
+    var momentumBandsPlugin = {
+        id: 'momentumBands',
+        beforeDatasetsDraw: function(chart, args, opts) {
+            var moms = (opts && opts.momentums) || [];
+            if (!moms.length) return;
+            var ctx = chart.ctx, xScale = chart.scales.x, area = chart.chartArea;
+            var n = moms.length;
+            ctx.save();
+            for (var i = 0; i < n; i++) {
+                var cur = xScale.getPixelForValue(i);
+                var prev = i > 0 ? xScale.getPixelForValue(i - 1) : cur;
+                var next = i < n - 1 ? xScale.getPixelForValue(i + 1) : cur;
+                var left = i > 0 ? (prev + cur) / 2 : area.left;
+                var right = i < n - 1 ? (cur + next) / 2 : area.right;
+                ctx.fillStyle = momentumBand(moms[i]);
+                ctx.fillRect(left, area.top, right - left, area.bottom - area.top);
+            }
+            ctx.restore();
+        }
+    };
+    function renderTimingHistory(symbol, canvasId, containerId, legendId) {
+        var container = document.getElementById(containerId);
+        if (!container) return;
+        fetch('/api/symbols/' + encodeURIComponent(symbol) + '/enrichment-history')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var pts = (data && data.points) || [];
+                if (pts.length < 2) { container.style.display = 'none'; return; }
+                container.style.display = '';
+                var labels = pts.map(function(p) { return p.date ? p.date.slice(5) : ''; });
+                var scores = pts.map(function(p) { return p.tech_timing; });
+                var moms = pts.map(function(p) { return p.momentum; });
+                var canvas = document.getElementById(canvasId);
+                if (!canvas) return;
+                if (_timingCharts[canvasId]) { _timingCharts[canvasId].destroy(); _timingCharts[canvasId] = null; }
+                _timingCharts[canvasId] = new Chart(canvas.getContext('2d'), {
+                    type: 'line',
+                    data: { labels: labels, datasets: [{
+                        label: 'Tech Timing', data: scores,
+                        borderColor: '#e5e7eb', borderWidth: 2,
+                        pointRadius: pts.length > 40 ? 0 : 2, pointHoverRadius: 4,
+                        tension: 0.25, fill: false
+                    }]},
+                    options: {
+                        responsive: true, maintainAspectRatio: false, animation: false,
+                        scales: {
+                            x: { grid: { display: false }, ticks: { color: '#9ca3af', maxTicksLimit: 10, font: { size: 10 } } },
+                            y: { min: 0, max: 100, grid: { color: 'rgba(148,163,184,0.12)' }, ticks: { color: '#9ca3af', stepSize: 25, font: { size: 10 } } }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            momentumBands: { momentums: moms },
+                            tooltip: { callbacks: { afterLabel: function(c) { return 'Momentum: ' + (moms[c.dataIndex] || '—'); } } }
+                        }
+                    },
+                    plugins: [momentumBandsPlugin]
+                });
+                var legend = document.getElementById(legendId);
+                if (legend) {
+                    var used = {};
+                    moms.forEach(function(m) { if (m) used[m] = true; });
+                    legend.innerHTML = Object.keys(used).map(function(m) {
+                        return '<span style="display:inline-flex;align-items:center;gap:0.3rem;">'
+                            + '<span style="width:11px;height:11px;border-radius:2px;background:'
+                            + momentumBand(m).replace(/0\.\d+\)/, '0.9)') + ';"></span>' + m + '</span>';
+                    }).join('');
+                }
+            })
+            .catch(function() { container.style.display = 'none'; });
+    }
+
     function openSummaryDetail(entry) {
         summaryModalTitle.textContent = SYMBOL + ' — Detail';
         var html = '';
@@ -2205,6 +2296,7 @@
             summaryModalBody.innerHTML = html;
             document.getElementById('summaryRadarChartContainer').style.display = 'none';
             summaryModal.style.display = 'flex';
+            renderTimingHistory(SYMBOL, 'summaryTimingChart', 'summaryTimingChartContainer', 'summaryTimingLegend');
             return;
         }
 
@@ -2309,6 +2401,7 @@
         } else {
             radarContainer.style.display = 'none';
         }
+        renderTimingHistory(SYMBOL, 'summaryTimingChart', 'summaryTimingChartContainer', 'summaryTimingLegend');
     }
 
     function closeSummaryDetail() { summaryModal.style.display = 'none'; }

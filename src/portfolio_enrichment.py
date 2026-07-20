@@ -102,6 +102,18 @@ async def run_portfolio_enrichment(cosmos) -> dict:
             logger.error("  ✗ %s: failed to save enrichment: %s", symbol, exc)
             errors += 1
 
+        # Record daily tech-timing/momentum snapshot (rolling 90-day history).
+        # Best-effort: never let history failures affect enrichment status.
+        try:
+            cosmos.record_enrichment_snapshot(
+                symbol,
+                (enrichment.get("technicals") or {}).get("score"),
+                enrichment.get("momentum", ""),
+            )
+        except Exception as exc:
+            logger.warning("  ⚠ %s: failed to record enrichment snapshot: %s",
+                           symbol, exc)
+
         # Polite delay between symbols
         time.sleep(0.5)
 
