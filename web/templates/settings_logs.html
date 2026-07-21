@@ -55,18 +55,6 @@
                 <option value="{{ key }}">{{ meta.label }}</option>
                 {% endfor %}
             </select>
-            <select id="trace-confidence-filter" class="filter-select">
-                <option value="">All Confidence</option>
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
-            </select>
-            <select id="trace-decision-filter" class="filter-select">
-                <option value="">All Decisions</option>
-                <option value="wait">Wait</option>
-                <option value="sell">Sell</option>
-                <option value="alert">Alerts only</option>
-            </select>
         </div>
     </div>
 
@@ -145,20 +133,13 @@
         var days = pill ? parseInt(pill.dataset.range, 10) : 90;
         var sym = (document.getElementById('trace-symbol-filter') || {}).value || '';
         var agent = (document.getElementById('trace-agent-filter') || {}).value || '';
-        var conf = (document.getElementById('trace-confidence-filter') || {}).value || '';
-        var decision = (document.getElementById('trace-decision-filter') || {}).value || '';
         var co = cutoff(days), visible = 0;
         document.querySelectorAll('#traces-table tbody tr.clickable-row').forEach(function (row) {
             var ts = new Date(row.dataset.timestamp);
             var timeOk = isNaN(ts.getTime()) ? true : ts >= co;
             var symOk = !sym || (row.dataset.symbol || '') === sym;
             var agentOk = !agent || (row.dataset.agentType || '').trim() === agent.trim();
-            var confOk = !conf || (row.dataset.confidence || '') === conf;
-            var decisionOk = true;
-            if (decision === 'alert') decisionOk = (row.dataset.alert === 'yes');
-            else if (decision === 'wait') decisionOk = (row.dataset.decision === 'wait');
-            else if (decision === 'sell') decisionOk = (row.dataset.decision || '').indexOf('sell') !== -1;
-            var show = timeOk && symOk && agentOk && confOk && decisionOk;
+            var show = timeOk && symOk && agentOk;
             row.style.display = show ? '' : 'none';
             if (show) visible++;
         });
@@ -172,7 +153,7 @@
             applyTraceFilters();
         });
     });
-    ['trace-symbol-filter', 'trace-agent-filter', 'trace-confidence-filter', 'trace-decision-filter'].forEach(function (id) {
+    ['trace-symbol-filter', 'trace-agent-filter'].forEach(function (id) {
         var el = document.getElementById(id);
         if (el) el.addEventListener('change', applyTraceFilters);
     });
