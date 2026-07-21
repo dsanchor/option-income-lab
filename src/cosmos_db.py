@@ -1389,6 +1389,20 @@ class CosmosDBService:
 
     AGENT_TRACE_TTL_SECONDS = 7776000  # 90 days
 
+    def _ensure_agent_traces_container(self):
+        """Return the agent_traces container, lazily (re)acquiring it if it was
+        missing at startup (e.g. created after the app booted). Never raises."""
+        if self.agent_traces_container is not None:
+            return self.agent_traces_container
+        try:
+            container = self.database.get_container_client("agent_traces")
+            container.read()
+            self.agent_traces_container = container
+            logger.info("Agent traces container acquired lazily.")
+        except Exception:
+            self.agent_traces_container = None
+        return self.agent_traces_container
+
     def write_agent_trace(self, trace: dict) -> Optional[dict]:
         """Persist a single agent execution trace (best-effort, never raises).
 
@@ -1397,7 +1411,8 @@ class CosmosDBService:
             response_text, skills (list), parsed (dict), is_alert (bool),
             duration_seconds (float), error (str), extra (dict).
         """
-        if self.agent_traces_container is None:
+        container = self._ensure_agent_traces_container()
+        if container is None:
             return None
         try:
             doc = {
@@ -1408,7 +1423,7 @@ class CosmosDBService:
                 "symbol": trace.get("symbol") or "_",
                 **{k: v for k, v in trace.items() if k != "symbol"},
             }
-            return self.agent_traces_container.create_item(doc)
+            return container.create_item(doc)
         except Exception as exc:
             logger.warning("Agent trace write failed: %s", exc)
             return None
@@ -1421,7 +1436,8 @@ class CosmosDBService:
         Returns lightweight rows (excludes the large prompt/response fields)
         suitable for a table view.
         """
-        if self.agent_traces_container is None:
+        container = self._ensure_agent_traces_container()
+        if container is None:
             return []
         try:
             filters = ["c.doc_type = 'agent_trace'"]
@@ -1445,7 +1461,7 @@ class CosmosDBService:
                 f"FROM c WHERE {where} ORDER BY c.timestamp DESC OFFSET 0 LIMIT @limit"
             )
             params.append({"name": "@limit", "value": int(limit)})
-            return list(self.agent_traces_container.query_items(
+            return list(container.query_items(
                 query=query, parameters=params, enable_cross_partition_query=True,
             ))
         except Exception as exc:
@@ -1454,10 +1470,11 @@ class CosmosDBService:
 
     def get_agent_trace(self, trace_id: str) -> Optional[dict]:
         """Read a single full trace by id (cross-partition)."""
-        if self.agent_traces_container is None:
+        container = self._ensure_agent_traces_container()
+        if container is None:
             return None
         try:
-            docs = list(self.agent_traces_container.query_items(
+            docs = list(container.query_items(
                 query="SELECT * FROM c WHERE c.id = @id AND c.doc_type = 'agent_trace'",
                 parameters=[{"name": "@id", "value": trace_id}],
                 enable_cross_partition_query=True,
@@ -1469,10 +1486,11 @@ class CosmosDBService:
 
     def count_agent_traces(self) -> int:
         """Total number of stored agent traces."""
-        if self.agent_traces_container is None:
+        container = self._ensure_agent_traces_container()
+        if container is None:
             return 0
         try:
-            docs = list(self.agent_traces_container.query_items(
+            docs = list(container.query_items(
                 query="SELECT VALUE COUNT(1) FROM c WHERE c.doc_type = 'agent_trace'",
                 enable_cross_partition_query=True,
             ))
@@ -1485,7 +1503,8 @@ class CosmosDBService:
         """Delete agent traces. If ``older_than_days`` is given, only delete
         traces older than that cutoff; otherwise delete all. Returns count.
         """
-        if self.agent_traces_container is None:
+        container = self._ensure_agent_traces_container()
+        if container is None:
             return 0
         try:
             if older_than_days is not None:
@@ -1497,13 +1516,13 @@ class CosmosDBService:
             else:
                 query = "SELECT c.id, c.symbol FROM c WHERE c.doc_type = 'agent_trace'"
                 params = []
-            docs = list(self.agent_traces_container.query_items(
+            docs = list(container.query_items(
                 query=query, parameters=params, enable_cross_partition_query=True,
             ))
             deleted = 0
             for d in docs:
                 try:
-                    self.agent_traces_container.delete_item(
+                    container.delete_item(
                         item=d["id"], partition_key=d.get("symbol") or "_",
                     )
                     deleted += 1
