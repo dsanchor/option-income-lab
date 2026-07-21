@@ -4,7 +4,6 @@
 {% block content %}
 <div class="page-header">
     <h1>🧾 Agent Logs</h1>
-    <p class="subtitle">Full request/response traces of agent executions (kept 90 days).</p>
 </div>
 
 {% if request.query_params.get('purged') %}
@@ -20,7 +19,6 @@
     <div class="card-header"><h2>⚙️ Trace capture</h2></div>
     <div style="padding: 0.75rem 1.25rem;">
         <form method="POST" action="/settings/logs/config">
-            <p class="subtitle" style="margin-top:0;">Enable or disable tracing per agent type.</p>
             <div style="display:flex; flex-wrap:wrap; gap:1rem; margin-bottom:1rem;">
                 {% for key, meta in agent_types.items() %}
                 <label style="display:flex; align-items:center; gap:0.4rem;">
@@ -29,7 +27,7 @@
                 </label>
                 {% endfor %}
             </div>
-            <button type="submit" class="btn btn-primary">Save capture settings</button>
+            <button type="submit" class="btn btn-primary" style="font-size:0.85rem; padding:0.4rem 1rem;">Save capture settings</button>
         </form>
     </div>
 </div>
@@ -134,7 +132,7 @@
                     <option value="all">— all traces —</option>
                 </select>
             </label>
-            <button type="submit" class="btn btn-danger">Purge</button>
+            <button type="submit" class="btn btn-danger" style="font-size:0.85rem; padding:0.4rem 1rem;">Purge</button>
         </form>
     </div>
 </div>
