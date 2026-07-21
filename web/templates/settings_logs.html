@@ -38,10 +38,10 @@
         <h2>Executions <span class="card-badge">{{ traces | length }}</span> <span class="subtitle" style="font-weight:normal;">of {{ total }} stored</span></h2>
         <div class="filter-group">
             <div class="filter-pills" id="trace-time-filter">
-                <button class="pill" data-range="1">1d</button>
+                <button class="pill active" data-range="1">1d</button>
                 <button class="pill" data-range="7">7d</button>
                 <button class="pill" data-range="30">30d</button>
-                <button class="pill active" data-range="90">90d</button>
+                <button class="pill" data-range="90">90d</button>
             </div>
             <select id="trace-symbol-filter" class="filter-select">
                 <option value="">All Symbols</option>
