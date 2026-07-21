@@ -28,6 +28,7 @@ from .options_chain_filters import (
     exclude_contract,
     get_contract,
 )
+from .volatility import format_volatility_block
 from .yfinance_data_provider import YFinanceDataProvider, create_provider, get_shared_provider, OPTIONS_CHAIN_SCHEMA_DESCRIPTION
 from .supervisor_instructions import get_supervisor_instructions, SUPERVISOR_OUTPUT_SCHEMA
 from .alpha_instructions import get_alpha_instructions, ALPHA_OUTPUT_SCHEMA
@@ -769,6 +770,186 @@ class AgentRunner:
                 enrichment["risk_flags"] = json_data["risk_flags"]
         return enrichment
 
+    def _build_enrichment_block(self, symbol: str, cosmos) -> str:
+        """Build an agent-readable block with the symbol's current enrichment
+        (momentum, tech-timing, entry tag, DGI quality) plus a tech-timing
+        trend derived from the rolling 90-day history.
+
+        Returns an empty string when enrichment is unavailable. Best-effort:
+        never raises.
+        """
+        try:
+            symbol_doc = cosmos.get_symbol(symbol) or {}
+            enrichment = symbol_doc.get("enrichment") or {}
+            if not enrichment:
+                return ""
+
+            tech_timing = (enrichment.get("technicals") or {}).get("score")
+            momentum = enrichment.get("momentum")
+            entry_tag = enrichment.get("entry_tag")
+            dgi = enrichment.get("quality_score")
+
+            lines = []
+            if tech_timing is not None:
+                lines.append(f"- Tech Timing score: {tech_timing}/100")
+            if momentum:
+                lines.append(f"- Momentum: {momentum}")
+            if entry_tag:
+                lines.append(f"- Entry tag: {entry_tag}")
+            if dgi is not None:
+                lines.append(f"- DGI quality score: {dgi}/100")
+
+            trend = self._build_tech_timing_trend(symbol, cosmos)
+            if trend:
+                lines.append(f"- Tech Timing trend: {trend}")
+
+            if not lines:
+                return ""
+            return (
+                "SYMBOL ENRICHMENT (pre-computed watchlist signals — use as a "
+                "confluence cross-check for your decision):\n" + "\n".join(lines)
+            )
+        except Exception as exc:
+            logger.warning("Enrichment block failed for %s: %s", symbol, exc)
+            return ""
+
+    def _build_tech_timing_trend(self, symbol: str, cosmos, window_days: int = 30) -> str:
+        """Summarize the tech-timing direction over the recent history window.
+
+        Returns e.g. ``"improving (42→68 over 28d)"`` or ``""`` if not enough
+        history. Best-effort: never raises.
+        """
+        try:
+            points = cosmos.get_enrichment_history(symbol) or []
+            valued = [
+                p for p in points
+                if p.get("tech_timing") is not None and p.get("date")
+            ]
+            if len(valued) < 2:
+                return ""
+            recent = valued[-window_days:] if window_days else valued
+            if len(recent) < 2:
+                recent = valued[-2:]
+            first = recent[0]
+            last = recent[-1]
+            try:
+                start_val = float(first["tech_timing"])
+                end_val = float(last["tech_timing"])
+            except (TypeError, ValueError):
+                return ""
+            span_days = self._date_span_days(first.get("date"), last.get("date"))
+            delta = end_val - start_val
+            if delta >= 5:
+                direction = "improving"
+            elif delta <= -5:
+                direction = "deteriorating"
+            else:
+                direction = "flat"
+            span_txt = f" over {span_days}d" if span_days else ""
+            return f"{direction} ({start_val:.0f}\u2192{end_val:.0f}{span_txt})"
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _date_span_days(start: str, end: str) -> Optional[int]:
+        """Days between two ISO date strings (YYYY-MM-DD); None if unparseable."""
+        try:
+            d0 = datetime.strptime(str(start)[:10], "%Y-%m-%d").date()
+            d1 = datetime.strptime(str(end)[:10], "%Y-%m-%d").date()
+            return (d1 - d0).days or None
+        except (ValueError, TypeError):
+            return None
+
+    def _build_position_context_section(self, symbol: str, cosmos, data: dict) -> str:
+        """Assemble enrichment + IV/HV volatility sections for monitor prompts."""
+        sections = []
+        enrichment_block = self._build_enrichment_block(symbol, cosmos)
+        if enrichment_block:
+            sections.append(f"\n--- ENRICHMENT ({symbol}) ---\n{enrichment_block}\n")
+        volatility_block = self._volatility_text(data)
+        if volatility_block:
+            sections.append(f"\n--- VOLATILITY ({symbol}) ---\n{volatility_block}\n")
+        return "".join(sections)
+
+    @staticmethod
+    def _volatility_text(data: dict) -> str:
+        """Format the JSON volatility summary from fetch_all into a prompt block."""
+        raw = (data or {}).get("volatility", "")
+        if not raw:
+            return ""
+        try:
+            summary = json.loads(raw) if isinstance(raw, str) else raw
+        except (ValueError, TypeError):
+            return ""
+        if not summary:
+            return ""
+        try:
+            return format_volatility_block(summary)
+        except Exception:
+            return ""
+
+    # ── Agent execution tracing (observability) ────────────────────────
+
+    def _get_trace_config(self, cosmos) -> dict:
+        """Return the per-agent-type trace enablement map (cached ~60s)."""
+        cached = getattr(self, "_trace_cfg_cache", None)
+        now = time.time()
+        if cached and (now - cached[0]) < 60:
+            return cached[1]
+        cfg = {}
+        try:
+            settings = cosmos.get_settings() or {}
+            cfg = (settings.get("agent_trace") or {}).get("enabled_types") or {}
+        except Exception:
+            cfg = {}
+        self._trace_cfg_cache = (now, cfg)
+        return cfg
+
+    def _trace_enabled(self, cosmos, agent_type: str) -> bool:
+        """Whether tracing is enabled for ``agent_type`` (default: enabled)."""
+        try:
+            cfg = self._get_trace_config(cosmos)
+            return bool(cfg.get(agent_type, True))
+        except Exception:
+            return True
+
+    def _record_trace(self, cosmos, *, agent_type, symbol, system_prompt=None,
+                      user_message=None, response_text=None, model=None,
+                      skills=None, parsed=None, is_alert=None, phase=None,
+                      duration_seconds=None, error=None, extra=None) -> None:
+        """Persist a full agent execution trace (best-effort, never raises)."""
+        try:
+            if cosmos is None or not self._trace_enabled(cosmos, agent_type):
+                return
+            trace = {
+                "agent_type": agent_type,
+                "symbol": symbol or "_",
+                "model": model,
+                "phase": phase,
+                "system_prompt": system_prompt,
+                "user_message": user_message,
+                "response_text": response_text,
+                "skills": list(skills) if skills else [],
+                "parsed": parsed if isinstance(parsed, dict) else None,
+                "is_alert": bool(is_alert) if is_alert is not None else None,
+                "duration_seconds": duration_seconds,
+                "error": error,
+            }
+            if isinstance(parsed, dict):
+                trace["confidence"] = parsed.get("confidence")
+                trace["activity"] = (
+                    parsed.get("activity") or parsed.get("action")
+                    or parsed.get("decision") or parsed.get("action_needed")
+                )
+                summ = parsed.get("summary") or parsed.get("reason")
+                if summ:
+                    trace["activity_summary"] = str(summ)[:300]
+            if extra:
+                trace["extra"] = extra
+            cosmos.write_agent_trace(trace)
+        except Exception as exc:
+            logger.debug("Trace record skipped for %s/%s: %s", symbol, agent_type, exc)
+
     # ------------------------------------------------------------------
     # Prolonged WAIT detection
     # ------------------------------------------------------------------
@@ -1257,6 +1438,15 @@ Provide your alpha advisor analysis in the JSON format specified above."""
             # Pre-fetch all market data via yfinance
             data = await fetcher.fetch_all(symbol, force_refresh=True)
 
+            # Pre-computed enrichment (all agent types) + IV/HV volatility
+            # context (options sell/monitor agents only — buy_tracker ignores
+            # options by design).
+            _enrichment_block = self._build_enrichment_block(symbol, cosmos)
+            _is_options_agent = agent_type != "buy_tracker"
+            _volatility_block = self._volatility_text(data) if _is_options_agent else ""
+            _enrichment_section = f"\n--- ENRICHMENT ({symbol}) ---\n{_enrichment_block}\n" if _enrichment_block else ""
+            _volatility_section = f"\n--- VOLATILITY ({symbol}) ---\n{_volatility_block}\n" if _volatility_block else ""
+
             message = f"""Analyze {symbol} (exchange: {exchange}).
 Category: {(symbol_category or "Balanced").replace("_", " ").title()}
 → Load the **category-params** skill for category-specific thresholds. All base rules (earnings gate, DTE ≤ 45, etc.) still apply — the category skill ONLY adjusts delta ranges, premium minimums, and IV requirements.
@@ -1274,7 +1464,7 @@ Category: {(symbol_category or "Balanced").replace("_", " ").title()}
 
 --- DIVIDENDS ({symbol}) ---
 {data['dividends']}
-
+{_enrichment_section}{_volatility_section}
 --- OPTIONS CHAIN ({symbol}) ---
 {self._format_options_chain(data.get('options_chain', ''), symbol)}
 
@@ -1350,7 +1540,23 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                 activity_data=activity_payload,
                 timestamp=analysis_ts,
             )
-            
+
+            # ── Execution trace (observability, best-effort) ──────────
+            self._record_trace(
+                cosmos,
+                agent_type=agent_type,
+                symbol=symbol,
+                system_prompt=instructions,
+                user_message=message,
+                response_text=response_text,
+                model=model,
+                skills=_skill_names,
+                parsed=json_data,
+                is_alert=is_alert,
+                phase="analysis",
+                duration_seconds=round(time.time() - run_start, 2),
+            )
+
             # ── Supervisor/Alpha reviews (skip for agent types without playbooks) ──
             _skip_reviews = agent_type in ("buy_tracker",)
             supervisor_view = None
@@ -1590,6 +1796,9 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
         current_contract_chain: str = "",
         model: str = None,
         health_metrics: str = "",
+        extra_context: str = "",
+        cosmos=None,
+        agent_type: str = None,
     ) -> Tuple[str, Optional[Dict], Optional[Dict]]:
         """Run Phase 1 — position assessment agent.
 
@@ -1621,7 +1830,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
 
 --- FORECAST ({symbol}) ---
 {data['forecast']}
-
+{extra_context}
 --- CURRENT CONTRACT ({position_type.upper()} ${strike} exp {expiration}) ---
 {current_contract_chain}
 {health_section}=== END OF DATA ===
@@ -1639,8 +1848,22 @@ Analyze the position risk and output your response in the required JSON format. 
             instructions=instructions,
             context_providers=[_skills] if _skills else None,
         )
+        _phase1_start = time.time()
         result = await agent.run(message)
         response_text = result.text or str(result)
+
+        self._record_trace(
+            cosmos,
+            agent_type=agent_type or f"open_{position_type}_monitor",
+            symbol=symbol,
+            system_prompt=instructions,
+            user_message=message,
+            response_text=response_text,
+            model=model,
+            skills=["earnings-gate-monitor", "data-source", "activity-log", "risk-flags"],
+            phase="assessment",
+            duration_seconds=round(time.time() - _phase1_start, 2),
+        )
 
         logger.info(
             "Phase 1 (assessment) completed for %s – response length=%d",
@@ -1675,6 +1898,8 @@ Analyze the position risk and output your response in the required JSON format. 
         full_symbol: str,
         model: str = None,
         category_delta_context: str = "",
+        cosmos=None,
+        agent_type: str = None,
     ) -> Tuple[str, Optional[Dict]]:
         """Run Phase 2 — roll management agent.
 
@@ -1703,8 +1928,24 @@ Output your activity in the required JSON format. Use the timestamp above in you
             instructions=roll_instructions,
             context_providers=[_skills] if _skills else None,
         )
+        _phase2_start = time.time()
         result = await agent.run(message)
         response_text = result.text or str(result)
+
+        json_data = self._try_extract_json(response_text)
+        self._record_trace(
+            cosmos,
+            agent_type=agent_type or "position_monitor",
+            symbol=full_symbol,
+            system_prompt=roll_instructions,
+            user_message=message,
+            response_text=response_text,
+            model=model,
+            skills=["roll-economics", "risk-flags"],
+            parsed=json_data,
+            phase="roll",
+            duration_seconds=round(time.time() - _phase2_start, 2),
+        )
 
         logger.info(
             "Phase 2 (roll mgmt) completed for %s – response length=%d",
@@ -1716,7 +1957,6 @@ Output your activity in the required JSON format. Use the timestamp above in you
         )
         print(f"Phase 2 response: {response_text[:200]}...")
 
-        json_data = self._try_extract_json(response_text)
         return response_text, json_data
 
     @staticmethod
@@ -1958,6 +2198,9 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 current_contract_chain=current_contract_chain,
                 model=assessment_model,
                 health_metrics=_health_metrics,
+                extra_context=self._build_position_context_section(symbol, cosmos, data),
+                cosmos=cosmos,
+                agent_type=agent_type,
             )
 
             if handoff_json is not None:
@@ -2026,6 +2269,8 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         full_symbol=symbol,
                         model=roll_model,
                         category_delta_context=_cat_delta_ctx,
+                        cosmos=cosmos,
+                        agent_type=agent_type,
                     )
                     # Use Phase 2 output as the final result
                     response_text = phase2_response
@@ -2471,6 +2716,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
             "momentum": enrichment.get("momentum"),
             "entry_tag": enrichment.get("entry_tag"),
             "dgi_score": enrichment.get("quality_score"),
+            "tech_timing_trend": self._build_tech_timing_trend(symbol, cosmos) or None,
             "technicals": enrichment.get("technicals", {}),
             "full_enrichment": enrichment,
         }
@@ -2492,17 +2738,23 @@ Output your activity in the required JSON format. Use the timestamp above in you
                     option_type = only_type
 
         options_chain_text = "(not relevant for this plan type)"
+        volatility_block = ""
         if option_type or "roll" in plan_type:
             try:
-                raw_chain = await get_options_chain_cache().get_or_load_async(symbol)
+                # fetch_all also computes the IV/HV volatility context and is
+                # cache-backed, so this avoids a second chain load.
+                _vdata = await get_shared_provider().fetch_all(symbol)
                 options_chain_text = self._format_options_chain(
-                    raw_chain,
+                    _vdata.get("options_chain", ""),
                     symbol,
                     option_type=option_type,
                 )
+                volatility_block = self._volatility_text(_vdata)
             except Exception as exc:
                 logger.warning("Plan monitor options chain fetch failed for %s: %s", symbol, exc)
                 options_chain_text = json.dumps({"error": str(exc)})
+
+        volatility_section = f"\n## VOLATILITY\n{volatility_block}\n" if volatility_block else ""
 
         prompt = f"""Analyze this action plan for {symbol}.
 
@@ -2525,7 +2777,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
 ```json
 {json.dumps(enrichment_context, indent=2, default=str)}
 ```
-
+{volatility_section}
 ## ACTIVE POSITIONS
 ```json
 {json.dumps(active_positions, indent=2, default=str)}
@@ -2541,9 +2793,25 @@ Respond in the required JSON format only."""
             name="PlanMonitorAgent",
             instructions=get_plan_monitor_instructions(),
         )
+        _pm_start = time.time()
         result = await agent.run(prompt)
         response_text = result.text or str(result)
         parsed = self._try_extract_any_json_object(response_text)
+
+        self._record_trace(
+            cosmos,
+            agent_type="plan_monitor",
+            symbol=symbol,
+            system_prompt=get_plan_monitor_instructions(),
+            user_message=prompt,
+            response_text=response_text,
+            model=self._plan_monitor_model,
+            parsed=parsed if isinstance(parsed, dict) else None,
+            phase="plan_monitor",
+            duration_seconds=round(time.time() - _pm_start, 2),
+            error=None if parsed is not None else "invalid_json",
+        )
+
         if parsed is None:
             raise ValueError(f"Plan monitor returned invalid JSON for {symbol}: {response_text[:300]}")
 

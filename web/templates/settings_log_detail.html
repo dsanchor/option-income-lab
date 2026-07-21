@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Agent Trace — Option Income Lab{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <a href="/settings/logs" class="back-link">← Back to Agent Logs</a>
+    <h1>🧾 Agent Trace</h1>
+    <p class="subtitle">{{ trace.timestamp }}</p>
+</div>
+
+<div class="card">
+    <div class="card-header"><h2>Overview</h2></div>
+    <div style="padding: 0.75rem 1.25rem;">
+        <div class="detail-grid">
+            <div><span class="detail-label">Symbol</span><span class="detail-value">{{ trace.symbol if trace.symbol and trace.symbol != '_' else '—' }}</span></div>
+            <div><span class="detail-label">Agent</span><span class="detail-value">{{ agent_label }}</span></div>
+            <div><span class="detail-label">Phase</span><span class="detail-value">{{ trace.phase | default('—', true) }}</span></div>
+            <div><span class="detail-label">Model</span><span class="detail-value mono">{{ trace.model | default('—', true) }}</span></div>
+            <div><span class="detail-label">Duration</span><span class="detail-value">{{ '%.2fs' | format(trace.duration_seconds) if trace.duration_seconds is not none else '—' }}</span></div>
+            <div><span class="detail-label">Confidence</span><span class="detail-value">{{ trace.confidence | default('—', true) }}</span></div>
+            <div><span class="detail-label">Decision</span><span class="detail-value">{{ trace.activity | default('—', true) }}</span></div>
+            <div><span class="detail-label">Alert</span><span class="detail-value">{{ '📢 Yes' if trace.is_alert else 'No' }}</span></div>
+        </div>
+        {% if trace.error %}
+        <div class="alert alert-warning" style="margin-top:1rem;"><strong>Error:</strong> {{ trace.error }}</div>
+        {% endif %}
+    </div>
+</div>
+
+{% if trace.skills %}
+<div class="card">
+    <div class="card-header"><h2>🛠️ Skills</h2></div>
+    <div style="padding: 0.75rem 1.25rem;">
+        <ul class="skills-list">
+            {% for s in trace.skills %}<li class="mono">{{ s }}</li>{% endfor %}
+        </ul>
+    </div>
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header"><h2>📜 System Prompt</h2></div>
+    <div style="padding: 0.75rem 1.25rem;">
+        <pre class="trace-block">{{ trace.system_prompt | default('(empty)', true) }}</pre>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header"><h2>👤 User Message</h2></div>
+    <div style="padding: 0.75rem 1.25rem;">
+        <pre class="trace-block">{{ trace.user_message | default('(empty)', true) }}</pre>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header"><h2>🤖 Assistant Response</h2></div>
+    <div style="padding: 0.75rem 1.25rem;">
+        <pre class="trace-block">{{ trace.response_text | default('(empty)', true) }}</pre>
+    </div>
+</div>
+
+{% if trace.parsed %}
+<div class="card">
+    <div class="card-header"><h2>🧩 Parsed Result</h2></div>
+    <div style="padding: 0.75rem 1.25rem;">
+        <pre class="trace-block">{{ trace.parsed | json_pretty }}</pre>
+    </div>
+</div>
+{% endif %}
+
+{% if trace.extra %}
+<div class="card">
+    <div class="card-header"><h2>➕ Extra</h2></div>
+    <div style="padding: 0.75rem 1.25rem;">
+        <pre class="trace-block">{{ trace.extra | json_pretty }}</pre>
+    </div>
+</div>
+{% endif %}
+
+<style>
+.trace-block {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--bg-secondary, #1a1d24);
+    border: 1px solid var(--border-color, #2a2f3a);
+    border-radius: 8px;
+    padding: 1rem;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    max-height: 480px;
+    overflow: auto;
+    margin: 0;
+}
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem 1.5rem; }
+.detail-label { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.6; }
+.detail-value { display: block; font-size: 0.95rem; font-weight: 600; }
+.skills-list { margin: 0; padding-left: 1.2rem; }
+.back-link { display: inline-block; margin-bottom: 0.5rem; opacity: 0.8; text-decoration: none; }
+.back-link:hover { opacity: 1; }
+</style>
+{% endblock %}

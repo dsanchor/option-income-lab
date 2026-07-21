@@ -17,7 +17,7 @@ from croniter import croniter
 from fastapi import FastAPI, Request, Query
 
 from src.market_hours import is_us_market_open
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -3770,6 +3770,115 @@ async def settings_runtime_page(request: Request):
         "cache_stats": cache_stats,
         "recent_errors": recent_errors,
     })
+
+
+# ===========================================================================
+# Settings - Agent Execution Logs (traces)
+# ===========================================================================
+
+# Agent types that can be individually traced (superset of AGENT_TYPES).
+TRACEABLE_AGENT_TYPES = {
+    **AGENT_TYPES,
+    "plan_monitor": {"label": "Plan Monitor"},
+}
+
+
+def _get_trace_enabled_types(cosmos) -> dict:
+    """Return {agent_type: bool} trace enablement (default: all enabled)."""
+    stored = {}
+    if cosmos is not None:
+        try:
+            settings = cosmos.get_settings() or {}
+            stored = (settings.get("agent_trace") or {}).get("enabled_types") or {}
+        except Exception:
+            stored = {}
+    return {key: bool(stored.get(key, True)) for key in TRACEABLE_AGENT_TYPES}
+
+
+@app.get("/settings/logs", response_class=HTMLResponse)
+async def settings_logs_page(request: Request):
+    """Agent execution logs — traced requests/responses with filters."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    traces = []
+    total = 0
+    symbols = []
+    if cosmos is not None:
+        try:
+            traces = cosmos.list_agent_traces(limit=500)
+        except Exception:
+            traces = []
+        try:
+            total = cosmos.count_agent_traces()
+        except Exception:
+            total = len(traces)
+        try:
+            symbols = sorted({t.get("symbol") for t in traces if t.get("symbol") and t.get("symbol") != "_"})
+        except Exception:
+            symbols = []
+
+    return templates.TemplateResponse("settings_logs.html", {
+        "request": request,
+        "traces": traces,
+        "total": total,
+        "symbols": symbols,
+        "agent_types": TRACEABLE_AGENT_TYPES,
+        "trace_enabled": _get_trace_enabled_types(cosmos),
+        "cosmos_available": cosmos is not None,
+    })
+
+
+@app.get("/settings/logs/{trace_id}", response_class=HTMLResponse)
+async def settings_log_detail_page(request: Request, trace_id: str):
+    """Full detail of a single agent execution trace."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    if cosmos is None:
+        return HTMLResponse("CosmosDB not available", status_code=503)
+    trace = cosmos.get_agent_trace(trace_id)
+    if not trace:
+        return HTMLResponse("Trace not found", status_code=404)
+    agent_label = TRACEABLE_AGENT_TYPES.get(
+        trace.get("agent_type"), {}).get("label", trace.get("agent_type", ""))
+    return templates.TemplateResponse("settings_log_detail.html", {
+        "request": request,
+        "trace": trace,
+        "agent_label": agent_label,
+    })
+
+
+@app.post("/settings/logs/config")
+async def settings_logs_config_save(request: Request):
+    """Persist per-agent-type trace enablement (checkboxes)."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    form = await request.form()
+    enabled = {key: (key in form) for key in TRACEABLE_AGENT_TYPES}
+    if cosmos is not None:
+        try:
+            settings = _load_settings_from_cosmos(cosmos) or {}
+            settings.setdefault("agent_trace", {})
+            settings["agent_trace"]["enabled_types"] = enabled
+            _save_settings_to_cosmos(cosmos, settings)
+        except Exception:
+            logger.warning("Failed to save agent_trace config", exc_info=True)
+    return RedirectResponse(url="/settings/logs", status_code=303)
+
+
+@app.post("/settings/logs/purge")
+async def settings_logs_purge(request: Request):
+    """Purge agent traces (all, or older than a number of days)."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    form = await request.form()
+    older_than = form.get("older_than_days")
+    deleted = 0
+    if cosmos is not None:
+        try:
+            days = int(older_than) if older_than not in (None, "", "all") else None
+        except (TypeError, ValueError):
+            days = None
+        try:
+            deleted = cosmos.purge_agent_traces(older_than_days=days)
+        except Exception:
+            logger.warning("Failed to purge agent traces", exc_info=True)
+    return RedirectResponse(url=f"/settings/logs?purged={deleted}", status_code=303)
 
 
 @app.post("/api/debug/clear-cache")

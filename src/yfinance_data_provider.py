@@ -200,16 +200,47 @@ class YFinanceDataProvider:
             float(history["Close"].iloc[-1]) if not history.empty else None
         )
 
+        options_chain = await self._build_options_chain(symbol)
+
         result = {
             "overview": self._build_overview(info, current_price),
             "technicals": self._build_technicals(history, info),
             "forecast": self._build_forecast(info, ticker),
             "dividends": self._build_dividends(info, ticker),
-            "options_chain": await self._build_options_chain(symbol),
+            "options_chain": options_chain,
         }
+
+        # IV/HV volatility context (best-effort, stateless premium-richness proxy).
+        # Stored as a JSON string to honour fetch_all's "all values are JSON" contract;
+        # consumers format it into a human-readable block via volatility.format_volatility_block.
+        vol_summary, _vol_block = self._build_volatility_context(
+            options_chain, history, current_price,
+        )
+        result["volatility"] = json.dumps(vol_summary or {})
 
         self._cache[symbol] = {"data": result, "timestamp": time.monotonic()}
         return result
+
+    def _build_volatility_context(self, options_chain, history, current_price):
+        """Return ``(summary_dict, formatted_block)`` for IV/HV richness.
+
+        Never raises — volatility context is optional enrichment.
+        """
+        try:
+            from .volatility import build_volatility_summary, format_volatility_block
+
+            try:
+                chain = json.loads(options_chain) if isinstance(options_chain, str) else (options_chain or {})
+            except (json.JSONDecodeError, TypeError):
+                chain = {}
+            closes = []
+            if history is not None and not history.empty and "Close" in history:
+                closes = [float(c) for c in history["Close"].tolist()]
+            summary = build_volatility_summary(chain, current_price, closes)
+            return summary, format_volatility_block(summary)
+        except Exception as exc:
+            logger.warning("Volatility context failed: %s", exc)
+            return {}, ""
 
     # ------------------------------------------------------------------
     # Overview

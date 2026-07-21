@@ -37,7 +37,7 @@ Eight specialized AI agents power the platform:
 
 **Data source:** Yahoo Finance via `yfinance` Python library — zero auth, no browser, 23+ option expirations with computed Greeks.
 
-**Storage:** Azure CosmosDB with symbol-centric partitioning across 5 containers (symbols, telemetry, settings, dgi_screener, calendar).
+**Storage:** Azure CosmosDB with symbol-centric partitioning across 6 containers (symbols, telemetry, settings, dgi_screener, calendar, agent_traces).
 
 → [Full architecture details](docs/architecture.md)
 
@@ -98,6 +98,12 @@ Suspend a symbol's following agents (Covered Call, Cash-Secured Put, Buy Tracker
 - **Symbol Reports** — On-demand deep-dive combining technicals, dividends, options chain, risk assessment
 
 → [Chat](docs/chat.md) | [Reports](docs/agents.md#symbol-report)
+
+### 🎯 Enrichment & IV/HV Context for Agents
+Sell-side agents (Cash-Secured Put, Covered Call), position monitors, and the plan monitor receive pre-computed **enrichment** (momentum, tech-timing score, entry tag, DGI category) plus a **90-day tech-timing trend** (improving / flat / deteriorating). Options agents also get a stateless **IV/HV richness** signal — current at-the-money implied volatility ÷ realized (historical) volatility — flagging premiums as rich (≥1.20), fair, or cheap (<0.90). Works from day one for any symbol, no stored IV history required. Buy Tracker gets enrichment only (no options).
+
+### 🧾 Agent Logs
+Full traceability of every agent execution under **Settings → Agent Logs**: system prompt, user message, assistant response, skills, and parsed result. Traces persist in a dedicated CosmosDB container for 90 days (auto-expiry via TTL) with a manual purge button (all / 90 / 30 / 7 days). Per-agent-type capture toggles let you enable/disable tracing individually. A filterable table (time pills 1d/7d/30d/90d, symbol, agent, confidence, decision — mirroring Recent Activity) drills into each execution's full detail.
 
 ---
 

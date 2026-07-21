@@ -13,7 +13,7 @@
 #   1. Creates a resource group (if it doesn't exist)
 #   2. Creates a CosmosDB account (serverless by default)
 #   3. Creates the "stock-options-manager" database
-#   4. Creates five containers: "symbols", "telemetry", "settings", "dgi_screener", "calendar"
+#   4. Creates six containers: "symbols", "telemetry", "settings", "dgi_screener", "calendar", "agent_traces"
 #   5. Applies custom indexing policy (index query fields, exclude large blobs)
 #   6. Retrieves and prints the connection endpoint and primary key
 #
@@ -238,6 +238,33 @@ az cosmosdb sql container create \
   -o none
 
 echo "  ✓ Calendar container ready"
+
+# ── 4f. Create Agent Traces Container ────────────────────────────────────────
+TRACES_CONTAINER="agent_traces"
+echo "▶ Creating container '$TRACES_CONTAINER' (partition key: /symbol)..."
+
+az cosmosdb sql container create \
+  --account-name "$COSMOSDB_ACCOUNT" \
+  --resource-group "$RESOURCE_GROUP" \
+  --database-name "$DATABASE_NAME" \
+  --name "$TRACES_CONTAINER" \
+  --partition-key-path "/symbol" \
+  --partition-key-version 2 \
+  --only-show-errors \
+  -o none
+
+# Enable TTL (90 days = 7776000 seconds) for automatic trace expiry
+echo "▶ Enabling TTL on '$TRACES_CONTAINER' (90 days)..."
+az cosmosdb sql container update \
+  --account-name "$COSMOSDB_ACCOUNT" \
+  --resource-group "$RESOURCE_GROUP" \
+  --database-name "$DATABASE_NAME" \
+  --name "$TRACES_CONTAINER" \
+  --ttl 7776000 \
+  --only-show-errors \
+  -o none
+
+echo "  ✓ Agent Traces container ready"
 
 # ── 5. Apply Custom Indexing Policy ──────────────────────────────────────────
 echo "▶ Applying custom indexing policy..."

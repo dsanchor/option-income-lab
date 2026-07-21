@@ -80,6 +80,19 @@ class CosmosDBService:
         # Calendar container — best-effort; never blocks if missing
         self._init_calendar_container()
 
+        # Agent traces container — best-effort; never blocks if missing
+        try:
+            self.agent_traces_container = self.database.get_container_client(
+                "agent_traces"
+            )
+            self.agent_traces_container.read()
+        except Exception:
+            logger.warning(
+                "Agent traces container not found — agent trace logging disabled. "
+                "Run scripts/provision_cosmosdb.sh to create it."
+            )
+            self.agent_traces_container = None
+
     def _init_calendar_container(self):
         """Try to connect to the calendar container. Safe to call multiple times."""
         try:
@@ -1368,6 +1381,138 @@ class CosmosDBService:
             self.telemetry_container.create_item(doc)
         except Exception as exc:
             logger.warning("Telemetry write failed (%s): %s", metric_type, exc)
+
+    # ── Agent Execution Traces ─────────────────────────────────────────
+    # Full request/response traces for observability. Stored in a dedicated
+    # `agent_traces` container (partition /symbol) with a 90-day TTL for
+    # automatic expiry, plus an explicit purge method for manual cleanup.
+
+    AGENT_TRACE_TTL_SECONDS = 7776000  # 90 days
+
+    def write_agent_trace(self, trace: dict) -> Optional[dict]:
+        """Persist a single agent execution trace (best-effort, never raises).
+
+        Expected keys (all optional except symbol/agent_type):
+            symbol, agent_type, model, phase, system_prompt, user_message,
+            response_text, skills (list), parsed (dict), is_alert (bool),
+            duration_seconds (float), error (str), extra (dict).
+        """
+        if self.agent_traces_container is None:
+            return None
+        try:
+            doc = {
+                "id": str(uuid4()),
+                "doc_type": "agent_trace",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "ttl": self.AGENT_TRACE_TTL_SECONDS,
+                "symbol": trace.get("symbol") or "_",
+                **{k: v for k, v in trace.items() if k != "symbol"},
+            }
+            return self.agent_traces_container.create_item(doc)
+        except Exception as exc:
+            logger.warning("Agent trace write failed: %s", exc)
+            return None
+
+    def list_agent_traces(self, limit: int = 100, symbol: str = None,
+                          agent_type: str = None, alerts_only: bool = False,
+                          before: str = None) -> list[dict]:
+        """List recent agent traces (newest first), with optional filters.
+
+        Returns lightweight rows (excludes the large prompt/response fields)
+        suitable for a table view.
+        """
+        if self.agent_traces_container is None:
+            return []
+        try:
+            filters = ["c.doc_type = 'agent_trace'"]
+            params = []
+            if symbol:
+                filters.append("c.symbol = @symbol")
+                params.append({"name": "@symbol", "value": symbol.upper()})
+            if agent_type:
+                filters.append("c.agent_type = @agent_type")
+                params.append({"name": "@agent_type", "value": agent_type})
+            if alerts_only:
+                filters.append("c.is_alert = true")
+            if before:
+                filters.append("c.timestamp < @before")
+                params.append({"name": "@before", "value": before})
+            where = " AND ".join(filters)
+            query = (
+                "SELECT c.id, c.symbol, c.agent_type, c.model, c.phase, "
+                "c.is_alert, c.duration_seconds, c.timestamp, c.error, "
+                "c.activity_summary, c.confidence, c.activity "
+                f"FROM c WHERE {where} ORDER BY c.timestamp DESC OFFSET 0 LIMIT @limit"
+            )
+            params.append({"name": "@limit", "value": int(limit)})
+            return list(self.agent_traces_container.query_items(
+                query=query, parameters=params, enable_cross_partition_query=True,
+            ))
+        except Exception as exc:
+            logger.warning("Agent trace list failed: %s", exc)
+            return []
+
+    def get_agent_trace(self, trace_id: str) -> Optional[dict]:
+        """Read a single full trace by id (cross-partition)."""
+        if self.agent_traces_container is None:
+            return None
+        try:
+            docs = list(self.agent_traces_container.query_items(
+                query="SELECT * FROM c WHERE c.id = @id AND c.doc_type = 'agent_trace'",
+                parameters=[{"name": "@id", "value": trace_id}],
+                enable_cross_partition_query=True,
+            ))
+            return docs[0] if docs else None
+        except Exception as exc:
+            logger.warning("Agent trace read failed: %s", exc)
+            return None
+
+    def count_agent_traces(self) -> int:
+        """Total number of stored agent traces."""
+        if self.agent_traces_container is None:
+            return 0
+        try:
+            docs = list(self.agent_traces_container.query_items(
+                query="SELECT VALUE COUNT(1) FROM c WHERE c.doc_type = 'agent_trace'",
+                enable_cross_partition_query=True,
+            ))
+            return int(docs[0]) if docs else 0
+        except Exception as exc:
+            logger.warning("Agent trace count failed: %s", exc)
+            return 0
+
+    def purge_agent_traces(self, older_than_days: Optional[int] = None) -> int:
+        """Delete agent traces. If ``older_than_days`` is given, only delete
+        traces older than that cutoff; otherwise delete all. Returns count.
+        """
+        if self.agent_traces_container is None:
+            return 0
+        try:
+            if older_than_days is not None:
+                cutoff = (datetime.now(timezone.utc)
+                          - timedelta(days=older_than_days)).isoformat()
+                query = ("SELECT c.id, c.symbol FROM c WHERE c.doc_type = 'agent_trace' "
+                         "AND c.timestamp < @cutoff")
+                params = [{"name": "@cutoff", "value": cutoff}]
+            else:
+                query = "SELECT c.id, c.symbol FROM c WHERE c.doc_type = 'agent_trace'"
+                params = []
+            docs = list(self.agent_traces_container.query_items(
+                query=query, parameters=params, enable_cross_partition_query=True,
+            ))
+            deleted = 0
+            for d in docs:
+                try:
+                    self.agent_traces_container.delete_item(
+                        item=d["id"], partition_key=d.get("symbol") or "_",
+                    )
+                    deleted += 1
+                except Exception as exc:
+                    logger.warning("Failed to delete trace %s: %s", d.get("id"), exc)
+            return deleted
+        except Exception as exc:
+            logger.warning("Agent trace purge failed: %s", exc)
+            return 0
 
     def get_telemetry_stats(self) -> dict:
         """Aggregate telemetry stats bucketed by today / 7 days / 30 days.
