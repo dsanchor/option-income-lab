@@ -1447,7 +1447,36 @@ Provide your alpha advisor analysis in the JSON format specified above."""
             _enrichment_section = f"\n--- ENRICHMENT ({symbol}) ---\n{_enrichment_block}\n" if _enrichment_block else ""
             _volatility_section = f"\n--- VOLATILITY ({symbol}) ---\n{_volatility_block}\n" if _volatility_block else ""
 
-            message = f"""Analyze {symbol} (exchange: {exchange}).
+            _is_buy_tracker = agent_type == "buy_tracker"
+            if _is_buy_tracker:
+                # Buy Tracker is a stock-accumulation agent: it must NOT receive
+                # any options-selling context (category/delta/premium/IV rules,
+                # options chain, volatility). Keep only stock technicals + enrichment.
+                message = f"""Analyze {symbol} (exchange: {exchange}) for BUY-only accumulation timing.
+
+=== PRE-FETCHED MARKET DATA ===
+
+--- OVERVIEW ({symbol}) ---
+{data['overview']}
+
+--- TECHNICALS ({symbol}) ---
+{data['technicals']}
+
+--- FORECAST ({symbol}) ---
+{data['forecast']}
+
+--- DIVIDENDS ({symbol}) ---
+{data['dividends']}
+{_enrichment_section}
+=== END OF DATA ===
+
+Previous activities for {symbol}:
+{previous_context}
+
+Current UTC timestamp: {analysis_ts}
+All market data has been pre-fetched above. Do NOT use any browser tools — analyze the data provided and output your activity in the required JSON format. Use the timestamp above in your JSON output; do NOT generate your own."""
+            else:
+                message = f"""Analyze {symbol} (exchange: {exchange}).
 Category: {(symbol_category or "Balanced").replace("_", " ").title()}
 → Load the **category-params** skill for category-specific thresholds. All base rules (earnings gate, DTE ≤ 45, etc.) still apply — the category skill ONLY adjusts delta ranges, premium minimums, and IV requirements.
 
@@ -1478,9 +1507,15 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
 
             # Resolve category-specific skill based on agent type and symbol category
             _category_skill = self._resolve_category_skill(agent_type, symbol_category)
-            _skill_names = ["earnings-gate-sell", "data-source", "risk-flags"]
-            if _category_skill:
-                _skill_names.append(_category_skill)
+            if _is_buy_tracker:
+                # Buy Tracker instructions are self-contained; sell/monitor skills
+                # (earnings-gate-sell, risk-flags, category params) would inject
+                # options-selling concepts, so load none.
+                _skill_names = []
+            else:
+                _skill_names = ["earnings-gate-sell", "data-source", "risk-flags"]
+                if _category_skill:
+                    _skill_names.append(_category_skill)
             _skills = self._get_skills_provider(_skill_names)
             agent = Agent(
                 client=self._get_client(model),
