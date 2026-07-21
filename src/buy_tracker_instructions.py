@@ -30,6 +30,14 @@ These rules are designed for **Dividend Growth Investing** stocks — quality co
 
 Evaluate each dimension below. Each dimension scores 0 or 1 point. Sum all points to determine the activity.
 
+**Precedence within a dimension:** first check the dimension's `Score 0 if`
+conditions. If ANY of them is true, that dimension scores **0** — this is a hard
+override that takes precedence over the `Score 1 if ANY` list. Only if NONE of
+the `Score 0 if` conditions apply do you then score **1** when ANY `Score 1 if`
+condition is met (otherwise 0). Apply this consistently so the same inputs always
+produce the same breakdown. (Example: if earnings are within 2 days, Dimension 4
+Income scores **0** by override even when the dividend yield alone would qualify.)
+
 ### Dimension 1: Value Entry / Pullback (0 or 1)
 Score **1** if ANY of the following:
 - Price has pulled back ≥5% from 52-week or recent high (discount to recent levels)
@@ -96,7 +104,13 @@ Score **0** if:
 
 ## ACTIVITY DETERMINATION — Hard Thresholds
 
-| Score | Activity | Meaning |
+Compute the **raw score** = the exact arithmetic sum of the five values in
+`score_breakdown` (`value_entry + trend + momentum + income + calendar`). The
+raw score always maps to a *base* activity via the table below. A WAIT trigger
+(next section) may then override the *activity* to `WAIT`, but it NEVER changes
+the raw score.
+
+| Score | Base Activity | Meaning |
 |-------|----------|---------|
 | 5/5   | `STRONG_BUY` | All dimensions confirm. High-conviction entry for larger position. |
 | 4/5   | `STRONG_BUY` | Near-perfect setup. Strong entry for larger position. |
@@ -105,18 +119,35 @@ Score **0** if:
 | 1/5   | `WAIT` | Weak setup. Do not accumulate. |
 | 0/5   | `WAIT` | Bearish or deteriorating. Stay away. |
 
+**SCORE CONSISTENCY (MANDATORY):**
+- The numerator in `score` MUST equal the exact sum of the five `score_breakdown`
+  values. If the breakdown is `{value_entry:1, trend:1, momentum:1, income:1,
+  calendar:0}`, the score is **4/5** — never 3/5. Add the five numbers and use
+  that number, with no manual adjustment.
+- A WAIT trigger changes ONLY `activity`, never the numeric `score`. It is
+  perfectly valid (and expected) to report `"score": "4/5"` with
+  `"activity": "WAIT"` when, for example, earnings are within 2 days. Do NOT
+  lower the score to "justify" the WAIT.
+- The five breakdown values you print in the `reason` field MUST be identical to
+  the values in the `score_breakdown` object and MUST sum to the `score`
+  numerator.
+
 **MANDATORY:** You MUST show the score breakdown in your `reason` field. Example:
-"Score 4/5 (value_entry:1, trend:1, momentum:1, income:1, calendar:0). 7% pullback from high with RSI at 38, price near SMA50 support, yield 3.1% well-covered, and no near-term event risk, so a larger accumulation entry is justified."
+"Score 4/5 (value_entry:1, trend:1, momentum:1, income:1, calendar:0). 7% pullback from high with RSI at 38, price near SMA50 support, yield 3.1% well-covered, but earnings are within 2 days, so activity is WAIT even though the setup scores 4/5."
 
 ---
 
-## WAIT TRIGGERS — Any ONE of these forces WAIT regardless of score:
+## WAIT TRIGGERS — Any ONE of these forces `activity` = WAIT (the numeric score is unchanged):
 
 1. **Earnings within 2 days** — Too much binary risk for timing an entry
 2. **RSI > 80** — Severely overbought, terrible DCA timing even for quality stocks
 3. **Price >10% above SMA50 AND >15% above SMA200** — Extremely extended, wait for pullback
 4. **Dividend cut/suspension detected** — Fundamental thesis broken, reassess before accumulating
 5. **All three bearish**: Oscillator "Strong Sell" AND MA "Strong Sell" AND price >10% below SMA200 — Potential fundamental deterioration, not just a pullback
+
+> A WAIT trigger overrides the activity to `WAIT` but does **not** subtract from
+> any dimension and does **not** change the `score`. Score the five dimensions
+> exactly as their own rules dictate, then apply the trigger only to `activity`.
 
 **NOT a WAIT trigger for DGI stocks:**
 - Death cross alone (SMA50 < SMA200) — Quality dividend growers recover. This is often an accumulation opportunity.
@@ -190,7 +221,9 @@ For `WAIT`:
 
 ## OUTPUT RULES
 - Valid `activity` values: `STRONG_BUY`, `BUY`, or `WAIT`
-- `score` must match the dimension sum (e.g., "4/5")
+- `score` numerator MUST equal the exact arithmetic sum of the five `score_breakdown` values (e.g., breakdown summing to 4 → `"4/5"`, never `"3/5"`). Add them up; do not adjust for WAIT triggers.
+- The breakdown printed in `reason` MUST match the `score_breakdown` object exactly and sum to the `score` numerator.
+- A WAIT trigger changes only `activity`; it never lowers `score`. `"score": "4/5"` with `"activity": "WAIT"` is valid when a WAIT trigger fires.
 - `score_breakdown` must use exactly these five keys: `value_entry`, `trend`, `momentum`, `income`, `calendar`
 - `reason` MUST start with the score and breakdown, then explain why this is a larger entry, small DCA entry, or patient WAIT
 - `entry_zone` must be a concrete price band for `BUY` and `STRONG_BUY`
