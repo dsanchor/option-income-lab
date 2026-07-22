@@ -88,7 +88,7 @@ Monthly calendar view of earnings and ex-dividend dates for tracked symbols. Col
 → [Events Calendar](docs/concepts.md#events-calendar)
 
 ### ⏸ Pause Watchlist Until Earnings
-Suspend a symbol's following agents (Covered Call, Cash-Secured Put, Buy Tracker) until its next earnings date to save LLM tokens. Toggles show shadowed on the symbol detail and dashboard; auto-resumes after earnings via a daily reactivation job.
+Suspend a symbol's following agents (Covered Call, Cash-Secured Put, Buy Tracker) until its next earnings date to save LLM tokens. Toggles show shadowed on the symbol detail and dashboard; auto-resumes after earnings via a daily reactivation job. Paused symbols are also excluded from the daily Telegram summary so their pre-pause analysis isn't repeated day after day (open-position monitors still report).
 → [Pause Watchlist Until Earnings](docs/concepts.md#pause-watchlist-until-earnings)
 
 ### 💬 Chat & Reports

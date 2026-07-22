@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore", message=r".*experimental.*")
 from agent_framework import Agent, SkillsProvider
 from agent_framework.openai import OpenAIChatCompletionClient
 
-from .cosmos_db import CosmosDBService
+from .cosmos_db import CosmosDBService, is_watchlist_paused
 from .llm import LlmConfig, create_async_chat_client
 from .context import ContextProvider
 from .options_chain_filters import (
@@ -2923,6 +2923,7 @@ Respond in the required JSON format only."""
 
             # Build closed position IDs and portfolio structure
             closed_position_ids: set = set()
+            paused_symbols: set = set()
             portfolio = {
                 "active_calls": [],
                 "active_puts": [],
@@ -2934,6 +2935,12 @@ Respond in the required JSON format only."""
                 sym = sym_doc.get("symbol", "?")
                 wl = sym_doc.get("watchlist", {})
                 positions = sym_doc.get("positions", [])
+
+                # Track symbols whose watchlist is paused so we don't repeat
+                # their stale pre-pause activities day after day.
+                paused = is_watchlist_paused(sym_doc)
+                if paused:
+                    paused_symbols.add(sym)
 
                 # Track closed position IDs for activity filtering
                 for p in positions:
@@ -2971,10 +2978,12 @@ Respond in the required JSON format only."""
                         ],
                     })
 
-                # Watchlist / following (only if enabled)
-                if wl.get("covered_call"):
+                # Watchlist / following (only if enabled AND not paused).
+                # Paused watchlist symbols generate no fresh activities, so
+                # including them would just repeat stale data every day.
+                if wl.get("covered_call") and not paused:
                     portfolio["watching_calls"].append(sym)
-                if wl.get("cash_secured_put"):
+                if wl.get("cash_secured_put") and not paused:
                     portfolio["watching_puts"].append(sym)
 
             logger.info(
@@ -3000,6 +3009,23 @@ Respond in the required JSON format only."""
                                 if a.get("position_id") not in closed_position_ids]
                     if filtered:
                         activities_by_symbol[sym] = filtered
+                    else:
+                        del activities_by_symbol[sym]
+
+            # Drop stale watchlist activities for paused symbols. Their
+            # covered_call/cash_secured_put/buy_tracker analyses are frozen at
+            # the pre-pause snapshot (agents skip paused symbols), so feeding
+            # them would repeat the same old data every day. Position monitors
+            # keep running on paused symbols, so those activities stay.
+            if paused_symbols:
+                _watchlist_agents = {"covered_call", "cash_secured_put", "buy_tracker"}
+                for sym in list(activities_by_symbol.keys()):
+                    if sym not in paused_symbols:
+                        continue
+                    kept = [a for a in activities_by_symbol[sym]
+                            if a.get("agent_type") not in _watchlist_agents]
+                    if kept:
+                        activities_by_symbol[sym] = kept
                     else:
                         del activities_by_symbol[sym]
 
