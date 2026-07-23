@@ -1260,8 +1260,24 @@
                 thead += '<th style="' + hdrStyle + '">' + dateHtml + '<br><span style="font-weight:400; font-size:0.73rem;">' + exp.dte + ' DTE</span></th>';
             });
             thead += '</tr></thead>';
+            var curStrike = (data.current_position && data.current_position.strike != null) ? Number(data.current_position.strike) : null;
+            var eqStrike = function(a, b) { return a != null && b != null && Math.abs(Number(a) - Number(b)) < 1e-6; };
+            var refRowHtml = '';
+            if (curStrike != null) {
+                var refPct = appliedPct(curStrike);
+                refRowHtml = '<tr>'
+                    + '<td style="' + TD_S + ' text-align:left; font-weight:700; color:#d29922;">◀ Your strike'
+                    + ' <span style="font-weight:600; font-size:0.73rem;">$' + fmt2(curStrike) + (refPct ? ' (' + refPct + ')' : '') + '</span></td>'
+                    + '<td colspan="' + expirations.length + '" style="padding:2px 8px; border-top:2px dashed #d29922; border-bottom:2px dashed #d29922; background:rgba(210,153,34,0.08);"></td>'
+                    + '</tr>';
+            }
             var tbody = '<tbody>';
+            var refInserted = false;
             rows.forEach(function(row) {
+                if (curStrike != null && !refInserted && row.strike != null && Number(row.strike) < curStrike) {
+                    tbody += refRowHtml;
+                    refInserted = true;
+                }
                 var labelHtml = row.label;
                 if (row.label === 'ATM' && underlying) {
                     labelHtml = 'ATM <span style="font-weight:400; color:var(--text-muted); font-size:0.73rem;">($' + fmt2(underlying) + ')</span>';
@@ -1275,7 +1291,12 @@
                         tbody += '<td style="' + TD_S + ' color:var(--text-muted);">—</td>';
                     } else {
                         var st = CELL_STYLES[cell.color] || CELL_STYLES.gray;
-                        tbody += '<td style="' + TD_S + ' background:' + st.bg + ';">';
+                        var isYou = exp.is_current && eqStrike(cell.strike, curStrike);
+                        var extra = isYou ? ' outline:2px solid #d29922; outline-offset:-2px;' : '';
+                        tbody += '<td style="' + TD_S + ' background:' + st.bg + ';' + extra + '">';
+                        if (isYou) {
+                            tbody += '<span style="display:inline-block; font-size:0.62rem; font-weight:700; color:#d29922; letter-spacing:0.5px;">● YOUR POSITION</span><br>';
+                        }
                         tbody += '<span style="font-weight:600;">$' + fmt2(cell.strike) + '</span> <span style="color:var(--text-muted); font-size:0.73rem;">(' + appliedPct(cell.strike) + ')</span><br>';
                         tbody += '<span style="color:var(--text-muted); font-size:0.73rem;">bid/ask</span><br>';
                         tbody += '<span style="color:' + st.color + ';">' + fmt2(cell.bid) + '/' + fmt2(cell.ask) + '</span><br>';
@@ -1288,6 +1309,9 @@
                 });
                 tbody += '</tr>';
             });
+            if (curStrike != null && !refInserted) {
+                tbody += refRowHtml;
+            }
             tbody += '</tbody>';
             return thead + tbody;
         }
