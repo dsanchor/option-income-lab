@@ -1341,6 +1341,14 @@ tbody tr:hover { background: var(--bg-hover); }
 }
 .dropdown-multi-menu label:hover { background: rgba(255,255,255,0.06); }
 .dropdown-multi-menu input[type="checkbox"] { accent-color: var(--accent-blue); }
+.dropdown-multi-menu .dropdown-select-all-row {
+    border-bottom: 1px solid var(--border, rgba(255,255,255,0.1));
+    margin-bottom: 0.25rem;
+    padding-bottom: 0.35rem;
+    position: sticky;
+    top: 0;
+    background: var(--bg-card, #222228);
+}
 
 /* ── Filter action row ── */
 .filter-actions {

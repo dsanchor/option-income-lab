@@ -49,6 +49,7 @@
             <div class="dropdown-multi" id="economics-month-dropdown">
                 <button type="button" class="dropdown-multi-btn">All Months ▾</button>
                 <div class="dropdown-multi-menu">
+                    <label class="dropdown-select-all-row"><input type="checkbox" class="dropdown-select-all"> <strong>Select all</strong></label>
                     <label><input type="checkbox" value="1"> Jan</label>
                     <label><input type="checkbox" value="2"> Feb</label>
                     <label><input type="checkbox" value="3"> Mar</label>
@@ -236,7 +237,16 @@
     }
 
     function getSelectedValues(dropdownEl) {
-        return Array.from(dropdownEl.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
+        return Array.from(dropdownEl.querySelectorAll('input[type="checkbox"]:not(.dropdown-select-all):checked')).map(cb => cb.value);
+    }
+
+    function syncSelectAll(dropdownEl) {
+        const selectAll = dropdownEl.querySelector('.dropdown-select-all');
+        if (!selectAll) return;
+        const boxes = Array.from(dropdownEl.querySelectorAll('input[type="checkbox"]:not(.dropdown-select-all)'));
+        const checkedCount = boxes.filter(cb => cb.checked).length;
+        selectAll.checked = boxes.length > 0 && checkedCount === boxes.length;
+        selectAll.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
     }
 
     function updateDropdownLabel(dropdownEl, allLabel) {
@@ -245,7 +255,7 @@
         if (selected.length === 0) {
             btn.textContent = allLabel + ' ▾';
         } else if (selected.length <= 3) {
-            const labels = Array.from(dropdownEl.querySelectorAll('input[type="checkbox"]:checked'))
+            const labels = Array.from(dropdownEl.querySelectorAll('input[type="checkbox"]:not(.dropdown-select-all):checked'))
                 .map(cb => cb.parentElement.textContent.trim());
             btn.textContent = labels.join(', ') + ' ▾';
         } else {
@@ -273,8 +283,18 @@
     });
 
     // Update labels on checkbox change and auto-apply
-    monthDropdown.addEventListener('change', () => { updateDropdownLabel(monthDropdown, 'All Months'); fetchEconomics(); });
-    symbolDropdown.addEventListener('change', () => { updateDropdownLabel(symbolDropdown, 'All Symbols'); fetchEconomics(); });
+    function handleDropdownChange(dropdownEl, allLabel, e) {
+        const selectAll = dropdownEl.querySelector('.dropdown-select-all');
+        if (selectAll && e && e.target === selectAll) {
+            const check = selectAll.checked;
+            dropdownEl.querySelectorAll('input[type="checkbox"]:not(.dropdown-select-all)').forEach(cb => { cb.checked = check; });
+        }
+        syncSelectAll(dropdownEl);
+        updateDropdownLabel(dropdownEl, allLabel);
+        fetchEconomics();
+    }
+    monthDropdown.addEventListener('change', (e) => handleDropdownChange(monthDropdown, 'All Months', e));
+    symbolDropdown.addEventListener('change', (e) => handleDropdownChange(symbolDropdown, 'All Symbols', e));
 
     function syncUrl() {
         const params = new URLSearchParams();
@@ -483,10 +503,12 @@
         // Populate symbol checkboxes
         const initialSymbols = state.initialSymbol ? state.initialSymbol.split(',') : [];
         const toSelect = selectedSymbols.length ? selectedSymbols : initialSymbols;
-        symbolMenu.innerHTML = filters.symbols
-            .map((s) => `<label><input type="checkbox" value="${s}"${toSelect.includes(s) ? ' checked' : ''}> ${s}</label>`)
+        symbolMenu.innerHTML = ['<label class="dropdown-select-all-row"><input type="checkbox" class="dropdown-select-all"> <strong>Select all</strong></label>']
+            .concat(filters.symbols
+                .map((s) => `<label><input type="checkbox" value="${s}"${toSelect.includes(s) ? ' checked' : ''}> ${s}</label>`))
             .join('');
         updateDropdownLabel(symbolDropdown, 'All Symbols');
+        syncSelectAll(symbolDropdown);
 
         yearSelect.value = filters.years.map(String).includes(selectedYear) ? selectedYear : (state.initialYear || '');
         state.initialYear = '';
@@ -527,10 +549,11 @@
         // Pre-select months from URL
         if (state.initialMonth) {
             const months = state.initialMonth.split(',');
-            monthDropdown.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+            monthDropdown.querySelectorAll('input[type="checkbox"]:not(.dropdown-select-all)').forEach(cb => {
                 cb.checked = months.includes(cb.value);
             });
             updateDropdownLabel(monthDropdown, 'All Months');
+            syncSelectAll(monthDropdown);
         }
     }
 
