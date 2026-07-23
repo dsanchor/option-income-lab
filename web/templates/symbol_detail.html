@@ -587,7 +587,7 @@
                                      style="margin-top:0.75rem; border-top:1px dashed var(--border, #2d2d35); padding-top:0.75rem;">
                                     <div class="roll-table-loading" style="padding:0.4rem 0; display:flex; align-items:center; gap:0.5rem; color:var(--text-muted);">
                                         <div class="spinner"></div>
-                                        <span style="font-size:0.82rem;">Calculando escenarios de roll…</span>
+                                        <span style="font-size:0.82rem;">Calculating roll scenarios…</span>
                                     </div>
                                     <div class="roll-table-error" style="display:none; color:var(--accent-red); font-size:0.85rem;"></div>
                                     <div class="roll-table-content" style="display:none;">
@@ -1226,11 +1226,11 @@
             }
             html += '&nbsp;&nbsp;|&nbsp;&nbsp;';
             html += '<span style="color:var(--text-muted);">Buyback:</span> <span style="font-family:var(--font-mono);">$' + fmt2(data.buyback_cost) + ' ($' + fmt2(data.buyback_per_share) + '/sh)</span>';
-            html += '&nbsp;&nbsp;<span style="color:var(--text-muted);">Capturado:</span> ';
+            html += '&nbsp;&nbsp;<span style="color:var(--text-muted);">Captured:</span> ';
             var pctColor = parseFloat(pctPct) >= 70 ? 'var(--accent-green)' : 'var(--accent-orange)';
             html += '<span style="font-family:var(--font-mono); color:' + pctColor + ';">' + pctPct + '%</span>';
             if (data.profit_target_reached) {
-                html += '&nbsp;&nbsp;<span style="background:rgba(0,168,126,0.2); color:var(--accent-green); padding:2px 8px; border-radius:999px; font-size:0.78rem; font-weight:600;">✅ 70%+ capturado — considera cerrar</span>';
+                html += '&nbsp;&nbsp;<span style="background:rgba(0,168,126,0.2); color:var(--accent-green); padding:2px 8px; border-radius:999px; font-size:0.78rem; font-weight:600                ;">✅ 70%+ captured — consider closing</span>';
             }
             if (chainTs) {
                 html += '&nbsp;&nbsp;<span title="' + chainTs + '" style="font-size:0.76rem; color:' + (chainWarn ? 'var(--accent-orange)' : 'var(--text-muted)') + ';">⏱ Chain: ' + chainAge + (chainWarn ? ' ⚠️' : '') + '</span>';
@@ -1290,7 +1290,7 @@
                 .then(function(r) {
                     if (loadingEl) loadingEl.style.display = 'none';
                     if (!r.ok || r.data.error) {
-                        errorEl.textContent = '⚠️ ' + (r.data.error || 'No se pudo cargar la tabla de roll.');
+                        errorEl.textContent = '⚠️ ' + (r.data.error || 'Could not load roll table.');
                         errorEl.style.display = 'block';
                         return;
                     }
@@ -1301,7 +1301,7 @@
                 })
                 .catch(function(e) {
                     if (loadingEl) loadingEl.style.display = 'none';
-                    errorEl.textContent = '⚠️ Error de red: ' + e.message;
+                    errorEl.textContent = '⚠️ Network error: ' + e.message;
                     errorEl.style.display = 'block';
                 })
                 .finally(function() {
