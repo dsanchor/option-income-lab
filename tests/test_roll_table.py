@@ -1,24 +1,25 @@
 """
 Unit tests for src/roll_table.py.
 
-Fixture chain has:
-  - MSFT-style calls + puts
-  - Current position:  call $420 exp 20260801  (past relative to test dates)
-  - 4 future call expirations: 20260808, 20260815, 20260822, 20260829
-  - 4 future put  expirations: same keys
-  - Strikes around $417.50 (underlying)
+Column layout (new behavior):
+  [previous (optional, if future)] → [current (always)] → [next N futures]
 
-Scenarios covered:
-  ✓ Normal call — green cells (net credit) and red cells (net debit)
-  ✓ Normal put  — symmetric bucket lookup
-  ✓ bid == 0   → color gray (not a credit/debit decision)
-  ✓ Strike not in expiration → gray cell
-  ✓ 70% profit target reached / not reached
-  ✓ +3% strike selection with exact match, fallback when none >= target
-  ✓ -3% strike selection with exact match, fallback when none <= target
-  ✓ Expiration before current_expiration excluded
-  ✓ JSON string input for chain
-  ✓ Unknown option_type defaults gracefully
+Fixture chain:
+  - current_exp_key = _future(3): NO previous (it is the nearest expiration).
+    Columns = [current(_future3), exp_8, exp_15, exp_22, exp_29] = 5 total.
+  - current_exp_key has a FULL strike ladder (395–445) with the current position
+    at $420 overridden to bid=1.40, ask=1.60 (buyback=1.50).
+  - underlying_price=417.50:
+      ATM  target=417.50   → selected strike = 415.0  (tie 415/420, min picks 415)
+      +3%  target=430.025  → selected strike = 435.0  (430 < target; 435 ≥ target)
+      -3%  target=404.975  → selected strike = 395.0  (405 > target; 395 ≤ target)
+  - exp_8  (+8d):  bid=0 at 430.0 (used by test_bid_zero_gives_gray_cell).
+  - exp_29 (+29d): no 430.0 strike.
+  - Puts mirror calls.
+
+Strike is now FIXED from the first expiration with available strikes (which is
+current_exp_key in the shared fixture), then re-used across all columns.
+Cells are located by date string (not fragile integer index) wherever possible.
 """
 
 import json
@@ -41,8 +42,28 @@ def _future(days: int) -> str:
     return _yyyymmdd(date.today() + timedelta(days=days))
 
 
+def _display_date(days: int) -> str:
+    """Return a future date in YYYY-MM-DD format, *days* from today."""
+    return (date.today() + timedelta(days=days)).strftime("%Y-%m-%d")
+
+
 def _make_contract(bid: float, ask: float, delta: float = -0.40) -> dict:
     return {"bid": bid, "ask": ask, "mid": round((bid + ask) / 2, 4), "delta": delta}
+
+
+def _cell_for_date(cells: list, date_str: str) -> dict:
+    """Find a cell by its expiration date string. Raises StopIteration if not found."""
+    return next(c for c in cells if c["expiration"] == date_str)
+
+
+def _future_cells(result: dict, row_label: str) -> list:
+    """Return cells that are NOT marked is_current and NOT is_previous."""
+    future_dates = {
+        e["date"] for e in result["expirations"]
+        if not e["is_current"] and not e["is_previous"]
+    }
+    row = next(r for r in result["rows"] if r["label"] == row_label)
+    return [c for c in row["cells"] if c["expiration"] in future_dates]
 
 
 # ---------------------------------------------------------------------------
@@ -56,22 +77,30 @@ def underlying_price() -> float:
 
 @pytest.fixture
 def current_exp_key() -> str:
-    # Current position expires in 3 days (still open, roll is being evaluated)
+    # Current position expires in 3 days (still open, roll is being evaluated).
+    # Being the nearest expiration, there is NO previous column.
     return _future(3)
 
 
 @pytest.fixture
 def chain(current_exp_key) -> dict:
     """
-    Chain with:
-      - current call: $420 exp current_exp_key  bid=1.40, ask=1.60  (mid=1.50)
-      - 4 future call expirations: +8d, +15d, +22d, +29d
-      - Strikes per expiration: 395, 405, 415, 420, 425, 430, 435, 445
-        (underlying ~417.50 → ATM≈415, +3%≈430, -3%≈405)
-      - One expiration (+8d) has bid=0 at 430 to trigger gray
-      - One expiration (+29d) lacks 430 strike to test missing strike → gray
-        (not quite — we'll test fallback instead, see below)
-      - Future put expirations mirror the call structure
+    Full-ladder chain.
+
+    current_exp_key (_future(3)):
+      Full strike ladder 395–445; position at 420 overridden to bid=1.40, ask=1.60
+      so buyback = robust_mid(1.40, 1.60) = 1.50 → buyback_cost = $150.
+
+    Strike selection (from current_exp_key, the first expiration):
+      ATM (+0%)  target=417.50   → 415.0  (|415-417.5|=2.5, tie w/ 420, min picks 415)
+      +3%        target=430.025  → 435.0  (430.0 < 430.025 → first ≥ is 435.0)
+      -3%        target=404.975  → 395.0  (405.0 > 404.975 → max ≤ is 395.0)
+
+    Future expirations:
+      exp_8  (+8d):  _strikes_exp8  — 430.0 bid=0 (irrelevant for fixed +3% strike=435)
+      exp_15 (+15d): _strikes_normal
+      exp_22 (+22d): _strikes_normal
+      exp_29 (+29d): _strikes_exp29_no_430 — no 430.0 (irrelevant; fixed strike=435 is present)
     """
     exp_8  = _future(8)
     exp_15 = _future(15)
@@ -90,37 +119,38 @@ def chain(current_exp_key) -> dict:
             "445.0": _make_contract(0.15, 0.25, delta_sign * 0.10),
         }
 
-    # exp_8: 430 has bid=0 → should be gray for the +3% row
+    def _strikes_current(delta_sign=1) -> dict:
+        """Full ladder; position at 420 uses bid=1.40/ask=1.60 for the buyback test."""
+        s = _strikes_normal(delta_sign)
+        s["420.0"] = _make_contract(1.40, 1.60, delta_sign * 0.50)
+        return s
+
+    # exp_8: 430.0 bid=0.  +3% fixed strike is 435 (not 430), so this only matters
+    # when underlying=417.0 is used to make +3% target=429.51 → chosen=430.
     def _strikes_exp8() -> dict:
         strikes = _strikes_normal()
-        strikes["430.0"] = _make_contract(0.0, 0.05, 0.30)   # bid=0 → gray
+        strikes["430.0"] = _make_contract(0.0, 0.05, 0.30)
         return strikes
 
-    # exp_29: no 430 strike → +3% target ($430) → fallback to max available (435)
     def _strikes_exp29_no_430() -> dict:
         strikes = _strikes_normal()
         del strikes["430.0"]
         return strikes
 
     calls = {
-        current_exp_key: {
-            "420.0": _make_contract(1.40, 1.60, 0.50),   # current position
-        },
+        current_exp_key: _strikes_current(),
         exp_8:  _strikes_exp8(),
         exp_15: _strikes_normal(),
         exp_22: _strikes_normal(),
         exp_29: _strikes_exp29_no_430(),
     }
 
-    # Puts mirror calls (negative deltas)
     puts = {
-        current_exp_key: {
-            "420.0": _make_contract(1.40, 1.60, -0.50),
-        },
+        current_exp_key: _strikes_current(delta_sign=-1),
         exp_8:  _strikes_normal(delta_sign=-1),
         exp_15: _strikes_normal(delta_sign=-1),
         exp_22: _strikes_normal(delta_sign=-1),
-        exp_29: _strikes_exp29_no_430(),   # reuse same dict (delta sign differs but irrelevant here)
+        exp_29: _strikes_exp29_no_430(),
     }
 
     return {
@@ -223,8 +253,15 @@ class TestRollTableCall:
         assert result["profit_target_reached"] is False   # 53% < 70%
 
     def test_four_expirations_returned(self, chain, underlying_price, current_exp_key):
+        # Columns: [current] + [exp_8, exp_15, exp_22, exp_29] = 5 total (no previous)
         result = self._run(chain, underlying_price, current_exp_key)
-        assert len(result["expirations"]) == 4
+        assert len(result["expirations"]) == 5
+        # Exactly one column is marked is_current, none is_previous
+        assert sum(1 for e in result["expirations"] if e["is_current"]) == 1
+        assert sum(1 for e in result["expirations"] if e["is_previous"]) == 0
+        # 4 plain future columns
+        futures = [e for e in result["expirations"] if not e["is_current"] and not e["is_previous"]]
+        assert len(futures) == 4
 
     def test_three_rows_returned(self, chain, underlying_price, current_exp_key):
         result = self._run(chain, underlying_price, current_exp_key)
@@ -242,27 +279,28 @@ class TestRollTableCall:
         assert atm_row["strike"] in (415.0, 420.0)   # allow either in a tie
 
     def test_plus3_strike_gte_target(self, chain, underlying_price, current_exp_key):
-        # +3% target = 417.50 * 1.03 = 430.025 → nearest >= = 435 (since 430 exists in exp_15+)
-        # For exp_15: 430.0 is available → 430.0
+        # Strike is fixed once from current_exp_key (full ladder).
+        # +3% target = 417.50 * 1.03 = 430.025 → first strike >= target = 435.0
         result = self._run(chain, underlying_price, current_exp_key)
         plus3_row = next(r for r in result["rows"] if r["label"] == "+3%")
+        # Row-level strike is from the first expiration
+        assert plus3_row["strike"] == 435.0
+        assert plus3_row["strike"] >= underlying_price * 1.03
+        # Every non-gray cell uses the same fixed strike, which satisfies the constraint
         for cell in plus3_row["cells"]:
             if cell["color"] != "gray" and cell["strike"] is not None:
-                assert cell["strike"] >= underlying_price * 1.03 or cell["strike"] == max(
-                    s for s in [395.0, 405.0, 415.0, 420.0, 425.0, 430.0, 435.0, 445.0]
-                )
+                assert cell["strike"] >= underlying_price * 1.03
 
     def test_minus3_strike_lte_target(self, chain, underlying_price, current_exp_key):
-        # -3% target = 417.50 * 0.97 = 404.975 → nearest <= = 405 is NOT (405 > 404.975)
-        # → 400 not in chain → fallback to min? No — 405 > 404.975, so candidates empty → fallback to lowest (395)
-        # Wait: chain has 405.0 and 395.0; 404.975 → ≤ 404.975: 395.0 qualifies; 405.0 does NOT
-        # so result = max([395.0]) = 395.0
+        # -3% target = 417.50 * 0.97 = 404.975 → largest strike ≤ target = 395.0
+        # (405.0 > 404.975, so 395.0 is the best candidate)
         result = self._run(chain, underlying_price, current_exp_key)
         minus3_row = next(r for r in result["rows"] if r["label"] == "-3%")
-        # All cells with strike not None should be ≤ 404.975 or equal to lowest fallback
+        assert minus3_row["strike"] == 395.0
+        assert minus3_row["strike"] <= underlying_price * 0.97 + 0.01  # float tolerance
         for cell in minus3_row["cells"]:
-            if cell["strike"] is not None and cell["color"] != "gray":
-                assert cell["strike"] <= underlying_price * 0.97 + 0.01  # tiny float tolerance
+            if cell["color"] != "gray" and cell["strike"] is not None:
+                assert cell["strike"] <= underlying_price * 0.97 + 0.01
 
     def test_green_cells_have_positive_net_credit(self, chain, underlying_price, current_exp_key):
         result = self._run(chain, underlying_price, current_exp_key)
@@ -281,20 +319,22 @@ class TestRollTableCall:
                     assert cell["net_credit"] <= 0
 
     def test_bid_zero_gives_gray_cell(self, chain, current_exp_key):
-        # underlying=417.0 → +3% target=417.0*1.03=429.51 → nearest strike >= target = 430.0
-        # exp_8 has bid=0 at 430.0 → cell should be gray
+        # underlying=417.0 → +3% target=417.0*1.03=429.51
+        # From current_exp_key (full ladder): first strike ≥ 429.51 = 430.0
+        # → chosen_strike=430.0; exp_8 has bid=0 at 430.0 → that cell is gray
         result = compute_roll_table(
             chain=chain,
             current_strike=420.0,
             current_expiration=current_exp_key,
             option_type="covered_call",
-            underlying_price=417.0,   # +3% target=429.51 → 430.0 qualifies and has bid=0
+            underlying_price=417.0,   # +3% target=429.51 → 430.0 qualifies and has bid=0 in exp_8
             premium_received=3.20,
             contracts=1,
         )
         plus3_row = next(r for r in result["rows"] if r["label"] == "+3%")
-        first_cell = plus3_row["cells"][0]   # exp_8 is first future expiration
-        assert first_cell["color"] == "gray"
+        # Locate exp_8 cell by date, not index
+        exp_8_cell = _cell_for_date(plus3_row["cells"], _display_date(8))
+        assert exp_8_cell["color"] == "gray"
 
     def test_current_position_metadata(self, chain, underlying_price, current_exp_key):
         result = self._run(chain, underlying_price, current_exp_key)
@@ -331,9 +371,10 @@ class TestRollTableCall:
             premium_received=3.20,
             num_expiries=2,
         )
-        assert len(result["expirations"]) == 2
+        # Columns = [current] + 2 futures = 3 total (no previous in shared fixture)
+        assert len(result["expirations"]) == 3
         for row in result["rows"]:
-            assert len(row["cells"]) == 2
+            assert len(row["cells"]) == 3
 
     def test_json_string_input(self, chain, underlying_price, current_exp_key):
         # chain can be passed as JSON string (as returned by OptionsChainCache)
@@ -392,8 +433,9 @@ class TestRollTablePut:
         assert result["buyback_per_share"] == 1.50   # same mid from puts bucket
 
     def test_four_expirations(self, chain, underlying_price, current_exp_key):
+        # Same as call: [current] + 4 futures = 5 total (no previous in shared fixture)
         result = self._run(chain, underlying_price, current_exp_key)
-        assert len(result["expirations"]) == 4
+        assert len(result["expirations"]) == 5
 
     def test_cells_structure_same_as_calls(self, chain, underlying_price, current_exp_key):
         result = self._run(chain, underlying_price, current_exp_key)
@@ -478,9 +520,12 @@ class TestProfitTargetGate:
 
 class TestPlus3Fallback:
     def test_fallback_to_highest_when_no_strike_above_target(self, current_exp_key):
-        """If no strike >= underlying*1.03, fallback to the highest available strike."""
-        # Build a chain where all future strikes are BELOW +3% target
+        """If no strike in current_exp_key >= underlying*1.03, fallback to the highest
+        available strike in current_exp_key (which is then fixed across all expirations)."""
         exp_fut = _future(10)
+        # All strikes in current_exp_key are BELOW the +3% target (430.025).
+        # Only strike = 420.0 → fallback = max([420.0]) = 420.0.
+        # exp_fut also has 420.0 → non-gray cell with that fallback strike.
         chain = {
             "symbol": "TEST",
             "timestamp": "2026-07-23T14:00:00Z",
@@ -490,6 +535,7 @@ class TestPlus3Fallback:
                     "400.0": _make_contract(5.0, 5.5),
                     "410.0": _make_contract(4.0, 4.5),
                     "415.0": _make_contract(3.0, 3.5),
+                    "420.0": _make_contract(2.0, 2.5),
                     # No strike >= 417.50 * 1.03 = 430.025
                 },
             },
@@ -504,9 +550,12 @@ class TestPlus3Fallback:
             premium_received=3.20,
         )
         plus3_row = next(r for r in result["rows"] if r["label"] == "+3%")
-        cell = plus3_row["cells"][0]
-        # Fallback: highest available strike (415.0)
-        assert cell["strike"] == 415.0
+        # Row-level strike is the fallback: highest in current_exp_key = 420.0
+        assert plus3_row["strike"] == 420.0
+        # exp_fut cell: strike=420.0 is present in exp_fut → non-gray
+        exp_fut_cell = _cell_for_date(plus3_row["cells"], _display_date(10))
+        assert exp_fut_cell["color"] != "gray"
+        assert exp_fut_cell["strike"] == 420.0
 
 
 # ---------------------------------------------------------------------------
@@ -570,9 +619,11 @@ class TestGrayCells:
             underlying_price=417.50,
             premium_received=3.20,
         )
+        # Columns: [current_exp_key, exp_fut]; cells[1] = exp_fut = gray
         for row in result["rows"]:
-            assert row["cells"][0]["color"] == "gray"
-            assert row["cells"][0]["strike"] is None
+            exp_fut_cell = _cell_for_date(row["cells"], _display_date(10))
+            assert exp_fut_cell["color"] == "gray"
+            assert exp_fut_cell["strike"] is None
 
     def test_bid_zero_gives_gray(self, current_exp_key):
         exp_fut = _future(10)
@@ -597,8 +648,10 @@ class TestGrayCells:
             underlying_price=417.50,
             premium_received=3.20,
         )
+        # Strike fixed from current_exp_key (420.0 only); exp_fut has 420.0 with bid=0 → gray
         for row in result["rows"]:
-            assert row["cells"][0]["color"] == "gray"
+            exp_fut_cell = _cell_for_date(row["cells"], _display_date(10))
+            assert exp_fut_cell["color"] == "gray"
 
     def test_current_contract_not_in_chain_sets_buyback_zero(self, current_exp_key):
         # Current contract missing from chain → buyback=0, pct_captured=1.0 (all captured)
@@ -634,6 +687,9 @@ class TestGrayCells:
 
 class TestExpirationFiltering:
     def test_expirations_before_current_excluded(self, chain, underlying_price, current_exp_key):
+        # New rule: current IS included (is_current=True); only strictly PAST dates are excluded.
+        # In the shared fixture, current_exp_key = _future(3) is the nearest expiration,
+        # so there is no previous column (is_previous is never True).
         result = compute_roll_table(
             chain=chain,
             current_strike=420.0,
@@ -642,14 +698,19 @@ class TestExpirationFiltering:
             underlying_price=underlying_price,
             premium_received=3.20,
         )
-        # All returned expirations must be after current_expiration
-        current_key = current_exp_key.replace("-", "")
+        # All DTE values must be ≥ 0 (no past dates appear at all)
         for exp in result["expirations"]:
-            exp_key = exp["date"].replace("-", "")
-            assert exp_key > current_key
+            assert exp["dte"] >= 0, f"Stale expiration appeared: {exp}"
+        # Exactly one entry is is_current=True
+        assert sum(1 for e in result["expirations"] if e["is_current"]) == 1
+        # No is_previous in this fixture (current is already the nearest)
+        assert sum(1 for e in result["expirations"] if e["is_previous"]) == 0
+        # The current expiration's date must match current_exp_key
+        curr = next(e for e in result["expirations"] if e["is_current"])
+        assert curr["date"].replace("-", "") == current_exp_key.replace("-", "")
 
     def test_num_expiries_capped_by_available(self, current_exp_key):
-        # Only 2 future expirations in chain → ask for 4 → get 2
+        # Only 2 future expirations in chain → ask for 4 → get 2 + 1 current = 3 total
         exp_fut1 = _future(10)
         exp_fut2 = _future(17)
         chain = {
@@ -671,7 +732,8 @@ class TestExpirationFiltering:
             premium_received=3.20,
             num_expiries=4,
         )
-        assert len(result["expirations"]) == 2
+        # [current] + 2 futures = 3 total (no previous)
+        assert len(result["expirations"]) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -701,12 +763,18 @@ class TestNetCreditArithmetic:
             contracts=1,
         )
         # buyback = robust_mid(1.40, 1.60) × 100 = 1.50 × 100 = 150.0
-        # ATM cell: new_bid=2.00, net = 2.00×100 - 150 = 50.0
+        # Strike from current_exp_key: only 420.0 → ATM=420.0 (fallback)
+        # exp_fut has 420.0? No — exp_fut only has 415.0. Fixed strike=420.0 not in exp_fut → gray?
+        # Wait: exp_fut has "415.0" only, and strike is fixed as 420.0 (from current).
+        # 420.0 not in exp_fut → gray for exp_fut cell.
+        # Current column: strike=420.0, bid=1.40, net=1.40*100-150=-10 → red.
         atm_row = next(r for r in result["rows"] if r["label"] == "ATM")
-        cell = atm_row["cells"][0]
-        assert cell["bid"] == 2.00
-        assert cell["net_credit"] == 50.0
-        assert cell["color"] == "green"
+        # Current cell has bid=1.40
+        current_cell = _cell_for_date(atm_row["cells"], _display_date(3))
+        assert current_cell["bid"] == 1.40
+        expected_net = round(1.40 * 100 * 1 - 150.0, 2)
+        assert current_cell["net_credit"] == pytest.approx(expected_net)
+        assert current_cell["color"] == "red"  # net=-10 ≤ 0
 
     def test_red_when_new_bid_below_buyback(self, current_exp_key):
         """net_credit negative → red."""
@@ -715,8 +783,6 @@ class TestNetCreditArithmetic:
             "symbol": "TEST",
             "timestamp": "2026-07-23T14:00:00Z",
             "calls": {
-                # buyback_per_share will be 0 because current contract not found
-                # override: use a chain where buyback is high
                 current_exp_key: {"420.0": _make_contract(3.00, 3.20)},
                 exp_fut: {"420.0": _make_contract(0.50, 0.70)},   # new bid < buyback
             },
@@ -734,10 +800,10 @@ class TestNetCreditArithmetic:
         # buyback = robust_mid(3.00, 3.20) × 100 = 3.10 × 100 = 310.0
         assert result["buyback_cost"] == 310.0
         atm_row = next(r for r in result["rows"] if r["label"] == "ATM")
-        cell = atm_row["cells"][0]
-        # new_bid=0.50, net = 50.0 - 310.0 = -260.0
-        assert cell["net_credit"] == -260.0
-        assert cell["color"] == "red"
+        # exp_fut has 420.0 with bid=0.50; net = 0.50*100 - 310 = -260
+        exp_fut_cell = _cell_for_date(atm_row["cells"], _display_date(10))
+        assert exp_fut_cell["net_credit"] == -260.0
+        assert exp_fut_cell["color"] == "red"
 
 
 class TestSameStrikeAcrossExpirations:
@@ -780,15 +846,143 @@ class TestSameStrikeAcrossExpirations:
             strike_offsets=(0.0,),
         )
         atm_row = next(r for r in result["rows"] if r["label"] == "ATM")
-        # Strike fixed from the first expiration
+        # Strike fixed from current_exp_key (_future(3)) which has 415.0
         assert atm_row["strike"] == 415.0
-        # First expiration cell uses 415.0
-        assert atm_row["cells"][0]["strike"] == 415.0
-        assert atm_row["cells"][0]["color"] != "gray"
-        # Second expiration lacks 415.0 → gray (NOT re-selected to 416.0)
-        assert atm_row["cells"][1]["color"] == "gray"
-        assert atm_row["cells"][1]["strike"] is None
+        # Column order: [current(_future3), exp_a(_future8), exp_b(_future15)]
+        # current column: has 415.0 → NOT gray
+        current_cell = _cell_for_date(atm_row["cells"], _display_date(3))
+        assert current_cell["strike"] == 415.0
+        assert current_cell["color"] != "gray"
+        # exp_a (_future8): has 415.0 in 'first' dict → NOT gray
+        exp_a_cell = _cell_for_date(atm_row["cells"], _display_date(8))
+        assert exp_a_cell["color"] != "gray"
+        # exp_b (_future15): lacks 415.0 → gray (NOT re-selected to 416.0)
+        exp_b_cell = _cell_for_date(atm_row["cells"], _display_date(15))
+        assert exp_b_cell["color"] == "gray"
+        assert exp_b_cell["strike"] is None
 
+
+
+
+# ---------------------------------------------------------------------------
+# Tests: column layout -- previous / current / future ordering and flags
+# ---------------------------------------------------------------------------
+
+class TestColumnLayout:
+    """Verify the new [previous?] -> [current] -> [futures...] column layout."""
+
+    def test_no_previous_when_current_is_nearest(self):
+        """When current is the nearest open expiration, no previous column appears."""
+        current_exp_key = _future(3)
+        exp_fut = _future(10)
+        chain = {
+            "symbol": "TEST",
+            "timestamp": "2026-07-23T14:00:00Z",
+            "calls": {
+                current_exp_key: {"420.0": _make_contract(1.40, 1.60)},
+                exp_fut: {"420.0": _make_contract(2.00, 2.20)},
+            },
+            "puts": {},
+        }
+        result = compute_roll_table(
+            chain=chain,
+            current_strike=420.0,
+            current_expiration=current_exp_key,
+            option_type="call",
+            underlying_price=417.50,
+            premium_received=3.20,
+        )
+        assert sum(1 for e in result["expirations"] if e["is_previous"]) == 0
+        assert result["expirations"][0]["is_current"] is True
+
+    def test_previous_column_appears_when_future_exp_precedes_current(self):
+        """When a future expiration exists before current, it appears as is_previous=True."""
+        prev_exp    = _future(5)   # earlier than current, but still future
+        current_exp = _future(10)  # current
+        future_exp  = _future(17)  # regular future
+        chain = {
+            "symbol": "TEST",
+            "timestamp": "2026-07-23T14:00:00Z",
+            "calls": {
+                prev_exp:    {"420.0": _make_contract(0.80, 1.00)},
+                current_exp: {"420.0": _make_contract(1.40, 1.60)},
+                future_exp:  {"420.0": _make_contract(2.00, 2.20)},
+            },
+            "puts": {},
+        }
+        result = compute_roll_table(
+            chain=chain,
+            current_strike=420.0,
+            current_expiration=current_exp,
+            option_type="call",
+            underlying_price=417.50,
+            premium_received=3.20,
+            num_expiries=1,
+        )
+        exps = result["expirations"]
+        # 3 columns: previous + current + 1 future
+        assert len(exps) == 3
+        assert exps[0]["is_previous"] is True
+        assert exps[1]["is_current"] is True
+        assert exps[2]["is_current"] is False
+        assert exps[2]["is_previous"] is False
+
+    def test_exactly_one_is_current(self):
+        """Exactly one expiration entry has is_current=True regardless of num_expiries."""
+        current_exp = _future(7)
+        chain = {
+            "symbol": "TEST",
+            "timestamp": "2026-07-23T14:00:00Z",
+            "calls": {
+                current_exp: {"420.0": _make_contract(1.40, 1.60)},
+                _future(14): {"420.0": _make_contract(1.80, 2.00)},
+                _future(21): {"420.0": _make_contract(2.10, 2.30)},
+                _future(28): {"420.0": _make_contract(2.40, 2.60)},
+            },
+            "puts": {},
+        }
+        result = compute_roll_table(
+            chain=chain,
+            current_strike=420.0,
+            current_expiration=current_exp,
+            option_type="call",
+            underlying_price=417.50,
+            premium_received=3.20,
+        )
+        assert sum(1 for e in result["expirations"] if e["is_current"]) == 1
+
+    def test_column_order_previous_lt_current_lt_futures(self):
+        """Columns must be ordered: previous.date < current.date < future[0].date < ..."""
+        prev_exp    = _future(4)
+        current_exp = _future(11)
+        fut_exp1    = _future(18)
+        fut_exp2    = _future(25)
+        chain = {
+            "symbol": "TEST",
+            "timestamp": "2026-07-23T14:00:00Z",
+            "calls": {
+                prev_exp:    {"420.0": _make_contract(0.70, 0.90)},
+                current_exp: {"420.0": _make_contract(1.40, 1.60)},
+                fut_exp1:    {"420.0": _make_contract(1.90, 2.10)},
+                fut_exp2:    {"420.0": _make_contract(2.30, 2.50)},
+            },
+            "puts": {},
+        }
+        result = compute_roll_table(
+            chain=chain,
+            current_strike=420.0,
+            current_expiration=current_exp,
+            option_type="call",
+            underlying_price=417.50,
+            premium_received=3.20,
+            num_expiries=2,
+        )
+        dates = [e["date"].replace("-", "") for e in result["expirations"]]
+        assert dates == sorted(dates), f"Columns not in ascending order: {dates}"
+        exps = result["expirations"]
+        assert exps[0]["is_previous"] is True
+        assert exps[1]["is_current"] is True
+        assert all(not e["is_current"] and not e["is_previous"] for e in exps[2:])
 
 if __name__ == "__main__":
     import pytest as _pytest

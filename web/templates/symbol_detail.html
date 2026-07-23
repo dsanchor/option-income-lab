@@ -1249,12 +1249,24 @@
             }
             var thead = '<thead><tr><th style="' + TH_S + ' text-align:left;">Target</th>';
             expirations.forEach(function(exp) {
-                thead += '<th style="' + TH_S + '">' + exp.date + '<br><span style="font-weight:400; font-size:0.73rem;">' + exp.dte + ' DTE</span></th>';
+                var hdrStyle = TH_S;
+                var dateHtml = exp.date;
+                if (exp.is_current) {
+                    hdrStyle += ' font-weight:700; color:var(--text, #ffffff); border-bottom:2px solid var(--accent-green);';
+                    dateHtml = '<strong>' + exp.date + '</strong> <span style="font-size:0.68rem; font-weight:600; color:var(--accent-green);">● open</span>';
+                } else if (exp.is_previous) {
+                    dateHtml = exp.date + ' <span style="font-size:0.68rem; color:var(--text-muted);">(prev)</span>';
+                }
+                thead += '<th style="' + hdrStyle + '">' + dateHtml + '<br><span style="font-weight:400; font-size:0.73rem;">' + exp.dte + ' DTE</span></th>';
             });
             thead += '</tr></thead>';
             var tbody = '<tbody>';
             rows.forEach(function(row) {
-                tbody += '<tr><td style="' + TD_S + ' text-align:left; font-weight:600;">' + row.label + '</td>';
+                var labelHtml = row.label;
+                if (row.label === 'ATM' && underlying) {
+                    labelHtml = 'ATM <span style="font-weight:400; color:var(--text-muted); font-size:0.73rem;">($' + fmt2(underlying) + ')</span>';
+                }
+                tbody += '<tr><td style="' + TD_S + ' text-align:left; font-weight:600;">' + labelHtml + '</td>';
                 var cellsByExp = {};
                 (row.cells || []).forEach(function(c) { cellsByExp[c.expiration] = c; });
                 expirations.forEach(function(exp) {

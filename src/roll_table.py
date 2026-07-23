@@ -241,7 +241,7 @@ def compute_roll_table(
         pct_captured = 0.0
     profit_target_reached: bool = pct_captured >= _PROFIT_TARGET_PCT
 
-    # ── 3. Select next N expirations strictly after current_expiration ─────
+    # ── 3. Select expirations: previous (optional) + current + next N ──────
     current_exp_key = _to_exp_key(current_expiration)
     today = date.today()
 
@@ -249,17 +249,39 @@ def compute_roll_table(
         k for k in bucket.keys() if _parse_exp_key(k) is not None
     )
 
+    # Previous FUTURE expiration strictly before current (roll-in candidate).
+    # Only shown when such an expiration still exists ahead of today; if the
+    # current option is already the nearest expiration, there is no previous.
+    prev_candidates = [
+        k for k in sorted_exp_keys
+        if k < current_exp_key and (_parse_exp_key(k) or date.min) > today
+    ]
+    prev_exp_key = prev_candidates[-1] if prev_candidates else None
+
+    # Next N expirations strictly after current
     future_exp_keys = [
         k for k in sorted_exp_keys
         if k > current_exp_key and (_parse_exp_key(k) or date.min) > today
-    ]
-    selected_exp_keys = future_exp_keys[:num_expiries]
+    ][:num_expiries]
+
+    # Ordered columns: previous (if any) → current (always) → futures
+    ordered_keys: list[str] = []
+    if prev_exp_key is not None:
+        ordered_keys.append(prev_exp_key)
+    ordered_keys.append(current_exp_key)
+    ordered_keys.extend(future_exp_keys)
 
     exp_entries: list[dict] = []
-    for k in selected_exp_keys:
+    for k in ordered_keys:
         d = _parse_exp_key(k)
         dte = (d - today).days if d else 0
-        exp_entries.append({"key": k, "date": _to_display_date(k), "dte": dte})
+        exp_entries.append({
+            "key": k,
+            "date": _to_display_date(k),
+            "dte": dte,
+            "is_current": k == current_exp_key,
+            "is_previous": prev_exp_key is not None and k == prev_exp_key,
+        })
 
     # ── 4. Build rows × cells ──────────────────────────────────────────────
     rows: list[dict] = []
@@ -365,6 +387,14 @@ def compute_roll_table(
             "option_type": option_type,
             "premium_received": premium_received,
         },
-        "expirations": [{"date": e["date"], "dte": e["dte"]} for e in exp_entries],
+        "expirations": [
+            {
+                "date": e["date"],
+                "dte": e["dte"],
+                "is_current": e["is_current"],
+                "is_previous": e["is_previous"],
+            }
+            for e in exp_entries
+        ],
         "rows": rows,
     }
