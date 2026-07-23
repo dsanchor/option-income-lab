@@ -100,3 +100,13 @@ The Portfolio Chat context contract now accepts `include_symbol_data` (default `
 
 ### July 2026 — Symbol Detail Compact Toolbar (2026-07-16)
 - Symbol detail controls were consolidated into a SINGLE compact horizontal toolbar (toggles | pause | nav chips) to minimize vertical space; the two-card layout was rejected for taking too much room.
+
+### July 2026 — Roll Table Endpoint + Activity Detail UI (2026-07-23)
+- New endpoint `GET /api/activities/{activity_id}/roll-table` wired in `web/app.py` (inserted between REST API Activity Chat section and Page Routes — Activity Detail). Uses `_get_cosmos(request)` + `cosmos.get_activity_by_id()` pattern identical to all other activity REST handlers.
+- Strike/expiration resolution: `current_strike`/`current_expiration` (monitor agents) with `strike`/`expiration` as fallback (watch agents) — mirrors `api_roll_position_from_activity` pattern.
+- Premium resolution: `activity.get("premium")` first, then `source.get("premium")`, then `source.get("new_premium")` — aligned with `api_dps_analysis` DPS scorer pattern.
+- Price fetch: exact copy of `api_dps_analysis` yf_provider pattern (fetch_all → overview JSON → fundamentals → current_price.value).
+- Chain fetch: exact copy of `api_dps_analysis` options_chain_cache pattern (`get_options_chain_cache().get_or_load_async(symbol)`).
+- Graceful error returns: 404 (not found), 400 (unsupported agent_type, missing fields, invalid strike), 503 (price/chain unavailable, RuntimeError).
+- Frontend: Roll Scenarios card added to `activity_detail.html` — visible only for `covered_call`, `cash_secured_put`, `open_call_monitor`, `open_put_monitor`. Lazy fetch on page load, spinner while loading. Summary bar shows strike/exp/premium, buyback cost+per-share, % capturado, profit_target badge, chain timestamp (orange ⚠️ if >15 min). Grid: rows = label+strike, columns = expiration+DTE, cells show bid/ask + delta + net_credit with green/red/gray background. No open interest shown (per user requirement).
+- JS uses inline styles with CSS var() tokens (`--accent-green`, `--accent-red`, `--text-muted`, `--border`, `--font-mono`) — no new CSS classes added.

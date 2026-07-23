@@ -2103,3 +2103,27 @@ Updated README.md to document all user-facing changes from the July session comm
 - For monitor activities (ROLL type), use `current_strike`/`current_expiration` instead of `strike`/`expiration`
 
 **Design decision:** Trigger is lazy JS fetch on activity_detail page load (or click). Not pre-computed at render time to avoid blocking page load. Show a "Loading roll table…" placeholder, replace with rendered table on response.
+
+## Learnings — Roll Table MVP Implementation (2026-07-23)
+
+### Session: `src/roll_table.py` + `tests/test_roll_table.py`
+
+**Status:** Implemented, 46/46 tests passing.
+
+**Module created:** `src/roll_table.py`
+- Public function: `compute_roll_table(chain, current_strike, current_expiration, option_type, underlying_price, premium_received, contracts=1, num_expiries=4, strike_offsets=(0.0, +0.03, -0.03)) → dict`
+- Reuses `robust_mid` (src/options_math.py) for buy-back cost marking
+- Reuses `get_contract` (src/options_chain_filters.py) for current-position lookup
+- Chain format: yfinance/TradingView merged output from `OptionsChainCache` — keys are YYYYMMDD expiration, str-float strike keys
+- Accepts JSON string or parsed dict as `chain` input (chain cache returns JSON string)
+- `pct_captured = (premium_received - buyback_per_share) / premium_received`; `profit_target_reached = pct_captured >= 0.70` (mirrors open_call_assessment_instructions.py line 68)
+- Net credit = `new_bid × 100 × contracts - buyback_cost`; color green/red/gray
+- Strike selection: ATM = closest, +N% = smallest >= target (fallback: max), -N% = largest <= target (fallback: min)
+- Expiration selection: strictly after `current_expiration` key (YYYYMMDD comparison) AND after today
+
+**Tests:** `tests/test_roll_table.py` — 46 tests across 11 test classes.
+- One test fixed: bid=0 gray test required underlying_price=417.0 (not 417.50) so that strike 430.0 qualifies as >= +3% target (430.025 vs 429.51).
+
+**Contract decision written:** `.squad/decisions/inbox/linus-rolltable-contract.md`
+- Includes endpoint skeleton for Rusty (`GET /api/activities/{activity_id}/roll-table`)
+- Includes frontend notes for Danny

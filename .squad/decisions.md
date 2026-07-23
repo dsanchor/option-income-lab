@@ -5568,3 +5568,136 @@ Consolidate all symbol detail controls into a **single compact horizontal toolba
 - Commit: 767ab5e ("refactor: collapse symbol detail controls into a single compact toolbar")
 - No API or backend changes required
 
+# Decision: Deterministic Roll Table — MVP (Buyback + Roll Up/Down/Out)
+
+**Date:** 2026-07-23  
+**Authors:** Linus (Quant Dev), Rusty (Agent Dev)  
+**Status:** ✅ Implemented & Integrated  
+**Impact:** Activity Detail UX — roll scenario analysis, profit target gate
+
+## Context
+
+Users need to evaluate roll scenarios when managing short options positions (covered calls, cash-secured puts, and monitor agents). The roll table displays:
+- Buyback costs at different strikes and expirations
+- Net credit (sold premium less buyback cost)
+- Profit target gate (70% of original premium captured)
+
+This enables quick cost-benefit analysis for rolling out/up/down decisions.
+
+## Decisions
+
+### 1. Pure Python Calculator — `src/roll_table.py`
+
+**Contract:** Linus (Quant Dev)  
+**Status:** ✅ Implemented & tested
+
+**Function Signature:**
+```python
+compute_roll_table(
+    chain,                      # dict OR JSON str (from OptionsChainCache)
+    current_strike,             # float
+    current_expiration,         # str (YYYY-MM-DD or YYYYMMDD)
+    option_type,                # str: "call" or "put"
+    underlying_price,           # float (live)
+    premium_received,           # float (per-share)
+    contracts=1,                # int (default 1)
+    num_expiries=4,             # int (next N expirations after current)
+    strike_offsets=(0.0, +0.03, -0.03),  # tuple (ATM, +3%, -3%)
+) -> dict
+```
+
+**Output Schema:**
+- `buyback_cost`, `buyback_per_share`, `pct_captured`, `profit_target_reached`
+- `underlying_price`, `chain_timestamp`
+- `current_position`: strike, expiration, option_type, premium_received
+- `expirations`: list of next N expirations with DTE
+- `rows`: 3 strike offsets (ATM, +3%, -3%) × 4 expiry cells
+- Each cell: bid, ask, delta, net_credit, color (green/red/gray)
+- **No open interest** (per user spec)
+
+**Color Rules:**
+| Condition | Color |
+|---|---|
+| bid == 0 | `"gray"` |
+| net_credit > 0 | `"green"` |
+| net_credit <= 0 | `"red"` |
+
+**Key Math:**
+```python
+buyback_per_share = robust_mid(current_bid, current_ask)
+buyback_cost      = buyback_per_share * 100 * contracts
+net_credit        = new_bid * 100 * contracts - buyback_cost
+pct_captured      = (premium_received - buyback_per_share) / premium_received
+profit_target_reached = pct_captured >= 0.70
+```
+
+**Strike Selection Logic:**
+- ATM: min by distance to underlying_price
+- +3%: min(s for s >= underlying * 1.03), fallback to max available
+- -3%: max(s for s <= underlying * 0.97), fallback to min available
+
+**Tests:** 46 tests in `tests/test_roll_table.py` — all passing ✅
+
+**Dependencies:**
+- ✅ `src/options_math.py` → `robust_mid()`
+- ✅ `src/options_chain_filters.py` → `get_contract()`
+- ✅ `src/options_chain_cache.py` → `get_options_chain_cache()`
+
+### 2. Endpoint + Activity Detail Integration — `web/app.py` & `web/templates/activity_detail.html`
+
+**Wiring:** Rusty (Agent Dev)  
+**Status:** ✅ Implemented & verified
+
+**Endpoint:**
+```
+GET /api/activities/{activity_id}/roll-table
+```
+
+**Logic Flow (web/app.py ~3095):**
+1. Fetch activity by ID (same pattern as other activity handlers)
+2. Validate agent_type → map to option_type (covered_call/open_call_monitor → "call"; cash_secured_put/open_put_monitor → "put")
+3. Resolve strike/expiration: `current_strike` / `current_expiration` (monitor agents) with `strike` / `expiration` fallback (watch agents)
+4. Resolve premium: `activity["premium"]` → `source["premium"]` → 0
+5. Live price: `request.app.state.yf_provider.fetch_all(symbol)` → `overview.fundamentals.current_price.value`
+6. Options chain: `get_options_chain_cache().get_or_load_async(symbol)`
+7. Call `compute_roll_table(...)`
+8. Return `JSONResponse(result)`
+
+**Error Responses:**
+- 404: Activity not found
+- 400: Unsupported agent_type, missing strike/expiration, invalid strike value
+- 503: Price unavailable, options chain error
+
+**Template Integration (web/templates/activity_detail.html ~360):**
+- **Visibility:** Only for `agent_type in ['covered_call', 'cash_secured_put', 'open_call_monitor', 'open_put_monitor']`
+- **Card:** "Roll Scenarios" section (id="rollTableCard")
+- **JS:** Fetches endpoint on page load (no button required)
+- **Loading:** Spinner (blue spinning border from style.css:723)
+- **Error:** Inline message with `var(--accent-red)`
+- **Summary:** Strike, expiration, premium received, buyback cost + per-share, % capturado (orange <70%, green ≥70%), profit_target_reached badge, chain timestamp (orange ⚠️ if >15 min old)
+- **Grid:** Table with expirations as columns, strike offsets (ATM, +3%, -3%) as rows
+- **Cell Display:** bid/ask, delta, net_credit — **no open interest** (per user spec)
+- **Cell Colors:** green (rgba 0,168,126,0.18), red (rgba 226,59,74,0.18), gray (transparent with "—")
+
+**Verification:**
+- `python3 -m py_compile web/app.py` ✅
+- `python3 -m pytest tests/test_roll_table.py -q` → 46/46 passed ✅
+- AST parse (29936 nodes) ✅
+
+**No changes to:** `src/roll_table.py`, `tests/test_roll_table.py`
+
+## Impact
+
+- Users now have deterministic roll analysis in Activity Detail
+- 70% profit target gate (aligned to `open_call_assessment_instructions.py:68`) highlights when closing is justified
+- Automatic endpoint fetch on page load (no extra button needed)
+- Supports all position types: covered calls, CSP, and monitor agents
+- Clean integration with existing activity detail template
+
+## Files Changed
+
+- `src/roll_table.py` — new, pure Python calculator
+- `tests/test_roll_table.py` — new, 46 tests
+- `web/app.py` — new endpoint (lines ~3095)
+- `web/templates/activity_detail.html` — Roll Scenarios card + JS (lines ~360)
+
