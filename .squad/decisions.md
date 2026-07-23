@@ -5701,3 +5701,118 @@ GET /api/activities/{activity_id}/roll-table
 - `web/app.py` — new endpoint (lines ~3095)
 - `web/templates/activity_detail.html` — Roll Scenarios card + JS (lines ~360)
 
+# Decision: Roll Table Relocation — Activity Detail → Position Detail
+
+**Date:** 2026-07-23  
+**Author:** Rusty (Agent Dev)  
+**Status:** Implemented ✅
+
+## Context
+
+The Roll Table UI was previously wired to `activity_detail.html` via endpoint `GET /api/activities/{activity_id}/roll-table`. However, users interact with position data primarily through `symbol_detail.html`, where each active position has an expandable detail block showing the Monitoring History chart and DPS analysis buttons. The roll table was invisible from this primary workflow.
+
+## Decision
+
+**Relocate the Roll Scenarios section end-to-end from activity detail to position detail.**
+
+- Surface Roll Scenarios for **every active position** (calls and puts), not just activities that happen to have a matching agent type.
+- Trigger automatically on position row expand (lazy-load, load-once guard), consistent with how the Monitoring History chart loads.
+- Use a dedicated position-scoped endpoint so the data is correct regardless of whether the user navigated through an activity.
+
+## Changes
+
+### 1. New Endpoint — `web/app.py`
+
+```
+GET /api/symbols/{symbol}/positions/{position_id}/roll-table
+```
+
+Inserted after `api_dps_insights` (~line 1415), before the Action Plans section. Mirrors `api_dps_analysis` exactly:
+- Cosmos lookup: `get_symbol(symbol)` → find position by `position_id`
+- Premium: `_source.get("premium") or _source.get("new_premium")`
+- Price: `yf_provider.fetch_all → overview JSON → fundamentals.current_price.value`; returns 503 if unavailable
+- Chain: `get_options_chain_cache().get_or_load_async(symbol)`
+- Calls `compute_roll_table(chain, strike, expiration, option_type, underlying_price, premium_received)`
+- Returns `JSONResponse(result)`; errors: 404 (not found), 503 (RuntimeError / price unavailable), 500 (unexpected, logged)
+
+### 2. Removed from `web/templates/activity_detail.html`
+
+- HTML block: `{% if activity.agent_type in [...] %}` Roll Scenarios card (was ~lines 359–382)
+- Script block: `{% if activity.agent_type in [...] %}` roll table JS IIFE (~lines 789–900)
+- Jinja balance verified: 51 opens / 51 closes ✅
+
+### 3. Added to `web/templates/symbol_detail.html`
+
+**HTML** — inserted inside the `{% if pos.status == 'active' %}` guard, after the `.dps-analysis-section` div, still within the `.position-snapshot-chart` wrapper:
+
+```html
+<div class="roll-table-section"
+     data-symbol="{{ symbol_doc.symbol }}"
+     data-position-id="{{ pos.position_id }}"
+     style="margin-top:0.75rem; border-top:1px dashed var(--border); padding-top:0.75rem;">
+    <div class="roll-table-loading" style="display:flex; ...">…spinner…</div>
+    <div class="roll-table-error" style="display:none; ..."></div>
+    <div class="roll-table-content" style="display:none;">
+        <h4>🔄 Roll Scenarios</h4>
+        <div class="roll-table-summary"></div>
+        <table class="roll-table-grid"></table>
+    </div>
+</div>
+```
+
+**JS** — IIFE added after `loadPositionSnapshotChart` function, exposes `window._loadRollTable(section)`:
+- Guards with `dataset.rollLoaded` / `dataset.rollLoading` (load once per position)
+- Fetches `GET /api/symbols/{sym}/positions/{posId}/roll-table`
+- Builds summary bar (strike, exp, premium, buyback, % capturado, profit_target badge, chain timestamp ⚠️)
+- Builds grid (ATM / +3% / -3% rows × 4 expirations; bid/ask + delta + net_credit; green/red/gray cells)
+
+**Expand hooks** — `window._loadRollTable` called in:
+1. `tr.pos-row` click handler (main expand)
+2. Roll-button expand handler
+
+Jinja balance verified: 81 opens / 81 closes ✅
+
+## Validation
+
+| Check | Result |
+|---|---|
+| `pytest tests/test_roll_table.py -q` | 46 passed ✅ |
+| `python3 -m py_compile web/app.py` | OK ✅ |
+| `python3 -c "import web.app"` | import OK ✅ |
+| Jinja balance activity_detail.html | 51/51 ✅ |
+| Jinja balance symbol_detail.html | 81/81 ✅ |
+
+## Notes
+
+- `src/roll_table.py` and its tests were **not modified** (pure calculation module, stable).
+- The old `GET /api/activities/{activity_id}/roll-table` endpoint was **not removed** — it still exists but is no longer called from any template.
+- Roll table renders for **all active positions** regardless of type (call or put), which was the primary motivation for the relocation.
+---
+
+# Decision: Roll Table Columns — Current Expiration Highlighting & ATM Price Context
+
+**Date:** 2026-07-23  
+**Status:** Implemented ✅
+
+## Summary
+
+Enhanced roll table column layout to display current expiration as the primary reference, with optional previous expiration for comparison, followed by 4 future expirations. ATM row now displays the underlying price used as the base for moneyness calculations.
+
+## Decision
+
+**Roll table displays:** Previous (optional) + Current (highlighted) + 4 Future expirations
+
+**ATM row context:** Show underlying price as calculation base (e.g., "ATM ($71.54)")
+
+## Implementation
+
+- `src/roll_table.py`: Expirations output includes `is_current` and `is_previous` boolean flags
+- `src/roll_table.py tests`: 51 tests passing with new column layout
+- `web/templates/symbol_detail.html`: buildRollGrid() bolds current expiration header with "● open" marker, adds "(prev)" tag to previous column
+- ATM row label now includes underlying price base for user reference
+
+## Impact
+
+- Clearer user navigation: current expiration is visually distinguished
+- Previous expiration context available without clutter
+- Price anchor context removes ambiguity in moneyness calculations

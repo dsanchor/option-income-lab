@@ -9,6 +9,7 @@
 
 ## Learnings
 
+- 2026-07-23: Roll table test suite updated for new expiration column layout with `is_current` and `is_previous` flags; 51 tests passing. Current expiration now highlighted in UI with "● open" marker, previous expiration tagged "(prev)", and ATM row displays underlying price context (e.g., "ATM ($71.54)").
 - 2026-07-01: Roll candidate table now sorted by Ann.Ret% (was Net Credit) to favor shorter-DTE rolls aligned with the 21-35 DTE target; approved by dsanchor 2026-07-01.
 - 2026-07-01: Roll target is now 21-35 DTE primary with 45 DTE fallback cap, and post-earnings hard block is 0-7 days with 8-13 days as a caution zone; applied symmetrically across calls/puts after dsanchor approval.
 ### Position Snapshot Capture (2026-06-04)
@@ -2127,3 +2128,28 @@ Updated README.md to document all user-facing changes from the July session comm
 **Contract decision written:** `.squad/decisions/inbox/linus-rolltable-contract.md`
 - Includes endpoint skeleton for Rusty (`GET /api/activities/{activity_id}/roll-table`)
 - Includes frontend notes for Danny
+
+## Learnings — Test Suite Update for New Column Layout (2025-07)
+
+### Context
+User updated `src/roll_table.py` to change expiration column layout to:
+`[previous (optional, if future)] → [current (always)] → [N futures]`
+Each entry in `result["expirations"]` now has `is_current` and `is_previous` bool flags.
+Strike is now FIXED from the first expiration (with available strikes), not re-selected per exp.
+
+### Key Decisions
+- Shared `chain` fixture upgraded: `current_exp_key` now has a full 8-strike ladder (395–445)
+  so ATM/+3%/-3% selection from the first expiration produces meaningful distinct strikes.
+- Tests use `_cell_for_date(cells, _display_date(N))` instead of fragile integer indices.
+- `_future_cells()` helper filters cells to only future (non-current, non-previous) columns.
+- `TestExpirationFiltering::test_expirations_before_current_excluded` rewritten: current IS
+  included now (dte>=0 check); asserts exactly one `is_current=True`, zero `is_previous`.
+- `TestPlus3Fallback` rewritten: fallback comes from `current_exp_key` (first exp), not futures.
+- `TestNetCreditArithmetic` tests now locate cells by date string, not `cells[0]`.
+- `TestSameStrikeAcrossExpirations` asserts current col (idx 0) not gray; gray is in `exp_b`.
+- Added `TestColumnLayout` (4 tests) to pin the column ordering, previous/current flags, and
+  the "no previous when current is nearest" rule.
+
+### Final counts
+- Before: 14 failing, 33 passing (46 total)
+- After:  51 passing (46 original + 5 new from TestColumnLayout), 0 failing
