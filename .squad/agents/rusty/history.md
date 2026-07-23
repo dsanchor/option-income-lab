@@ -110,3 +110,12 @@ The Portfolio Chat context contract now accepts `include_symbol_data` (default `
 - Graceful error returns: 404 (not found), 400 (unsupported agent_type, missing fields, invalid strike), 503 (price/chain unavailable, RuntimeError).
 - Frontend: Roll Scenarios card added to `activity_detail.html` — visible only for `covered_call`, `cash_secured_put`, `open_call_monitor`, `open_put_monitor`. Lazy fetch on page load, spinner while loading. Summary bar shows strike/exp/premium, buyback cost+per-share, % capturado, profit_target badge, chain timestamp (orange ⚠️ if >15 min). Grid: rows = label+strike, columns = expiration+DTE, cells show bid/ask + delta + net_credit with green/red/gray background. No open interest shown (per user requirement).
 - JS uses inline styles with CSS var() tokens (`--accent-green`, `--accent-red`, `--text-muted`, `--border`, `--font-mono`) — no new CSS classes added.
+
+### July 2026 — Roll Table Relocation to Position Detail (2026-07-23)
+- Roll Scenarios section **relocated** from `activity_detail.html` to `symbol_detail.html` per-position blocks.
+- New endpoint `GET /api/symbols/{symbol}/positions/{position_id}/roll-table` added in `web/app.py` (after `api_dps_insights`, before Action Plans section). Mirrors `api_dps_analysis` exactly: same cosmos/position lookup, same yf_provider price fetch, same options_chain_cache call, 404/503/500 error handling. GET is appropriate (pure read).
+- Old `GET /api/activities/{activity_id}/roll-table` endpoint remains for backward compatibility (activity detail page no longer uses it, but the endpoint itself was not removed since it does no harm).
+- `activity_detail.html` cleanup: removed Roll Scenarios card HTML block (lines ~359-382) and the `{% if agent_type ... %}` script block (~789-900). Jinja balanced 51/51.
+- `symbol_detail.html` addition: Roll table section inserted inside `{% if pos.status == 'active' %}` guard, after the `dps-analysis-section` div, inside `.position-snapshot-chart` wrapper. Triggers auto-on-expand via `window._loadRollTable(section)` hooked into both `tr.pos-row` click handler and the roll-button expand handler. Loads once per position (guarded by `dataset.rollLoaded`).
+- JS scoped in IIFE, exposes only `window._loadRollTable`. Reuses exact same cell styles, formatters, summary builder, and grid builder from the activity detail implementation.
+- Jinja balanced 81/81 for symbol_detail.html. `python3 -m pytest tests/test_roll_table.py -q` → 46 passed. `python3 -m py_compile web/app.py` → OK. `import web.app` → OK.

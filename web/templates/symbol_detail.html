@@ -580,6 +580,24 @@
                                     <div class="dps-result" style="display:none; margin-top:0.75rem; padding:0.75rem; border-radius:6px; background:var(--surface-alt, rgba(255,255,255,0.03)); border:1px solid var(--border, #2d2d35);"></div>
                                     <div class="dps-insights-result markdown-body" style="display:none; margin-top:0.75rem; padding:0.75rem; border-radius:6px; background:var(--surface-alt, rgba(255,255,255,0.03)); border:1px solid var(--border, #2d2d35); font-size:0.9rem; line-height:1.55;"></div>
                                 </div>
+                                <!-- Roll Scenarios (active positions only) -->
+                                <div class="roll-table-section"
+                                     data-symbol="{{ symbol_doc.symbol }}"
+                                     data-position-id="{{ pos.position_id }}"
+                                     style="margin-top:0.75rem; border-top:1px dashed var(--border, #2d2d35); padding-top:0.75rem;">
+                                    <div class="roll-table-loading" style="padding:0.4rem 0; display:flex; align-items:center; gap:0.5rem; color:var(--text-muted);">
+                                        <div class="spinner"></div>
+                                        <span style="font-size:0.82rem;">Calculando escenarios de roll…</span>
+                                    </div>
+                                    <div class="roll-table-error" style="display:none; color:var(--accent-red); font-size:0.85rem;"></div>
+                                    <div class="roll-table-content" style="display:none;">
+                                        <h4 style="margin:0 0 0.5rem; color:var(--text, #ffffff); font-size:0.88rem;">🔄 Roll Scenarios</h4>
+                                        <div class="roll-table-summary" style="display:flex; flex-wrap:wrap; gap:0.75rem; margin-bottom:0.75rem; font-size:0.82rem; align-items:center;"></div>
+                                        <div style="overflow-x:auto;">
+                                            <table class="roll-table-grid" style="width:100%; border-collapse:collapse; font-size:0.8rem;"></table>
+                                        </div>
+                                    </div>
+                                </div>
                                 {% endif %}
                             </div>
 
@@ -1173,6 +1191,125 @@
         }
     }
 
+    // ── Roll Table ────────────────────────────────────────────────────────
+    (function() {
+        var CELL_STYLES = {
+            green: { bg: 'rgba(0,168,126,0.18)', color: 'var(--accent-green)' },
+            red:   { bg: 'rgba(226,59,74,0.18)',  color: 'var(--accent-red)' },
+            gray:  { bg: 'transparent',            color: 'var(--text-muted)' },
+        };
+        var TH_S = 'padding:0.35rem 0.55rem; text-align:center; color:var(--text-muted); font-weight:600; font-size:0.78rem; white-space:nowrap; border-bottom:1px solid var(--border);';
+        var TD_S = 'padding:0.35rem 0.55rem; text-align:center; font-family:var(--font-mono); border-bottom:1px solid var(--border); white-space:nowrap;';
+
+        function fmt2(v) { return (v === null || v === undefined) ? '—' : parseFloat(v).toFixed(2); }
+        function fmtCredit(v) {
+            if (v === null || v === undefined) return '—';
+            var n = parseFloat(v);
+            return (n >= 0 ? '+' : '') + n.toFixed(2);
+        }
+
+        function buildRollSummary(data) {
+            var cp = data.current_position || {};
+            var pctPct = (data.pct_captured * 100).toFixed(1);
+            var chainTs = data.chain_timestamp || '';
+            var chainAge = '', chainWarn = false;
+            if (chainTs) {
+                var diffMin = Math.round((Date.now() - new Date(chainTs).getTime()) / 60000);
+                chainAge = diffMin + 'm ago';
+                chainWarn = diffMin > 15;
+            }
+            var html = '';
+            html += '<span style="color:var(--text-muted);">Strike:</span> <span style="font-family:var(--font-mono);">$' + (cp.strike || '—') + '</span>';
+            html += '&nbsp;&nbsp;<span style="color:var(--text-muted);">Exp:</span> <span style="font-family:var(--font-mono);">' + (cp.expiration || '—') + '</span>';
+            if (cp.premium_received) {
+                html += '&nbsp;&nbsp;<span style="color:var(--text-muted);">Premium rcvd:</span> <span style="font-family:var(--font-mono);">$' + fmt2(cp.premium_received) + '</span>';
+            }
+            html += '&nbsp;&nbsp;|&nbsp;&nbsp;';
+            html += '<span style="color:var(--text-muted);">Buyback:</span> <span style="font-family:var(--font-mono);">$' + fmt2(data.buyback_cost) + ' ($' + fmt2(data.buyback_per_share) + '/sh)</span>';
+            html += '&nbsp;&nbsp;<span style="color:var(--text-muted);">Capturado:</span> ';
+            var pctColor = parseFloat(pctPct) >= 70 ? 'var(--accent-green)' : 'var(--accent-orange)';
+            html += '<span style="font-family:var(--font-mono); color:' + pctColor + ';">' + pctPct + '%</span>';
+            if (data.profit_target_reached) {
+                html += '&nbsp;&nbsp;<span style="background:rgba(0,168,126,0.2); color:var(--accent-green); padding:2px 8px; border-radius:999px; font-size:0.78rem; font-weight:600;">✅ 70%+ capturado — considera cerrar</span>';
+            }
+            if (chainTs) {
+                html += '&nbsp;&nbsp;<span title="' + chainTs + '" style="font-size:0.76rem; color:' + (chainWarn ? 'var(--accent-orange)' : 'var(--text-muted)') + ';">⏱ Chain: ' + chainAge + (chainWarn ? ' ⚠️' : '') + '</span>';
+            }
+            return html;
+        }
+
+        function buildRollGrid(data) {
+            var expirations = data.expirations || [];
+            var rows = data.rows || [];
+            var thead = '<thead><tr><th style="' + TH_S + ' text-align:left;">Strike</th>';
+            expirations.forEach(function(exp) {
+                thead += '<th style="' + TH_S + '">' + exp.date + '<br><span style="font-weight:400; font-size:0.73rem;">' + exp.dte + ' DTE</span></th>';
+            });
+            thead += '</tr></thead>';
+            var tbody = '<tbody>';
+            rows.forEach(function(row) {
+                tbody += '<tr><td style="' + TD_S + ' text-align:left; font-weight:600;">' + row.label + '<br><span style="color:var(--text-muted); font-size:0.78rem;">$' + fmt2(row.strike) + '</span></td>';
+                var cellsByExp = {};
+                (row.cells || []).forEach(function(c) { cellsByExp[c.expiration] = c; });
+                expirations.forEach(function(exp) {
+                    var cell = cellsByExp[exp.date];
+                    if (!cell || cell.color === 'gray') {
+                        tbody += '<td style="' + TD_S + ' color:var(--text-muted);">—</td>';
+                    } else {
+                        var st = CELL_STYLES[cell.color] || CELL_STYLES.gray;
+                        tbody += '<td style="' + TD_S + ' background:' + st.bg + ';">';
+                        tbody += '<span style="color:var(--text-muted); font-size:0.73rem;">bid/ask</span><br>';
+                        tbody += '<span style="color:' + st.color + ';">' + fmt2(cell.bid) + '/' + fmt2(cell.ask) + '</span><br>';
+                        tbody += '<span style="color:var(--text-muted); font-size:0.73rem;">delta</span><br>';
+                        tbody += '<span>' + fmt2(cell.delta) + '</span><br>';
+                        tbody += '<span style="color:var(--text-muted); font-size:0.73rem;">net credit</span><br>';
+                        tbody += '<span style="color:' + st.color + '; font-weight:600;">' + fmtCredit(cell.net_credit) + '</span>';
+                        tbody += '</td>';
+                    }
+                });
+                tbody += '</tr>';
+            });
+            tbody += '</tbody>';
+            return thead + tbody;
+        }
+
+        window._loadRollTable = function(section) {
+            if (!section || section.dataset.rollLoaded === 'true' || section.dataset.rollLoading === 'true') return;
+            section.dataset.rollLoading = 'true';
+
+            var sym = section.dataset.symbol;
+            var posId = section.dataset.positionId;
+            var loadingEl = section.querySelector('.roll-table-loading');
+            var errorEl = section.querySelector('.roll-table-error');
+            var contentEl = section.querySelector('.roll-table-content');
+            var summaryEl = section.querySelector('.roll-table-summary');
+            var gridEl = section.querySelector('.roll-table-grid');
+
+            fetch('/api/symbols/' + encodeURIComponent(sym) + '/positions/' + encodeURIComponent(posId) + '/roll-table')
+                .then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data }; }); })
+                .then(function(r) {
+                    if (loadingEl) loadingEl.style.display = 'none';
+                    if (!r.ok || r.data.error) {
+                        errorEl.textContent = '⚠️ ' + (r.data.error || 'No se pudo cargar la tabla de roll.');
+                        errorEl.style.display = 'block';
+                        return;
+                    }
+                    summaryEl.innerHTML = buildRollSummary(r.data);
+                    gridEl.innerHTML = buildRollGrid(r.data);
+                    contentEl.style.display = 'block';
+                    section.dataset.rollLoaded = 'true';
+                })
+                .catch(function(e) {
+                    if (loadingEl) loadingEl.style.display = 'none';
+                    errorEl.textContent = '⚠️ Error de red: ' + e.message;
+                    errorEl.style.display = 'block';
+                })
+                .finally(function() {
+                    section.dataset.rollLoading = 'false';
+                });
+        };
+    })();
+
     // ── DPS Analysis ──────────────────────────────────────────────────────
     function renderDpsResult(container, result) {
         if (result.error) {
@@ -1639,6 +1776,7 @@
                 detailRow.style.display = 'table-row';
                 if (chevron) chevron.textContent = '▾';
                 loadPositionSnapshotChart(detailRow.querySelector('.position-snapshot-chart'));
+                if (window._loadRollTable) window._loadRollTable(detailRow.querySelector('.roll-table-section'));
             } else {
                 detailRow.style.display = 'none';
                 if (chevron) chevron.textContent = '▸';
@@ -1900,6 +2038,7 @@
                 detailRow.style.display = 'table-row';
                 if (chevron) chevron.textContent = '▾';
                 loadPositionSnapshotChart(detailRow.querySelector('.position-snapshot-chart'));
+                if (window._loadRollTable) window._loadRollTable(detailRow.querySelector('.roll-table-section'));
             }
             var form = document.querySelector('[data-roll-form-idx="' + idx + '"]');
             if (form) {

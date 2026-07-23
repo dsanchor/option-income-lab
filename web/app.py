@@ -1415,6 +1415,81 @@ Summarize this position's DPS: current state, trend, notable history, and likely
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/api/symbols/{symbol}/positions/{position_id}/roll-table")
+async def api_roll_table(request: Request, symbol: str, position_id: str):
+    """Compute roll scenarios table for an open position (calls and puts)."""
+    try:
+        cosmos = _get_cosmos(request)
+        symbol = symbol.upper()
+
+        sym_doc = cosmos.get_symbol(symbol)
+        if not sym_doc:
+            return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
+
+        position = None
+        for pos in sym_doc.get("positions", []):
+            if pos.get("position_id") == position_id:
+                position = pos
+                break
+        if position is None:
+            return JSONResponse({"error": f"Position {position_id} not found"}, status_code=404)
+
+        strike = float(position["strike"])
+        expiration = position["expiration"]
+        option_type = position.get("type", "call")
+
+        _source = position.get("source") or {}
+        premium = None
+        try:
+            premium = float(_source.get("premium") or _source.get("new_premium") or 0) or None
+        except (TypeError, ValueError):
+            pass
+
+        # Get current price from yf_provider (overview data) — same block as api_dps_analysis
+        yf_provider = getattr(request.app.state, "yf_provider", None)
+        underlying_price = None
+        if yf_provider is not None:
+            import json as _json
+            data = await yf_provider.fetch_all(symbol)
+            overview = data.get("overview", "{}")
+            if isinstance(overview, str):
+                try:
+                    overview = _json.loads(overview)
+                except (ValueError, TypeError):
+                    overview = {}
+            fundamentals = overview.get("fundamentals", {})
+            price_field = fundamentals.get("current_price", {})
+            underlying_price = price_field.get("value") if isinstance(price_field, dict) else price_field
+            if underlying_price is not None:
+                underlying_price = float(underlying_price)
+
+        if not underlying_price:
+            return JSONResponse({"error": "Underlying price unavailable"}, status_code=503)
+
+        # Fetch options chain from centralized cache
+        from src.options_chain_cache import get_options_chain_cache
+        chain_json = await get_options_chain_cache().get_or_load_async(symbol)
+
+        # Compute roll table
+        from src.roll_table import compute_roll_table
+        result = compute_roll_table(
+            chain=chain_json,
+            current_strike=strike,
+            current_expiration=expiration,
+            option_type=option_type,
+            underlying_price=underlying_price,
+            premium_received=premium,
+        )
+
+        return JSONResponse(result)
+
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        logger.exception("Roll table failed for %s/%s", symbol, position_id)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ===========================================================================
 # REST API — Action Plans
 # ===========================================================================
