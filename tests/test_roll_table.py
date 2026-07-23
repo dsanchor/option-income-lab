@@ -740,6 +740,56 @@ class TestNetCreditArithmetic:
         assert cell["color"] == "red"
 
 
+class TestSameStrikeAcrossExpirations:
+    """The chosen strike is fixed from the first expiration and reused for all;
+    a later expiration missing that exact strike yields a gray cell (it does NOT
+    re-select a different nearby strike per expiration)."""
+
+    def _chain(self):
+        exp_a = _future(8)
+        exp_b = _future(15)
+        # First expiration: ATM target 417.50 → nearest is 415.0
+        first = {
+            "410.0": _make_contract(3.00, 3.20, 0.55),
+            "415.0": _make_contract(2.00, 2.20, 0.50),
+            "420.0": _make_contract(1.20, 1.40, 0.45),
+        }
+        # Second expiration LACKS 415.0 but has a nearby 416.0 — old per-exp logic
+        # would have picked 416.0; new logic must return gray (415.0 absent).
+        second = {
+            "410.0": _make_contract(3.40, 3.60, 0.55),
+            "416.0": _make_contract(2.10, 2.30, 0.50),
+            "420.0": _make_contract(1.50, 1.70, 0.45),
+        }
+        return {
+            "symbol": "TST",
+            "timestamp": "2026-07-23T14:00:00Z",
+            "calls": {_future(3): {"415.0": _make_contract(1.40, 1.60, 0.50)},
+                      exp_a: first, exp_b: second},
+            "puts": {},
+        }
+
+    def test_strike_fixed_and_missing_is_gray(self):
+        result = compute_roll_table(
+            chain=self._chain(),
+            current_strike=415.0,
+            current_expiration=_future(3),
+            option_type="covered_call",
+            underlying_price=417.50,
+            premium_received=3.00,
+            strike_offsets=(0.0,),
+        )
+        atm_row = next(r for r in result["rows"] if r["label"] == "ATM")
+        # Strike fixed from the first expiration
+        assert atm_row["strike"] == 415.0
+        # First expiration cell uses 415.0
+        assert atm_row["cells"][0]["strike"] == 415.0
+        assert atm_row["cells"][0]["color"] != "gray"
+        # Second expiration lacks 415.0 → gray (NOT re-selected to 416.0)
+        assert atm_row["cells"][1]["color"] == "gray"
+        assert atm_row["cells"][1]["strike"] is None
+
+
 if __name__ == "__main__":
     import pytest as _pytest
     _pytest.main([__file__, "-v"])

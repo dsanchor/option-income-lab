@@ -268,38 +268,37 @@ def compute_roll_table(
         label = _label_for_offset(offset)
         target = underlying_price * (1.0 + offset)
 
+        # Determine the strike ONCE, from the first expiration that has
+        # available strikes, then reuse the SAME strike across all expirations.
+        chosen_strike: Optional[float] = None
+        for exp in exp_entries:
+            strikes_dict = bucket.get(exp["key"], {})
+            available_first: list[float] = []
+            for sk in strikes_dict:
+                try:
+                    available_first.append(float(sk))
+                except (ValueError, TypeError):
+                    pass
+            if available_first:
+                available_first.sort()
+                chosen_strike = _select_strike(available_first, target, offset)
+                if chosen_strike is not None:
+                    break
+
         cells: list[dict] = []
-        first_strike: Optional[float] = None
 
         for exp in exp_entries:
             exp_key = exp["key"]
             exp_display = exp["date"]
             dte = exp["dte"]
 
-            strikes_dict: dict = bucket.get(exp_key, {})
-            if not strikes_dict:
-                cells.append(_gray_cell(exp_display, dte))
-                continue
-
-            # Build sorted list of available float strikes
-            available: list[float] = []
-            for sk in strikes_dict:
-                try:
-                    available.append(float(sk))
-                except (ValueError, TypeError):
-                    pass
-            available.sort()
-
-            if not available:
-                cells.append(_gray_cell(exp_display, dte))
-                continue
-
-            chosen_strike = _select_strike(available, target, offset)
             if chosen_strike is None:
                 cells.append(_gray_cell(exp_display, dte))
                 continue
 
-            # Find the contract dict for the chosen strike
+            strikes_dict = bucket.get(exp_key, {})
+
+            # Look up the SAME chosen strike in this expiration
             contract: Optional[dict] = None
             for sk, c in strikes_dict.items():
                 try:
@@ -330,9 +329,6 @@ def compute_roll_table(
             else:
                 color = "red"
 
-            if first_strike is None:
-                first_strike = chosen_strike
-
             cells.append(
                 {
                     "expiration": exp_display,
@@ -350,7 +346,7 @@ def compute_roll_table(
             {
                 "offset": offset,
                 "label": label,
-                "strike": first_strike,
+                "strike": chosen_strike,
                 "cells": cells,
             }
         )

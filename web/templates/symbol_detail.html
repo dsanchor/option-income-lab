@@ -1241,14 +1241,20 @@
         function buildRollGrid(data) {
             var expirations = data.expirations || [];
             var rows = data.rows || [];
-            var thead = '<thead><tr><th style="' + TH_S + ' text-align:left;">Strike</th>';
+            var underlying = data.underlying_price || 0;
+            function appliedPct(strike) {
+                if (!underlying || strike == null) return '';
+                var p = (strike - underlying) / underlying * 100;
+                return (p >= 0 ? '+' : '') + p.toFixed(1) + '%';
+            }
+            var thead = '<thead><tr><th style="' + TH_S + ' text-align:left;">Target</th>';
             expirations.forEach(function(exp) {
                 thead += '<th style="' + TH_S + '">' + exp.date + '<br><span style="font-weight:400; font-size:0.73rem;">' + exp.dte + ' DTE</span></th>';
             });
             thead += '</tr></thead>';
             var tbody = '<tbody>';
             rows.forEach(function(row) {
-                tbody += '<tr><td style="' + TD_S + ' text-align:left; font-weight:600;">' + row.label + '<br><span style="color:var(--text-muted); font-size:0.78rem;">$' + fmt2(row.strike) + '</span></td>';
+                tbody += '<tr><td style="' + TD_S + ' text-align:left; font-weight:600;">' + row.label + '</td>';
                 var cellsByExp = {};
                 (row.cells || []).forEach(function(c) { cellsByExp[c.expiration] = c; });
                 expirations.forEach(function(exp) {
@@ -1258,6 +1264,7 @@
                     } else {
                         var st = CELL_STYLES[cell.color] || CELL_STYLES.gray;
                         tbody += '<td style="' + TD_S + ' background:' + st.bg + ';">';
+                        tbody += '<span style="font-weight:600;">$' + fmt2(cell.strike) + '</span> <span style="color:var(--text-muted); font-size:0.73rem;">(' + appliedPct(cell.strike) + ')</span><br>';
                         tbody += '<span style="color:var(--text-muted); font-size:0.73rem;">bid/ask</span><br>';
                         tbody += '<span style="color:' + st.color + ';">' + fmt2(cell.bid) + '/' + fmt2(cell.ask) + '</span><br>';
                         tbody += '<span style="color:var(--text-muted); font-size:0.73rem;">delta</span><br>';

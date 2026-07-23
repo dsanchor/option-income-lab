@@ -1479,6 +1479,7 @@ async def api_roll_table(request: Request, symbol: str, position_id: str):
             option_type=option_type,
             underlying_price=underlying_price,
             premium_received=premium,
+            strike_offsets=(0.03, 0.0, -0.03),
         )
 
         return JSONResponse(result)
@@ -3160,104 +3161,6 @@ Technical Analysis:
         return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
         logger.exception("Activity chat error for %s", activity_id)
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
-# ===========================================================================
-# REST API — Roll Table
-# ===========================================================================
-
-@app.get("/api/activities/{activity_id}/roll-table")
-async def api_activity_roll_table(request: Request, activity_id: str):
-    """Return a deterministic roll table for an option monitor/sell activity."""
-    try:
-        cosmos = _get_cosmos(request)
-        activity = cosmos.get_activity_by_id(activity_id)
-        if not activity:
-            return JSONResponse({"error": "Activity not found"}, status_code=404)
-
-        symbol = activity.get("symbol", "").upper()
-        agent_type = activity.get("agent_type", "")
-        option_type = {
-            "covered_call": "call",
-            "cash_secured_put": "put",
-            "open_call_monitor": "call",
-            "open_put_monitor": "put",
-        }.get(agent_type)
-        if not option_type:
-            return JSONResponse(
-                {"error": f"Unsupported agent_type '{agent_type}'"}, status_code=400
-            )
-
-        # Monitor agents use current_strike/current_expiration; watch agents use strike/expiration
-        current_strike = activity.get("current_strike") or activity.get("strike")
-        current_expiration = activity.get("current_expiration") or activity.get("expiration")
-        if not current_strike or not current_expiration:
-            return JSONResponse(
-                {"error": "Activity missing strike or expiration"}, status_code=400
-            )
-        try:
-            current_strike = float(current_strike)
-        except (TypeError, ValueError):
-            return JSONResponse(
-                {"error": "Invalid strike value"}, status_code=400
-            )
-
-        # Resolve premium: direct field, or from source sub-document
-        _source = activity.get("source") or {}
-        premium_received = None
-        try:
-            premium_received = float(
-                activity.get("premium")
-                or _source.get("premium")
-                or _source.get("new_premium")
-                or 0
-            ) or None
-        except (TypeError, ValueError):
-            premium_received = None
-
-        # Get live underlying price — mirrors api_dps_analysis pattern
-        yf_provider = getattr(request.app.state, "yf_provider", None)
-        underlying_price = None
-        if yf_provider is not None:
-            data = await yf_provider.fetch_all(symbol)
-            overview = data.get("overview", "{}")
-            if isinstance(overview, str):
-                try:
-                    overview = json.loads(overview)
-                except (ValueError, TypeError):
-                    overview = {}
-            fundamentals = overview.get("fundamentals", {})
-            price_field = fundamentals.get("current_price", {})
-            underlying_price = price_field.get("value") if isinstance(price_field, dict) else price_field
-            if underlying_price is not None:
-                try:
-                    underlying_price = float(underlying_price)
-                except (TypeError, ValueError):
-                    underlying_price = None
-        if not underlying_price:
-            return JSONResponse({"error": "Could not fetch underlying price"}, status_code=503)
-
-        # Fetch options chain from centralized cache — mirrors api_dps_analysis pattern
-        from src.options_chain_cache import get_options_chain_cache
-        from src.roll_table import compute_roll_table
-        chain_cache = get_options_chain_cache()
-        chain_json = await chain_cache.get_or_load_async(symbol)
-
-        result = compute_roll_table(
-            chain=chain_json,
-            current_strike=current_strike,
-            current_expiration=str(current_expiration),
-            option_type=option_type,
-            underlying_price=underlying_price,
-            premium_received=premium_received or 0.0,
-        )
-        return JSONResponse(result)
-
-    except RuntimeError as e:
-        return JSONResponse({"error": str(e)}, status_code=503)
-    except Exception as e:
-        logger.exception("Roll table error for activity %s", activity_id)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
