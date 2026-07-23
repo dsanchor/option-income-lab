@@ -66,19 +66,19 @@
             </span>
             <span class="toolbar-divider" aria-hidden="true"></span>
             <div class="chip-group">
-                <a href="/symbols/{{ symbol_doc.symbol }}/options-chain" class="chip-link chip-link-compact" title="Option Chain">
+                <a href="/symbols/{{ symbol_doc.symbol }}/options-chain" class="chip-link chip-link-compact" title="View the live option chain (calls & puts): strikes, expirations, bid/ask and Greeks — to pick contracts for covered calls or cash-secured puts.">
                     <span>📈</span> Option Chain
                 </a>
-                <a href="/symbols/{{ symbol_doc.symbol }}/chat" class="chip-link chip-link-compact">
+                <a href="/symbols/{{ symbol_doc.symbol }}/chat" class="chip-link chip-link-compact" title="Ask an AI assistant about this symbol — positions, market context and strategy — using its live Yahoo Finance data and your open positions.">
                     <span>💬</span> Chat
                 </a>
-                <a href="/symbols/{{ symbol_doc.symbol }}/report" class="chip-link chip-link-compact">
+                <a href="/symbols/{{ symbol_doc.symbol }}/report" class="chip-link chip-link-compact" title="Generate an AI situation report combining technical analysis, your open positions and recent agent recommendations, with short/medium-term price outlook.">
                     <span>📊</span> Report
                 </a>
-                <a href="/symbols/{{ symbol_doc.symbol }}/technical-analysis" class="chip-link chip-link-compact" title="Technical Analysis">
+                <a href="/symbols/{{ symbol_doc.symbol }}/technical-analysis" class="chip-link chip-link-compact" title="Generate an AI technical analysis (RSI, MACD, moving averages, support/resistance) with covered-call and cash-secured-put suggestions, based on 1 year of daily price history.">
                     <span>🔬</span> Tech Analysis
                 </a>
-                <button id="rt-chart-toggle" type="button" class="chip-link chip-link-compact" title="Toggle real-time chart" aria-pressed="false">
+                <button id="rt-chart-toggle" type="button" class="chip-link chip-link-compact" title="Toggle a live TradingView chart (daily, with MACD, ADX and Divergence studies) for this symbol, without leaving the page." aria-pressed="false">
                     <span>📉</span> RT Chart
                 </button>
             </div>
