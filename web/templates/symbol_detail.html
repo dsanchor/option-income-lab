@@ -25,6 +25,9 @@
       </script>
     </div>
     
+    <!-- RT Chart (toggleable TradingView advanced chart) -->
+    <div id="rt-chart-container" data-symbol="{{ symbol_doc.exchange }}:{{ symbol_doc.symbol }}" data-initialized="false" style="display:none; height:520px; margin:0.5rem 0;"></div>
+    
     <div class="symbol-toolbar-wrap">
         <div class="symbol-toolbar">
             {% if is_paused %}
@@ -75,6 +78,9 @@
                 <a href="/symbols/{{ symbol_doc.symbol }}/technical-analysis" class="chip-link chip-link-compact" title="Technical Analysis">
                     <span>🔬</span> Tech Analysis
                 </a>
+                <button id="rt-chart-toggle" type="button" class="chip-link chip-link-compact" title="Toggle real-time chart" aria-pressed="false">
+                    <span>📉</span> RT Chart
+                </button>
             </div>
         </div>
         {% if is_paused %}
@@ -2610,6 +2616,76 @@
             });
         }
     }
+    // --- RT Chart toggle (TradingView advanced chart) ---
+    (function initRtChartToggle() {
+        var btn = document.getElementById('rt-chart-toggle');
+        var container = document.getElementById('rt-chart-container');
+        if (!btn || !container) return;
+        btn.addEventListener('click', function() {
+            var visible = container.style.display !== 'none';
+            if (visible) {
+                container.style.display = 'none';
+                btn.setAttribute('aria-pressed', 'false');
+                btn.classList.remove('chip-link-active');
+                return;
+            }
+            container.style.display = 'block';
+            btn.setAttribute('aria-pressed', 'true');
+            btn.classList.add('chip-link-active');
+            if (container.dataset.initialized !== 'true') {
+                container.dataset.initialized = 'true';
+                var sym = container.dataset.symbol || '';
+                var widget = document.createElement('div');
+                widget.className = 'tradingview-widget-container';
+                widget.style.height = '100%';
+                widget.style.width = '100%';
+                var inner = document.createElement('div');
+                inner.className = 'tradingview-widget-container__widget';
+                inner.style.height = 'calc(100% - 32px)';
+                inner.style.width = '100%';
+                widget.appendChild(inner);
+                var config = {
+                    "allow_symbol_change": true,
+                    "calendar": false,
+                    "details": false,
+                    "hide_side_toolbar": true,
+                    "hide_top_toolbar": false,
+                    "hide_legend": false,
+                    "hide_volume": false,
+                    "hotlist": false,
+                    "interval": "D",
+                    "locale": "en",
+                    "save_image": true,
+                    "style": "1",
+                    "symbol": sym,
+                    "theme": "dark",
+                    "timezone": "Etc/UTC",
+                    "backgroundColor": "#0F0F0F",
+                    "gridColor": "rgba(242, 242, 242, 0.06)",
+                    "watchlist": [],
+                    "withdateranges": false,
+                    "compareSymbols": [],
+                    "studies": [
+                        "STD;Divergence%1Indicator",
+                        "STD;Average%1Directional%1Index",
+                        "STD;MACD"
+                    ],
+                    "autosize": true
+                };
+                var script = document.createElement('script');
+                script.type = 'text/javascript';
+                script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+                script.async = true;
+                script.innerHTML = JSON.stringify(config);
+                widget.appendChild(script);
+                var copyright = document.createElement('div');
+                copyright.className = 'tradingview-widget-copyright';
+                copyright.innerHTML = '<a href="https://www.tradingview.com/symbols/' + sym.replace(':', '-') + '/" rel="noopener nofollow" target="_blank"><span class="blue-text">' + (sym.split(':')[1] || sym) + ' stock chart</span></a><span class="trademark"> by TradingView</span>';
+                widget.appendChild(copyright);
+                container.appendChild(widget);
+            }
+        });
+    })();
 
 })();
 </script>
