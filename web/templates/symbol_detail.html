@@ -1271,6 +1271,8 @@
                     + '<td colspan="' + expirations.length + '" style="padding:2px 8px; border-top:2px dashed #d29922; border-bottom:2px dashed #d29922; background:rgba(210,153,34,0.08);"></td>'
                     + '</tr>';
             }
+            var otype = (data.current_position && data.current_position.option_type) || 'call';
+            var isPut = /put/i.test(otype);
             var tbody = '<tbody>';
             var refInserted = false;
             rows.forEach(function(row) {
@@ -1279,8 +1281,13 @@
                     refInserted = true;
                 }
                 var labelHtml = row.label;
-                if (row.label === 'ATM' && underlying) {
-                    labelHtml = 'ATM <span style="font-weight:400; color:var(--text-muted); font-size:0.73rem;">($' + fmt2(underlying) + ')</span>';
+                if (row.label === 'ATM') {
+                    labelHtml = 'ATM' + (underlying ? ' <span style="font-weight:400; color:var(--text-muted); font-size:0.73rem;">($' + fmt2(underlying) + ')</span>' : '');
+                } else if (row.offset != null && row.offset !== 0) {
+                    var off = Number(row.offset);
+                    var pctLabel = (off > 0 ? '+' : '') + Math.round(off * 100) + '%';
+                    var moneyness = (off > 0) ? (isPut ? 'ITM' : 'OTM') : (isPut ? 'OTM' : 'ITM');
+                    labelHtml = moneyness + ' <span style="font-weight:400; color:var(--text-muted); font-size:0.73rem;">(' + pctLabel + ')</span>';
                 }
                 tbody += '<tr><td style="' + TD_S + ' text-align:left; font-weight:600;">' + labelHtml + '</td>';
                 var cellsByExp = {};
