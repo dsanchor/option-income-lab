@@ -2929,3 +2929,213 @@ Completed 2026-07-15. All headings from the original README verified present in 
 
 None. Structure is complete and verified.
 
+
+---
+
+# Decision: Buy-Back Cost & Roll Table Feature — Deterministic Options Analytics
+
+**Date:** 2026-07-23  
+**Status:** Proposal — Pending Implementation  
+**Authors:** Linus (Quant Logic), Danny (Integration Architecture)
+
+## Context
+
+User (dsanchor) requested a deterministic feature (pure Python, no LLM agents) that displays buy-back cost and roll scenarios on the Activity Detail page. The table shows 4 next expiration dates × 3 strikes (ATM, +3%, -3% relative to underlying price), with color coding: green = net credit (profitable), red = net debit (loss).
+
+---
+
+## Architectural Decisions
+
+### 1. Entry Point: Dedicated API Endpoint
+
+**Endpoint:** `GET /api/activities/{activity_id}/roll-table`
+
+**Rationale:**
+- Activity Detail handler (web/app.py:3096) is synchronous page render; adding chain data fetch would increase page load time for ALL activity views
+- Dedicated endpoint allows async JS fetch with spinner: page loads instantly, roll table loads separately
+- Follows established pattern (chat, DPS analysis — all use separate API endpoints)
+
+---
+
+### 2. Data Source: Options Chain Cache
+
+**Source:** `chain_cache.get_or_load_async(symbol)` from `src/options_chain_cache.py`
+
+**Rationale:**
+- Cache has 30-min TTL, warmed by nightly refresh_all scheduler
+- On hit: < 100ms. On cold miss: 5–15s (yfinance + TradingView) — acceptable with async loading
+- Provides consistent, single source of truth for options data
+- Do NOT replicate debug endpoint's pattern of direct provider.fetch_all()
+
+**Caching Non-Decision:** Roll table computation is fast (~5ms once chain is in memory). Caching the derived table adds complexity with no benefit; the chain cache is the right abstraction level.
+
+---
+
+### 3. Core Module: Pure Python Computation
+
+**Module Name:** `src/roll_table.py` (pure Python, fully unit-testable)
+
+**Interface:** (Linus and Danny proposals require reconciliation on exact signature; core concept is a single public function computing the roll matrix):
+
+```python
+def compute_roll_table(
+    chain: dict,                          # from chain_cache
+    current_strike: float,                # position's strike
+    current_expiration: str,              # position's expiration (YYYY-MM-DD or YYYYMMDD)
+    option_type: str,                     # "call" or "put"
+    underlying_price: float,              # live, from yf_provider
+    premium_received: float,              # per-share, from position source (for buy-back context)
+    contracts: int = 1,                   # default 1; future-proof for position schema
+    n_expirations: int = 4,               # number of future expirations to show
+    strike_offsets: tuple = (0.0, 0.03, -0.03)  # ATM, +3%, -3% relative
+) -> dict:
+    """
+    Returns:
+    {
+      "buy_back_cost": float,             # robust_mid × 100 × contracts (total)
+      "buy_back_per_share": float,        # robust_mid value
+      "underlying_price": float,
+      "chain_timestamp": str,
+      "current_position": {strike, expiration, option_type, premium_received},
+      "expirations": [
+        {
+          "expiration": "YYYY-MM-DD",
+          "dte": int,
+          "strikes": [
+            {
+              "label": "ATM" | "+3%" | "-3%",
+              "strike": float,
+              "bid": float,
+              "ask": float,
+              "mid": float,
+              "new_premium": float,       # bid × 100 × contracts (conservative, what seller collects)
+              "net_credit": float,        # new_premium - buy_back_cost
+              "color": "green" | "red" | "gray",
+              "liquidity_ok": bool,       # bid > 0 AND openInterest >= 10
+              "delta": float | null
+            }
+          ]
+        }
+      ]
+    }
+    ```
+
+**Rationale:**
+- Pure Python, no external agents; fully testable with unit tests
+- Reuses existing helpers (`robust_mid` from `src/options_math.py`, strike filtering from `src/options_chain_filters.py`)
+- Returns `null` for illiquid/missing strikes (grayed out in template, not hidden)
+- Symmetric for calls and puts via option_type parameter
+
+---
+
+### 4. Buy-Back Cost Formula
+
+```
+buy_back_per_share = robust_mid(current_bid, current_ask)
+buy_back_cost = buy_back_per_share × 100 × contracts
+```
+
+**Rationale:** `robust_mid()` resists stale/garbage quotes. Surface both per-share and total cost in response.
+
+---
+
+### 5. New Premium Formula (Conservative)
+
+```
+new_premium_per_share = contract["bid"]  # what seller realistically collects
+new_premium = new_premium_per_share × 100 × contracts
+net_credit = new_premium - buy_back_cost
+```
+
+**Rationale:** Use bid (not mid) for new premium to be conservative. If bid == 0, mark as illiquid (gray).
+
+---
+
+### 6. Liquidity Filter
+
+Mark a strike cell as illiquid (color = gray) if:
+- `contract["bid"] == 0` OR
+- `contract["openInterest"] < 10`
+
+**Do NOT hide illiquid cells** — show them grayed out so user has full market picture.
+
+---
+
+### 7. Strike Selection Algorithm
+
+For each expiration, select 3 strikes:
+
+1. **ATM (At-The-Money):** `min(strikes, key=lambda s: abs(s - underlying_price))`
+2. **Upper (+3%):** Lowest strike >= `underlying_price × 1.03`; if none, take highest available
+3. **Lower (-3%):** Highest strike <= `underlying_price × 0.97`; if none, take lowest available
+
+**Deduplication:** Skip if ATM ≈ +3% or -3% collapse to same strike; mark as "same as ATM" in response.
+
+---
+
+### 8. Expiration Selection
+
+1. Parse chain keys as YYYYMMDD dates
+2. Filter to dates strictly after today
+3. Sort ascending
+4. Take first `n_expirations` (default 4)
+5. Express DTE as `(expiration_date - today).days`
+
+---
+
+### 9. Frontend Integration
+
+**Template:** `web/templates/activity_detail.html`
+
+- Add "Roll Scenarios" collapsible section, **visible only for** `agent_type in ['open_call_monitor', 'open_put_monitor']`
+- On page load: JS auto-fetches `/api/activities/{activity_id}/roll-table`
+- Show spinner/placeholder during load
+- Table: rows = expiry+DTE, columns = ATM / +3% / -3%
+- Cell colors: green = `is_profitable`, red = loss, gray = illiquid/null
+- Header shows: buy-back cost, underlying price, chain timestamp
+- **Graceful fallback:** If endpoint returns error, show "Opciones no disponibles (datos de cadena sin cargar)"
+
+---
+
+### 10. Scope: Both Calls and Puts
+
+The `option_type` field from the activity (`open_call_monitor` → `"call"`, `open_put_monitor` → `"put"`) is already available. Same code path handles both. Display should note the option type to avoid confusion.
+
+---
+
+## Dependencies & Owners
+
+| Component | Owner |
+|-----------|-------|
+| `src/roll_table.py` (pure logic) | Linus (Quant Dev) |
+| `GET /api/activities/{activity_id}/roll-table` endpoint | Rusty (Backend) |
+| Frontend rendering in activity_detail.html | Rusty (Frontend) |
+| Add `contracts` to position schema (future) | Rusty (Backend) |
+
+---
+
+## Risks & Mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| Cold chain cache (5–15s fetch) | JS async fetch + spinner prevents page block |
+| Strike not found in chain (illiquid) | Return `null` cell; template renders "—" grayed out |
+| Chain stale (> 30 min) | Cache auto-refreshes on miss; show timestamp in header |
+| yfinance expirations vary by symbol | Take first N after current_expiration, no hard-coded dates |
+
+---
+
+## Open Questions
+
+1. Should endpoint also accept `position_id` as alternative to `activity_id` (for positions without linked activity)?
+2. Roll table caching strategy: cache per activity_id, or always compute fresh from chain?
+3. Visual enhancement: mark buy-back row green if already at 50%+ profit gate?
+
+---
+
+## Non-Decisions
+
+- **No LLM in roll computation** — Pure Python, deterministic logic only
+- **No precompute/cache of roll table** — Chain cache is sufficient; derivation is fast
+- **No hard-coded expirations** — All expiration dates come from live chain
+

@@ -2058,3 +2058,48 @@ Updated README.md to document all user-facing changes from the July session comm
 - DPS Insights framed as LLM narration that never overrides the deterministic score
 - Roll ranking change clearly stated (Annualized Return % replaces Net Credit as sort key)
 - Ex-div awareness scoped to CSP SELL only with non-blocking informational framing
+
+## Learnings — Buy-Back & Roll Table Design Consultation (2026-07-23)
+
+### Session: Deterministic Roll Table for Activity Detail
+
+**Request:** Design a deterministic (pure Python, no LLM) feature that shows buy-back cost + roll scenarios on the activity detail page, triggered on click. Grid: 3 strikes (ATM, +3%, -3%) × next 4 expirations. Color: green if new premium collected > buy-back cost, red otherwise.
+
+**Key findings from codebase exploration:**
+
+- `src/options_chain_cache.py` already provides `get_options_chain_cache().get_or_load(symbol)` (sync) and `get_or_load_async()`. Full chain is available as `{calls/puts: {YYYYMMDD: {strike_key: {bid, ask, mid, iv, delta, ...}}}}`.
+- Chain has ALL expirations (yfinance base + TradingView overlay), sorted. Next 4 expirations = first 4 keys in `chain["calls"]` or `chain["puts"]` after today's date.
+- The `robust_mid(bid, ask)` from `src/options_math.py` is already the right function for marking options fairly (resists stale/one-sided quotes).
+- Position schema (`cosmos_db.py`) stores `strike`, `expiration`, `type` (call/put), `source.premium` (per-share premium received). **NO `contracts` field** — all current positions are implicitly 1 contract. Future enhancement should add `contracts` field.
+- The `activity_detail_page` route (`/activities/{activity_id}`) renders `activity_detail.html` with the activity dict. Currently no options chain or roll table is computed there.
+- Pattern to follow: `api_dps_analysis` endpoint (`POST /api/symbols/{symbol}/positions/{position_id}/dps-analysis`) — calls `chain_cache.get_or_load_async(symbol)` and returns JSON. The activity detail page can call a similar new endpoint via JS fetch on click.
+- `agent_type_map = {"covered_call": "call", "cash_secured_put": "put"}` — use this to infer option_type from activity.agent_type.
+- Activity has `underlying_price` field (recorded at signal time, may be stale); for roll table, need live price — best sourced via `yf_provider.fetch_all(symbol)` overview, same pattern as DPS analysis.
+- For puts: buy-back = current put's ask×100 (you're short, you buy to close). Roll scenarios apply to puts too (roll up = higher strike = closer to ATM for puts = more aggressive; roll down = lower strike = safer for puts).
+
+**Proposed API endpoint:** `GET /api/activities/{activity_id}/roll-table`
+- Reads activity from cosmos (symbol, agent_type→option_type, strike, expiration, source.premium)
+- Gets live underlying price from yf_provider
+- Calls `chain_cache.get_or_load_async(symbol)`
+- Computes buy-back cost = robust_mid(bid, ask) × 100 × contracts (default 1)
+- For next 4 expirations: finds ATM/+3%/-3% strikes, computes new_premium = bid × 100 (conservative) and net = new_premium - buy_back_cost
+- Returns JSON: `{buy_back_cost, underlying_price, current_position, rolls: [{expiration, strikes: [{label, strike, bid, ask, mid, new_premium, net_credit, color}]}]}`
+
+**Math defined:**
+- buy_back_cost = robust_mid(bid, ask) × 100 × contracts (per-share mid, ×100 for contract, ×N contracts)
+- net_credit = new_option_bid × 100 × contracts − buy_back_cost  (positive = credit roll, negative = debit roll)
+- color = "green" if net_credit > 0 else "red"
+- ATM strike = min(available_strikes, key=lambda s: abs(s - underlying_price))
+- upper strike = min(s for s in available_strikes if s >= underlying_price × 1.03), or nearest above if none
+- lower strike = max(s for s in available_strikes if s <= underlying_price × 0.97), or nearest below if none
+- Use bid (not mid) for new premium: conservative estimate of what you'll actually collect as the short seller
+
+**Gotchas noted:**
+- No `contracts` field in position schema → assume 1 until added
+- Stale chain data: 30-min TTL may show stale bid/ask → add `chain_timestamp` to response
+- ITM options: buy-back cost can be very high (deep ITM); surface delta or moneyness
+- Liquidity filter: skip strikes with openInterest < 10 or bid == 0 (mark as "illiquid")
+- Puts vs calls: direction semantics differ (put roll up = higher = more aggressive assignment risk)
+- For monitor activities (ROLL type), use `current_strike`/`current_expiration` instead of `strike`/`expiration`
+
+**Design decision:** Trigger is lazy JS fetch on activity_detail page load (or click). Not pre-computed at render time to avoid blocking page load. Show a "Loading roll table…" placeholder, replace with rendered table on response.
