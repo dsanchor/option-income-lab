@@ -274,6 +274,8 @@ def summarize_prediction(pred: dict) -> dict:
       - ``path_pct_1sigma`` / ``path_pct_2sigma``: % of those snapshots inside the
         band (path metric — visual only, biased high). ``None`` when no snapshots.
       - ``endpoint``: the resolved endpoint dict (or ``None`` if not yet reached).
+      - ``center``/``sigma``/``low1``/``high1``/``low2``/``high2``: the predicted
+        price band for that horizon (so callers can show the actual range).
     """
     horizons = pred.get("horizons", {}) if isinstance(pred, dict) else {}
     snapshots = pred.get("snapshots", []) if isinstance(pred, dict) else []
@@ -283,6 +285,7 @@ def summarize_prediction(pred: dict) -> dict:
     for name in HORIZONS:
         if name not in horizons:
             continue
+        band = horizons.get(name) or {}
         in_h = [s for s in snapshots if s.get("horizon") == name]
         n = len(in_h)
         if n:
@@ -295,6 +298,12 @@ def summarize_prediction(pred: dict) -> dict:
             "path_pct_1sigma": pct1,
             "path_pct_2sigma": pct2,
             "endpoint": endpoints.get(name),
+            "center": band.get("center"),
+            "sigma": band.get("sigma"),
+            "low1": band.get("low1"),
+            "high1": band.get("high1"),
+            "low2": band.get("low2"),
+            "high2": band.get("high2"),
         }
     return out
 

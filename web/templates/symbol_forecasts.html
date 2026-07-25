@@ -60,8 +60,9 @@
         </table>
     </div>
     <p style="font-size:0.72rem; color:var(--text-muted); padding:0.75rem 1.25rem;">
-        Each horizon cell shows <strong>% of snapshots inside ±1σ</strong> (path metric) and, once the horizon's end session is
-        reached, the <strong>endpoint</strong> result ✓/±/✗ (the calibrated metric — should trend ≈68% for ±1σ). Click a row to open the fan chart.
+        Each horizon cell shows the <strong>±1σ predicted price range</strong> (hover for ±2σ). Below it: the
+        <strong>% of snapshots inside ±1σ</strong> (path metric) and, once the horizon's end session is reached,
+        the <strong>endpoint</strong> result ✓/±/✗ (the calibrated metric — should trend ≈68% for ±1σ). Click a row to open the fan chart.
     </p>
 </div>
 
@@ -105,19 +106,29 @@
     function cellHtml(h) {
         if (!h) return '<span style="color:var(--text-muted);">—</span>';
         var s = '';
-        if (h.path_count > 0) {
-            s += '<span title="' + h.path_count + ' snapshot(s); % inside ±1σ">' + pct(h.path_pct_1sigma) + '</span>';
+        // Predicted ±1σ price range (the actual forecast for this horizon)
+        if (h.low1 != null && h.high1 != null) {
+            var range2 = (h.low2 != null && h.high2 != null)
+                ? '±2σ $' + num(h.low2) + '–$' + num(h.high2) : '';
+            s += '<div style="font-weight:600;" title="±1σ predicted range. ' + range2 + '">$' +
+                 num(h.low1) + '–$' + num(h.high1) + '</div>';
         } else {
-            s += '<span style="color:var(--text-muted);">·</span>';
+            s += '<div style="color:var(--text-muted);">—</div>';
+        }
+        // Path % + endpoint result
+        var sub = '';
+        if (h.path_count > 0) {
+            sub += '<span title="' + h.path_count + ' snapshot(s); % inside ±1σ">' + pct(h.path_pct_1sigma) + '</span>';
         }
         if (h.endpoint) {
             var ep = h.endpoint;
             var ok = ep.inside_1sigma;
             var icon = ok ? '✓' : (ep.inside_2sigma ? '±' : '✗');
             var col = ok ? 'var(--green,#22c55e)' : (ep.inside_2sigma ? 'var(--amber,#f59e0b)' : 'var(--red,#ef4444)');
-            s += ' <strong style="color:' + col + '" title="Endpoint close ' + num(ep.price) + ' — ' +
+            sub += ' <strong style="color:' + col + '" title="Endpoint close ' + num(ep.price) + ' — ' +
                  (ok ? 'inside ±1σ' : (ep.inside_2sigma ? 'inside ±2σ only' : 'outside ±2σ')) + '">' + icon + '</strong>';
         }
+        s += '<div style="font-size:0.72rem; color:var(--text-muted);">' + (sub || '·') + '</div>';
         return s;
     }
 
