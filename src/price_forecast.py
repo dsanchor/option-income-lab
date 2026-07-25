@@ -19,9 +19,38 @@ import logging
 import math
 from typing import Dict, List, Optional, Sequence
 
-from .volatility import TRADING_DAYS, historical_volatility
+from .volatility import TRADING_DAYS, ewma_volatility, historical_volatility
 
 logger = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Confidence → z-multiplier (two-sided central interval of a normal dist).
+# The band half-width is ``z * unit_sigma`` where ``unit_sigma`` is the √t
+# volatility scale. 0.68 keeps the classic ±1σ meaning. The PRIMARY (inner) band
+# is configurable; the SECONDARY (outer) band is a wider reference for context.
+# ──────────────────────────────────────────────────────────────────────────────
+_CONF_Z = {
+    0.50: 0.6745,
+    0.68: 1.0000,   # classic ±1σ (68.27%) — kept as the engine default
+    0.80: 1.2816,
+    0.90: 1.6449,
+    0.95: 1.9600,
+    0.99: 2.5758,
+}
+DEFAULT_CONFIDENCE = 0.68
+OUTER_CONFIDENCE = 0.95
+
+
+def z_for_confidence(confidence: Optional[float]) -> float:
+    """Return the z-multiplier for a central confidence level (nearest known)."""
+    if confidence is None or not _is_finite(confidence):
+        confidence = DEFAULT_CONFIDENCE
+    if confidence in _CONF_Z:
+        return _CONF_Z[confidence]
+    # Nearest supported level (keeps behaviour predictable & deterministic).
+    key = min(_CONF_Z.keys(), key=lambda k: abs(k - float(confidence)))
+    return _CONF_Z[key]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -131,57 +160,134 @@ def compute_bias(technicals: Optional[dict]) -> float:
 # Forecast (volatility cone)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _band_for_sessions(price: float, hv: float, sessions: int) -> Dict[str, float]:
-    """Return ±1σ / ±2σ price bands for a horizon ending at ``sessions``.
+def _band_for_sessions(
+    price: float,
+    vol: float,
+    sessions: int,
+    *,
+    z1: float = 1.0,
+    z2: float = 1.96,
+    trend_slope: float = 0.0,
+) -> Dict[str, float]:
+    """Return primary/secondary price bands for a horizon ending at ``sessions``.
 
-    ``sigma = price * hv * sqrt(sessions / 252)`` where ``hv`` is annualized
-    realized volatility (decimal, e.g. 0.28).
+    ``unit_sigma = price * vol * sqrt(sessions / 252)`` where ``vol`` is annualized
+    volatility (decimal, e.g. 0.28). The half-widths are ``z1`` (primary, inner,
+    configurable confidence) and ``z2`` (secondary, outer reference) times
+    ``unit_sigma``. The band centre stays at ``price`` (honest random-walk centre);
+    ``trend_end`` is the projected linear-trend value at the horizon end session,
+    drawn as an overlay only — it never shifts the band.
     """
-    sigma = price * hv * math.sqrt(sessions / TRADING_DAYS)
+    sigma = price * vol * math.sqrt(sessions / TRADING_DAYS)
     return {
         "center": round(price, 4),
         "sigma": round(sigma, 4),
-        "low1": round(price - sigma, 4),
-        "high1": round(price + sigma, 4),
-        "low2": round(price - 2 * sigma, 4),
-        "high2": round(price + 2 * sigma, 4),
+        "z1": round(z1, 4),
+        "z2": round(z2, 4),
+        "low1": round(price - z1 * sigma, 4),
+        "high1": round(price + z1 * sigma, 4),
+        "low2": round(price - z2 * sigma, 4),
+        "high2": round(price + z2 * sigma, 4),
+        "trend_end": round(price + trend_slope * sessions, 4),
+    }
+
+
+def linear_trend(
+    closes: Sequence[float],
+    window: int = 20,
+) -> Optional[dict]:
+    """Least-squares linear trend over the last ``window`` closes.
+
+    Returns ``{"slope": $/session, "resid_std": $, "window": n}`` or ``None``.
+    ``slope`` is the per-session drift used to draw the projected trend overlay;
+    ``resid_std`` is the standard deviation of the fit residuals (how far closes
+    sat from the trend line — a dispersion diagnostic). Never raises.
+    """
+    if closes is None:
+        return None
+    clean = [float(c) for c in closes if c is not None and _is_finite(c) and float(c) > 0]
+    if window and window > 0:
+        clean = clean[-window:]
+    n = len(clean)
+    if n < 3:
+        return None
+
+    xs = list(range(n))
+    mean_x = sum(xs) / n
+    mean_y = sum(clean) / n
+    sxx = sum((x - mean_x) ** 2 for x in xs)
+    if sxx <= 0:
+        return None
+    sxy = sum((xs[i] - mean_x) * (clean[i] - mean_y) for i in range(n))
+    slope = sxy / sxx
+    intercept = mean_y - slope * mean_x
+    residuals = [clean[i] - (intercept + slope * xs[i]) for i in range(n)]
+    if n > 2:
+        resid_var = sum(r * r for r in residuals) / (n - 2)
+        resid_std = math.sqrt(resid_var) if resid_var > 0 else 0.0
+    else:
+        resid_std = 0.0
+    return {
+        "slope": round(slope, 6),
+        "resid_std": round(resid_std, 4),
+        "window": n,
     }
 
 
 def compute_forecast(
     current_price: Optional[float],
-    hv: Optional[float],
+    vol: Optional[float],
     technicals: Optional[dict] = None,
+    *,
+    confidence: float = DEFAULT_CONFIDENCE,
+    trend: Optional[dict] = None,
+    vol_source: str = "hv",
 ) -> Optional[dict]:
     """Build a full forecast for all horizons, or ``None`` if inputs are unusable.
 
     Args:
         current_price: latest (adjusted) close.
-        hv: annualized realized volatility (decimal). Use
+        vol: annualized volatility (decimal) — HV, EWMA or IV. Use
             :func:`compute_forecast_from_closes` to derive it from a series.
         technicals: technicals dict from ``TechnicalsCalculator`` (for bias).
+        confidence: central confidence level for the PRIMARY band (default 0.68 =
+            classic ±1σ). Drives ``z1``; the outer band uses ``OUTER_CONFIDENCE``.
+        trend: optional ``linear_trend`` dict — its ``slope`` projects a trend
+            overlay line (``trend_end`` per horizon). Never shifts the band centre.
+        vol_source: label of where ``vol`` came from ("hv" | "ewma" | "iv").
 
-    Returns a dict with ``price_at_creation``, ``hv``, ``bias`` and a ``horizons``
-    map. The band centre is always ``current_price`` — the bias is reported
-    separately and never shifts it.
+    Returns a dict with ``price_at_creation``, ``hv`` (the vol used), ``vol_source``,
+    ``confidence``, ``bias``, ``trend`` and a ``horizons`` map. The band centre is
+    always ``current_price`` — bias and trend are reported separately.
     """
     if current_price is None or not _is_finite(current_price) or current_price <= 0:
         return None
-    if hv is None or not _is_finite(hv) or hv <= 0:
+    if vol is None or not _is_finite(vol) or vol <= 0:
         return None
 
     price = float(current_price)
+    z1 = z_for_confidence(confidence)
+    outer_conf = OUTER_CONFIDENCE if confidence < OUTER_CONFIDENCE else 0.99
+    z2 = z_for_confidence(outer_conf)
+    slope = float(trend["slope"]) if isinstance(trend, dict) and _is_finite(trend.get("slope")) else 0.0
+
     horizons: Dict[str, dict] = {}
     for name, bounds in HORIZONS.items():
-        band = _band_for_sessions(price, hv, bounds["end_session"])
+        band = _band_for_sessions(
+            price, vol, bounds["end_session"], z1=z1, z2=z2, trend_slope=slope
+        )
         band["start_session"] = bounds["start_session"]
         band["end_session"] = bounds["end_session"]
         horizons[name] = band
 
     return {
         "price_at_creation": round(price, 4),
-        "hv": round(float(hv), 6),
+        "hv": round(float(vol), 6),
+        "vol_source": vol_source,
+        "confidence": round(float(confidence), 4),
+        "outer_confidence": round(float(outer_conf), 4),
         "bias": compute_bias(technicals),
+        "trend": trend if isinstance(trend, dict) else None,
         "horizons": horizons,
     }
 
@@ -192,21 +298,47 @@ def compute_forecast_from_closes(
     *,
     current_price: Optional[float] = None,
     hv_window: int = HV_WINDOW,
+    confidence: float = DEFAULT_CONFIDENCE,
+    vol_source: str = "hv",
+    iv: Optional[float] = None,
+    trend_window: int = 20,
 ) -> Optional[dict]:
-    """Convenience wrapper: derive HV (and default price) from a closes series.
+    """Convenience wrapper: derive vol + trend from a closes series.
+
+    ``vol_source`` selects the volatility estimator:
+      - ``"hv"``  : flat-window historical volatility (default).
+      - ``"ewma"``: exponentially-weighted realized volatility (more responsive).
+      - ``"iv"`` / ``"iv_hv"``: use the provided ``iv`` (annualized implied vol);
+        ``"iv_hv"`` falls back to HV when ``iv`` is missing.
 
     ``current_price`` defaults to the last close. Returns ``None`` when there is
-    not enough clean history to compute HV.
+    not enough clean history to compute a volatility estimate.
     """
     if not has_enough_history(closes):
         return None
-    hv = historical_volatility(closes, window=hv_window)
-    if hv is None:
+
+    src = (vol_source or "hv").lower()
+    vol = None
+    used = "hv"
+    if src in ("iv", "iv_hv") and iv is not None and _is_finite(iv) and iv > 0:
+        vol, used = float(iv), "iv"
+    elif src == "ewma":
+        vol, used = ewma_volatility(closes, span=hv_window), "ewma"
+    if vol is None or not _is_finite(vol) or vol <= 0:
+        # Fallback (covers "hv", "iv_hv" without IV, or a failed EWMA).
+        vol, used = historical_volatility(closes, window=hv_window), "hv"
+    if vol is None:
         return None
+
     if current_price is None:
         clean = [c for c in closes if c is not None and _is_finite(c)]
         current_price = clean[-1] if clean else None
-    return compute_forecast(current_price, hv, technicals)
+
+    trend = linear_trend(closes, window=trend_window)
+    return compute_forecast(
+        current_price, vol, technicals,
+        confidence=confidence, trend=trend, vol_source=used,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -276,10 +408,19 @@ def summarize_prediction(pred: dict) -> dict:
       - ``endpoint``: the resolved endpoint dict (or ``None`` if not yet reached).
       - ``center``/``sigma``/``low1``/``high1``/``low2``/``high2``: the predicted
         price band for that horizon (so callers can show the actual range).
+      - ``trend_end``: projected linear-trend value at the horizon end session.
+      - ``mean_dev`` / ``mean_dev_pct``: mean absolute deviation of the realized
+        closes from the projected trend line within the horizon window (``None``
+        with no snapshots or no trend).
     """
     horizons = pred.get("horizons", {}) if isinstance(pred, dict) else {}
     snapshots = pred.get("snapshots", []) if isinstance(pred, dict) else []
     endpoints = pred.get("endpoints", {}) if isinstance(pred, dict) else {}
+    trend = pred.get("trend") if isinstance(pred, dict) else None
+    anchor = pred.get("price_at_creation") if isinstance(pred, dict) else None
+    slope = None
+    if isinstance(trend, dict) and _is_finite(trend.get("slope")) and _is_finite(anchor):
+        slope = float(trend["slope"])
 
     out: Dict[str, dict] = {}
     for name in HORIZONS:
@@ -293,6 +434,21 @@ def summarize_prediction(pred: dict) -> dict:
             pct2 = round(100.0 * sum(1 for s in in_h if s.get("inside_2sigma")) / n, 1)
         else:
             pct1 = pct2 = None
+
+        mean_dev = mean_dev_pct = None
+        if slope is not None and n:
+            devs = []
+            for s in in_h:
+                off = s.get("offset")
+                px = s.get("price")
+                if _is_finite(off) and _is_finite(px):
+                    trend_at = float(anchor) + slope * float(off)
+                    devs.append(abs(float(px) - trend_at))
+            if devs:
+                mean_dev = round(sum(devs) / len(devs), 4)
+                if _is_finite(anchor) and float(anchor) > 0:
+                    mean_dev_pct = round(100.0 * mean_dev / float(anchor), 2)
+
         out[name] = {
             "path_count": n,
             "path_pct_1sigma": pct1,
@@ -304,6 +460,9 @@ def summarize_prediction(pred: dict) -> dict:
             "high1": band.get("high1"),
             "low2": band.get("low2"),
             "high2": band.get("high2"),
+            "trend_end": band.get("trend_end"),
+            "mean_dev": mean_dev,
+            "mean_dev_pct": mean_dev_pct,
         }
     return out
 

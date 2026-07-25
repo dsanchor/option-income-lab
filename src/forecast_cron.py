@@ -38,8 +38,46 @@ RETENTION_DAYS = 365
 WINDOW_CALENDAR_BOUND_DAYS = 42
 # Calendar horizon (~4 weeks) used for the best-effort earnings/ex-div flags.
 FLAG_HORIZON_DAYS = 30
+# Target DTE for the ATM implied-vol lookup (~4-week horizon, matches lifecycle).
+IV_TARGET_DTE = 30
 
 _TECH = TechnicalsCalculator()
+
+
+def _load_pf_settings() -> dict:
+    """Read price-forecast model settings from Config (safe defaults on error)."""
+    defaults = {"band_confidence": 0.50, "vol_source": "iv_hv", "trend_window": 20}
+    try:
+        from src.config import Config
+        cfg = Config()
+        return {
+            "band_confidence": cfg.price_forecast_band_confidence,
+            "vol_source": cfg.price_forecast_vol_source,
+            "trend_window": cfg.price_forecast_trend_window,
+        }
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Forecast cron: could not read config, using defaults: %s", exc)
+        return defaults
+
+
+async def _fetch_atm_iv(symbol: str, price: float) -> Optional[float]:
+    """Best-effort ATM implied vol (annualized decimal) for ~30 DTE. None on failure."""
+    try:
+        import json
+        from src.options_chain_cache import get_options_chain_cache
+        from src.volatility import extract_atm_iv
+
+        cache = get_options_chain_cache()
+        raw = await cache.get_or_load_async(symbol)
+        chain = json.loads(raw) if isinstance(raw, str) else (raw or {})
+        result = extract_atm_iv(chain, price, target_dte=IV_TARGET_DTE)
+        if result is None:
+            return None
+        iv, _dte = result
+        return iv if iv and iv > 0 else None
+    except Exception as exc:
+        logger.info("Forecast cron: IV lookup failed for %s: %s", symbol, exc)
+        return None
 
 
 async def run_forecast_cron(cosmos, yf_provider) -> dict:
@@ -59,6 +97,13 @@ async def run_forecast_cron(cosmos, yf_provider) -> dict:
         datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
     ).strftime("%Y-%m-%d")
 
+    pf_settings = _load_pf_settings()
+    logger.info(
+        "Forecast cron settings: confidence=%s vol_source=%s trend_window=%s",
+        pf_settings["band_confidence"], pf_settings["vol_source"],
+        pf_settings["trend_window"],
+    )
+
     created = 0
     validated = 0
     resolved = 0
@@ -71,7 +116,9 @@ async def run_forecast_cron(cosmos, yf_provider) -> dict:
         if not symbol:
             continue
         try:
-            outcome = await _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff)
+            outcome = await _process_symbol(
+                cosmos, yf_provider, symbol, run_date, cutoff, pf_settings
+            )
             created += outcome["created"]
             validated += outcome["validated"]
             resolved += outcome["resolved"]
@@ -99,8 +146,10 @@ async def run_forecast_cron(cosmos, yf_provider) -> dict:
     return summary
 
 
-async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff) -> dict:
+async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff, pf_settings=None) -> dict:
     """Process a single symbol. Returns per-stage counts."""
+    if pf_settings is None:
+        pf_settings = {"band_confidence": 0.50, "vol_source": "iv_hv", "trend_window": 20}
     out = {"created": 0, "validated": 0, "resolved": 0, "pruned": 0, "skipped": 0}
 
     history = await yf_provider.get_ohlcv_history(symbol, period="1y")
@@ -160,11 +209,21 @@ async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff) -> dict
 
     # ── Generate today's prediction ────────────────────────────────────
     technicals = _TECH.compute_all(history)
+
+    vol_source = pf_settings.get("vol_source", "iv_hv")
+    iv = None
+    if vol_source in ("iv", "iv_hv"):
+        iv = await _fetch_atm_iv(symbol, latest_price)
+
     forecast = compute_forecast_from_closes(
         closes_series.tolist(),
         technicals,
         current_price=latest_price,
         hv_window=HV_WINDOW,
+        confidence=pf_settings.get("band_confidence", 0.50),
+        vol_source=vol_source,
+        iv=iv,
+        trend_window=pf_settings.get("trend_window", 20),
     )
     if forecast is None:
         out["skipped"] = 1

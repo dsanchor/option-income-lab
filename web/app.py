@@ -2639,15 +2639,25 @@ async def api_symbol_forecasts(request: Request, symbol: str,
             "status": p.get("status"),
             "price_at_creation": p.get("price_at_creation"),
             "hv": p.get("hv"),
+            "vol_source": p.get("vol_source", "hv"),
+            "confidence": p.get("confidence", 0.68),
+            "outer_confidence": p.get("outer_confidence", 0.95),
             "bias": p.get("bias"),
+            "trend": p.get("trend"),
             "flags": p.get("flags", {}),
             "horizons": summarize_prediction(p),
         })
+
+    # Confidence used by the most recent prediction — drives UI labels/target.
+    latest_conf = rows[0]["confidence"] if rows else 0.68
+    latest_outer = rows[0]["outer_confidence"] if rows else 0.95
 
     return JSONResponse({
         "symbol": sym,
         "range": {"from": date_from, "to": date_to},
         "count": len(rows),
+        "confidence": latest_conf,
+        "outer_confidence": latest_outer,
         "rows": rows,
         "hit_rate": aggregate_hit_rate(preds),
     })
@@ -3536,6 +3546,10 @@ def _build_settings_config_context(
     pf_next_run = fmt_time(pf.get("next_run"))
     pf_last_run_iso = resolve_last_run_iso("price_forecast", pf.get("last_run"))
     pf_next_run_iso = to_iso(pf.get("next_run"))
+    _pf_cfg = config.get("price_forecast", {})
+    pf_band_confidence = _pf_cfg.get("band_confidence", 0.50)
+    pf_vol_source = _pf_cfg.get("vol_source", "iv_hv")
+    pf_trend_window = _pf_cfg.get("trend_window", 20)
     
     return {
         "request": request,
@@ -3603,6 +3617,9 @@ def _build_settings_config_context(
         "pf_next_run": pf_next_run,
         "pf_last_run_iso": pf_last_run_iso,
         "pf_next_run_iso": pf_next_run_iso,
+        "pf_band_confidence": pf_band_confidence,
+        "pf_vol_source": pf_vol_source,
+        "pf_trend_window": pf_trend_window,
     }
 
 
@@ -3916,6 +3933,29 @@ async def settings_config_save(request: Request):
     pf_enabled = form.get("pf_enabled") == "true"
     pf_cron = str(form.get("pf_cron", "0 21 * * 1-5")).strip()
 
+    # Model settings (band confidence / vol source / trend window).
+    def _pf_conf():
+        try:
+            v = float(form.get("pf_band_confidence", 0.50))
+        except (TypeError, ValueError):
+            return 0.50
+        return v if v in (0.50, 0.68, 0.80, 0.90, 0.95) else 0.50
+
+    def _pf_vol():
+        v = str(form.get("pf_vol_source", "iv_hv")).lower()
+        return v if v in ("hv", "ewma", "iv_hv") else "iv_hv"
+
+    def _pf_trend():
+        try:
+            v = int(form.get("pf_trend_window", 20))
+        except (TypeError, ValueError):
+            return 20
+        return v if 5 <= v <= 120 else 20
+
+    pf_band_confidence = _pf_conf()
+    pf_vol_source = _pf_vol()
+    pf_trend_window = _pf_trend()
+
     if pf_cron:
         try:
             croniter(pf_cron)
@@ -3924,12 +3964,18 @@ async def settings_config_save(request: Request):
                 cosmos_settings.setdefault("price_forecast", {})
                 cosmos_settings["price_forecast"]["enabled"] = pf_enabled
                 cosmos_settings["price_forecast"]["cron"] = pf_cron
+                cosmos_settings["price_forecast"]["band_confidence"] = pf_band_confidence
+                cosmos_settings["price_forecast"]["vol_source"] = pf_vol_source
+                cosmos_settings["price_forecast"]["trend_window"] = pf_trend_window
                 _save_settings_to_cosmos(cosmos, cosmos_settings)
 
             config = _load_config()
             config.setdefault("price_forecast", {})
             config["price_forecast"]["enabled"] = pf_enabled
             config["price_forecast"]["cron"] = pf_cron
+            config["price_forecast"]["band_confidence"] = pf_band_confidence
+            config["price_forecast"]["vol_source"] = pf_vol_source
+            config["price_forecast"]["trend_window"] = pf_trend_window
             _write_config(config)
             saved.append("Price forecast")
 

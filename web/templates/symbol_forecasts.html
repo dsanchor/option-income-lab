@@ -32,7 +32,7 @@
 
 <!-- Rolling endpoint calibration -->
 <div class="card">
-    <div class="card-header"><h2>Endpoint Hit-Rate <span class="card-badge">±1σ target ≈ 68%</span></h2></div>
+    <div class="card-header"><h2>Endpoint Hit-Rate <span class="card-badge" id="hitRateBadge">band target</span></h2></div>
     <div id="forecast-hitrate" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0.75rem; padding:1rem 1.25rem;"></div>
 </div>
 
@@ -60,9 +60,10 @@
         </table>
     </div>
     <p style="font-size:0.72rem; color:var(--text-muted); padding:0.75rem 1.25rem;">
-        Each horizon cell shows the <strong>±1σ predicted price range</strong> (hover for ±2σ). Below it: the
-        <strong>% of snapshots inside ±1σ</strong> (path metric) and, once the horizon's end session is reached,
-        the <strong>endpoint</strong> result ✓/±/✗ (the calibrated metric — should trend ≈68% for ±1σ). Click a row to open the fan chart.
+        Each horizon cell shows the <strong>predicted price range</strong> at the configured band confidence (hover for the wider outer band). Below it: the
+        <strong>trend</strong> projected value at the horizon end and the <strong>mean deviation</strong> of closes from that trend line, then the
+        <strong>% of snapshots inside</strong> the band (path metric) and, once the horizon's end session is reached,
+        the <strong>endpoint</strong> result ✓/±/✗ (the calibrated metric — should trend toward the band confidence). Click a row to open the fan chart.
     </p>
 </div>
 
@@ -94,6 +95,10 @@
     var TRADING_DAYS = 252;
     var currentRange = '30d';
     var fanChart = null;
+    var bandConf = 0.68;     // central probability of primary band (from API)
+    var outerConf = 0.95;    // outer band probability
+    function confLabel() { return Math.round(bandConf * 100) + '%'; }
+    function outerLabel() { return Math.round(outerConf * 100) + '%'; }
 
     var fModal = document.getElementById('forecastDetailModal');
     var fTitle = document.getElementById('forecastDetailTitle');
@@ -107,19 +112,29 @@
     function cellHtml(h) {
         if (!h) return '<span style="color:var(--text-muted);">—</span>';
         var s = '';
-        // Predicted ±1σ price range (the actual forecast for this horizon)
+        // Predicted primary price range (the actual forecast for this horizon)
         if (h.low1 != null && h.high1 != null) {
             var range2 = (h.low2 != null && h.high2 != null)
-                ? '±2σ $' + num(h.low2) + '–$' + num(h.high2) : '';
-            s += '<div style="font-weight:600;" title="±1σ predicted range. ' + range2 + '">$' +
+                ? outerLabel() + ' $' + num(h.low2) + '–$' + num(h.high2) : '';
+            s += '<div style="font-weight:600;" title="' + confLabel() + ' predicted range. ' + range2 + '">$' +
                  num(h.low1) + '–$' + num(h.high1) + '</div>';
         } else {
             s += '<div style="color:var(--text-muted);">—</div>';
         }
+        // Trend projected value at horizon end + mean deviation from the trend line
+        if (h.trend_end != null) {
+            var dev = '';
+            if (h.mean_dev != null) {
+                dev = ' <span style="color:var(--text-muted);" title="Mean deviation of closes from the trend line">±$' + num(h.mean_dev) +
+                      (h.mean_dev_pct != null ? ' / ' + num(h.mean_dev_pct, 1) + '%' : '') + '</span>';
+            }
+            s += '<div style="font-size:0.72rem; color:var(--blue,#60a5fa);" title="Linear-trend projection at the horizon end session">↳ $' +
+                 num(h.trend_end) + dev + '</div>';
+        }
         // Path % + endpoint result
         var sub = '';
         if (h.path_count > 0) {
-            sub += '<span title="' + h.path_count + ' snapshot(s); % inside ±1σ">' + pct(h.path_pct_1sigma) + '</span>';
+            sub += '<span title="' + h.path_count + ' snapshot(s); % inside the ' + confLabel() + ' band">' + pct(h.path_pct_1sigma) + '</span>';
         }
         if (h.endpoint) {
             var ep = h.endpoint;
@@ -127,7 +142,7 @@
             var icon = ok ? '✓' : (ep.inside_2sigma ? '±' : '✗');
             var col = ok ? 'var(--green,#22c55e)' : (ep.inside_2sigma ? 'var(--amber,#f59e0b)' : 'var(--red,#ef4444)');
             sub += ' <strong style="color:' + col + '" title="Endpoint close ' + num(ep.price) + ' — ' +
-                 (ok ? 'inside ±1σ' : (ep.inside_2sigma ? 'inside ±2σ only' : 'outside ±2σ')) + '">' + icon + '</strong>';
+                 (ok ? 'inside ' + confLabel() + ' band' : (ep.inside_2sigma ? 'inside ' + outerLabel() + ' band only' : 'outside ' + outerLabel() + ' band')) + '">' + icon + '</strong>';
         }
         s += '<div style="font-size:0.72rem; color:var(--text-muted);">' + (sub || '·') + '</div>';
         return s;
@@ -135,6 +150,9 @@
 
     function renderHitRate(hr) {
         var el = document.getElementById('forecast-hitrate');
+        var badge = document.getElementById('hitRateBadge');
+        var target = Math.round(bandConf * 100);
+        if (badge) badge.textContent = '±band target ≈ ' + target + '%';
         var labels = { '1d': '1d', '1w': '1w', '2w': '2w', '4w': '4w' };
         var parts = [];
         ['1d','1w','2w','4w'].forEach(function(k) {
@@ -143,17 +161,17 @@
             var resolved = h.resolved || 0;
             var hasData = (v !== null && v !== undefined);
             var valTxt = hasData ? v.toFixed(0) + '%' : '—';
-            // Colour vs the 68% target: green near/above, amber a bit off, red far
+            // Colour vs the configured band target: green near/above, amber a bit off, red far
             var col = 'var(--text-muted)';
             if (hasData) {
-                var diff = Math.abs(v - 68);
+                var diff = Math.abs(v - target);
                 col = diff <= 12 ? 'var(--green,#22c55e)' : (diff <= 25 ? 'var(--amber,#f59e0b)' : 'var(--red,#ef4444)');
             }
             var dirTxt = (h.direction_pct != null) ? 'dir ' + h.direction_pct.toFixed(0) + '%' : 'dir —';
             parts.push(
                 '<div style="background:var(--bg-input,#1a1a22); border:1px solid var(--border,#2d2d35); border-radius:var(--radius,8px); padding:0.75rem 0.9rem;">' +
                   '<div style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.03em; color:var(--text-muted,#888); margin-bottom:0.35rem;">' +
-                    labels[k] + ' endpoint ±1σ</div>' +
+                    labels[k] + ' endpoint ±' + target + '%</div>' +
                   '<div style="font-size:1.6rem; font-weight:700; line-height:1; color:' + col + ';">' + valTxt + '</div>' +
                   '<div style="font-size:0.72rem; color:var(--text-muted,#888); margin-top:0.35rem;">n=' + resolved + ' · ' + dirTxt + '</div>' +
                 '</div>'
@@ -165,6 +183,8 @@
     function renderTable(data) {
         var tbody = document.getElementById('forecast-tbody');
         document.getElementById('forecastCount').textContent = (data.count || 0) + ' predictions';
+        if (data.confidence != null) bandConf = data.confidence;
+        if (data.outer_confidence != null) outerConf = data.outer_confidence;
         renderHitRate(data.hit_rate || {});
         if (!data.rows || !data.rows.length) {
             tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; color:var(--text-muted); padding:1.5rem;">No forecasts in this range yet.</td></tr>';
@@ -240,6 +260,12 @@
 
     // ---- Fan-chart modal ----
     function sigmaAt(price, hv, session) { return price * hv * Math.sqrt(session / TRADING_DAYS); }
+    var CONF_Z = { '0.5': 0.6745, '0.50': 0.6745, '0.68': 1.0, '0.8': 1.2816, '0.80': 1.2816, '0.9': 1.6449, '0.90': 1.6449, '0.95': 1.96, '0.99': 2.5758 };
+    function zFor(conf, dflt) {
+        if (conf == null) return dflt;
+        var z = CONF_Z[String(conf)];
+        return (z != null) ? z : dflt;
+    }
 
     function openForecastDetail(id) {
         if (!id) return;
@@ -252,20 +278,27 @@
     function renderFanChart(doc) {
         fTitle.textContent = SYMBOL + ' — Forecast ' + (doc.created_date || '');
         var price = doc.price_at_creation, hv = doc.hv, bias = doc.bias;
+        var z1 = zFor(doc.confidence, 1.0), z2 = zFor(doc.outer_confidence, 1.96);
+        var confPct = Math.round((doc.confidence != null ? doc.confidence : 0.68) * 100);
+        var outPct = Math.round((doc.outer_confidence != null ? doc.outer_confidence : 0.95) * 100);
+        var slope = (doc.trend && doc.trend.slope != null) ? doc.trend.slope : null;
         fBody.innerHTML = '<div style="display:flex; flex-wrap:wrap; gap:0.5rem 1.25rem; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem;">' +
             '<span>Price at creation: <strong style="color:var(--text);">$' + num(price) + '</strong></span>' +
             '<span>HV (annualized): <strong style="color:var(--text);">' + (hv != null ? (hv*100).toFixed(1) + '%' : '—') + '</strong></span>' +
+            '<span>Vol source: <strong style="color:var(--text);">' + (doc.vol_source || 'hv') + '</strong></span>' +
             '<span>Bias: <strong style="color:var(--text);">' + num(bias) + '</strong></span>' +
+            (slope != null ? '<span>Trend: <strong style="color:var(--text);">' + (slope >= 0 ? '+' : '') + num(slope) + ' $/session</strong></span>' : '') +
             (doc.flags && doc.flags.earnings_in_window ? '<span>📅 earnings in window</span>' : '') +
             (doc.flags && doc.flags.exdiv_in_window ? '<span>💰 ex-div in window</span>' : '') +
             '</div>';
 
-        var labels = [], high2 = [], high1 = [], low1 = [], low2 = [], center = [];
+        var labels = [], high2 = [], high1 = [], low1 = [], low2 = [], center = [], trend = [];
         for (var s = 0; s <= 20; s++) {
             var sg = sigmaAt(price, hv, s);
             labels.push(s); center.push(price);
-            high1.push(price + sg); low1.push(price - sg);
-            high2.push(price + 2*sg); low2.push(price - 2*sg);
+            high1.push(price + z1*sg); low1.push(price - z1*sg);
+            high2.push(price + z2*sg); low2.push(price - z2*sg);
+            trend.push(slope != null ? (price + slope * s) : null);
         }
 
         var snaps = (doc.snapshots || []).map(function(sn) {
@@ -309,7 +342,7 @@
                 g.font = '9px system-ui, sans-serif';
                 g.textAlign = 'left';
                 [1, 5, 10, 20].forEach(function(s) {
-                    var sg = sigmaAt(price, hv, s);
+                    var sg = sigmaAt(price, hv, s) * z1;
                     var px = xScale.getPixelForValue(s);
                     g.fillStyle = 'rgba(129,140,248,0.9)';
                     g.fillText('$' + (price + sg).toFixed(1), px + 3, yScale.getPixelForValue(price + sg) - 2);
@@ -325,11 +358,12 @@
             data: {
                 labels: labels,
                 datasets: [
-                    { label: '+2σ', data: high2, borderColor: 'rgba(99,102,241,0.35)', borderWidth: 1, pointRadius: 0, fill: '+3', backgroundColor: 'rgba(99,102,241,0.06)', tension: 0.3 },
-                    { label: '+1σ', data: high1, borderColor: 'rgba(99,102,241,0.6)', borderWidth: 1, pointRadius: 0, fill: '+1', backgroundColor: 'rgba(99,102,241,0.14)', tension: 0.3 },
-                    { label: '-1σ', data: low1, borderColor: 'rgba(99,102,241,0.6)', borderWidth: 1, pointRadius: 0, fill: false, tension: 0.3 },
-                    { label: '-2σ', data: low2, borderColor: 'rgba(99,102,241,0.35)', borderWidth: 1, pointRadius: 0, fill: false, tension: 0.3 },
+                    { label: 'Outer', data: high2, borderColor: 'rgba(99,102,241,0.35)', borderWidth: 1, pointRadius: 0, fill: '+3', backgroundColor: 'rgba(99,102,241,0.06)', tension: 0.3 },
+                    { label: 'Inner', data: high1, borderColor: 'rgba(99,102,241,0.6)', borderWidth: 1, pointRadius: 0, fill: '+1', backgroundColor: 'rgba(99,102,241,0.14)', tension: 0.3 },
+                    { label: '-inner', data: low1, borderColor: 'rgba(99,102,241,0.6)', borderWidth: 1, pointRadius: 0, fill: false, tension: 0.3 },
+                    { label: '-outer', data: low2, borderColor: 'rgba(99,102,241,0.35)', borderWidth: 1, pointRadius: 0, fill: false, tension: 0.3 },
                     { label: 'Center', data: center, borderColor: 'rgba(148,163,184,0.7)', borderWidth: 1, borderDash: [4,4], pointRadius: 0, fill: false },
+                    { label: 'Trend', data: trend, borderColor: 'rgba(56,189,248,0.9)', borderWidth: 2, borderDash: [6,3], pointRadius: 0, fill: false, tension: 0, spanGaps: true },
                     { label: 'Close', type: 'scatter', data: snaps, pointRadius: 4, pointHoverRadius: 6,
                       pointBackgroundColor: snaps.map(function(p){ return p._c; }), pointBorderColor: 'rgba(0,0,0,0.3)' },
                     { label: 'Endpoint', type: 'scatter', data: eps, pointStyle: 'rectRot', pointRadius: 7, pointHoverRadius: 9,

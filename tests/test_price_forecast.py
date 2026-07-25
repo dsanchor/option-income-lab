@@ -13,6 +13,8 @@ from src.price_forecast import (
     HV_WINDOW,
     LIFECYCLE_SESSIONS,
     MIN_HISTORY_BARS,
+    DEFAULT_CONFIDENCE,
+    OUTER_CONFIDENCE,
     compute_bias,
     compute_forecast,
     compute_forecast_from_closes,
@@ -21,11 +23,14 @@ from src.price_forecast import (
     has_enough_history,
     horizon_for_offset,
     is_endpoint,
+    linear_trend,
     price_inside,
     summarize_prediction,
     aggregate_hit_rate,
     trading_session_offset,
+    z_for_confidence,
 )
+from src.volatility import ewma_volatility, historical_volatility
 
 
 # ---------------------------------------------------------------------------
@@ -311,3 +316,133 @@ def test_aggregate_hit_rate_ignores_neutral_direction():
     agg = aggregate_hit_rate(preds)
     assert agg["1d"]["resolved"] == 1
     assert agg["1d"]["direction_pct"] is None
+
+
+# ---------------------------------------------------------------------------
+# Confidence bands (configurable z-multiplier)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "confidence,expected_z",
+    [
+        (0.50, 0.6745),
+        (0.68, 1.0),
+        (0.80, 1.2816),
+        (0.95, 1.96),
+    ],
+)
+def test_z_for_confidence_known_levels(confidence, expected_z):
+    assert z_for_confidence(confidence) == pytest.approx(expected_z, rel=1e-3)
+
+
+def test_z_for_confidence_defaults_and_nearest():
+    # None → default (0.68 → z=1.0).
+    assert z_for_confidence(None) == pytest.approx(1.0)
+    # Unknown value snaps to the nearest supported level.
+    assert z_for_confidence(0.70) == pytest.approx(z_for_confidence(0.68))
+
+
+def test_confidence_narrows_the_band():
+    # A lower confidence must produce a tighter (narrower) primary band, but the
+    # centre stays on spot and the raw unit sigma is unchanged.
+    wide = compute_forecast(100.0, 0.20, confidence=0.95)["horizons"]["4w"]
+    tight = compute_forecast(100.0, 0.20, confidence=0.50)["horizons"]["4w"]
+    wide_width = wide["high1"] - wide["low1"]
+    tight_width = tight["high1"] - tight["low1"]
+    assert tight_width < wide_width
+    assert tight["center"] == pytest.approx(100.0)
+    # Raw unit sigma is the same regardless of the chosen confidence.
+    assert tight["sigma"] == pytest.approx(wide["sigma"], rel=1e-6)
+
+
+def test_compute_forecast_records_confidence_metadata():
+    fc = compute_forecast(100.0, 0.20, confidence=0.50)
+    assert fc["confidence"] == pytest.approx(0.50)
+    assert fc["outer_confidence"] == pytest.approx(OUTER_CONFIDENCE)
+    # z1 corresponds to the primary confidence; z2 to the outer one.
+    band = fc["horizons"]["1w"]
+    assert band["z1"] == pytest.approx(z_for_confidence(0.50), rel=1e-3)
+    assert band["z2"] == pytest.approx(z_for_confidence(OUTER_CONFIDENCE), rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# EWMA volatility
+# ---------------------------------------------------------------------------
+
+def test_ewma_volatility_needs_enough_history():
+    assert ewma_volatility([100.0]) is None
+    assert ewma_volatility(None) is None
+
+
+def test_ewma_volatility_positive_and_annualized():
+    closes = [100.0, 101.0, 99.5, 102.0, 100.5, 103.0, 101.0, 104.0, 102.5, 105.0]
+    vol = ewma_volatility(closes, span=5)
+    assert vol is not None and vol > 0
+
+
+def test_ewma_reacts_faster_than_flat_hv():
+    # Calm regime then a volatility spike at the end: EWMA should read higher
+    # than the flat-window HV because it weights the recent spike more.
+    calm = [100.0 + 0.1 * i for i in range(40)]
+    spike = [calm[-1] + (5.0 if i % 2 == 0 else -5.0) for i in range(6)]
+    closes = calm + spike
+    hv = historical_volatility(closes)
+    ewma = ewma_volatility(closes, span=10)
+    assert hv is not None and ewma is not None
+    assert ewma > hv
+
+
+# ---------------------------------------------------------------------------
+# Linear trend overlay
+# ---------------------------------------------------------------------------
+
+def test_linear_trend_none_on_short_series():
+    assert linear_trend([100.0, 101.0]) is None
+    assert linear_trend(None) is None
+
+
+def test_linear_trend_recovers_known_slope():
+    # Perfectly linear series: slope per session == 0.5, residuals ~0.
+    closes = [100.0 + 0.5 * i for i in range(20)]
+    tr = linear_trend(closes, window=20)
+    assert tr is not None
+    assert tr["slope"] == pytest.approx(0.5, rel=1e-6)
+    assert tr["resid_std"] == pytest.approx(0.0, abs=1e-6)
+    assert tr["window"] == 20
+
+
+def test_linear_trend_respects_window():
+    closes = [100.0 + 0.5 * i for i in range(60)]
+    tr = linear_trend(closes, window=10)
+    assert tr["window"] == 10
+
+
+# ---------------------------------------------------------------------------
+# Trend projection + mean deviation in summarize_prediction
+# ---------------------------------------------------------------------------
+
+def test_summarize_prediction_trend_end_and_mean_dev():
+    # Doc carries a trend slope; snapshots deviate from the projected trend line.
+    slope = 0.5
+    price0 = 100.0
+    pred = _pred(
+        horizons=("1w",),
+        snapshots=[
+            # offset 3 → trend expects 100 + 0.5*3 = 101.5; actual 102.5 → dev 1.0
+            {"horizon": "1w", "offset": 3, "price": 102.5,
+             "inside_1sigma": True, "inside_2sigma": True},
+            # offset 5 → trend expects 102.5; actual 101.5 → dev 1.0
+            {"horizon": "1w", "offset": 5, "price": 101.5,
+             "inside_1sigma": True, "inside_2sigma": True},
+        ],
+    )
+    pred["price_at_creation"] = price0
+    pred["trend"] = {"slope": slope, "resid_std": 0.0, "window": 20}
+    # 1w ends at session 5 → projected trend end = 100 + 0.5*5 = 102.5
+    for name, band in pred["horizons"].items():
+        band["trend_end"] = round(price0 + slope * HORIZONS[name]["end_session"], 4)
+
+    summary = summarize_prediction(pred)
+    assert summary["1w"]["trend_end"] == pytest.approx(102.5)
+    assert summary["1w"]["mean_dev"] == pytest.approx(1.0, rel=1e-3)
+    assert summary["1w"]["mean_dev_pct"] is not None

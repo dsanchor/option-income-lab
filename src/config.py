@@ -285,3 +285,27 @@ class Config:
     def price_forecast_cron(self) -> str:
         """Price-forecast cron expression (default: '0 21 * * 1-5')."""
         return str(self.config.get('price_forecast', {}).get('cron', '0 21 * * 1-5'))
+
+    @property
+    def price_forecast_band_confidence(self) -> float:
+        """Primary band central confidence (0.50/0.68/0.80/0.95). Default 0.50."""
+        try:
+            v = float(self.config.get('price_forecast', {}).get('band_confidence', 0.50))
+        except (TypeError, ValueError):
+            return 0.50
+        return v if v in (0.50, 0.68, 0.80, 0.90, 0.95) else 0.50
+
+    @property
+    def price_forecast_vol_source(self) -> str:
+        """Volatility source: 'hv' | 'ewma' | 'iv_hv'. Default 'iv_hv'."""
+        v = str(self.config.get('price_forecast', {}).get('vol_source', 'iv_hv')).lower()
+        return v if v in ('hv', 'ewma', 'iv_hv') else 'iv_hv'
+
+    @property
+    def price_forecast_trend_window(self) -> int:
+        """Sessions used for the linear-trend overlay regression. Default 20."""
+        try:
+            v = int(self.config.get('price_forecast', {}).get('trend_window', 20))
+        except (TypeError, ValueError):
+            return 20
+        return v if 5 <= v <= 120 else 20

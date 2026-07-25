@@ -64,6 +64,42 @@ def historical_volatility(
     return daily_std * math.sqrt(TRADING_DAYS)
 
 
+def ewma_volatility(
+    closes: Sequence[float],
+    span: int = 20,
+) -> Optional[float]:
+    """Annualized EWMA (exponentially-weighted) realized volatility (decimal).
+
+    Weights recent daily log returns more heavily (RiskMetrics-style), so the
+    estimate reacts faster to volatility regime changes than a flat-window HV.
+    ``span`` maps to the smoothing factor ``alpha = 2 / (span + 1)``. Returns
+    ``None`` when there are not enough clean returns.
+    """
+    if closes is None:
+        return None
+    clean = [float(c) for c in closes if c is not None and _is_finite(c) and float(c) > 0]
+    if len(clean) < 3:
+        return None
+
+    returns = []
+    for prev, cur in zip(clean[:-1], clean[1:]):
+        try:
+            returns.append(math.log(cur / prev))
+        except (ValueError, ZeroDivisionError):
+            continue
+    if len(returns) < 2:
+        return None
+
+    alpha = 2.0 / (span + 1.0) if span and span > 0 else 0.1
+    # EWMA of squared returns (mean assumed ~0, standard for short-horizon vol).
+    ewma_var = returns[0] ** 2
+    for r in returns[1:]:
+        ewma_var = alpha * (r ** 2) + (1.0 - alpha) * ewma_var
+    if ewma_var <= 0:
+        return None
+    return math.sqrt(ewma_var) * math.sqrt(TRADING_DAYS)
+
+
 def _parse_exp_key(exp_key: str) -> Optional[date]:
     """Parse an expiration key (``YYYYMMDD`` or ``YYYY-MM-DD``) to a date."""
     if not exp_key:

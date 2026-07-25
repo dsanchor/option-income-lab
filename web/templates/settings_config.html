@@ -446,6 +446,46 @@
                     <small style="display:block; margin-top:0.3rem; color:var(--text-muted); font-size:0.75rem;">Default: <code>0 21 * * 1-5</code> = 9 PM UTC weekdays (after US close)</small>
                 </div>
 
+                <!-- Model tuning -->
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:0.75rem; margin-bottom:0.75rem;">
+                    <div>
+                        <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
+                            Band confidence
+                            <span title="Central probability of the primary range. Lower = tighter, more actionable band (the 'most likely' range). The endpoint hit-rate target equals this value.">ⓘ</span>
+                        </label>
+                        <select name="pf_band_confidence"
+                                style="width:100%; padding:0.55rem 0.7rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-size:0.85rem; border-radius:var(--radius);">
+                            <option value="0.5" {{ 'selected' if pf_band_confidence in [0.5, 0.50] }}>50% — most likely range (tighter)</option>
+                            <option value="0.68" {{ 'selected' if pf_band_confidence == 0.68 }}>68% — classic ±1σ</option>
+                            <option value="0.8" {{ 'selected' if pf_band_confidence in [0.8, 0.80] }}>80%</option>
+                            <option value="0.95" {{ 'selected' if pf_band_confidence == 0.95 }}>95% (widest)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
+                            Volatility source
+                            <span title="HV = flat 20-day realized vol. EWMA = recency-weighted (more responsive). IV→HV = implied vol from the option chain when available, else HV.">ⓘ</span>
+                        </label>
+                        <select name="pf_vol_source"
+                                style="width:100%; padding:0.55rem 0.7rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-size:0.85rem; border-radius:var(--radius);">
+                            <option value="iv_hv" {{ 'selected' if pf_vol_source == 'iv_hv' }}>IV → HV (recommended)</option>
+                            <option value="ewma" {{ 'selected' if pf_vol_source == 'ewma' }}>EWMA (responsive)</option>
+                            <option value="hv" {{ 'selected' if pf_vol_source == 'hv' }}>HV (flat window)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
+                            Trend window
+                            <span title="Sessions used for the linear-regression trend overlay (slope + mean deviation). Overlay only — never shifts the band.">ⓘ</span>
+                        </label>
+                        <input type="number" name="pf_trend_window" value="{{ pf_trend_window }}" min="5" max="120" step="1"
+                               style="width:100%; padding:0.55rem 0.7rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                    </div>
+                </div>
+                <small style="display:block; margin-bottom:0.75rem; color:var(--text-muted); font-size:0.72rem;">
+                    Note: IV is only available for new daily forecasts (not stored historically). Re-run the backfill with <code>--force</code> to rebuild history under new settings (uses HV/EWMA).
+                </small>
+
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Last Run</label>

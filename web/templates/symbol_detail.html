@@ -30,41 +30,6 @@
     
     <div class="symbol-toolbar-wrap">
         <div class="symbol-toolbar">
-            {% if is_paused %}
-            <button id="resume-watchlist" class="btn-trigger btn-trigger-compact" type="button" title="Resume covered call, cash-secured put, and buy tracker now">▶ Resume</button>
-            {% else %}
-            <button id="pause-watchlist" class="btn-trigger btn-trigger-compact" type="button" {% if not next_earnings_date %}disabled title="No upcoming earnings date found. Sync the calendar first."{% else %}title="Pause covered call, cash-secured put, and buy tracker until {{ next_earnings_date }}"{% endif %}>⏸ Pause</button>
-            {% endif %}
-            <span class="toolbar-divider" aria-hidden="true"></span>
-            <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
-                <label class="switch">
-                    <input type="checkbox" id="toggle-cc" {% if symbol_doc.watchlist.covered_call %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
-                    <span class="slider"></span>
-                </label>
-                <span>Call</span>
-            </span>
-            <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
-                <label class="switch">
-                    <input type="checkbox" id="toggle-csp" {% if symbol_doc.watchlist.cash_secured_put %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
-                    <span class="slider"></span>
-                </label>
-                <span>Put</span>
-            </span>
-            <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
-                <label class="switch">
-                    <input type="checkbox" id="toggle-bt" {% if symbol_doc.watchlist.buy_tracker %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
-                    <span class="slider"></span>
-                </label>
-                <span>Buy Tracker</span>
-            </span>
-            <span class="toggle-item">
-                <label class="switch">
-                    <input type="checkbox" id="toggle-notifications" {% if symbol_doc.telegram_notifications_enabled is not defined or symbol_doc.telegram_notifications_enabled %}checked{% endif %}>
-                    <span class="slider"></span>
-                </label>
-                <span>Notifications</span>
-            </span>
-            <span class="toolbar-divider" aria-hidden="true"></span>
             <div class="chip-group">
                 <a href="/symbols/{{ symbol_doc.symbol }}/options-chain" class="chip-link chip-link-compact" title="View the live option chain (calls & puts): strikes, expirations, bid/ask and Greeks — to pick contracts for covered calls or cash-secured puts.">
                     <span>📈</span> Option Chain
@@ -86,11 +51,6 @@
                 </a>
             </div>
         </div>
-        {% if is_paused %}
-        <div class="symbol-toolbar-date">
-            <span class="badge badge-waiting badge-pause" title="Covered call, put and buy tracker suspended until earnings; notifications stay active">⏸ Paused until earnings · {{ symbol_doc.watchlist_pause.until }}</span>
-        </div>
-        {% endif %}
     </div>
 </div>
 
@@ -225,6 +185,50 @@
 </div>
 
 <!-- Positions -->
+<!-- Watchlist controls (relate to positions: pause, CC/CSP/BT toggles, notifications) -->
+<div class="symbol-toolbar-wrap" style="margin-bottom:0.75rem;">
+    <div class="symbol-toolbar">
+        {% if is_paused %}
+        <button id="resume-watchlist" class="btn-trigger btn-trigger-compact" type="button" title="Resume covered call, cash-secured put, and buy tracker now">▶ Resume</button>
+        {% else %}
+        <button id="pause-watchlist" class="btn-trigger btn-trigger-compact" type="button" {% if not next_earnings_date %}disabled title="No upcoming earnings date found. Sync the calendar first."{% else %}title="Pause covered call, cash-secured put, and buy tracker until {{ next_earnings_date }}"{% endif %}>⏸ Pause</button>
+        {% endif %}
+        <span class="toolbar-divider" aria-hidden="true"></span>
+        <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
+            <label class="switch">
+                <input type="checkbox" id="toggle-cc" {% if symbol_doc.watchlist.covered_call %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
+                <span class="slider"></span>
+            </label>
+            <span>Call</span>
+        </span>
+        <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
+            <label class="switch">
+                <input type="checkbox" id="toggle-csp" {% if symbol_doc.watchlist.cash_secured_put %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
+                <span class="slider"></span>
+            </label>
+            <span>Put</span>
+        </span>
+        <span class="toggle-item {% if is_paused %}paused-shadow{% endif %}">
+            <label class="switch">
+                <input type="checkbox" id="toggle-bt" {% if symbol_doc.watchlist.buy_tracker %}checked{% endif %} {% if is_paused %}disabled{% endif %}>
+                <span class="slider"></span>
+            </label>
+            <span>Buy Tracker</span>
+        </span>
+        <span class="toggle-item">
+            <label class="switch">
+                <input type="checkbox" id="toggle-notifications" {% if symbol_doc.telegram_notifications_enabled is not defined or symbol_doc.telegram_notifications_enabled %}checked{% endif %}>
+                <span class="slider"></span>
+            </label>
+            <span>Notifications</span>
+        </span>
+    </div>
+    {% if is_paused %}
+    <div class="symbol-toolbar-date">
+        <span class="badge badge-waiting badge-pause" title="Covered call, put and buy tracker suspended until earnings; notifications stay active">⏸ Paused until earnings · {{ symbol_doc.watchlist_pause.until }}</span>
+    </div>
+    {% endif %}
+</div>
 <div class="card">
     <div class="card-header">
         <h2>Positions</h2>
