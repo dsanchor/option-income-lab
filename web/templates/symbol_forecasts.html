@@ -80,7 +80,8 @@
             </div>
             <div style="font-size:0.68rem; color:var(--text-muted); margin-top:0.5rem;">
                 X = trading sessions since creation (0→20). Shaded bands = ±1σ / ±2σ volatility cone.
-                Dots = daily closes (green inside ±1σ, amber ±2σ, red outside). ◆ = horizon endpoint.
+                Dots = daily closes with price labels (green inside ±1σ, amber ±2σ, red outside). ◆ = horizon endpoint.
+                Blue numbers = ±1σ band price at each horizon end (1 / 5 / 10 / 20 sessions).
             </div>
         </div>
     </div>
@@ -270,8 +271,47 @@
 
         var ctx = document.getElementById('forecastFanChart').getContext('2d');
         if (fanChart) { fanChart.destroy(); }
+
+        // Inline plugin: draw numeric price labels on the marked points + band edges.
+        var priceLabelPlugin = {
+            id: 'priceLabels',
+            afterDatasetsDraw: function(chart) {
+                var g = chart.ctx;
+                g.save();
+                g.font = '10px system-ui, sans-serif';
+                g.textAlign = 'center';
+                chart.data.datasets.forEach(function(ds, di) {
+                    if (ds.label !== 'Close' && ds.label !== 'Endpoint') return;
+                    var meta = chart.getDatasetMeta(di);
+                    if (!meta || meta.hidden) return;
+                    meta.data.forEach(function(pt, i) {
+                        var v = ds.data[i] && ds.data[i].y;
+                        if (v == null) return;
+                        var isEp = ds.label === 'Endpoint';
+                        g.fillStyle = isEp ? 'rgba(255,255,255,0.95)' : 'rgba(203,213,225,0.95)';
+                        g.font = (isEp ? 'bold ' : '') + '10px system-ui, sans-serif';
+                        var dy = isEp ? -12 : -9;
+                        g.fillText('$' + v.toFixed(2), pt.x, pt.y + dy);
+                    });
+                });
+                // Band edge values at each horizon end session (1,5,10,20).
+                var xScale = chart.scales.x, yScale = chart.scales.y;
+                g.font = '9px system-ui, sans-serif';
+                g.textAlign = 'left';
+                [1, 5, 10, 20].forEach(function(s) {
+                    var sg = sigmaAt(price, hv, s);
+                    var px = xScale.getPixelForValue(s);
+                    g.fillStyle = 'rgba(129,140,248,0.9)';
+                    g.fillText('$' + (price + sg).toFixed(1), px + 3, yScale.getPixelForValue(price + sg) - 2);
+                    g.fillText('$' + (price - sg).toFixed(1), px + 3, yScale.getPixelForValue(price - sg) + 9);
+                });
+                g.restore();
+            }
+        };
+
         fanChart = new Chart(ctx, {
             type: 'line',
+            plugins: [priceLabelPlugin],
             data: {
                 labels: labels,
                 datasets: [
