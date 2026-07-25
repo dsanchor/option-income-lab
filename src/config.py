@@ -273,3 +273,15 @@ class Config:
     def options_chain_scheduler_cron(self) -> str:
         """Options chain scheduler cron expression (default: '0 * * * *')."""
         return str(self.config.get('options_chain_scheduler', {}).get('cron', '0 * * * *'))
+
+    # ── Price Forecast ─────────────────────────────────────────────────
+
+    @property
+    def price_forecast_enabled(self) -> bool:
+        """Whether the deterministic price-forecast job is enabled (default: True)."""
+        return bool(self.config.get('price_forecast', {}).get('enabled', True))
+
+    @property
+    def price_forecast_cron(self) -> str:
+        """Price-forecast cron expression (default: '0 21 * * 1-5')."""
+        return str(self.config.get('price_forecast', {}).get('cron', '0 21 * * 1-5'))

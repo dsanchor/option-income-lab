@@ -70,6 +70,10 @@ portfolio_enrichment:
   enabled: true
   cron: "0 9-17 * * 1-5"  # Hourly 9-17 Mon-Fri (UTC)
 
+price_forecast:
+  enabled: true
+  cron: "0 21 * * 1-5"  # 9 PM weekdays (UTC) — after US market close
+
 # yfinance data provider settings
 yfinance:
   cache_ttl: 300             # Cache TTL in seconds (default: 5 minutes)

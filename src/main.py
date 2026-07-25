@@ -442,10 +442,40 @@ class OptionsAgentScheduler:
         except Exception as e:
             print(f"ERROR during Portfolio Enrichment: {e}")
 
+    def run_price_forecast_job(self):
+        """Execute the deterministic price-forecast job (async→sync bridge)."""
+        _run_async(self._run_price_forecast_async())
+
+    async def _run_price_forecast_async(self):
+        """Run the price-forecast cron if enabled in config."""
+        pf_config = self.config.config.get('price_forecast', {})
+        if not pf_config.get('enabled', True):
+            print("⏭️  Price Forecast disabled in config")
+            return
+
+        from .forecast_cron import run_forecast_cron
+        from .yfinance_data_provider import get_shared_provider
+
+        now_tz = _now_local()
+        print(f"\n{'='*70}")
+        print(f"📈 Price Forecast - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"{'='*70}\n")
+
+        try:
+            yf_provider = get_shared_provider(self.config.config.get('yfinance'))
+            result = await run_forecast_cron(self.cosmos, yf_provider)
+            print(
+                f"Price Forecast complete: {result.get('created', 0)} created, "
+                f"{result.get('validated', 0)} validated, "
+                f"{result.get('resolved', 0)} resolved, "
+                f"{result.get('pruned', 0)} pruned"
+            )
+        except Exception as e:
+            print(f"ERROR during Price Forecast: {e}")
+
     def run_banner_agent_job(self):
         """Execute banner agent (bridges async to sync for scheduler)."""
         _run_async(self._run_banner_agent_async())
-
     async def _run_banner_agent_async(self):
         """Run dashboard banner agent if enabled in config."""
         banner_config = self.config.config.get('banner_agent', {})
@@ -697,6 +727,14 @@ class OptionsAgentScheduler:
             "portfolio_enrichment",
             "0 9-17 * * 1-5",
             self.run_portfolio_enrichment_job,
+            has_extra_config=False,
+        )
+        self.registry.register(
+            "price_forecast",
+            "Price Forecast",
+            "price_forecast",
+            "0 21 * * 1-5",
+            self.run_price_forecast_job,
             has_extra_config=False,
         )
         

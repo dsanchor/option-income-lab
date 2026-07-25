@@ -865,8 +865,131 @@ class CosmosDBService:
                 symbol, position_id, exc,
             )
 
-    # ── Activity / Alert Write ─────────────────────────────────────────
+    # ── Price Forecast (deterministic volatility cone) ─────────────────
+    # One document per prediction: doc_id = "{symbol}_forecast_{created_date}".
+    # Partition key is the symbol. Retention is enforced in code (no Cosmos TTL)
+    # via prune_price_forecasts, matching the enrichment_history pattern.
 
+    def write_price_forecast(self, symbol: str, forecast: dict) -> Optional[dict]:
+        """Upsert a price-forecast document for a symbol/creation-date.
+
+        Re-running on the same ``created_date`` overwrites that day's prediction.
+
+        Args:
+            symbol: Ticker symbol (partition key).
+            forecast: Full forecast doc. Must contain ``created_date``
+                (YYYY-MM-DD). Typically also ``start_date``, ``end_date``,
+                ``price_at_creation``, ``hv``, ``bias``, ``horizons``, ``flags``,
+                ``snapshots``, ``endpoints``, ``status``.
+
+        Returns:
+            The upserted document, or None if ``created_date`` is missing.
+        """
+        created_date = forecast.get("created_date")
+        if not created_date:
+            logger.warning("Skipping price forecast for %s: missing created_date", symbol)
+            return None
+
+        doc = dict(forecast)
+        doc["id"] = f"{symbol}_forecast_{created_date}"
+        doc["symbol"] = symbol
+        doc["doc_type"] = "price_forecast"
+        doc.setdefault("status", "open")
+        doc.setdefault("snapshots", [])
+        doc.setdefault("endpoints", {})
+        doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
+
+        try:
+            return self.container.upsert_item(doc)
+        except Exception as exc:
+            logger.warning("Price forecast write failed for %s: %s", symbol, exc)
+            return None
+
+    def get_open_price_forecasts(self, symbol: str, as_of: str) -> list[dict]:
+        """Return forecasts whose snapshot window still includes ``as_of``.
+
+        A forecast is "open" when ``start_date <= as_of <= end_date`` — i.e. the
+        daily job should append ``as_of``'s realized price to it. Dates are
+        ``YYYY-MM-DD`` strings (lexicographically comparable).
+        """
+        query = (
+            "SELECT * FROM c WHERE c.doc_type = 'price_forecast' "
+            "AND c.start_date <= @as_of AND c.end_date >= @as_of "
+            "AND (NOT IS_DEFINED(c.status) OR c.status != 'closed')"
+        )
+        try:
+            return list(self.container.query_items(
+                query=query,
+                parameters=[{"name": "@as_of", "value": as_of}],
+                partition_key=symbol,
+            ))
+        except Exception as exc:
+            logger.warning("get_open_price_forecasts failed for %s: %s", symbol, exc)
+            return []
+
+    def get_price_forecasts(self, symbol: str, date_from: str | None = None,
+                            date_to: str | None = None,
+                            limit: int = 500) -> list[dict]:
+        """Return a symbol's forecasts by creation date, newest first.
+
+        Optional ``date_from``/``date_to`` (YYYY-MM-DD) filter on ``created_date``.
+        """
+        conditions = ["c.doc_type = 'price_forecast'"]
+        params: list[dict] = []
+        if date_from:
+            conditions.append("c.created_date >= @from")
+            params.append({"name": "@from", "value": date_from})
+        if date_to:
+            conditions.append("c.created_date <= @to")
+            params.append({"name": "@to", "value": date_to})
+        query = (
+            f"SELECT TOP {int(limit)} * FROM c WHERE {' AND '.join(conditions)} "
+            "ORDER BY c.created_date DESC"
+        )
+        try:
+            return list(self.container.query_items(
+                query=query,
+                parameters=params,
+                partition_key=symbol,
+            ))
+        except Exception as exc:
+            logger.warning("get_price_forecasts failed for %s: %s", symbol, exc)
+            return []
+
+    def get_price_forecast(self, symbol: str, forecast_id: str) -> Optional[dict]:
+        """Read a single forecast document by id, or None if missing."""
+        try:
+            return self.container.read_item(item=forecast_id, partition_key=symbol)
+        except CosmosResourceNotFoundError:
+            return None
+
+    def prune_price_forecasts(self, symbol: str, cutoff_date: str) -> int:
+        """Delete forecasts with ``created_date < cutoff_date`` (code-side TTL).
+
+        Returns the number of documents deleted.
+        """
+        query = (
+            "SELECT c.id FROM c WHERE c.doc_type = 'price_forecast' "
+            "AND c.created_date < @cutoff"
+        )
+        deleted = 0
+        try:
+            stale = list(self.container.query_items(
+                query=query,
+                parameters=[{"name": "@cutoff", "value": cutoff_date}],
+                partition_key=symbol,
+            ))
+            for item in stale:
+                try:
+                    self.container.delete_item(item=item["id"], partition_key=symbol)
+                    deleted += 1
+                except CosmosResourceNotFoundError:
+                    pass
+        except Exception as exc:
+            logger.warning("prune_price_forecasts failed for %s: %s", symbol, exc)
+        return deleted
+
+    # ── Activity / Alert Write ─────────────────────────────────────────
     def write_activity(self, symbol: str, agent_type: str,
                        activity_data: dict,
                        timestamp: str | None = None,
@@ -1924,6 +2047,39 @@ class CosmosDBService:
             return items[0].get("date") if items else None
         except Exception as exc:
             logger.warning("Failed to read next earnings date for %s: %s", symbol, exc)
+            return None
+
+    def get_next_calendar_event_date(self, symbol: str, event_type: str) -> str | None:
+        """Return the next stored calendar-event date of ``event_type``, or None.
+
+        Generic sibling of :meth:`get_next_earnings_date`. ``event_type`` is e.g.
+        ``"earnings"`` or ``"ex_dividend"``.
+        """
+        if not self.calendar_container:
+            self._init_calendar_container()
+        if not self.calendar_container:
+            return None
+        today = datetime.now().strftime("%Y-%m-%d")
+        query = (
+            "SELECT c.date FROM c "
+            "WHERE c.type = @type AND c.symbol = @symbol AND c.date >= @today "
+            "ORDER BY c.date ASC"
+        )
+        try:
+            items = list(self.calendar_container.query_items(
+                query=query,
+                parameters=[
+                    {"name": "@type", "value": event_type},
+                    {"name": "@symbol", "value": symbol},
+                    {"name": "@today", "value": today},
+                ],
+                partition_key=symbol,
+            ))
+            return items[0].get("date") if items else None
+        except Exception as exc:
+            logger.warning(
+                "Failed to read next %s date for %s: %s", event_type, symbol, exc
+            )
             return None
 
     def delete_calendar_events_for_symbol(self, symbol: str):

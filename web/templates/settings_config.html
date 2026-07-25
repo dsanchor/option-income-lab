@@ -422,6 +422,54 @@
                 </div>
             </div>
 
+            <!-- Price Forecast Section -->
+            <div style="margin-top:1.5rem;">
+                <h3 style="font-size:0.95rem; font-weight:600; margin:0 0 0.75rem 0; padding-bottom:0.5rem; border-bottom:1px solid var(--border); color:var(--text);">Price Forecast</h3>
+
+                <div style="margin-bottom:1rem;">
+                    <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                        <input type="checkbox" name="pf_enabled" value="true" {{ 'checked' if pf_enabled }}>
+                        <span style="font-size:0.9rem;">Enable deterministic price-forecast scheduler</span>
+                    </label>
+                    <small style="display:block; margin-top:0.3rem; margin-left:1.5rem; color:var(--text-muted); font-size:0.75rem;">
+                        Daily volatility-cone predictions (1d/1w/2w/4w) self-validated against actual prices. Fully deterministic — no AI/LLM.
+                    </small>
+                </div>
+
+                <div style="margin-bottom:0.75rem;">
+                    <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
+                        Cron Expression
+                        <span style="font-size:0.8rem; color:var(--text-muted); font-weight:normal;" title="When to generate/validate forecasts (after market close)">ⓘ</span>
+                    </label>
+                    <input type="text" name="pf_cron" value="{{ pf_cron }}" placeholder="0 21 * * 1-5" spellcheck="false"
+                           style="width:100%; padding:0.6rem 0.8rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                    <small style="display:block; margin-top:0.3rem; color:var(--text-muted); font-size:0.75rem;">Default: <code>0 21 * * 1-5</code> = 9 PM UTC weekdays (after US close)</small>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
+                    <div>
+                        <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Last Run</label>
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-last-run="{{ pf_last_run_iso }}">
+                            {{ pf_last_run or "Never" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
+                        </div>
+                    </div>
+                    <div>
+                        <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">Next Run</label>
+                        <div style="padding:0.5rem 0.8rem; background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);" data-next-run="{{ pf_next_run_iso }}">
+                            {{ pf_next_run or "N/A" }}
+                            <span class="relative-time" style="font-size:0.75rem; opacity:0.7; margin-left:0.5rem;"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Run Now button -->
+                <div style="margin-top:0.75rem;">
+                    <button type="button" class="btn btn-primary" id="btnRunPriceForecast" style="font-size:0.85rem; padding:0.4rem 1rem;">▶ Run Now</button>
+                    <span id="pfRunStatus" class="mono" style="margin-left:0.75rem; font-size:0.85rem;"></span>
+                </div>
+            </div>
+
             <!-- Plan Monitor Section -->
             <div style="margin-top:1.5rem;">
                 <h3 style="font-size:0.95rem; font-weight:600; margin:0 0 0.75rem 0; padding-bottom:0.5rem; border-bottom:1px solid var(--border); color:var(--text);">Plan Monitor</h3>
@@ -661,6 +709,30 @@
             } finally {
                 peBtn.disabled = false;
                 setTimeout(function() { peStatus.textContent = ''; }, 8000);
+            }
+        });
+    }
+
+    // Run Now — Price Forecast
+    var pfBtn = document.getElementById('btnRunPriceForecast');
+    var pfStatus = document.getElementById('pfRunStatus');
+    if (pfBtn) {
+        pfBtn.addEventListener('click', async function() {
+            pfBtn.disabled = true;
+            pfStatus.textContent = '⏳ Running...';
+            try {
+                var res = await fetch('/api/trigger/price_forecast', { method: 'POST' });
+                var data = await res.json();
+                if (res.ok) {
+                    pfStatus.textContent = '✅ Triggered!';
+                } else {
+                    pfStatus.textContent = '❌ ' + (data.error || 'Failed');
+                }
+            } catch(e) {
+                pfStatus.textContent = '❌ ' + e.message;
+            } finally {
+                pfBtn.disabled = false;
+                setTimeout(function() { pfStatus.textContent = ''; }, 8000);
             }
         });
     }

@@ -221,6 +221,24 @@ class YFinanceDataProvider:
         self._cache[symbol] = {"data": result, "timestamp": time.monotonic()}
         return result
 
+    async def get_ohlcv_history(self, symbol: str, period: str = "1y"):
+        """Return a symbol's OHLCV history as a date-indexed DataFrame, or None.
+
+        Adjusted (yfinance ``history`` uses ``auto_adjust=True`` by default, so
+        Close is split/dividend-adjusted). Used by the price-forecast cron and the
+        backfill script — both need the dated session index to map calendar dates
+        to trading-session offsets. Never raises.
+        """
+        try:
+            ticker = yf.Ticker(symbol)
+            history = ticker.history(period=period)
+        except Exception as exc:
+            logger.warning("get_ohlcv_history failed for %s: %s", symbol, exc)
+            return None
+        if history is None or history.empty or "Close" not in history:
+            return None
+        return history
+
     def _build_volatility_context(self, options_chain, history, current_price):
         """Return ``(summary_dict, formatted_block)`` for IV/HV richness.
 

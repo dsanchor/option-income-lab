@@ -2578,6 +2578,77 @@ async def symbol_options_chain_page(request: Request, symbol: str):
     })
 
 
+def _resolve_forecast_range(range_param, date_from, date_to):
+    """Resolve table filters to (date_from, date_to) YYYY-MM-DD, defaulting to last month."""
+    if date_from or date_to:
+        return date_from, date_to
+    days_map = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}
+    days = days_map.get(range_param or "30d", 30)
+    today = datetime.now(timezone.utc)
+    return (today - timedelta(days=days)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+
+
+@app.get("/api/symbols/{symbol}/forecasts")
+async def api_symbol_forecasts(request: Request, symbol: str,
+                               range: str = "30d",
+                               from_: str = Query(default=None, alias="from"),
+                               to: str = Query(default=None)):
+    """Deterministic price-forecast table rows + rolling endpoint calibration.
+
+    Query params: ``range`` (1d/7d/30d/90d, default 30d) OR explicit ``from``/``to``
+    (YYYY-MM-DD). Returns per-prediction rows (path % + endpoint per horizon) and a
+    rolling per-horizon endpoint hit-rate aggregate.
+    """
+    from src.price_forecast import summarize_prediction, aggregate_hit_rate
+
+    try:
+        cosmos = _get_cosmos(request)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+
+    sym = symbol.upper()
+    date_from, date_to = _resolve_forecast_range(range, from_, to)
+    preds = cosmos.get_price_forecasts(sym, date_from, date_to)
+
+    rows = []
+    for p in preds:
+        rows.append({
+            "id": p.get("id"),
+            "created_date": p.get("created_date"),
+            "start_date": p.get("start_date"),
+            "end_date": p.get("end_date"),
+            "status": p.get("status"),
+            "price_at_creation": p.get("price_at_creation"),
+            "hv": p.get("hv"),
+            "bias": p.get("bias"),
+            "flags": p.get("flags", {}),
+            "horizons": summarize_prediction(p),
+        })
+
+    return JSONResponse({
+        "symbol": sym,
+        "range": {"from": date_from, "to": date_to},
+        "count": len(rows),
+        "rows": rows,
+        "hit_rate": aggregate_hit_rate(preds),
+    })
+
+
+@app.get("/api/symbols/{symbol}/forecasts/{forecast_id}")
+async def api_symbol_forecast_detail(request: Request, symbol: str, forecast_id: str):
+    """Full detail for a single prediction — feeds the modal fan chart."""
+    try:
+        cosmos = _get_cosmos(request)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+
+    doc = cosmos.get_price_forecast(symbol.upper(), forecast_id)
+    if not doc:
+        return JSONResponse(
+            {"error": f"Forecast {forecast_id} not found"}, status_code=404)
+    return JSONResponse(doc)
+
+
 @app.get("/api/symbols/{symbol}/options-chain")
 async def api_symbol_options_chain(request: Request, symbol: str):
     """Return parsed option chain data from yfinance provider."""
@@ -3438,6 +3509,14 @@ def _build_settings_config_context(
     pe_next_run = fmt_time(pe.get("next_run"))
     pe_last_run_iso = resolve_last_run_iso("portfolio_enrichment", pe.get("last_run"))
     pe_next_run_iso = to_iso(pe.get("next_run"))
+
+    pf = tasks_by_name.get("price_forecast", {})
+    pf_enabled = pf.get("enabled", True)
+    pf_cron = pf.get("cron", "0 21 * * 1-5")
+    pf_last_run = resolve_last_run("price_forecast", pf.get("last_run"))
+    pf_next_run = fmt_time(pf.get("next_run"))
+    pf_last_run_iso = resolve_last_run_iso("price_forecast", pf.get("last_run"))
+    pf_next_run_iso = to_iso(pf.get("next_run"))
     
     return {
         "request": request,
@@ -3499,6 +3578,12 @@ def _build_settings_config_context(
         "pe_next_run": pe_next_run,
         "pe_last_run_iso": pe_last_run_iso,
         "pe_next_run_iso": pe_next_run_iso,
+        "pf_enabled": pf_enabled,
+        "pf_cron": pf_cron,
+        "pf_last_run": pf_last_run,
+        "pf_next_run": pf_next_run,
+        "pf_last_run_iso": pf_last_run_iso,
+        "pf_next_run_iso": pf_next_run_iso,
     }
 
 
@@ -3805,6 +3890,34 @@ async def settings_config_save(request: Request):
             if scheduler is not None:
                 scheduler.reschedule_portfolio_enrichment(pe_cron)
                 scheduler.registry.update_task_enabled("portfolio_enrichment", pe_enabled, scheduler.config)
+        except (ValueError, KeyError):
+            pass
+
+    # Price forecast settings
+    pf_enabled = form.get("pf_enabled") == "true"
+    pf_cron = str(form.get("pf_cron", "0 21 * * 1-5")).strip()
+
+    if pf_cron:
+        try:
+            croniter(pf_cron)
+            if cosmos:
+                cosmos_settings = _load_settings_from_cosmos(cosmos) or {}
+                cosmos_settings.setdefault("price_forecast", {})
+                cosmos_settings["price_forecast"]["enabled"] = pf_enabled
+                cosmos_settings["price_forecast"]["cron"] = pf_cron
+                _save_settings_to_cosmos(cosmos, cosmos_settings)
+
+            config = _load_config()
+            config.setdefault("price_forecast", {})
+            config["price_forecast"]["enabled"] = pf_enabled
+            config["price_forecast"]["cron"] = pf_cron
+            _write_config(config)
+            saved.append("Price forecast")
+
+            scheduler = getattr(request.app.state, "scheduler", None)
+            if scheduler is not None:
+                scheduler.registry.reschedule("price_forecast", pf_cron, scheduler.config)
+                scheduler.registry.update_task_enabled("price_forecast", pf_enabled, scheduler.config)
         except (ValueError, KeyError):
             pass
 
@@ -4273,6 +4386,50 @@ async def trigger_dps_scorer(request: Request):
     )
     thread.start()
     return JSONResponse({"status": "triggered", "agent_type": "dps_scorer"})
+
+
+def _run_forecast_cron_in_background(cosmos, yf_provider, state_ref):
+    """Run the price-forecast cron in a background thread."""
+    import asyncio
+    from src.forecast_cron import run_forecast_cron
+    try:
+        result = asyncio.run(run_forecast_cron(cosmos, yf_provider))
+        state_ref["last_result"] = result
+    except Exception as e:
+        logger.error("Price forecast cron trigger error: %s", e, exc_info=True)
+        state_ref["last_result"] = {"status": "error", "error": str(e)}
+    finally:
+        state_ref["running"] = False
+
+
+@app.post("/api/trigger/price_forecast")
+async def trigger_price_forecast(request: Request):
+    cosmos = getattr(request.app.state, "cosmos", None)
+    yf_provider = getattr(request.app.state, "yf_provider", None)
+
+    if cosmos is None:
+        return JSONResponse(
+            {"error": "CosmosDB not available — cannot run price forecast"},
+            status_code=503)
+
+    state_ref = getattr(request.app.state, "_forecast_cron_status", None)
+    if state_ref is None:
+        state_ref = {"running": False, "last_result": None}
+        request.app.state._forecast_cron_status = state_ref
+
+    if state_ref.get("running"):
+        return JSONResponse(
+            {"error": "Price forecast already running"},
+            status_code=409)
+
+    state_ref["running"] = True
+    thread = threading.Thread(
+        target=_run_forecast_cron_in_background,
+        args=(cosmos, yf_provider, state_ref),
+        daemon=True,
+    )
+    thread.start()
+    return JSONResponse({"status": "triggered", "agent_type": "price_forecast"})
 
 
 @app.post("/api/trigger/portfolio_enrichment")
