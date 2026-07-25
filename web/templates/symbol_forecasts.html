@@ -33,7 +33,7 @@
 <!-- Rolling endpoint calibration -->
 <div class="card">
     <div class="card-header"><h2>Endpoint Hit-Rate <span class="card-badge">±1σ target ≈ 68%</span></h2></div>
-    <div id="forecast-hitrate" class="stats-grid" style="padding:1rem 1.25rem;"></div>
+    <div id="forecast-hitrate" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0.75rem; padding:1rem 1.25rem;"></div>
 </div>
 
 <!-- Table -->
@@ -135,17 +135,27 @@
 
     function renderHitRate(hr) {
         var el = document.getElementById('forecast-hitrate');
+        var labels = { '1d': '1d', '1w': '1w', '2w': '2w', '4w': '4w' };
         var parts = [];
         ['1d','1w','2w','4w'].forEach(function(k) {
             var h = hr[k] || {};
             var v = h.hit_pct_1sigma;
-            var label = (v === null || v === undefined) ? '—' : v.toFixed(0) + '%';
+            var resolved = h.resolved || 0;
+            var hasData = (v !== null && v !== undefined);
+            var valTxt = hasData ? v.toFixed(0) + '%' : '—';
+            // Colour vs the 68% target: green near/above, amber a bit off, red far
+            var col = 'var(--text-muted)';
+            if (hasData) {
+                var diff = Math.abs(v - 68);
+                col = diff <= 12 ? 'var(--green,#22c55e)' : (diff <= 25 ? 'var(--amber,#f59e0b)' : 'var(--red,#ef4444)');
+            }
+            var dirTxt = (h.direction_pct != null) ? 'dir ' + h.direction_pct.toFixed(0) + '%' : 'dir —';
             parts.push(
-                '<div class="stat-box">' +
-                '<div class="stat-label">' + k + ' endpoint ±1σ</div>' +
-                '<div class="stat-value">' + label + '</div>' +
-                '<div class="stat-sub">n=' + (h.resolved || 0) +
-                (h.direction_pct != null ? ' · dir ' + h.direction_pct.toFixed(0) + '%' : '') + '</div>' +
+                '<div style="background:var(--bg-input,#1a1a22); border:1px solid var(--border,#2d2d35); border-radius:var(--radius,8px); padding:0.75rem 0.9rem;">' +
+                  '<div style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.03em; color:var(--text-muted,#888); margin-bottom:0.35rem;">' +
+                    labels[k] + ' endpoint ±1σ</div>' +
+                  '<div style="font-size:1.6rem; font-weight:700; line-height:1; color:' + col + ';">' + valTxt + '</div>' +
+                  '<div style="font-size:0.72rem; color:var(--text-muted,#888); margin-top:0.35rem;">n=' + resolved + ' · ' + dirTxt + '</div>' +
                 '</div>'
             );
         });
