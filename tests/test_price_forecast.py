@@ -18,6 +18,7 @@ from src.price_forecast import (
     compute_bias,
     compute_forecast,
     compute_forecast_from_closes,
+    compute_reading,
     endpoint_direction_correct,
     evaluate_snapshot,
     has_enough_history,
@@ -415,6 +416,97 @@ def test_linear_trend_respects_window():
     closes = [100.0 + 0.5 * i for i in range(60)]
     tr = linear_trend(closes, window=10)
     assert tr["window"] == 10
+
+
+def test_linear_trend_perfect_line_high_r2_no_shrink():
+    # Clean line: R²≈1 so the shrunk slope stays ≈ raw slope; quality "strong".
+    closes = [100.0 + 0.5 * i for i in range(20)]
+    tr = linear_trend(closes, window=20)
+    assert tr["r2"] == pytest.approx(1.0, abs=1e-6)
+    assert tr["slope"] == pytest.approx(tr["slope_raw"], rel=1e-6)
+    assert tr["quality"] == "strong"
+
+
+def test_linear_trend_noisy_series_shrinks_slope():
+    # Zig-zag with no real drift: low R² → slope shrunk toward 0, quality "weak".
+    closes = [100.0 + (2.0 if i % 2 else -2.0) for i in range(20)]
+    tr = linear_trend(closes, window=20)
+    assert tr["r2"] < 0.2
+    assert abs(tr["slope"]) <= abs(tr["slope_raw"])
+    assert tr["quality"] == "weak"
+
+
+# ---------------------------------------------------------------------------
+# Trade reading (bias + trend agreement matrix)
+# ---------------------------------------------------------------------------
+
+def test_compute_reading_bullish_aligned_favours_csp():
+    rd = compute_reading(0.5, 0.8)
+    assert rd["code"] == "bull"
+    assert rd["agree"] is True
+    assert rd["csp"] == "favorable"
+    assert rd["cc"] == "avoid"
+
+
+def test_compute_reading_bearish_aligned_favours_cc():
+    rd = compute_reading(-0.5, -0.8)
+    assert rd["code"] == "bear"
+    assert rd["csp"] == "avoid"
+    assert rd["cc"] == "favorable"
+
+
+def test_compute_reading_topping_divergence():
+    rd = compute_reading(-0.5, 0.8)  # uptrend, momentum fading
+    assert rd["code"] == "top"
+    assert rd["agree"] is False
+    assert rd["cc"] == "favorable"
+
+
+def test_compute_reading_bottoming_divergence():
+    rd = compute_reading(0.5, -0.8)  # downtrend, momentum turning up
+    assert rd["code"] == "bottom"
+    assert rd["csp"] == "favorable"
+
+
+def test_compute_reading_neutral_below_threshold():
+    # |bias| under the conviction threshold and flat trend → neutral.
+    rd = compute_reading(0.05, 0.0)
+    assert rd["code"] == "neutral"
+    assert rd["csp"] == "neutral" and rd["cc"] == "neutral"
+
+
+# ---------------------------------------------------------------------------
+# Direction scoring: conviction threshold + trend-agreement filter
+# ---------------------------------------------------------------------------
+
+def _dir_band(direction):
+    # Minimal band: realized endpoint above/below the creation price (center).
+    price = 100.0
+    realized = 102.0 if direction > 0 else 98.0
+    return {"center": price}, realized
+
+
+def test_direction_scored_when_bias_and_trend_agree():
+    band, realized = _dir_band(1)
+    # Bullish: bias up, trend up, price rose → correct.
+    assert endpoint_direction_correct(band, realized, 0.5, trend_slope=0.8) is True
+
+
+def test_direction_none_when_bias_below_threshold():
+    band, realized = _dir_band(1)
+    assert endpoint_direction_correct(band, realized, 0.05, trend_slope=0.8) is None
+
+
+def test_direction_none_when_bias_trend_diverge():
+    band, realized = _dir_band(1)
+    # High-conviction bias but trend disagrees → not scored.
+    assert endpoint_direction_correct(band, realized, 0.5, trend_slope=-0.8) is None
+
+
+def test_direction_old_doc_falls_back_to_bias_only():
+    band, realized = _dir_band(1)
+    # No trend slope (legacy doc): still scored on bias alone (gated by threshold).
+    assert endpoint_direction_correct(band, realized, 0.5, trend_slope=None) is True
 
 
 # ---------------------------------------------------------------------------

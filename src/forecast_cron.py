@@ -197,7 +197,8 @@ async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff, pf_sett
                 "inside_1sigma": result["inside_1sigma"],
                 "inside_2sigma": result["inside_2sigma"],
                 "direction_correct": endpoint_direction_correct(
-                    band, latest_price, pred.get("bias", 0.0)
+                    band, latest_price, pred.get("bias", 0.0),
+                    (pred.get("trend") or {}).get("slope"),
                 ),
             }
             out["resolved"] += 1

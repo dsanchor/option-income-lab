@@ -41,6 +41,11 @@ _CONF_Z = {
 DEFAULT_CONFIDENCE = 0.68
 OUTER_CONFIDENCE = 0.95
 
+# Minimum |bias| to treat the directional signal as a real (high-conviction)
+# claim. Below this the technicals aggregate is treated as noise and no
+# directional call is scored. Also used by the trend-agreement filter.
+BIAS_CONVICTION_THRESHOLD = 0.15
+
 
 def z_for_confidence(confidence: Optional[float]) -> float:
     """Return the z-multiplier for a central confidence level (nearest known)."""
@@ -156,6 +161,83 @@ def compute_bias(technicals: Optional[dict]) -> float:
     return _clamp(float(value), -1.0, 1.0)
 
 
+def compute_reading(
+    bias: Optional[float],
+    trend_slope: Optional[float],
+    *,
+    threshold: float = BIAS_CONVICTION_THRESHOLD,
+) -> dict:
+    """Combine directional bias (technicals) + trend slope into a trade reading.
+
+    ``bias`` = oscillator/MA aggregate in [-1,+1] (momentum + overbought/oversold
+    state). ``trend_slope`` = linear-regression drift ($/session) — pure price
+    direction. They measure different things and their (dis)agreement is the
+    signal:
+
+      trend ↑ & bias ↑  → Bullish   (aligned, high conviction) → favours CSP
+      trend ↓ & bias ↓  → Bearish   (aligned, high conviction) → favours CC
+      trend ↑ & bias “not up”   → Topping   (uptrend, momentum fading) → time CC
+      trend ↓ & bias “not down” → Bottoming (downtrend, momentum turning) → time CSP
+      otherwise → Neutral (no edge)
+
+    Returns a display-only dict (``code``/``label``/``icon``/``conviction``/
+    ``agree``/``csp``/``cc``/``reason``). Never shifts the band. Deterministic.
+    """
+    b = float(bias) if _is_finite(bias) else 0.0
+    s = float(trend_slope) if _is_finite(trend_slope) else 0.0
+    bias_dir = 1 if b >= threshold else (-1 if b <= -threshold else 0)
+    trend_dir = 1 if s > 0 else (-1 if s < 0 else 0)
+    agree = bias_dir != 0 and bias_dir == trend_dir
+
+    if agree and bias_dir > 0:
+        code, label, icon, conv = "bull", "Bullish", "▲▲", "high"
+        csp, cc = "favorable", "avoid"
+        reason = ("Tendencia ↑ y momentum ↑ coinciden (convicción alta). "
+                  "Favorable para VENDER CSP: esperas que el precio se mantenga "
+                  "o suba, así el put vence sin valor y te quedas la prima. "
+                  "Evita vender CC ahora: riesgo de que te asignen y limitar la subida.")
+    elif agree and bias_dir < 0:
+        code, label, icon, conv = "bear", "Bearish", "▼▼", "high"
+        csp, cc = "avoid", "favorable"
+        reason = ("Tendencia ↓ y momentum ↓ coinciden (convicción alta). "
+                  "Favorable para VENDER CC: esperas que el precio caiga o no "
+                  "suba, así el call vence sin valor. Evita CSP ahora: riesgo de "
+                  "asignación a la baja mientras el precio sigue cayendo.")
+    elif trend_dir > 0 and bias_dir <= 0:
+        code, label, icon, conv = "top", "Topping", "▲▽", "low"
+        csp, cc = "caution", "favorable"
+        reason = ("Tendencia ↑ pero el momentum no acompaña (posible sobrecompra "
+                  "/ agotamiento). Buen momento para VENDER CC contra la fuerza "
+                  "(primas altas, posible techo). CSP con cautela: puede venir un "
+                  "pullback. Baja convicción — señales divergentes.")
+    elif trend_dir < 0 and bias_dir >= 0:
+        code, label, icon, conv = "bottom", "Bottoming", "▽▲", "low"
+        csp, cc = "favorable", "caution"
+        reason = ("Tendencia ↓ pero el momentum gira al alza (posible sobreventa "
+                  "/ rebote). Buen momento para VENDER CSP en la debilidad "
+                  "(primas altas, posible suelo). CC con cautela: puede rebotar. "
+                  "Baja convicción — señales divergentes.")
+    else:
+        code, label, icon, conv = "neutral", "Neutral", "·", "none"
+        csp, cc = "neutral", "neutral"
+        reason = ("Sin tendencia clara o señal demasiado débil. Mercado en rango: "
+                  "la prima decae a tu favor en ambos lados, pero sin ventaja "
+                  "direccional. Convicción baja — no hay apuesta clara.")
+
+    return {
+        "code": code,
+        "label": label,
+        "icon": icon,
+        "conviction": conv,
+        "agree": agree,
+        "bias_dir": bias_dir,
+        "trend_dir": trend_dir,
+        "csp": csp,
+        "cc": cc,
+        "reason": reason,
+    }
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Forecast (volatility cone)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -192,16 +274,38 @@ def _band_for_sessions(
     }
 
 
+def _median(values: Sequence[float]) -> float:
+    """Median of a non-empty sequence (no external deps)."""
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    if n % 2:
+        return float(s[mid])
+    return (float(s[mid - 1]) + float(s[mid])) / 2.0
+
+
 def linear_trend(
     closes: Sequence[float],
     window: int = 20,
 ) -> Optional[dict]:
-    """Least-squares linear trend over the last ``window`` closes.
+    """Robust, confidence-gated linear trend over the last ``window`` closes.
 
-    Returns ``{"slope": $/session, "resid_std": $, "window": n}`` or ``None``.
-    ``slope`` is the per-session drift used to draw the projected trend overlay;
-    ``resid_std`` is the standard deviation of the fit residuals (how far closes
-    sat from the trend line — a dispersion diagnostic). Never raises.
+    Deterministic. Designed so the projected trend *stops pointing* when the data
+    doesn't actually trend (the common "it never hits" failure of naive OLS
+    extrapolation):
+
+      1. **Theil–Sen slope** (median of pairwise slopes) instead of ordinary least
+         squares — resistant to single-day gaps/earnings spikes.
+      2. **R² quality gate**: the coefficient of determination of the robust fit,
+         i.e. how much of the price variance the straight line explains.
+      3. **Slope shrinkage**: the slope actually used for projection is shrunk
+         toward zero by R² (``slope = slope_raw * r2``). A strong linear trend
+         projects nearly in full; a noisy series flattens out. Sign is preserved,
+         so the directional reading stays consistent.
+
+    Returns ``{slope, slope_raw, r2, quality, resid_std, window}`` or ``None``.
+    ``slope`` is the shrunk per-session drift used everywhere downstream
+    (``trend_end``, chart overlay, directional reading). Never raises.
     """
     if closes is None:
         return None
@@ -213,22 +317,44 @@ def linear_trend(
         return None
 
     xs = list(range(n))
-    mean_x = sum(xs) / n
-    mean_y = sum(clean) / n
-    sxx = sum((x - mean_x) ** 2 for x in xs)
-    if sxx <= 0:
+    # ── Theil–Sen robust slope: median of pairwise slopes (n small → O(n²) fine) ──
+    pair_slopes = [
+        (clean[j] - clean[i]) / (j - i)
+        for i in range(n)
+        for j in range(i + 1, n)
+    ]
+    if not pair_slopes:
         return None
-    sxy = sum((xs[i] - mean_x) * (clean[i] - mean_y) for i in range(n))
-    slope = sxy / sxx
-    intercept = mean_y - slope * mean_x
-    residuals = [clean[i] - (intercept + slope * xs[i]) for i in range(n)]
-    if n > 2:
-        resid_var = sum(r * r for r in residuals) / (n - 2)
-        resid_std = math.sqrt(resid_var) if resid_var > 0 else 0.0
+    slope_raw = _median(pair_slopes)
+    intercept = _median([clean[i] - slope_raw * xs[i] for i in range(n)])
+
+    # ── R² of the robust fit + residual dispersion ──
+    mean_y = sum(clean) / n
+    ss_tot = sum((y - mean_y) ** 2 for y in clean)
+    residuals = [clean[i] - (intercept + slope_raw * xs[i]) for i in range(n)]
+    ss_res = sum(r * r for r in residuals)
+    if ss_tot <= 0:
+        r2 = 0.0
     else:
-        resid_std = 0.0
+        r2 = 1.0 - (ss_res / ss_tot)
+    r2 = _clamp(r2, 0.0, 1.0)  # negative R² (fit worse than mean) → 0 = no trend
+    resid_std = math.sqrt(ss_res / (n - 2)) if n > 2 and ss_res > 0 else 0.0
+
+    # ── Shrink the projected slope by fit quality (confidence gate + damping) ──
+    slope_eff = slope_raw * r2
+
+    if r2 >= 0.5:
+        quality = "strong"
+    elif r2 >= 0.2:
+        quality = "moderate"
+    else:
+        quality = "weak"
+
     return {
-        "slope": round(slope, 6),
+        "slope": round(slope_eff, 6),
+        "slope_raw": round(slope_raw, 6),
+        "r2": round(r2, 4),
+        "quality": quality,
         "resid_std": round(resid_std, 4),
         "window": n,
     }
@@ -280,14 +406,16 @@ def compute_forecast(
         band["end_session"] = bounds["end_session"]
         horizons[name] = band
 
+    bias_val = compute_bias(technicals)
     return {
         "price_at_creation": round(price, 4),
         "hv": round(float(vol), 6),
         "vol_source": vol_source,
         "confidence": round(float(confidence), 4),
         "outer_confidence": round(float(outer_conf), 4),
-        "bias": compute_bias(technicals),
+        "bias": bias_val,
         "trend": trend if isinstance(trend, dict) else None,
+        "reading": compute_reading(bias_val, slope),
         "horizons": horizons,
     }
 
@@ -378,16 +506,34 @@ def evaluate_snapshot(
     }
 
 
-def endpoint_direction_correct(band: dict, price: float, bias: float) -> Optional[bool]:
-    """Whether the endpoint move agreed with the directional bias.
+def endpoint_direction_correct(
+    band: dict,
+    price: float,
+    bias: float,
+    trend_slope: Optional[float] = None,
+    *,
+    threshold: float = BIAS_CONVICTION_THRESHOLD,
+) -> Optional[bool]:
+    """Whether the endpoint move agreed with the (high-conviction) directional call.
 
-    Returns ``None`` when bias is neutral (~0) or inputs are missing — a neutral
-    bias makes no directional claim and should not be scored.
+    Only scores a direction when there is a real claim:
+      * ``|bias| >= threshold`` — low-conviction bias is treated as noise (``None``).
+      * If ``trend_slope`` is known and non-zero, bias and trend must **agree**
+        (same sign); divergent signals make no directional claim (``None``). This
+        is the trend-agreement filter — it raises ``direction_pct`` by only
+        scoring the clean, aligned setups.
+
+    Returns ``None`` when there is no claim or inputs are missing. Old docs without
+    a stored trend pass ``trend_slope=None`` and fall back to bias-only scoring.
     """
     if band is None or price is None or not _is_finite(price):
         return None
-    if bias is None or abs(bias) < 1e-9:
+    if bias is None or not _is_finite(bias) or abs(bias) < threshold:
         return None
+    # Trend-agreement filter (only when the trend is known).
+    if trend_slope is not None and _is_finite(trend_slope) and float(trend_slope) != 0.0:
+        if (float(trend_slope) > 0) != (bias > 0):
+            return None
     move = price - band.get("center", 0.0)
     if move == 0:
         return None
@@ -470,12 +616,17 @@ def summarize_prediction(pred: dict) -> dict:
 def aggregate_hit_rate(preds: Sequence[dict]) -> dict:
     """Rolling endpoint calibration across many predictions, per horizon.
 
-    Only *resolved* endpoints count (the real calibration metric). Returns per
-    horizon: ``resolved`` (n), ``hit_pct_1sigma`` / ``hit_pct_2sigma`` (should
-    trend ~68% / ~95%) and ``direction_pct`` over endpoints that made a
-    directional claim. Percentages are ``None`` when there is no data yet.
+    Only *resolved* endpoints count for the hit/direction metrics (the real
+    calibration metric). Returns per horizon: ``resolved`` (n), ``hit_pct_1sigma``
+    / ``hit_pct_2sigma`` (should trend toward the band confidence),
+    ``direction_pct`` over endpoints that made a directional claim, and
+    ``mean_dev_pct`` — the average (across predictions with snapshots) of each
+    prediction's mean deviation of closes from its projected trend line, as a % of
+    the entry price. Percentages are ``None`` when there is no data yet.
     """
     out: Dict[str, dict] = {}
+    # Pre-compute per-prediction summaries once (for the trend deviation metric).
+    summaries = [summarize_prediction(p) for p in preds if isinstance(p, dict)]
     for name in HORIZONS:
         resolved = [
             p.get("endpoints", {}).get(name)
@@ -484,6 +635,11 @@ def aggregate_hit_rate(preds: Sequence[dict]) -> dict:
         ]
         n = len(resolved)
         dir_claims = [e for e in resolved if e.get("direction_correct") is not None]
+        dev_pcts = [
+            s[name]["mean_dev_pct"]
+            for s in summaries
+            if name in s and _is_finite(s[name].get("mean_dev_pct"))
+        ]
         out[name] = {
             "resolved": n,
             "hit_pct_1sigma": (
@@ -500,6 +656,10 @@ def aggregate_hit_rate(preds: Sequence[dict]) -> dict:
                     / len(dir_claims), 1
                 ) if dir_claims else None
             ),
+            "mean_dev_pct": (
+                round(sum(dev_pcts) / len(dev_pcts), 2) if dev_pcts else None
+            ),
+            "mean_dev_n": len(dev_pcts),
         }
     return out
 
