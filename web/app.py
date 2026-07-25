@@ -2491,6 +2491,25 @@ async def symbol_report_page(request: Request, symbol: str):
     })
 
 
+@app.get("/symbols/{symbol}/forecasts", response_class=HTMLResponse)
+async def symbol_forecasts_page(request: Request, symbol: str):
+    """Render the deterministic price-forecast history page for a symbol."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    if cosmos is None:
+        error_detail = getattr(request.app.state, "cosmos_error", "unknown")
+        return HTMLResponse(f"CosmosDB not available: {error_detail}",
+                            status_code=503)
+
+    doc = cosmos.get_symbol(symbol.upper())
+    if not doc:
+        return HTMLResponse(f"Symbol {symbol} not found", status_code=404)
+
+    return templates.TemplateResponse("symbol_forecasts.html", {
+        "request": request,
+        "symbol_doc": doc,
+    })
+
+
 @app.post("/api/symbols/{symbol}/technical-analysis")
 async def symbol_technical_analysis_api(request: Request, symbol: str):
     """Generate a detailed technical analysis for a symbol.

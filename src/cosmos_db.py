@@ -933,6 +933,12 @@ class CosmosDBService:
         """Return a symbol's forecasts by creation date, newest first.
 
         Optional ``date_from``/``date_to`` (YYYY-MM-DD) filter on ``created_date``.
+
+        NOTE: the ``symbols`` container's indexing policy may exclude the
+        ``created_date`` path, which makes a server-side ``ORDER BY`` fail with
+        "The index path corresponding to the specified order-by item is
+        excluded." We therefore query without ``ORDER BY`` and sort client-side,
+        so the feature works regardless of the container's indexing policy.
         """
         conditions = ["c.doc_type = 'price_forecast'"]
         params: list[dict] = []
@@ -942,16 +948,15 @@ class CosmosDBService:
         if date_to:
             conditions.append("c.created_date <= @to")
             params.append({"name": "@to", "value": date_to})
-        query = (
-            f"SELECT TOP {int(limit)} * FROM c WHERE {' AND '.join(conditions)} "
-            "ORDER BY c.created_date DESC"
-        )
+        query = f"SELECT * FROM c WHERE {' AND '.join(conditions)}"
         try:
-            return list(self.container.query_items(
+            items = list(self.container.query_items(
                 query=query,
                 parameters=params,
                 partition_key=symbol,
             ))
+            items.sort(key=lambda d: d.get("created_date", ""), reverse=True)
+            return items[: int(limit)]
         except Exception as exc:
             logger.warning("get_price_forecasts failed for %s: %s", symbol, exc)
             return []
