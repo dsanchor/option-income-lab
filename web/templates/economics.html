@@ -151,7 +151,7 @@
             <canvas id="economics-monthly-chart"></canvas>
         </div>
         <div class="economics-chart-panel">
-            <h3>Calls vs Puts Premium</h3>
+            <h3>Calls vs Puts Net</h3>
             <canvas id="economics-type-chart"></canvas>
         </div>
     </div>
@@ -463,7 +463,7 @@
             data: {
                 labels: ['Calls', 'Puts'],
                 datasets: [{
-                    data: [data.by_type.calls.premium, data.by_type.puts.premium],
+                    data: [data.by_type.calls.net, data.by_type.puts.net],
                     backgroundColor: ['#00a87e', '#ec7e00'],
                     borderColor: ['#00a87e', '#ec7e00'],
                     borderWidth: 1
