@@ -26,6 +26,7 @@ from src.price_forecast import (
     is_endpoint,
     linear_trend,
     momentum_bias,
+    graded_momentum_bias,
     price_inside,
     reading_from_momentum,
     summarize_prediction,
@@ -226,6 +227,56 @@ def test_from_closes_passes_momentum_through():
     assert fc["momentum"] == "Bullish"
     assert fc["bias"] == pytest.approx(1.0)
     assert fc["reading"]["code"] == "bull"
+
+
+# ---------------------------------------------------------------------------
+# Graded momentum bias (sign from momentum, magnitude from ADX + SMA distance)
+# ---------------------------------------------------------------------------
+
+def test_graded_bias_falls_back_to_discrete_without_inputs():
+    # No adx/sma → discrete regime bias.
+    assert graded_momentum_bias("Bullish") == pytest.approx(1.0)
+    assert graded_momentum_bias("Bearish") == pytest.approx(-1.0)
+    assert graded_momentum_bias("Bullish (overextended)") == pytest.approx(0.6)
+
+
+def test_graded_bias_non_directional_states_are_zero():
+    assert graded_momentum_bias("Neutral", adx=40, price=110, sma_50=100, sma_200=90) == 0.0
+    assert graded_momentum_bias("Weakening", adx=40, price=110, sma_50=100, sma_200=90) == 0.0
+    assert graded_momentum_bias("Unknown") == 0.0
+
+
+def test_graded_bias_scales_with_adx_and_distance():
+    # Strong trend (ADX 50 → adx_strength 1) and far from SMA50 (10% → dist 1) →
+    # full magnitude at the regime cap.
+    strong = graded_momentum_bias("Bullish", adx=50, price=110, sma_50=100, sma_200=90)
+    assert strong == pytest.approx(1.0)
+
+    # Weak trend (ADX just above floor) and price hugging SMA50 → near zero.
+    weak = graded_momentum_bias("Bearish", adx=21, price=100.5, sma_50=100, sma_200=110)
+    assert 0.0 < abs(weak) < 0.15
+    assert weak < 0  # sign preserved
+
+
+def test_graded_bias_sign_follows_momentum():
+    assert graded_momentum_bias("Bullish", adx=35, price=108, sma_50=100, sma_200=90) > 0
+    assert graded_momentum_bias("Bearish", adx=35, price=92, sma_50=100, sma_200=110) < 0
+
+
+def test_graded_bias_respects_regime_cap():
+    # Overextended cap is 0.6 even at maximum strength.
+    v = graded_momentum_bias("Bullish (overextended)", adx=60, price=120, sma_50=100, sma_200=90)
+    assert v == pytest.approx(0.6)
+
+
+def test_compute_forecast_uses_graded_bias_with_momentum_technicals():
+    mt = {"adx": 50.0, "sma_50": 100.0, "sma_200": 90.0}
+    fc = compute_forecast(110.0, 0.20, momentum="Bullish", momentum_technicals=mt)
+    assert fc["bias"] == pytest.approx(1.0)
+    # Weaker structure → smaller magnitude.
+    mt2 = {"adx": 22.0, "sma_50": 100.0, "sma_200": 95.0}
+    fc2 = compute_forecast(100.5, 0.20, momentum="Bullish", momentum_technicals=mt2)
+    assert 0.0 < fc2["bias"] < 1.0
 
 
 # ---------------------------------------------------------------------------

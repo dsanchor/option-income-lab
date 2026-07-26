@@ -329,6 +329,61 @@ def momentum_bias(momentum: Optional[str]) -> float:
     return float(spec["bias"]) if spec else 0.0
 
 
+# Tunable scaling for the graded bias magnitude.
+_ADX_FLOOR = 20.0          # below this ADX there is no real trend
+_ADX_SPAN = 30.0           # ADX 20 -> 0 strength, ADX 50+ -> full strength
+_SMA_DIST_FULL = 0.08      # price >= 8% away from SMA50 -> full extension strength
+_ADX_WEIGHT = 0.5          # blend: trend strength (ADX) vs price extension (SMA dist)
+
+
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return lo if x < lo else (hi if x > hi else x)
+
+
+def graded_momentum_bias(
+    momentum: Optional[str],
+    *,
+    adx: Optional[float] = None,
+    price: Optional[float] = None,
+    sma_50: Optional[float] = None,
+    sma_200: Optional[float] = None,
+) -> float:
+    """Continuous directional bias in [-1, +1].
+
+    The **sign** is fixed by the momentum regime (Bullish → +, Bearish → −;
+    non-directional states → 0). The **magnitude** is graded by two deterministic
+    strength inputs and never exceeds the regime cap (1.0 for a clean trend, 0.6
+    for an overextended/oversold one):
+
+      - ADX (trend strength): ``ADX 20 → 0``, ``ADX 50+ → 1``.
+      - Price distance from SMA50 (extension): ``0% → 0``, ``≥8% → 1``.
+
+    ``bias = sign × cap × (w·adx_strength + (1−w)·dist_strength)``.
+
+    Falls back to the discrete regime bias when the ADX/SMA inputs are missing or
+    non-finite. Never shifts the band centre — used only for the Bias column and
+    the directional hit-rate.
+    """
+    spec = _MOMENTUM_READING.get(momentum or "")
+    if not spec:
+        return 0.0
+    base = float(spec["bias"])
+    if base == 0.0:
+        return 0.0
+    sign = 1.0 if base > 0 else -1.0
+    cap = abs(base)
+
+    if not all(_is_finite(v) for v in (adx, price, sma_50, sma_200)) or not sma_50:
+        return round(base, 4)  # discrete fallback
+
+    adx_strength = _clamp((float(adx) - _ADX_FLOOR) / _ADX_SPAN, 0.0, 1.0)
+    dist = abs(float(price) - float(sma_50)) / abs(float(sma_50))
+    dist_strength = _clamp(dist / _SMA_DIST_FULL, 0.0, 1.0)
+    strength = _ADX_WEIGHT * adx_strength + (1.0 - _ADX_WEIGHT) * dist_strength
+
+    return round(sign * cap * strength, 4)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Forecast (volatility cone)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -460,6 +515,7 @@ def compute_forecast(
     trend: Optional[dict] = None,
     vol_source: str = "hv",
     momentum: Optional[str] = None,
+    momentum_technicals: Optional[dict] = None,
 ) -> Optional[dict]:
     """Build a full forecast for all horizons, or ``None`` if inputs are unusable.
 
@@ -476,7 +532,13 @@ def compute_forecast(
         vol_source: label of where ``vol`` came from ("hv" | "ewma" | "iv").
         momentum: canonical momentum label (``dgi_metrics.classify_momentum``).
             When provided it is the single directional source of truth — it drives
-            the ``reading`` and ``bias``; the legacy technicals aggregate is ignored.
+            the ``reading`` and the sign of ``bias``; the legacy technicals aggregate
+            is ignored.
+        momentum_technicals: optional DGI technicals dict (``adx``/``sma_50``/
+            ``sma_200`` from ``calculate_technical_timing_score``). When present, the
+            ``bias`` magnitude is graded continuously by ADX (trend strength) and the
+            price↔SMA50 distance (extension); otherwise the discrete regime bias is
+            used.
 
     Returns a dict with ``price_at_creation``, ``hv`` (the vol used), ``vol_source``,
     ``confidence``, ``bias``, ``momentum``, ``trend`` and a ``horizons`` map. The band
@@ -505,7 +567,14 @@ def compute_forecast(
     # Directional read: the canonical momentum drives it when supplied; otherwise
     # fall back to the legacy technicals-consensus bias + trend agreement.
     if momentum is not None:
-        bias_val = momentum_bias(momentum)
+        mt = momentum_technicals or {}
+        bias_val = graded_momentum_bias(
+            momentum,
+            adx=mt.get("adx"),
+            price=price,
+            sma_50=mt.get("sma_50"),
+            sma_200=mt.get("sma_200"),
+        )
         reading = reading_from_momentum(momentum)
     else:
         bias_val = compute_bias(technicals)
@@ -535,6 +604,7 @@ def compute_forecast_from_closes(
     iv: Optional[float] = None,
     trend_window: int = 20,
     momentum: Optional[str] = None,
+    momentum_technicals: Optional[dict] = None,
 ) -> Optional[dict]:
     """Convenience wrapper: derive vol + trend from a closes series.
 
@@ -571,7 +641,7 @@ def compute_forecast_from_closes(
     return compute_forecast(
         current_price, vol, technicals,
         confidence=confidence, trend=trend, vol_source=used,
-        momentum=momentum,
+        momentum=momentum, momentum_technicals=momentum_technicals,
     )
 
 
