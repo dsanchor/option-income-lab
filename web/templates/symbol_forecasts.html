@@ -95,7 +95,7 @@
     var SYMBOL = "{{ symbol_doc.symbol }}";
     var HZ_END = { '1d': 1, '1w': 5, '2w': 10, '4w': 20 };
     var TRADING_DAYS = 252;
-    var currentRange = '30d';
+    var currentRange = '90d';
     var fanChart = null;
     var bandConf = 0.68;     // central probability of primary band (from API)
     var outerConf = 0.95;    // outer band probability
@@ -426,7 +426,7 @@
     }
 
     // initial load
-    setActivePill('30d');
+    setActivePill('90d');
     loadForecasts();
 })();
 </script>
