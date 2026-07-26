@@ -246,6 +246,45 @@ def calculate_technical_timing_score(
     }
 
 
+def classify_momentum(technicals: Dict[str, Any], current_price: float) -> str:
+    """Directional momentum for options selling — the canonical signal.
+
+    Pure rule tree over the SMA50/SMA200 structure, the price position relative to
+    SMA50, ADX (trend strength gate) and RSI (over-extension flags). This is the
+    single source of truth shared by the watchlist enrichment and the price
+    forecast so both surfaces always show the same call.
+
+    Args:
+        technicals: dict with ``sma_50``, ``sma_200``, ``rsi`` and ``adx`` (as
+            produced by :func:`calculate_technical_timing_score`).
+        current_price: latest price used for the position-vs-SMA50 test.
+
+    Returns one of: ``"Bullish"``, ``"Bullish (overextended)"``, ``"Weakening"``,
+    ``"Neutral"``, ``"Bearish"``, ``"Bearish (oversold)"`` or ``"Unknown"``.
+    """
+    if not isinstance(technicals, dict):
+        return "Unknown"
+    sma_50 = technicals.get("sma_50", 0)
+    sma_200 = technicals.get("sma_200", 0)
+    price = current_price or 0
+    rsi = technicals.get("rsi", 50)
+    adx = technicals.get("adx", 0)
+
+    if not (sma_50 and sma_200 and price):
+        return "Unknown"
+
+    # ADX < 20 = no real trend, force Neutral.
+    if adx < 20:
+        return "Neutral"
+    if sma_50 > sma_200 and price > sma_50:
+        return "Bullish (overextended)" if rsi > 70 else "Bullish"
+    if sma_50 > sma_200 and price <= sma_50:
+        return "Weakening"
+    if sma_50 <= sma_200 and price >= sma_50:
+        return "Neutral"
+    return "Bearish (oversold)" if rsi < 30 else "Bearish"
+
+
 # ======================================================================
 # Fundamental Dividend Metrics
 # ======================================================================

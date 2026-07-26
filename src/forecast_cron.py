@@ -18,6 +18,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from src import dgi_metrics
 from src.price_forecast import (
     HV_WINDOW,
     LIFECYCLE_SESSIONS,
@@ -31,6 +32,30 @@ from src.price_forecast import (
 from src.technicals_calculator import TechnicalsCalculator
 
 logger = logging.getLogger(__name__)
+
+
+def _momentum_from_history(history, current_price: float) -> Optional[str]:
+    """Canonical DGI momentum for an OHLC slice, or ``None`` when unavailable.
+
+    Mirrors the watchlist enrichment engine (``calculate_technical_timing_score``
+    + ``classify_momentum``) so the forecast reading always agrees with the
+    watchlist momentum. Requires High/Low/Close; degrades to ``None`` on any error
+    (the forecast then falls back to the legacy technicals bias).
+    """
+    try:
+        if history is None or history.empty:
+            return None
+        if not all(col in history for col in ("Close", "High", "Low")):
+            return None
+        tt = dgi_metrics.calculate_technical_timing_score(
+            history["Close"].values,
+            history["High"].values,
+            history["Low"].values,
+            current_price,
+        )
+        return dgi_metrics.classify_momentum(tt, current_price)
+    except Exception:
+        return None
 
 # Retention window for stored predictions (code-side TTL). ~1 year.
 RETENTION_DAYS = 365
@@ -216,6 +241,7 @@ async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff, pf_sett
 
     # ── Generate today's prediction ────────────────────────────────────
     technicals = _TECH.compute_all(history)
+    momentum = _momentum_from_history(history, latest_price)
 
     vol_source = pf_settings.get("vol_source", "iv_hv")
     iv = None
@@ -231,6 +257,7 @@ async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff, pf_sett
         vol_source=vol_source,
         iv=iv,
         trend_window=pf_settings.get("trend_window", 20),
+        momentum=momentum,
     )
     if forecast is None:
         out["skipped"] = 1
@@ -297,6 +324,7 @@ def _build_backfill_prediction(cosmos, symbol, history, session_dates, closes,
     hist_upto = history.iloc[: t_idx + 1]
 
     technicals = _TECH.compute_all(hist_upto)
+    momentum = _momentum_from_history(hist_upto, float(closes[t_idx]))
     forecast = compute_forecast_from_closes(
         closes_upto,
         technicals,
@@ -305,6 +333,7 @@ def _build_backfill_prediction(cosmos, symbol, history, session_dates, closes,
         confidence=confidence,
         vol_source=vol_source,
         trend_window=trend_window,
+        momentum=momentum,
     )
     if forecast is None:
         return None

@@ -25,7 +25,9 @@ from src.price_forecast import (
     horizon_for_offset,
     is_endpoint,
     linear_trend,
+    momentum_bias,
     price_inside,
+    reading_from_momentum,
     summarize_prediction,
     aggregate_hit_rate,
     trading_session_offset,
@@ -164,6 +166,66 @@ def test_from_closes_respects_explicit_current_price():
     closes = [100.0 + i * 0.1 for i in range(60)]
     fc = compute_forecast_from_closes(closes, current_price=123.45)
     assert fc["price_at_creation"] == pytest.approx(123.45)
+
+
+# ---------------------------------------------------------------------------
+# Momentum-driven reading (DGI engine as single source of truth)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("momentum,expected_code,expected_bias", [
+    ("Bullish", "bull", 1.0),
+    ("Bullish (overextended)", "top", 0.6),
+    ("Weakening", "top", 0.0),
+    ("Neutral", "neutral", 0.0),
+    ("Bearish", "bear", -1.0),
+    ("Bearish (oversold)", "bottom", -0.6),
+    ("Unknown", "neutral", 0.0),
+])
+def test_reading_and_bias_from_momentum(momentum, expected_code, expected_bias):
+    rd = reading_from_momentum(momentum)
+    assert rd["code"] == expected_code
+    assert rd["label"] == momentum
+    assert rd["momentum"] == momentum
+    # Shape parity with compute_reading consumers.
+    for key in ("code", "label", "icon", "conviction", "csp", "cc", "reason"):
+        assert key in rd
+    assert momentum_bias(momentum) == pytest.approx(expected_bias)
+
+
+def test_reading_from_momentum_unknown_on_garbage():
+    rd = reading_from_momentum("not-a-state")
+    assert rd["code"] == "neutral"
+    assert rd["label"] == "Unknown"
+    assert momentum_bias("not-a-state") == 0.0
+    assert momentum_bias(None) == 0.0
+
+
+def test_compute_forecast_uses_momentum_over_technicals():
+    # A strongly-bullish technicals aggregate would give bias +0.8, but an explicit
+    # Bearish momentum must win — momentum is the single source of truth.
+    tech = {"summary": {"recommendation": {"value": 0.8}}}
+    fc = compute_forecast(100.0, 0.20, tech, momentum="Bearish")
+    assert fc["momentum"] == "Bearish"
+    assert fc["bias"] == pytest.approx(-1.0)
+    assert fc["reading"]["code"] == "bear"
+    assert fc["reading"]["label"] == "Bearish"
+    # Bias still never shifts the band centre.
+    assert fc["horizons"]["4w"]["center"] == pytest.approx(100.0)
+
+
+def test_compute_forecast_without_momentum_falls_back_to_technicals():
+    tech = {"summary": {"recommendation": {"value": 0.8}}}
+    fc = compute_forecast(100.0, 0.20, tech)
+    assert fc["momentum"] is None
+    assert fc["bias"] == pytest.approx(0.8)
+
+
+def test_from_closes_passes_momentum_through():
+    closes = [100.0 + i * 0.1 for i in range(60)]
+    fc = compute_forecast_from_closes(closes, momentum="Bullish")
+    assert fc["momentum"] == "Bullish"
+    assert fc["bias"] == pytest.approx(1.0)
+    assert fc["reading"]["code"] == "bull"
 
 
 # ---------------------------------------------------------------------------

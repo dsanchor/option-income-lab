@@ -107,6 +107,31 @@ def test_cron_generates_and_validates():
     assert resolved["endpoints"]["1d"]["date"] == today
 
 
+def test_cron_prediction_carries_dgi_momentum():
+    """The generated forecast uses the DGI momentum engine as its reading source."""
+    from src import dgi_metrics
+
+    history = _make_history()
+    cosmos = _FakeCosmos([])
+    provider = _FakeProvider(history)
+
+    summary = asyncio.run(run_forecast_cron(cosmos, provider))
+    assert summary["status"] == "completed"
+
+    today = [d.strftime("%Y-%m-%d") for d in history.index][-1]
+    new_pred = next(w for w in cosmos.written if w.get("created_date") == today)
+
+    # The stored prediction exposes the canonical momentum + a matching reading.
+    assert "momentum" in new_pred
+    tt = dgi_metrics.calculate_technical_timing_score(
+        history["Close"].values, history["High"].values,
+        history["Low"].values, float(history["Close"].iloc[-1]),
+    )
+    expected = dgi_metrics.classify_momentum(tt, float(history["Close"].iloc[-1]))
+    assert new_pred["momentum"] == expected
+    assert new_pred["reading"]["label"] == expected
+
+
 def test_cron_skips_on_stale_history():
     # Latest session is well before today → holiday/stale guard trips.
     history = _make_history(end="2020-01-02")

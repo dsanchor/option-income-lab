@@ -239,6 +239,97 @@ def compute_reading(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Canonical momentum → trade reading
+# ──────────────────────────────────────────────────────────────────────────────
+# The momentum string is produced by the DGI screener engine
+# (``dgi_metrics.classify_momentum``: SMA50/200 + ADX + RSI) and is the single
+# directional source of truth shared by the watchlist enrichment and the price
+# forecast, so both surfaces always show the same call. This maps each momentum
+# state to the forecast's display ``reading`` and a directional ``bias`` sign used
+# only for the directional hit-rate (never shifts the band).
+_MOMENTUM_READING = {
+    "Bullish": {
+        "code": "bull", "icon": "▲▲", "conviction": "high",
+        "csp": "favorable", "cc": "avoid", "bias": 1.0,
+        "reason": ("SMA50 > SMA200, price above both — uptrend. "
+                   "Sell Puts: favorable (price expected to hold or rise). "
+                   "Sell Calls: assignment risk that caps the upside."),
+    },
+    "Bullish (overextended)": {
+        "code": "top", "icon": "▲▽", "conviction": "low",
+        "csp": "caution", "cc": "favorable", "bias": 0.6,
+        "reason": ("Bullish BUT RSI > 70 (overbought) — may reverse soon. "
+                   "Sell Calls: good timing into the strength. "
+                   "Sell Puts: caution, a pullback may come."),
+    },
+    "Weakening": {
+        "code": "top", "icon": "▲▽", "conviction": "low",
+        "csp": "caution", "cc": "favorable", "bias": 0.0,
+        "reason": ("SMA50 > SMA200 but price dropped below SMA50 — losing steam. "
+                   "Sell Calls: ideal. Sell Puts: caution."),
+    },
+    "Neutral": {
+        "code": "neutral", "icon": "·", "conviction": "none",
+        "csp": "neutral", "cc": "neutral", "bias": 0.0,
+        "reason": ("ADX < 20 or no clear trend — range-bound. Premium decays in "
+                   "your favor on both sides, but with no directional edge."),
+    },
+    "Bearish": {
+        "code": "bear", "icon": "▼▼", "conviction": "high",
+        "csp": "avoid", "cc": "favorable", "bias": -1.0,
+        "reason": ("SMA50 < SMA200, price below both — downtrend. "
+                   "Sell Calls: favorable. "
+                   "Sell Puts: assignment risk to the downside."),
+    },
+    "Bearish (oversold)": {
+        "code": "bottom", "icon": "▽▲", "conviction": "low",
+        "csp": "favorable", "cc": "caution", "bias": -0.6,
+        "reason": ("Bearish BUT RSI < 30 (oversold) — may bounce soon. "
+                   "Sell Puts: good timing into the weakness. "
+                   "Sell Calls: caution, it may bounce."),
+    },
+    "Unknown": {
+        "code": "neutral", "icon": "·", "conviction": "none",
+        "csp": "neutral", "cc": "neutral", "bias": 0.0,
+        "reason": "Insufficient data for a directional read.",
+    },
+}
+
+
+def reading_from_momentum(momentum: Optional[str]) -> dict:
+    """Build the forecast display ``reading`` from a canonical momentum label.
+
+    Returns a dict with the same shape as :func:`compute_reading`
+    (``code``/``label``/``icon``/``conviction``/``momentum``/``csp``/``cc``/
+    ``reason``) so every consumer renders identically. Unknown/absent momentum
+    degrades to the neutral "Unknown" reading.
+    """
+    key = momentum if momentum in _MOMENTUM_READING else "Unknown"
+    spec = _MOMENTUM_READING[key]
+    return {
+        "code": spec["code"],
+        "label": key,
+        "icon": spec["icon"],
+        "conviction": spec["conviction"],
+        "momentum": key,
+        "csp": spec["csp"],
+        "cc": spec["cc"],
+        "reason": spec["reason"],
+    }
+
+
+def momentum_bias(momentum: Optional[str]) -> float:
+    """Directional bias sign in [-1, +1] implied by a momentum label.
+
+    Used only for the directional hit-rate (``endpoint_direction_correct``) and the
+    Bias column — never shifts the band. Non-directional states (Weakening, Neutral,
+    Unknown) return 0.0 so they make no directional claim.
+    """
+    spec = _MOMENTUM_READING.get(momentum or "")
+    return float(spec["bias"]) if spec else 0.0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Forecast (volatility cone)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -368,6 +459,7 @@ def compute_forecast(
     confidence: float = DEFAULT_CONFIDENCE,
     trend: Optional[dict] = None,
     vol_source: str = "hv",
+    momentum: Optional[str] = None,
 ) -> Optional[dict]:
     """Build a full forecast for all horizons, or ``None`` if inputs are unusable.
 
@@ -375,16 +467,20 @@ def compute_forecast(
         current_price: latest (adjusted) close.
         vol: annualized volatility (decimal) — HV, EWMA or IV. Use
             :func:`compute_forecast_from_closes` to derive it from a series.
-        technicals: technicals dict from ``TechnicalsCalculator`` (for bias).
+        technicals: technicals dict from ``TechnicalsCalculator`` (legacy bias
+            fallback, only used when ``momentum`` is not supplied).
         confidence: central confidence level for the PRIMARY band (default 0.68 =
             classic ±1σ). Drives ``z1``; the outer band uses ``OUTER_CONFIDENCE``.
         trend: optional ``linear_trend`` dict — its ``slope`` projects a trend
             overlay line (``trend_end`` per horizon). Never shifts the band centre.
         vol_source: label of where ``vol`` came from ("hv" | "ewma" | "iv").
+        momentum: canonical momentum label (``dgi_metrics.classify_momentum``).
+            When provided it is the single directional source of truth — it drives
+            the ``reading`` and ``bias``; the legacy technicals aggregate is ignored.
 
     Returns a dict with ``price_at_creation``, ``hv`` (the vol used), ``vol_source``,
-    ``confidence``, ``bias``, ``trend`` and a ``horizons`` map. The band centre is
-    always ``current_price`` — bias and trend are reported separately.
+    ``confidence``, ``bias``, ``momentum``, ``trend`` and a ``horizons`` map. The band
+    centre is always ``current_price`` — bias and trend are reported separately.
     """
     if current_price is None or not _is_finite(current_price) or current_price <= 0:
         return None
@@ -406,7 +502,14 @@ def compute_forecast(
         band["end_session"] = bounds["end_session"]
         horizons[name] = band
 
-    bias_val = compute_bias(technicals)
+    # Directional read: the canonical momentum drives it when supplied; otherwise
+    # fall back to the legacy technicals-consensus bias + trend agreement.
+    if momentum is not None:
+        bias_val = momentum_bias(momentum)
+        reading = reading_from_momentum(momentum)
+    else:
+        bias_val = compute_bias(technicals)
+        reading = compute_reading(bias_val, slope)
     return {
         "price_at_creation": round(price, 4),
         "hv": round(float(vol), 6),
@@ -414,8 +517,9 @@ def compute_forecast(
         "confidence": round(float(confidence), 4),
         "outer_confidence": round(float(outer_conf), 4),
         "bias": bias_val,
+        "momentum": momentum,
         "trend": trend if isinstance(trend, dict) else None,
-        "reading": compute_reading(bias_val, slope),
+        "reading": reading,
         "horizons": horizons,
     }
 
@@ -430,6 +534,7 @@ def compute_forecast_from_closes(
     vol_source: str = "hv",
     iv: Optional[float] = None,
     trend_window: int = 20,
+    momentum: Optional[str] = None,
 ) -> Optional[dict]:
     """Convenience wrapper: derive vol + trend from a closes series.
 
@@ -466,6 +571,7 @@ def compute_forecast_from_closes(
     return compute_forecast(
         current_price, vol, technicals,
         confidence=confidence, trend=trend, vol_source=used,
+        momentum=momentum,
     )
 
 
