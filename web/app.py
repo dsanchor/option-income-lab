@@ -1362,7 +1362,6 @@ async def api_dps_analysis(request: Request, symbol: str, position_id: str):
             snapshots=snapshots,
             underlying_price=underlying_price,
             premium_received=_premium,
-            signal=(sym_doc.get("enrichment") or {}).get("signal"),
         )
 
         return JSONResponse(result)

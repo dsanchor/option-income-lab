@@ -206,38 +206,6 @@ def extract_series_from_snapshots(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Canonical directional-signal confluence (shared by both scorers)
-# ──────────────────────────────────────────────────────────────────────────────
-
-_SIGNAL_SUIT_POINTS = {"favorable": 6, "neutral": 0, "caution": -4, "avoid": -8}
-
-
-def _signal_confluence(option_type: str, signal: Optional[Dict]) -> Optional[Dict]:
-    """Score adjustment from the canonical directional reading (single source of
-    truth shared with the forecast/enrichment).
-
-    A confluence *nudge* — never overrides the position's own snapshot-based
-    trend analysis. Returns a ``score_breakdown``-shaped dict (or ``None`` when
-    no reading is available). ``favorable/neutral/caution/avoid`` map to points
-    from the reading's CSP (puts) or CC (calls) suitability.
-    """
-    reading = (signal or {}).get("reading") or {}
-    label = reading.get("label")
-    if not label:
-        return None
-    suit = reading.get("csp") if option_type == "put" else reading.get("cc")
-    pts = _SIGNAL_SUIT_POINTS.get(suit)
-    if pts is None:
-        return None
-    kind = "CSP" if option_type == "put" else "CC"
-    return {
-        "factor": "Directional reading",
-        "points": pts,
-        "reason": f"{label} — {suit} for {kind} (canonical signal)",
-    }
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Short PUT scorer
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -248,7 +216,6 @@ def score_short_put(
     expiration: str,
     underlying_price: float,
     premium_received: Optional[float] = None,
-    signal: Optional[Dict] = None,
 ) -> Dict:
     """Score a short put position deterministically.
 
@@ -386,17 +353,6 @@ def score_short_put(
         score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength}) — unfavorable trend"})
         key_drivers.append(f"ADX {adx:.1f} rising ({adx_strength} trend)")
         rule_hits.append("adx_rising")
-
-    # Canonical directional reading (confluence nudge — shared source of truth)
-    _sig = _signal_confluence("put", signal)
-    if _sig:
-        score += _sig["points"]
-        score_breakdown.append(_sig)
-        if _sig["points"] > 0:
-            key_drivers.append(_sig["reason"])
-        elif _sig["points"] <= -8:
-            key_drivers.append(_sig["reason"])
-            rule_hits.append("reading_unfavorable")
 
     # DTE (contextual: depends on moneyness)
     if dte > 21:
@@ -650,7 +606,6 @@ def score_short_call(
     expiration: str,
     underlying_price: float,
     premium_received: Optional[float] = None,
-    signal: Optional[Dict] = None,
 ) -> Dict:
     """Score a short call position deterministically.
 
@@ -788,17 +743,6 @@ def score_short_call(
         score_breakdown.append({"factor": "ADX", "points": adx_pts, "reason": f"ADX {adx:.1f} > 25 rising ({adx_strength}) — unfavorable trend"})
         key_drivers.append(f"ADX {adx:.1f} rising ({adx_strength} trend)")
         rule_hits.append("adx_rising")
-
-    # Canonical directional reading (confluence nudge — shared source of truth)
-    _sig = _signal_confluence("call", signal)
-    if _sig:
-        score += _sig["points"]
-        score_breakdown.append(_sig)
-        if _sig["points"] > 0:
-            key_drivers.append(_sig["reason"])
-        elif _sig["points"] <= -8:
-            key_drivers.append(_sig["reason"])
-            rule_hits.append("reading_unfavorable")
 
     # DTE (contextual: depends on moneyness)
     if dte > 21:
@@ -1054,7 +998,6 @@ def run_dps_analysis(
     snapshots: List[Dict],
     underlying_price: Optional[float] = None,
     premium_received: Optional[float] = None,
-    signal: Optional[Dict] = None,
 ) -> Dict:
     """Run the full DPS analysis for a position.
 
@@ -1091,9 +1034,9 @@ def run_dps_analysis(
 
     # Run scorer
     if option_type == "put":
-        result = score_short_put(greeks, snapshots, strike, expiration, underlying_price, premium_received=premium_received, signal=signal)
+        result = score_short_put(greeks, snapshots, strike, expiration, underlying_price, premium_received=premium_received)
     else:
-        result = score_short_call(greeks, snapshots, strike, expiration, underlying_price, premium_received=premium_received, signal=signal)
+        result = score_short_call(greeks, snapshots, strike, expiration, underlying_price, premium_received=premium_received)
 
     result["ticker"] = symbol
     return result

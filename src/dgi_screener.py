@@ -135,22 +135,6 @@ def analyze_single_symbol(symbol: str, filters: dict = None) -> dict:
         if not isinstance(technicals, dict):
             technicals = {"score": technicals}
 
-    # Canonical directional signal — single source of truth shared with the
-    # price forecast and agents. Reuses the same TechnicalsCalculator consensus
-    # + robust trend, so the enrichment "momentum" can never drift from the
-    # forecast "reading". Best-effort: degrades to Neutral on thin history.
-    signal = None
-    try:
-        if history is not None and not (hasattr(history, "empty") and history.empty):
-            from .technicals_calculator import TechnicalsCalculator
-            from .price_forecast import build_signal
-            tech_consensus = TechnicalsCalculator().compute_all(history)
-            closes = [float(c) for c in history["Close"].dropna().tolist()]
-            signal = build_signal(tech_consensus, closes)
-    except Exception as exc:
-        logger.warning("Canonical signal failed for %s: %s", symbol, exc)
-        signal = None
-
     # Quality score with detailed breakdown
     quality_detail = dgi_metrics.calculate_quality_score_detailed(metrics, technicals)
     quality_score = quality_detail["total"]
@@ -168,39 +152,33 @@ def analyze_single_symbol(symbol: str, filters: dict = None) -> dict:
     else:
         entry_tag = "Wait"
 
-    # Momentum (directional signal for options selling) — derived from the
-    # canonical reading so it stays coherent with the forecast. Falls back to
-    # the legacy SMA/RSI/ADX heuristic only when the canonical signal is
-    # unavailable (thin history / compute failure).
-    if signal is not None and signal.get("momentum"):
-        momentum = signal["momentum"]
-    else:
-        sma_50 = technicals.get("sma_50", 0)
-        sma_200 = technicals.get("sma_200", 0)
-        price = metrics.get("current_price", 0)
-        rsi = technicals.get("rsi", 50)
-        adx = technicals.get("adx", 0)
+    # Momentum (directional signal for options selling)
+    sma_50 = technicals.get("sma_50", 0)
+    sma_200 = technicals.get("sma_200", 0)
+    price = metrics.get("current_price", 0)
+    rsi = technicals.get("rsi", 50)
+    adx = technicals.get("adx", 0)
 
-        if sma_50 and sma_200 and price:
-            # ADX < 20 = no real trend, force Neutral
-            if adx < 20:
-                momentum = "Neutral"
-            elif sma_50 > sma_200 and price > sma_50:
-                if rsi > 70:
-                    momentum = "Bullish (overextended)"
-                else:
-                    momentum = "Bullish"
-            elif sma_50 > sma_200 and price <= sma_50:
-                momentum = "Weakening"
-            elif sma_50 <= sma_200 and price >= sma_50:
-                momentum = "Neutral"
+    if sma_50 and sma_200 and price:
+        # ADX < 20 = no real trend, force Neutral
+        if adx < 20:
+            momentum = "Neutral"
+        elif sma_50 > sma_200 and price > sma_50:
+            if rsi > 70:
+                momentum = "Bullish (overextended)"
             else:
-                if rsi < 30:
-                    momentum = "Bearish (oversold)"
-                else:
-                    momentum = "Bearish"
+                momentum = "Bullish"
+        elif sma_50 > sma_200 and price <= sma_50:
+            momentum = "Weakening"
+        elif sma_50 <= sma_200 and price >= sma_50:
+            momentum = "Neutral"
         else:
-            momentum = "Unknown"
+            if rsi < 30:
+                momentum = "Bearish (oversold)"
+            else:
+                momentum = "Bearish"
+    else:
+        momentum = "Unknown"
 
     category = dgi_metrics.categorize_stock(metrics)
     passes_filters = dgi_metrics.passes_minimum_filters(metrics, filters)
@@ -215,7 +193,6 @@ def analyze_single_symbol(symbol: str, filters: dict = None) -> dict:
         "quality_detail": quality_detail,
         "entry_tag": entry_tag,
         "momentum": momentum,
-        "signal": signal,
         "category": category,
         "has_dividends": has_dividends,
         "passes_minimum_filters": passes_filters,

@@ -238,65 +238,6 @@ def compute_reading(
     }
 
 
-# Canonical reading → legacy momentum vocabulary. Kept identical to the words
-# the watchlist UI (filters, badge colours, tooltips) already understands, so the
-# enrichment "momentum" stays coherent with the forecast "reading" without
-# breaking any consumer:
-#   top    (uptrend, momentum fading)      → "Weakening"        (CC-favourable)
-#   bottom (downtrend, oversold bounce)    → "Bearish (oversold)" (CSP-favourable)
-_MOMENTUM_BY_CODE = {
-    "bull": "Bullish",
-    "bear": "Bearish",
-    "top": "Weakening",
-    "bottom": "Bearish (oversold)",
-    "neutral": "Neutral",
-}
-
-
-def momentum_label(reading: Optional[dict]) -> str:
-    """Human momentum label derived from a ``compute_reading`` result.
-
-    Single mapping so every surface (enrichment, forecast, agents) speaks the
-    same directional vocabulary. Returns "Unknown" when there is no reading.
-    """
-    if not isinstance(reading, dict):
-        return "Unknown"
-    return _MOMENTUM_BY_CODE.get(reading.get("code"), "Neutral")
-
-
-def build_signal(
-    technicals: Optional[dict],
-    closes: Optional[List[float]],
-    *,
-    trend_window: int = 20,
-) -> dict:
-    """Canonical directional signal — the single source of truth reused across
-    the platform (forecast, enrichment, agents, DPS scorer, UIs).
-
-    Combines the technicals-consensus ``bias`` (TradingView-style aggregate) with
-    the robust price ``trend`` (Theil-Sen) into a trade ``reading`` and a legacy
-    ``momentum`` label. Given the same inputs it always yields the same output,
-    so components that reuse it stay coherent instead of drifting apart.
-
-    Args:
-        technicals: ``TechnicalsCalculator.compute_all`` output (for ``bias``).
-        closes: recent close series (for the price ``trend``).
-        trend_window: sessions used for the robust trend fit.
-
-    Returns ``{bias, trend, reading, momentum}``. Deterministic; no I/O, no LLM.
-    """
-    bias = compute_bias(technicals)
-    trend = linear_trend(closes, window=trend_window)
-    slope = trend.get("slope") if isinstance(trend, dict) else None
-    reading = compute_reading(bias, slope)
-    return {
-        "bias": bias,
-        "trend": trend,
-        "reading": reading,
-        "momentum": momentum_label(reading),
-    }
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Forecast (volatility cone)
 # ──────────────────────────────────────────────────────────────────────────────

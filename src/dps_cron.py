@@ -74,9 +74,6 @@ async def run_dps_cron(cosmos, yf_provider) -> dict:
         if underlying_price is not None:
             underlying_price = float(underlying_price)
 
-        # Canonical directional signal (shared with forecast/enrichment).
-        sym_signal = (sym_doc.get("enrichment") or {}).get("signal")
-
         for pos in active_positions:
             position_id = pos.get("position_id", "")
             strike = pos.get("strike")
@@ -113,7 +110,6 @@ async def run_dps_cron(cosmos, yf_provider) -> dict:
                     snapshots=snapshots,
                     underlying_price=underlying_price,
                     premium_received=_prem,
-                    signal=sym_signal,
                 )
 
                 if result.get("status") == "ERROR" or result.get("error"):
