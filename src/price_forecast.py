@@ -192,37 +192,37 @@ def compute_reading(
     if agree and bias_dir > 0:
         code, label, icon, conv = "bull", "Bullish", "▲▲", "high"
         csp, cc = "favorable", "avoid"
-        reason = ("Tendencia ↑ y momentum ↑ coinciden (convicción alta). "
-                  "Favorable para VENDER CSP: esperas que el precio se mantenga "
-                  "o suba, así el put vence sin valor y te quedas la prima. "
-                  "Evita vender CC ahora: riesgo de que te asignen y limitar la subida.")
+        reason = ("Uptrend and momentum agree (high conviction). "
+                  "Favorable to SELL CSP: you expect the price to hold or rise, "
+                  "so the put expires worthless and you keep the premium. "
+                  "Avoid selling CC now: risk of assignment that caps the upside.")
     elif agree and bias_dir < 0:
         code, label, icon, conv = "bear", "Bearish", "▼▼", "high"
         csp, cc = "avoid", "favorable"
-        reason = ("Tendencia ↓ y momentum ↓ coinciden (convicción alta). "
-                  "Favorable para VENDER CC: esperas que el precio caiga o no "
-                  "suba, así el call vence sin valor. Evita CSP ahora: riesgo de "
-                  "asignación a la baja mientras el precio sigue cayendo.")
+        reason = ("Downtrend and momentum agree (high conviction). "
+                  "Favorable to SELL CC: you expect the price to fall or not rise, "
+                  "so the call expires worthless. Avoid CSP now: risk of downside "
+                  "assignment while the price keeps falling.")
     elif trend_dir > 0 and bias_dir <= 0:
         code, label, icon, conv = "top", "Topping", "▲▽", "low"
         csp, cc = "caution", "favorable"
-        reason = ("Tendencia ↑ pero el momentum no acompaña (posible sobrecompra "
-                  "/ agotamiento). Buen momento para VENDER CC contra la fuerza "
-                  "(primas altas, posible techo). CSP con cautela: puede venir un "
-                  "pullback. Baja convicción — señales divergentes.")
+        reason = ("Uptrend but momentum is not following (possible overbought / "
+                  "exhaustion). Good moment to SELL CC into the strength "
+                  "(rich premium, possible top). CSP with caution: a pullback may "
+                  "come. Low conviction — diverging signals.")
     elif trend_dir < 0 and bias_dir >= 0:
         code, label, icon, conv = "bottom", "Bottoming", "▽▲", "low"
         csp, cc = "favorable", "caution"
-        reason = ("Tendencia ↓ pero el momentum gira al alza (posible sobreventa "
-                  "/ rebote). Buen momento para VENDER CSP en la debilidad "
-                  "(primas altas, posible suelo). CC con cautela: puede rebotar. "
-                  "Baja convicción — señales divergentes.")
+        reason = ("Downtrend but momentum is turning up (possible oversold / "
+                  "bounce). Good moment to SELL CSP into the weakness "
+                  "(rich premium, possible bottom). CC with caution: it may bounce. "
+                  "Low conviction — diverging signals.")
     else:
         code, label, icon, conv = "neutral", "Neutral", "·", "none"
         csp, cc = "neutral", "neutral"
-        reason = ("Sin tendencia clara o señal demasiado débil. Mercado en rango: "
-                  "la prima decae a tu favor en ambos lados, pero sin ventaja "
-                  "direccional. Convicción baja — no hay apuesta clara.")
+        reason = ("No clear trend or signal too weak. Range-bound market: "
+                  "premium decays in your favor on both sides, but with no "
+                  "directional edge. Low conviction — no clear bet.")
 
     return {
         "code": code,
