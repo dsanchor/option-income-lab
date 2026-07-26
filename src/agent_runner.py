@@ -788,12 +788,24 @@ class AgentRunner:
             momentum = enrichment.get("momentum")
             entry_tag = enrichment.get("entry_tag")
             dgi = enrichment.get("quality_score")
+            signal = enrichment.get("signal") or {}
+            reading = signal.get("reading") or {}
 
             lines = []
             if tech_timing is not None:
                 lines.append(f"- Tech Timing score: {tech_timing}/100")
             if momentum:
                 lines.append(f"- Momentum: {momentum}")
+            if reading.get("label"):
+                csp = reading.get("csp")
+                cc = reading.get("cc")
+                extra = ""
+                if csp and cc:
+                    extra = f" — CSP: {csp}, CC: {cc}"
+                lines.append(
+                    f"- Reading: {reading['label']} "
+                    f"(conviction {reading.get('conviction', 'n/a')}){extra}"
+                )
             if entry_tag:
                 lines.append(f"- Entry tag: {entry_tag}")
             if dgi is not None:
@@ -2681,6 +2693,11 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 from .dps_scorer import run_dps_analysis as _run_dps
                 _dps_snaps = cosmos.get_position_snapshots(symbol, position_id, limit=20)
                 _dps_snaps.reverse()
+                _dps_signal = None
+                try:
+                    _dps_signal = ((cosmos.get_symbol(symbol) or {}).get("enrichment") or {}).get("signal")
+                except Exception:
+                    _dps_signal = None
                 _dps_result = _run_dps(
                     symbol=symbol,
                     strike=float(strike),
@@ -2690,6 +2707,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                     snapshots=_dps_snaps,
                     underlying_price=snapshot_data.get("underlying_price"),
                     premium_received=_premium_received,
+                    signal=_dps_signal,
                 )
                 _dps_score = _dps_result.get("score")
                 if _dps_score is not None:

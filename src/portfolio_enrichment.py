@@ -51,6 +51,7 @@ def enrich_symbol(symbol: str) -> dict | None:
             "category": result.get("category", ""),
             "entry_tag": result.get("entry_tag", ""),
             "momentum": result.get("momentum", ""),
+            "signal": result.get("signal"),
             "metrics": result.get("metrics", {}),
             "technicals": result.get("technicals", {}),
             "has_dividends": result.get("has_dividends", False),

@@ -66,6 +66,7 @@
 {% set mom_base = momentum | replace(' (overextended)', '') | replace(' (oversold)', '') %}
 {% set mom_lower = mom_base | lower %}
 {% set mom_warn = '(overextended)' in momentum or '(oversold)' in momentum %}
+{% set reading = (enr.signal | default({}) or {}).reading | default({}) or {} %}
 {% set cat_lower = (enr.category | default('') | lower | replace(' ', '-')) or 'none' %}
 {% set total_shares = symbol_doc.total_shares | default(0) %}
 {% set in_calls = summary_in_calls | default(0) %}
@@ -109,6 +110,12 @@
                         <span class="badge badge-momentum-{{ mom_lower }}" title="{% if mom_base == 'Bullish' and not mom_warn %}SMA50 > SMA200, price above both — uptrend. Sell Puts: ✅ safe | Sell Calls: ⚠️ assignment risk{% elif momentum == 'Bullish (overextended)' %}Bullish BUT RSI > 70 (overbought) — may reverse soon. Sell Puts: ⚠️ possible drop | Sell Calls: ✅ good timing{% elif momentum == 'Weakening' %}SMA50 > SMA200 but price dropping below SMA50 — losing steam. Sell Calls: ✅ ideal | Sell Puts: ⚠️ caution{% elif momentum == 'Neutral' %}ADX < 20 or no clear trend — range-bound. Sell Puts: ✅ | Sell Calls: ✅ (premium decays){% elif mom_base == 'Bearish' and not mom_warn %}SMA50 < SMA200, price below both — downtrend. Sell Calls: ✅ safe | Sell Puts: ❌ assignment risk{% elif momentum == 'Bearish (oversold)' %}Bearish BUT RSI < 30 (oversold) — may bounce soon. Sell Calls: ⚠️ possible bounce | Sell Puts: ✅ good timing{% else %}Insufficient data{% endif %}">
                             {% if mom_warn %}⚠️ {% endif %}{{ momentum }}
                         </span>
+                        {% if reading.label %}
+                        <div style="font-size:0.68rem; color:var(--text-muted); margin-top:0.2rem;" title="{{ reading.reason | default('') }}">
+                            {{ reading.icon | default('') }} {{ reading.label }}
+                            <span style="opacity:0.8;">· CSP {{ reading.csp | default('—') }} · CC {{ reading.cc | default('—') }}</span>
+                        </div>
+                        {% endif %}
                         {% else %}—{% endif %}
                     </td>
                     <td class="mono">{% if metrics.current_price %}${{ "%.2f" | format(metrics.current_price) }}{% else %}—{% endif %}</td>

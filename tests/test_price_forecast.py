@@ -19,6 +19,8 @@ from src.price_forecast import (
     compute_forecast,
     compute_forecast_from_closes,
     compute_reading,
+    build_signal,
+    momentum_label,
     endpoint_direction_correct,
     evaluate_snapshot,
     has_enough_history,
@@ -473,6 +475,45 @@ def test_compute_reading_neutral_below_threshold():
     rd = compute_reading(0.05, 0.0)
     assert rd["code"] == "neutral"
     assert rd["csp"] == "neutral" and rd["cc"] == "neutral"
+
+
+# ---------------------------------------------------------------------------
+# Canonical signal builder (single source of truth reused across components)
+# ---------------------------------------------------------------------------
+
+def test_build_signal_bullish_uptrend():
+    closes = [100.0 + 0.5 * i for i in range(30)]
+    tech = {"summary": {"recommendation": {"value": 0.4}}}
+    sig = build_signal(tech, closes)
+    assert sig["bias"] == pytest.approx(0.4)
+    assert sig["reading"]["code"] == "bull"
+    assert sig["momentum"] == "Bullish"
+    assert sig["trend"]["quality"] == "strong"
+
+
+def test_build_signal_momentum_matches_reading():
+    # The momentum label is always derived from the reading (never drifts).
+    closes = [100.0 - 0.5 * i for i in range(30)]  # downtrend
+    tech = {"summary": {"recommendation": {"value": -0.4}}}
+    sig = build_signal(tech, closes)
+    assert sig["reading"]["code"] == "bear"
+    assert sig["momentum"] == momentum_label(sig["reading"]) == "Bearish"
+
+
+def test_build_signal_degrades_on_missing_inputs():
+    sig = build_signal(None, None)
+    assert sig["bias"] == 0.0
+    assert sig["trend"] is None
+    assert sig["reading"]["code"] == "neutral"
+    assert sig["momentum"] == "Neutral"
+
+
+def test_momentum_label_uses_ui_compatible_vocabulary():
+    # Every emitted label must be one the watchlist UI already understands.
+    allowed = {"Bullish", "Bearish", "Weakening", "Bearish (oversold)", "Neutral"}
+    for code in ("bull", "bear", "top", "bottom", "neutral"):
+        assert momentum_label({"code": code}) in allowed
+    assert momentum_label(None) == "Unknown"
 
 
 # ---------------------------------------------------------------------------
