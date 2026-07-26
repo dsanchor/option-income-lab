@@ -176,7 +176,7 @@ def test_from_closes_respects_explicit_current_price():
 @pytest.mark.parametrize("momentum,expected_code,expected_bias", [
     ("Bullish", "bull", 1.0),
     ("Bullish (overextended)", "top", 0.6),
-    ("Weakening", "top", 0.0),
+    ("Weakening", "top", -0.2),
     ("Neutral", "neutral", 0.0),
     ("Bearish", "bear", -1.0),
     ("Bearish (oversold)", "bottom", -0.6),
@@ -242,8 +242,17 @@ def test_graded_bias_falls_back_to_discrete_without_inputs():
 
 def test_graded_bias_non_directional_states_are_zero():
     assert graded_momentum_bias("Neutral", adx=40, price=110, sma_50=100, sma_200=90) == 0.0
-    assert graded_momentum_bias("Weakening", adx=40, price=110, sma_50=100, sma_200=90) == 0.0
     assert graded_momentum_bias("Unknown") == 0.0
+
+
+def test_graded_bias_weakening_is_mildly_bearish_and_graded():
+    # Weakening leans mildly bearish (cap 0.2), graded by ADX + SMA distance.
+    b = graded_momentum_bias("Weakening", adx=40, price=110, sma_50=100, sma_200=90)
+    assert -0.2 <= b < 0.0
+    # adx_strength (40->0.667) blended with dist_strength (10%->1.0) => 0.833 * -0.2.
+    assert b == pytest.approx(-0.1667, abs=1e-3)
+    # Discrete fallback when inputs are missing.
+    assert graded_momentum_bias("Weakening") == pytest.approx(-0.2)
 
 
 def test_graded_bias_scales_with_adx_and_distance():

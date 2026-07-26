@@ -264,7 +264,7 @@ _MOMENTUM_READING = {
     },
     "Weakening": {
         "code": "top", "icon": "▲▽", "conviction": "low",
-        "csp": "caution", "cc": "favorable", "bias": 0.0,
+        "csp": "caution", "cc": "favorable", "bias": -0.2,
         "reason": ("SMA50 > SMA200 but price dropped below SMA50 — losing steam. "
                    "Sell Calls: ideal. Sell Puts: caution."),
     },
@@ -322,8 +322,8 @@ def momentum_bias(momentum: Optional[str]) -> float:
     """Directional bias sign in [-1, +1] implied by a momentum label.
 
     Used only for the directional hit-rate (``endpoint_direction_correct``) and the
-    Bias column — never shifts the band. Non-directional states (Weakening, Neutral,
-    Unknown) return 0.0 so they make no directional claim.
+    Bias column — never shifts the band. Non-directional states (Neutral, Unknown)
+    return 0.0; Weakening carries a mild bearish lean (-0.2, fading uptrend).
     """
     spec = _MOMENTUM_READING.get(momentum or "")
     return float(spec["bias"]) if spec else 0.0
