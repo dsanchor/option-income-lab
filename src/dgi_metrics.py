@@ -6,6 +6,7 @@ Formulas and thresholds follow the spec in danny-dgi-screener.md (v3).
 """
 
 import logging
+import math
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -152,6 +153,17 @@ def calculate_technical_timing_score(
     high = np.asarray(high_prices, dtype=float)
     low = np.asarray(low_prices, dtype=float)
 
+    # Drop non-finite rows (yfinance can return a trailing NaN row intraday/pre-market,
+    # and a single NaN poisons np.mean → SMA/ADX/RSI all become NaN). Keep the three
+    # OHLC series aligned so indicators stay consistent.
+    if close.size and high.size == close.size and low.size == close.size:
+        finite = np.isfinite(close) & np.isfinite(high) & np.isfinite(low)
+        close, high, low = close[finite], high[finite], low[finite]
+    else:
+        close = close[np.isfinite(close)]
+        high = high[np.isfinite(high)]
+        low = low[np.isfinite(low)]
+
     # --- RSI ---
     rsi_val = calculate_rsi(close, period=rsi_period)
     if rsi_val <= 30:
@@ -270,10 +282,16 @@ def classify_momentum(technicals: Dict[str, Any], current_price: float) -> str:
     rsi = technicals.get("rsi", 50)
     adx = technicals.get("adx", 0)
 
+    # NaN-safe: a NaN SMA/price is truthy in Python and would silently fall through
+    # the comparison ladder to "Bearish". Treat non-finite structure as Unknown.
+    if not all(math.isfinite(x) for x in (sma_50, sma_200, price)):
+        return "Unknown"
     if not (sma_50 and sma_200 and price):
         return "Unknown"
 
     # ADX < 20 = no real trend, force Neutral.
+    if not math.isfinite(adx):
+        adx = 0
     if adx < 20:
         return "Neutral"
     if sma_50 > sma_200 and price > sma_50:

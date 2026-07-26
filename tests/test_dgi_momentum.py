@@ -5,6 +5,8 @@ enrichment (dgi_screener) and the price forecast (forecast_cron), so both
 surfaces always agree.
 """
 
+import math
+
 import pytest
 
 from src.dgi_metrics import classify_momentum
@@ -51,3 +53,33 @@ def test_unknown_on_missing_smas():
 
 def test_unknown_on_zero_price():
     assert classify_momentum(_tech(110, 100), 0) == "Unknown"
+
+
+def test_nan_smas_return_unknown_not_bearish():
+    # A NaN SMA is truthy in Python and used to fall through to "Bearish".
+    nan = float("nan")
+    assert classify_momentum(_tech(nan, nan, rsi=82, adx=27), 85) == "Unknown"
+    assert classify_momentum(_tech(110, nan), 85) == "Unknown"
+
+
+def test_timing_score_ignores_trailing_nan_row():
+    import numpy as np
+    from src.dgi_metrics import calculate_technical_timing_score
+
+    rng = np.random.default_rng(0)
+    close = 100.0 + np.cumsum(rng.normal(0, 0.5, 260))
+    high = close * 1.01
+    low = close * 0.99
+    clean = calculate_technical_timing_score(close, high, low, float(close[-1]))
+
+    # Append a trailing NaN row (as yfinance sometimes returns intraday/pre-market).
+    close_n = np.append(close, np.nan)
+    high_n = np.append(high, np.nan)
+    low_n = np.append(low, np.nan)
+    with_nan = calculate_technical_timing_score(close_n, high_n, low_n, float(close[-1]))
+
+    # SMAs must stay finite and match the clean computation (NaN row dropped).
+    assert math.isfinite(with_nan["sma_50"]) and math.isfinite(with_nan["sma_200"])
+    assert with_nan["sma_50"] == pytest.approx(clean["sma_50"])
+    assert with_nan["sma_200"] == pytest.approx(clean["sma_200"])
+    assert with_nan["score"] == pytest.approx(clean["score"])
