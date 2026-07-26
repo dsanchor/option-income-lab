@@ -189,7 +189,7 @@
                 var diff = Math.abs(v - target);
                 col = diff <= 12 ? 'var(--green,#22c55e)' : (diff <= 25 ? 'var(--amber,#f59e0b)' : 'var(--red,#ef4444)');
             }
-            var dirTxt = (h.direction_pct != null) ? 'dir ' + h.direction_pct.toFixed(0) + '%' : 'dir —';
+            var dirTxt = (h.direction_pct != null) ? 'dir ' + h.direction_pct.toFixed(0) + '% (c=' + (h.direction_n || 0) + ')' : 'dir — (c=' + (h.direction_n || 0) + ')';
             var devTxt = (h.mean_dev_pct != null)
                 ? '<div style="font-size:0.72rem; color:var(--blue,#60a5fa); margin-top:0.2rem;" title="Average deviation of closes from the projected trend line, as % of entry price (over ' + (h.mean_dev_n || 0) + ' prediction(s) with snapshots). Lower = price tracked the trend more tightly.">↳ trend dev ±' + h.mean_dev_pct.toFixed(2) + '%</div>'
                 : '<div style="font-size:0.72rem; color:var(--text-muted,#888); margin-top:0.2rem;" title="Average deviation of closes from the projected trend line. No snapshots yet.">↳ trend dev —</div>';
@@ -198,7 +198,7 @@
                   '<div style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.03em; color:var(--text-muted,#888); margin-bottom:0.35rem;">' +
                     labels[k] + ' endpoint ±' + target + '%</div>' +
                   '<div style="font-size:1.6rem; font-weight:700; line-height:1; color:' + col + ';">' + valTxt + '</div>' +
-                  '<div style="font-size:0.72rem; color:var(--text-muted,#888); margin-top:0.35rem;">n=' + resolved + ' · ' + dirTxt + '</div>' +
+                  '<div style="font-size:0.72rem; color:var(--text-muted,#888); margin-top:0.35rem;" title="n = resolved endpoints. dir = share of correct directional calls, computed only over the c high-conviction claims (|bias| >= 0.10 and, when known, agreeing with the trend). Neutral/low-conviction forecasts are excluded, so c may be lower than n.">n=' + resolved + ' · ' + dirTxt + '</div>' +
                   devTxt +
                 '</div>'
             );
@@ -219,8 +219,8 @@
         var html = '';
         data.rows.forEach(function(r) {
             var hz = r.horizons || {};
-            var biasArrow = r.bias > 0.15 ? '↑' : (r.bias < -0.15 ? '↓' : '→');
-            var biasCol = r.bias > 0.15 ? 'var(--green,#22c55e)' : (r.bias < -0.15 ? 'var(--red,#ef4444)' : 'var(--text-muted)');
+            var biasArrow = r.bias > 0.10 ? '↑' : (r.bias < -0.10 ? '↓' : '→');
+            var biasCol = r.bias > 0.10 ? 'var(--green,#22c55e)' : (r.bias < -0.10 ? 'var(--red,#ef4444)' : 'var(--text-muted)');
             var flags = [];
             if (r.flags && r.flags.earnings_in_window) flags.push('<span title="Earnings in window">📅</span>');
             if (r.flags && r.flags.exdiv_in_window) flags.push('<span title="Ex-dividend in window">💰</span>');

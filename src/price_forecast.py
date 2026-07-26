@@ -44,7 +44,7 @@ OUTER_CONFIDENCE = 0.95
 # Minimum |bias| to treat the directional signal as a real (high-conviction)
 # claim. Below this the technicals aggregate is treated as noise and no
 # directional call is scored. Also used by the trend-agreement filter.
-BIAS_CONVICTION_THRESHOLD = 0.15
+BIAS_CONVICTION_THRESHOLD = 0.10
 
 
 def z_for_confidence(confidence: Optional[float]) -> float:
@@ -832,6 +832,7 @@ def aggregate_hit_rate(preds: Sequence[dict]) -> dict:
                     / len(dir_claims), 1
                 ) if dir_claims else None
             ),
+            "direction_n": len(dir_claims),
             "mean_dev_pct": (
                 round(sum(dev_pcts) / len(dev_pcts), 2) if dev_pcts else None
             ),
