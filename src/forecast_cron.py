@@ -21,6 +21,7 @@ from typing import Optional
 from src.price_forecast import (
     HV_WINDOW,
     LIFECYCLE_SESSIONS,
+    MIN_HISTORY_BARS,
     compute_forecast_from_closes,
     endpoint_direction_correct,
     evaluate_snapshot,
@@ -40,6 +41,11 @@ WINDOW_CALENDAR_BOUND_DAYS = 42
 FLAG_HORIZON_DAYS = 30
 # Target DTE for the ATM implied-vol lookup (~4-week horizon, matches lifecycle).
 IV_TARGET_DTE = 30
+# Number of trailing trading sessions to reconstruct when a symbol is first added,
+# so the forecast table/chart have history from day one instead of accumulating it
+# one session at a time. Kept small (~5 weeks) — enough to populate the 1d/1w/2w
+# horizons and start resolving endpoints.
+DEFAULT_BACKFILL_SESSIONS = 25
 
 _TECH = TechnicalsCalculator()
 
@@ -272,3 +278,154 @@ def _event_flags(cosmos, symbol, today) -> dict:
         "earnings_in_window": _in_window(earnings),
         "exdiv_in_window": _in_window(exdiv),
     }
+
+
+def _build_backfill_prediction(cosmos, symbol, history, session_dates, closes,
+                               t_idx, *, confidence, vol_source, trend_window):
+    """Reconstruct one point-in-time prediction created at session index ``t_idx``.
+
+    Uses only history up to and including ``t_idx`` (no look-ahead), then validates
+    it forward against the real sessions that followed (which we legitimately have
+    now). Returns the prediction doc, or ``None`` when the forecast can't be built.
+
+    This is the exact same ``compute_forecast_from_closes`` / technicals / vol code
+    path as the live daily cron — the only difference is the as-of slice. IV is not
+    available historically, so ``vol_source`` is limited to ``hv``/``ewma``.
+    """
+    created_date = session_dates[t_idx]
+    closes_upto = closes[: t_idx + 1]
+    hist_upto = history.iloc[: t_idx + 1]
+
+    technicals = _TECH.compute_all(hist_upto)
+    forecast = compute_forecast_from_closes(
+        closes_upto,
+        technicals,
+        current_price=float(closes[t_idx]),
+        hv_window=HV_WINDOW,
+        confidence=confidence,
+        vol_source=vol_source,
+        trend_window=trend_window,
+    )
+    if forecast is None:
+        return None
+
+    end_date = (
+        datetime.strptime(created_date, "%Y-%m-%d")
+        + timedelta(days=WINDOW_CALENDAR_BOUND_DAYS)
+    ).strftime("%Y-%m-%d")
+    forecast.update({
+        "created_date": created_date,
+        "start_date": created_date,
+        "end_date": end_date,
+        "status": "open",
+        "snapshots": [],
+        "endpoints": {},
+        "flags": _event_flags(cosmos, symbol, created_date),
+        "backfilled": True,
+    })
+
+    # Validate forward against the real subsequent sessions.
+    last_idx = len(session_dates) - 1
+    for u_idx in range(t_idx + 1, last_idx + 1):
+        as_of = session_dates[u_idx]
+        offset = trading_session_offset(session_dates, created_date, as_of)
+        if offset > LIFECYCLE_SESSIONS:
+            break
+        price = float(closes[u_idx])
+        result = evaluate_snapshot(forecast["horizons"], price, offset)
+        if result is None:
+            continue
+        forecast["snapshots"].append({"date": as_of, **result})
+        if result["is_endpoint"]:
+            band = forecast["horizons"][result["horizon"]]
+            forecast["endpoints"][result["horizon"]] = {
+                "date": as_of,
+                "price": result["price"],
+                "inside_1sigma": result["inside_1sigma"],
+                "inside_2sigma": result["inside_2sigma"],
+                "direction_correct": endpoint_direction_correct(
+                    band, price, forecast.get("bias", 0.0),
+                    (forecast.get("trend") or {}).get("slope"),
+                ),
+            }
+        if offset >= LIFECYCLE_SESSIONS:
+            forecast["status"] = "closed"
+
+    forecast["snapshots"].sort(key=lambda s: s.get("date", ""))
+    return forecast
+
+
+async def backfill_symbol_forecasts(cosmos, yf_provider, symbol,
+                                    *, sessions=DEFAULT_BACKFILL_SESSIONS,
+                                    pf_settings=None, force=False) -> dict:
+    """Reconstruct the last ``sessions`` trading-session forecasts for one symbol.
+
+    Intended to run when a symbol is first added so the forecast table/chart have
+    history immediately (matching what the daily cron would have accumulated). Fully
+    deterministic and point-in-time (no look-ahead). Existing predictions are kept
+    unless ``force`` is set. Returns per-stage counts.
+
+    Volatility is realized-only (``hv``/``ewma``) because implied vol cannot be
+    reconstructed historically; ``iv``/``iv_hv`` settings degrade to ``hv``.
+    """
+    out = {"created": 0, "skipped": 0, "reason": "ok"}
+    if cosmos is None or yf_provider is None:
+        out["reason"] = "unavailable"
+        return out
+
+    if pf_settings is None:
+        pf_settings = _load_pf_settings()
+    confidence = pf_settings.get("band_confidence", 0.50)
+    trend_window = max(5, min(120, int(pf_settings.get("trend_window", 20))))
+    vol_source = (pf_settings.get("vol_source") or "hv").lower()
+    if vol_source not in ("hv", "ewma"):
+        vol_source = "hv"  # IV unavailable historically
+    sessions = max(1, int(sessions))
+
+    try:
+        history = await yf_provider.get_ohlcv_history(symbol, period="1y")
+    except Exception as exc:
+        logger.info("Forecast backfill: history fetch failed for %s: %s", symbol, exc)
+        out["reason"] = "no_history"
+        return out
+    if history is None or history.empty or "Close" not in history:
+        out["reason"] = "no_history"
+        return out
+
+    closes_series = history["Close"].dropna()
+    history = history.loc[closes_series.index]  # align indices
+    closes = closes_series.tolist()
+    session_dates = [d.strftime("%Y-%m-%d") for d in closes_series.index]
+
+    if not has_enough_history(closes) or len(closes) <= MIN_HISTORY_BARS:
+        out["reason"] = "insufficient_history"
+        return out
+
+    # Candidate creation sessions: the last ``sessions`` sessions that still have
+    # >= MIN_HISTORY_BARS of warm-up history behind them.
+    earliest_feasible_idx = MIN_HISTORY_BARS
+    start_idx = max(earliest_feasible_idx, len(session_dates) - sessions)
+
+    for t_idx in range(start_idx, len(session_dates)):
+        created_date = session_dates[t_idx]
+        doc_id = f"{symbol}_forecast_{created_date}"
+        if not force and cosmos.get_price_forecast(symbol, doc_id) is not None:
+            out["skipped"] += 1
+            continue
+        pred = _build_backfill_prediction(
+            cosmos, symbol, history, session_dates, closes, t_idx,
+            confidence=confidence, vol_source=vol_source, trend_window=trend_window,
+        )
+        if pred is None:
+            out["skipped"] += 1
+            continue
+        if cosmos.write_price_forecast(symbol, pred):
+            out["created"] += 1
+        else:
+            out["skipped"] += 1
+
+    logger.info(
+        "Forecast backfill for %s: %d created, %d skipped (%s)",
+        symbol, out["created"], out["skipped"], out["reason"],
+    )
+    return out

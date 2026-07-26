@@ -705,6 +705,24 @@ async def api_create_symbol(request: Request):
                 pass
         threading.Thread(target=_enrich, daemon=True).start()
 
+        # Seed the deterministic price-forecast history (last ~25 sessions) so the
+        # forecast table/chart are populated from day one instead of waiting for the
+        # daily cron to accumulate them. Point-in-time, no look-ahead, no LLM.
+        yf_provider = getattr(request.app.state, "yf_provider", None)
+        def _seed_forecasts():
+            try:
+                from src.forecast_cron import (
+                    DEFAULT_BACKFILL_SESSIONS,
+                    backfill_symbol_forecasts,
+                )
+                asyncio.run(backfill_symbol_forecasts(
+                    cosmos, yf_provider, symbol,
+                    sessions=DEFAULT_BACKFILL_SESSIONS,
+                ))
+            except Exception:
+                pass
+        threading.Thread(target=_seed_forecasts, daemon=True).start()
+
         return JSONResponse(_clean_doc(doc), status_code=201)
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
