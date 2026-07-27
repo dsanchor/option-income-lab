@@ -2636,7 +2636,7 @@ async def api_symbol_forecasts(request: Request, symbol: str,
     (YYYY-MM-DD). Returns per-prediction rows (path % + endpoint per horizon) and a
     rolling per-horizon endpoint hit-rate aggregate.
     """
-    from src.price_forecast import summarize_prediction, aggregate_hit_rate, compute_reading
+    from src.price_forecast import summarize_prediction, aggregate_hit_rate, aggregate_forecast_averages, compute_reading
 
     try:
         cosmos = _get_cosmos(request)
@@ -2681,6 +2681,7 @@ async def api_symbol_forecasts(request: Request, symbol: str,
         "outer_confidence": latest_outer,
         "rows": rows,
         "hit_rate": aggregate_hit_rate(preds),
+        "averages": aggregate_forecast_averages(preds),
     })
 
 

@@ -36,6 +36,16 @@
     <div id="forecast-hitrate" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0.75rem; padding:1rem 1.25rem;"></div>
 </div>
 
+<!-- Average projected (trend) price per horizon -->
+<div class="card">
+    <div class="card-header"><h2>Average Projected Price <span class="card-badge" id="avgCountBadge">—</span></h2></div>
+    <div id="forecast-averages" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:0.75rem; padding:1rem 1.25rem;"></div>
+    <p style="font-size:0.72rem; color:var(--text-muted); padding:0 1.25rem 0.9rem;">
+        Mean of the <strong>trend projection</strong> (Theil-Sen slope shrunk by R²) at each horizon end, across the predictions in range.
+        <strong>Trimmed</strong> drops the top &amp; bottom 20% of projections (robust to earnings gaps/spikes) and is shown for 1w/2w/4w when there are ≥5 predictions.
+    </p>
+</div>
+
 <!-- Table -->
 <div class="card">
     <div class="card-header"><h2>Prediction History</h2></div>
@@ -206,12 +216,45 @@
         el.innerHTML = parts.join('');
     }
 
-    function renderTable(data) {
+    function renderAverages(av) {
+        var el = document.getElementById('forecast-averages');
+        var badge = document.getElementById('avgCountBadge');
+        if (!el) return;
+        var labels = { '1d': '1d', '1w': '1w', '2w': '2w', '4w': '4w' };
+        var maxN = 0;
+        var parts = [];
+        ['1d','1w','2w','4w'].forEach(function(k) {
+            var a = av[k] || {};
+            var n = a.n || 0;
+            if (n > maxN) maxN = n;
+            var meanTxt = (a.mean != null) ? '$' + num(a.mean) : '—';
+            // Trimmed mean: shown for 1w/2w/4w only (never 1d), when available.
+            var trimHtml = '';
+            if (k !== '1d') {
+                trimHtml = (a.trimmed_mean != null)
+                    ? '<div style="font-size:0.72rem; color:var(--blue,#60a5fa); margin-top:0.3rem;" title="Trimmed mean — drops the top &amp; bottom 20% of trend projections. Robust to outliers.">↳ trimmed $' + num(a.trimmed_mean) + '</div>'
+                    : '<div style="font-size:0.72rem; color:var(--text-muted,#888); margin-top:0.3rem;" title="Trimmed mean needs ≥5 predictions in range.">↳ trimmed —</div>';
+            }
+            parts.push(
+                '<div style="background:var(--bg-input,#1a1a22); border:1px solid var(--border,#2d2d35); border-radius:var(--radius,8px); padding:0.75rem 0.9rem;">' +
+                  '<div style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.03em; color:var(--text-muted,#888); margin-bottom:0.35rem;">' +
+                    labels[k] + ' projected price</div>' +
+                  '<div style="font-size:1.6rem; font-weight:700; line-height:1; color:var(--text,#e5e7eb);" title="Mean of the trend projection at the ' + labels[k] + ' horizon end, over ' + n + ' prediction(s).">' + meanTxt + '</div>' +
+                  trimHtml +
+                  '<div style="font-size:0.72rem; color:var(--text-muted,#888); margin-top:0.35rem;">n=' + n + '</div>' +
+                '</div>'
+            );
+        });
+        el.innerHTML = parts.join('');
+        if (badge) badge.textContent = maxN ? ('n=' + maxN) : '—';
+    }
+
         var tbody = document.getElementById('forecast-tbody');
         document.getElementById('forecastCount').textContent = (data.count || 0) + ' predictions';
         if (data.confidence != null) bandConf = data.confidence;
         if (data.outer_confidence != null) outerConf = data.outer_confidence;
         renderHitRate(data.hit_rate || {});
+        renderAverages(data.averages || {});
         if (!data.rows || !data.rows.length) {
             tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; color:var(--text-muted); padding:1.5rem;">No forecasts in this range yet.</td></tr>';
             return;

@@ -841,6 +841,71 @@ def aggregate_hit_rate(preds: Sequence[dict]) -> dict:
     return out
 
 
+# Minimum number of samples required for the trimmed mean to be meaningful.
+# Below this the trim would drop too much (or nothing), so callers fall back to
+# the plain mean. With n=5 and trim=0.20 we drop 1 from each tail, leaving 3.
+TRIMMED_MEAN_MIN_N = 5
+
+
+def _trimmed_mean(values: Sequence[float], trim: float = 0.20) -> Optional[float]:
+    """Symmetric trimmed mean: drop ``floor(n*trim)`` values from each tail.
+
+    Robust to outliers (earnings gaps, spikes). Returns ``None`` when there is
+    not enough data for the trim to be meaningful (``n < TRIMMED_MEAN_MIN_N``)
+    or when nothing survives the trim. Never raises.
+    """
+    clean = sorted(float(v) for v in values if _is_finite(v))
+    n = len(clean)
+    if n < TRIMMED_MEAN_MIN_N:
+        return None
+    k = int(math.floor(n * trim))
+    kept = clean[k: n - k] if k > 0 else clean
+    if not kept:
+        return None
+    return sum(kept) / len(kept)
+
+
+def aggregate_forecast_averages(
+    preds: Sequence[dict],
+    *,
+    trim: float = 0.20,
+) -> dict:
+    """Average projected (trend) price per horizon across many predictions.
+
+    For each horizon this averages the ``trend_end`` value (the directional
+    linear-trend projection at the horizon end) across the supplied predictions.
+    The band centre is deliberately ignored — it is always the price at creation
+    (a random-walk centre), so its mean carries no forward-looking signal.
+
+    Returns per horizon ``{n, mean, trimmed_mean}`` where:
+      - ``n``: predictions contributing a finite ``trend_end`` for that horizon.
+      - ``mean``: plain arithmetic mean (``None`` when ``n == 0``).
+      - ``trimmed_mean``: symmetric 20% trimmed mean (``None`` when
+        ``n < TRIMMED_MEAN_MIN_N``). Callers may hide it for the ``1d`` horizon.
+    """
+    out: Dict[str, dict] = {}
+    for name in HORIZONS:
+        vals: List[float] = []
+        for p in preds:
+            if not isinstance(p, dict):
+                continue
+            band = (p.get("horizons") or {}).get(name) or {}
+            te = band.get("trend_end")
+            if _is_finite(te):
+                vals.append(float(te))
+        n = len(vals)
+        out[name] = {
+            "n": n,
+            "mean": round(sum(vals) / n, 4) if n else None,
+            "trimmed_mean": (
+                round(tm, 4)
+                if (tm := _trimmed_mean(vals, trim=trim)) is not None
+                else None
+            ),
+        }
+    return out
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Small numeric helpers
 # ──────────────────────────────────────────────────────────────────────────────

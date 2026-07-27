@@ -31,6 +31,9 @@ from src.price_forecast import (
     reading_from_momentum,
     summarize_prediction,
     aggregate_hit_rate,
+    aggregate_forecast_averages,
+    _trimmed_mean,
+    TRIMMED_MEAN_MIN_N,
     trading_session_offset,
     z_for_confidence,
 )
@@ -660,3 +663,69 @@ def test_summarize_prediction_trend_end_and_mean_dev():
     assert summary["1w"]["trend_end"] == pytest.approx(102.5)
     assert summary["1w"]["mean_dev"] == pytest.approx(1.0, rel=1e-3)
     assert summary["1w"]["mean_dev_pct"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Trimmed mean + per-horizon projected-price averages
+# ---------------------------------------------------------------------------
+
+def _pred_with_trend_end(trend_ends):
+    """Build a prediction whose horizons carry the given ``trend_end`` values."""
+    pred = _pred(horizons=tuple(trend_ends.keys()))
+    for name, te in trend_ends.items():
+        pred["horizons"][name]["trend_end"] = te
+    return pred
+
+
+def test_trimmed_mean_none_below_min_samples():
+    # Fewer than TRIMMED_MEAN_MIN_N samples → not meaningful → None.
+    assert _trimmed_mean([1.0, 2.0, 3.0, 4.0]) is None
+    assert TRIMMED_MEAN_MIN_N == 5
+
+
+def test_trimmed_mean_drops_tails():
+    # n=5, trim 20% → drop 1 from each tail. Outliers 1 and 100 removed → mean of 2,3,4.
+    assert _trimmed_mean([1.0, 2.0, 3.0, 4.0, 100.0]) == pytest.approx(3.0)
+
+
+def test_trimmed_mean_ignores_non_finite():
+    vals = [1.0, 2.0, 3.0, 4.0, 5.0, None, float("nan")]
+    assert _trimmed_mean(vals) == pytest.approx(3.0)
+
+
+def test_aggregate_forecast_averages_mean_and_trim():
+    # Five predictions per horizon; 1w has an outlier that the trimmed mean drops.
+    preds = [
+        _pred_with_trend_end({"1d": 100.0, "1w": 101.0}),
+        _pred_with_trend_end({"1d": 102.0, "1w": 102.0}),
+        _pred_with_trend_end({"1d": 104.0, "1w": 103.0}),
+        _pred_with_trend_end({"1d": 106.0, "1w": 104.0}),
+        _pred_with_trend_end({"1d": 108.0, "1w": 200.0}),  # 1w outlier
+    ]
+    av = aggregate_forecast_averages(preds)
+
+    assert av["1w"]["n"] == 5
+    assert av["1w"]["mean"] == pytest.approx((101 + 102 + 103 + 104 + 200) / 5)
+    # Trimmed drops 200 and 101 → mean of 102, 103, 104.
+    assert av["1w"]["trimmed_mean"] == pytest.approx(103.0)
+
+
+def test_aggregate_forecast_averages_trim_none_when_few_samples():
+    preds = [_pred_with_trend_end({"1d": 100.0, "1w": 101.0}) for _ in range(3)]
+    av = aggregate_forecast_averages(preds)
+    assert av["1w"]["n"] == 3
+    assert av["1w"]["mean"] == pytest.approx(101.0)
+    assert av["1w"]["trimmed_mean"] is None
+
+
+def test_aggregate_forecast_averages_empty_and_missing_trend_end():
+    # No predictions → all horizons report n=0 with None means.
+    av = aggregate_forecast_averages([])
+    for name in HORIZONS:
+        assert av[name] == {"n": 0, "mean": None, "trimmed_mean": None}
+
+    # A prediction without a trend_end contributes nothing.
+    pred = _pred(horizons=("1d",))  # no trend_end set
+    av2 = aggregate_forecast_averages([pred])
+    assert av2["1d"]["n"] == 0
+    assert av2["1d"]["mean"] is None
