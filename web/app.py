@@ -705,9 +705,11 @@ async def api_create_symbol(request: Request):
                 pass
         threading.Thread(target=_enrich, daemon=True).start()
 
-        # Seed the deterministic price-forecast history (last ~25 sessions) so the
-        # forecast table/chart are populated from day one instead of waiting for the
-        # daily cron to accumulate them. Point-in-time, no look-ahead, no LLM.
+        # Seed the deterministic price-forecast history (last ~45 sessions ≈ 60
+        # calendar days) so the forecast table/chart are populated from day one
+        # instead of waiting for the daily cron to accumulate them. Enough depth
+        # for the 40-session long trend window and to resolve 4w endpoints.
+        # Point-in-time, no look-ahead, no LLM.
         yf_provider = getattr(request.app.state, "yf_provider", None)
         def _seed_forecasts():
             try:

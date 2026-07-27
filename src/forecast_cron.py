@@ -71,9 +71,10 @@ FLAG_HORIZON_DAYS = 30
 IV_TARGET_DTE = 30
 # Number of trailing trading sessions to reconstruct when a symbol is first added,
 # so the forecast table/chart have history from day one instead of accumulating it
-# one session at a time. Kept small (~5 weeks) — enough to populate the 1d/1w/2w
-# horizons and start resolving endpoints.
-DEFAULT_BACKFILL_SESSIONS = 25
+# one session at a time. ~45 sessions (~9 weeks / ~60 calendar days) — enough for
+# the long trend window (40 sessions) to have a full base and for the 4w horizon
+# (20 sessions) to resolve endpoints on a meaningful number of predictions.
+DEFAULT_BACKFILL_SESSIONS = 45
 
 _TECH = TechnicalsCalculator()
 
