@@ -367,13 +367,29 @@
             (doc.flags && doc.flags.exdiv_in_window ? '<span>💰 ex-div in window</span>' : '') +
             '</div>';
 
+        // Horizon-aware trend: each horizon may use its own slope (short window for
+        // 1d/1w, long window for 2w/4w). Pick the slope for a given session offset
+        // from that horizon's band; fall back to the headline slope for legacy docs.
+        function slopeForSession(sess) {
+            var hs = doc.horizons || {};
+            var order = ['1d', '1w', '2w', '4w'];
+            for (var i = 0; i < order.length; i++) {
+                var b = hs[order[i]];
+                if (b && b.trend_slope != null &&
+                    sess >= b.start_session && sess <= b.end_session) return b.trend_slope;
+            }
+            if (hs['1d'] && hs['1d'].trend_slope != null) return hs['1d'].trend_slope;  // session 0
+            return slope;
+        }
+
         var labels = [], high2 = [], high1 = [], low1 = [], low2 = [], center = [], trend = [];
         for (var s = 0; s <= 20; s++) {
             var sg = sigmaAt(price, hv, s);
             labels.push(s); center.push(price);
             high1.push(price + z1*sg); low1.push(price - z1*sg);
             high2.push(price + z2*sg); low2.push(price - z2*sg);
-            trend.push(slope != null ? (price + slope * s) : null);
+            var sl = slopeForSession(s);
+            trend.push(sl != null ? (price + sl * s) : null);
         }
 
         var snaps = (doc.snapshots || []).map(function(sn) {

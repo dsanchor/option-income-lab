@@ -78,6 +78,20 @@ HORIZONS: Dict[str, Dict[str, int]] = {
 # Full prediction lifecycle in trading sessions.
 LIFECYCLE_SESSIONS = max(h["end_session"] for h in HORIZONS.values())
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Horizon-aware trend windows (trading sessions).
+# Short horizons (1d/1w) track the recent slope; longer horizons (2w/4w) use a
+# longer, smoother base. Chosen empirically via scripts/sweep_trend_window.py:
+# dir% and mean_dev% favour ~20 sessions for 1d/1w and ~40 for 2w/4w (longer
+# horizons benefit clearly from a longer regression base). Each horizon's band
+# carries its own ``trend_slope`` so validation/deviation use the matched slope.
+# ──────────────────────────────────────────────────────────────────────────────
+DEFAULT_TREND_WINDOW = 20        # short horizons (1d, 1w)
+DEFAULT_TREND_WINDOW_LONG = 40   # long horizons (2w, 4w)
+HORIZON_TREND_TIER: Dict[str, str] = {
+    "1d": "short", "1w": "short", "2w": "long", "4w": "long",
+}
+
 # Indicator warm-up: MACD(26/9) + ADX(14) need ~35 bars before the first valid
 # technicals; ``TechnicalsCalculator.compute_all`` returns empty below 30 bars.
 # Used by the backfill to shrink the range for very young tickers.
@@ -417,6 +431,7 @@ def _band_for_sessions(
         "low2": round(price - z2 * sigma, 4),
         "high2": round(price + z2 * sigma, 4),
         "trend_end": round(price + trend_slope * sessions, 4),
+        "trend_slope": round(trend_slope, 6),
     }
 
 
@@ -513,6 +528,7 @@ def compute_forecast(
     *,
     confidence: float = DEFAULT_CONFIDENCE,
     trend: Optional[dict] = None,
+    horizon_trends: Optional[Dict[str, dict]] = None,
     vol_source: str = "hv",
     momentum: Optional[str] = None,
     momentum_technicals: Optional[dict] = None,
@@ -527,8 +543,14 @@ def compute_forecast(
             fallback, only used when ``momentum`` is not supplied).
         confidence: central confidence level for the PRIMARY band (default 0.68 =
             classic ±1σ). Drives ``z1``; the outer band uses ``OUTER_CONFIDENCE``.
-        trend: optional ``linear_trend`` dict — its ``slope`` projects a trend
-            overlay line (``trend_end`` per horizon). Never shifts the band centre.
+        trend: optional ``linear_trend`` dict — its ``slope`` projects the trend
+            overlay line (``trend_end`` per horizon) and drives the top-level
+            ``reading``. Never shifts the band centre. When ``horizon_trends`` is
+            given, this is the "headline" (short-window) trend.
+        horizon_trends: optional map ``{horizon_name: linear_trend dict}`` giving a
+            per-horizon slope (horizon-aware trend windows). When present, each
+            horizon's ``trend_end``/``trend_slope`` uses its own slope; horizons not
+            in the map fall back to ``trend``'s slope.
         vol_source: label of where ``vol`` came from ("hv" | "ewma" | "iv").
         momentum: canonical momentum label (``dgi_metrics.classify_momentum``).
             When provided it is the single directional source of truth — it drives
@@ -555,10 +577,19 @@ def compute_forecast(
     z2 = z_for_confidence(outer_conf)
     slope = float(trend["slope"]) if isinstance(trend, dict) and _is_finite(trend.get("slope")) else 0.0
 
+    def _slope_for(name: str) -> float:
+        """Per-horizon slope: the matched horizon trend, else the headline slope."""
+        if isinstance(horizon_trends, dict):
+            ht = horizon_trends.get(name)
+            if isinstance(ht, dict) and _is_finite(ht.get("slope")):
+                return float(ht["slope"])
+        return slope
+
     horizons: Dict[str, dict] = {}
     for name, bounds in HORIZONS.items():
         band = _band_for_sessions(
-            price, vol, bounds["end_session"], z1=z1, z2=z2, trend_slope=slope
+            price, vol, bounds["end_session"], z1=z1, z2=z2,
+            trend_slope=_slope_for(name),
         )
         band["start_session"] = bounds["start_session"]
         band["end_session"] = bounds["end_session"]
@@ -602,7 +633,8 @@ def compute_forecast_from_closes(
     confidence: float = DEFAULT_CONFIDENCE,
     vol_source: str = "hv",
     iv: Optional[float] = None,
-    trend_window: int = 20,
+    trend_window: int = DEFAULT_TREND_WINDOW,
+    trend_window_long: int = DEFAULT_TREND_WINDOW_LONG,
     momentum: Optional[str] = None,
     momentum_technicals: Optional[dict] = None,
 ) -> Optional[dict]:
@@ -616,6 +648,9 @@ def compute_forecast_from_closes(
 
     ``current_price`` defaults to the last close. Returns ``None`` when there is
     not enough clean history to compute a volatility estimate.
+
+    ``trend_window`` sets the regression length for the short horizons (1d/1w) and
+    ``trend_window_long`` for the long horizons (2w/4w) — see ``HORIZON_TREND_TIER``.
     """
     if not has_enough_history(closes):
         return None
@@ -637,11 +672,21 @@ def compute_forecast_from_closes(
         clean = [c for c in closes if c is not None and _is_finite(c)]
         current_price = clean[-1] if clean else None
 
-    trend = linear_trend(closes, window=trend_window)
+    # Horizon-aware trend: a short window for 1d/1w and a longer window for 2w/4w.
+    # The short window is the "headline" trend (chart line start, reading).
+    trend_short = linear_trend(closes, window=trend_window)
+    if trend_window_long and trend_window_long != trend_window:
+        trend_long = linear_trend(closes, window=trend_window_long)
+    else:
+        trend_long = trend_short
+    horizon_trends = {
+        name: (trend_long if tier == "long" else trend_short)
+        for name, tier in HORIZON_TREND_TIER.items()
+    }
     return compute_forecast(
         current_price, vol, technicals,
-        confidence=confidence, trend=trend, vol_source=used,
-        momentum=momentum, momentum_technicals=momentum_technicals,
+        confidence=confidence, trend=trend_short, horizon_trends=horizon_trends,
+        vol_source=used, momentum=momentum, momentum_technicals=momentum_technicals,
     )
 
 
@@ -749,6 +794,10 @@ def summarize_prediction(pred: dict) -> dict:
         if name not in horizons:
             continue
         band = horizons.get(name) or {}
+        # Prefer the horizon's own slope (horizon-aware windows); fall back to the
+        # top-level trend slope for legacy docs whose bands have no ``trend_slope``.
+        band_slope = band.get("trend_slope")
+        h_slope = float(band_slope) if _is_finite(band_slope) else slope
         in_h = [s for s in snapshots if s.get("horizon") == name]
         n = len(in_h)
         if n:
@@ -758,13 +807,13 @@ def summarize_prediction(pred: dict) -> dict:
             pct1 = pct2 = None
 
         mean_dev = mean_dev_pct = None
-        if slope is not None and n:
+        if h_slope is not None and _is_finite(anchor) and n:
             devs = []
             for s in in_h:
                 off = s.get("offset")
                 px = s.get("price")
                 if _is_finite(off) and _is_finite(px):
-                    trend_at = float(anchor) + slope * float(off)
+                    trend_at = float(anchor) + h_slope * float(off)
                     devs.append(abs(float(px) - trend_at))
             if devs:
                 mean_dev = round(sum(devs) / len(devs), 4)

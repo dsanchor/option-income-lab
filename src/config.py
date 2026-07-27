@@ -303,9 +303,18 @@ class Config:
 
     @property
     def price_forecast_trend_window(self) -> int:
-        """Sessions used for the linear-trend overlay regression. Default 20."""
+        """Sessions used for the short-horizon (1d/1w) trend regression. Default 20."""
         try:
             v = int(self.config.get('price_forecast', {}).get('trend_window', 20))
         except (TypeError, ValueError):
             return 20
         return v if 5 <= v <= 120 else 20
+
+    @property
+    def price_forecast_trend_window_long(self) -> int:
+        """Sessions used for the long-horizon (2w/4w) trend regression. Default 40."""
+        try:
+            v = int(self.config.get('price_forecast', {}).get('trend_window_long', 40))
+        except (TypeError, ValueError):
+            return 40
+        return v if 5 <= v <= 120 else 40

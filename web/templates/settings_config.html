@@ -475,10 +475,18 @@
                     </div>
                     <div>
                         <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
-                            Trend window
-                            <span title="Sessions used for the linear-regression trend overlay (slope + mean deviation). Overlay only — never shifts the band.">ⓘ</span>
+                            Trend window (short · 1d/1w)
+                            <span title="Sessions used for the linear-regression trend overlay on the short horizons (1d, 1w). Overlay only — never shifts the band.">ⓘ</span>
                         </label>
                         <input type="number" name="pf_trend_window" value="{{ pf_trend_window }}" min="5" max="120" step="1"
+                               style="width:100%; padding:0.55rem 0.7rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
+                    </div>
+                    <div>
+                        <label style="display:block; font-size:0.85rem; color:var(--text-muted); margin-bottom:0.3rem;">
+                            Trend window (long · 2w/4w)
+                            <span title="Sessions used for the linear-regression trend overlay on the long horizons (2w, 4w). A longer, smoother base — empirically better for longer horizons. Overlay only.">ⓘ</span>
+                        </label>
+                        <input type="number" name="pf_trend_window_long" value="{{ pf_trend_window_long }}" min="5" max="120" step="1"
                                style="width:100%; padding:0.55rem 0.7rem; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-mono); font-size:0.85rem; border-radius:var(--radius);">
                     </div>
                 </div>

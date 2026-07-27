@@ -3572,6 +3572,7 @@ def _build_settings_config_context(
     pf_band_confidence = _pf_cfg.get("band_confidence", 0.50)
     pf_vol_source = _pf_cfg.get("vol_source", "iv_hv")
     pf_trend_window = _pf_cfg.get("trend_window", 20)
+    pf_trend_window_long = _pf_cfg.get("trend_window_long", 40)
     
     return {
         "request": request,
@@ -3642,6 +3643,7 @@ def _build_settings_config_context(
         "pf_band_confidence": pf_band_confidence,
         "pf_vol_source": pf_vol_source,
         "pf_trend_window": pf_trend_window,
+        "pf_trend_window_long": pf_trend_window_long,
     }
 
 
@@ -3974,9 +3976,17 @@ async def settings_config_save(request: Request):
             return 20
         return v if 5 <= v <= 120 else 20
 
+    def _pf_trend_long():
+        try:
+            v = int(form.get("pf_trend_window_long", 40))
+        except (TypeError, ValueError):
+            return 40
+        return v if 5 <= v <= 120 else 40
+
     pf_band_confidence = _pf_conf()
     pf_vol_source = _pf_vol()
     pf_trend_window = _pf_trend()
+    pf_trend_window_long = _pf_trend_long()
 
     if pf_cron:
         try:
@@ -3989,6 +3999,7 @@ async def settings_config_save(request: Request):
                 cosmos_settings["price_forecast"]["band_confidence"] = pf_band_confidence
                 cosmos_settings["price_forecast"]["vol_source"] = pf_vol_source
                 cosmos_settings["price_forecast"]["trend_window"] = pf_trend_window
+                cosmos_settings["price_forecast"]["trend_window_long"] = pf_trend_window_long
                 _save_settings_to_cosmos(cosmos, cosmos_settings)
 
             config = _load_config()
@@ -3998,6 +4009,7 @@ async def settings_config_save(request: Request):
             config["price_forecast"]["band_confidence"] = pf_band_confidence
             config["price_forecast"]["vol_source"] = pf_vol_source
             config["price_forecast"]["trend_window"] = pf_trend_window
+            config["price_forecast"]["trend_window_long"] = pf_trend_window_long
             _write_config(config)
             saved.append("Price forecast")
 

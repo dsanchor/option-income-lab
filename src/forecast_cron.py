@@ -20,6 +20,7 @@ from typing import Optional
 
 from src import dgi_metrics
 from src.price_forecast import (
+    DEFAULT_TREND_WINDOW_LONG,
     HV_WINDOW,
     LIFECYCLE_SESSIONS,
     MIN_HISTORY_BARS,
@@ -79,7 +80,7 @@ _TECH = TechnicalsCalculator()
 
 def _load_pf_settings() -> dict:
     """Read price-forecast model settings from Config (safe defaults on error)."""
-    defaults = {"band_confidence": 0.50, "vol_source": "iv_hv", "trend_window": 20}
+    defaults = {"band_confidence": 0.50, "vol_source": "iv_hv", "trend_window": 20, "trend_window_long": 40}
     try:
         from src.config import Config
         cfg = Config()
@@ -87,6 +88,7 @@ def _load_pf_settings() -> dict:
             "band_confidence": cfg.price_forecast_band_confidence,
             "vol_source": cfg.price_forecast_vol_source,
             "trend_window": cfg.price_forecast_trend_window,
+            "trend_window_long": cfg.price_forecast_trend_window_long,
         }
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Forecast cron: could not read config, using defaults: %s", exc)
@@ -132,9 +134,9 @@ async def run_forecast_cron(cosmos, yf_provider) -> dict:
 
     pf_settings = _load_pf_settings()
     logger.info(
-        "Forecast cron settings: confidence=%s vol_source=%s trend_window=%s",
+        "Forecast cron settings: confidence=%s vol_source=%s trend_window=%s/%s",
         pf_settings["band_confidence"], pf_settings["vol_source"],
-        pf_settings["trend_window"],
+        pf_settings["trend_window"], pf_settings.get("trend_window_long"),
     )
 
     created = 0
@@ -182,7 +184,7 @@ async def run_forecast_cron(cosmos, yf_provider) -> dict:
 async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff, pf_settings=None) -> dict:
     """Process a single symbol. Returns per-stage counts."""
     if pf_settings is None:
-        pf_settings = {"band_confidence": 0.50, "vol_source": "iv_hv", "trend_window": 20}
+        pf_settings = {"band_confidence": 0.50, "vol_source": "iv_hv", "trend_window": 20, "trend_window_long": 40}
     out = {"created": 0, "validated": 0, "resolved": 0, "pruned": 0, "skipped": 0}
 
     history = await yf_provider.get_ohlcv_history(symbol, period="1y")
@@ -231,7 +233,8 @@ async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff, pf_sett
                 "inside_2sigma": result["inside_2sigma"],
                 "direction_correct": endpoint_direction_correct(
                     band, latest_price, pred.get("bias", 0.0),
-                    (pred.get("trend") or {}).get("slope"),
+                    band.get("trend_slope") if band.get("trend_slope") is not None
+                    else (pred.get("trend") or {}).get("slope"),
                 ),
             }
             out["resolved"] += 1
@@ -259,6 +262,7 @@ async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff, pf_sett
         vol_source=vol_source,
         iv=iv,
         trend_window=pf_settings.get("trend_window", 20),
+        trend_window_long=pf_settings.get("trend_window_long", 40),
         momentum=momentum,
         momentum_technicals=momentum_tt,
     )
@@ -311,7 +315,8 @@ def _event_flags(cosmos, symbol, today) -> dict:
 
 
 def _build_backfill_prediction(cosmos, symbol, history, session_dates, closes,
-                               t_idx, *, confidence, vol_source, trend_window):
+                               t_idx, *, confidence, vol_source, trend_window,
+                               trend_window_long=DEFAULT_TREND_WINDOW_LONG):
     """Reconstruct one point-in-time prediction created at session index ``t_idx``.
 
     Uses only history up to and including ``t_idx`` (no look-ahead), then validates
@@ -336,6 +341,7 @@ def _build_backfill_prediction(cosmos, symbol, history, session_dates, closes,
         confidence=confidence,
         vol_source=vol_source,
         trend_window=trend_window,
+        trend_window_long=trend_window_long,
         momentum=momentum,
         momentum_technicals=momentum_tt,
     )
@@ -378,7 +384,8 @@ def _build_backfill_prediction(cosmos, symbol, history, session_dates, closes,
                 "inside_2sigma": result["inside_2sigma"],
                 "direction_correct": endpoint_direction_correct(
                     band, price, forecast.get("bias", 0.0),
-                    (forecast.get("trend") or {}).get("slope"),
+                    band.get("trend_slope") if band.get("trend_slope") is not None
+                    else (forecast.get("trend") or {}).get("slope"),
                 ),
             }
         if offset >= LIFECYCLE_SESSIONS:
@@ -410,6 +417,7 @@ async def backfill_symbol_forecasts(cosmos, yf_provider, symbol,
         pf_settings = _load_pf_settings()
     confidence = pf_settings.get("band_confidence", 0.50)
     trend_window = max(5, min(120, int(pf_settings.get("trend_window", 20))))
+    trend_window_long = max(5, min(120, int(pf_settings.get("trend_window_long", 40))))
     vol_source = (pf_settings.get("vol_source") or "hv").lower()
     if vol_source not in ("hv", "ewma"):
         vol_source = "hv"  # IV unavailable historically
@@ -448,6 +456,7 @@ async def backfill_symbol_forecasts(cosmos, yf_provider, symbol,
         pred = _build_backfill_prediction(
             cosmos, symbol, history, session_dates, closes, t_idx,
             confidence=confidence, vol_source=vol_source, trend_window=trend_window,
+            trend_window_long=trend_window_long,
         )
         if pred is None:
             out["skipped"] += 1

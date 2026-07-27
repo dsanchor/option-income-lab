@@ -10,6 +10,7 @@ import pytest
 
 from src.price_forecast import (
     HORIZONS,
+    HORIZON_TREND_TIER,
     HV_WINDOW,
     LIFECYCLE_SESSIONS,
     MIN_HISTORY_BARS,
@@ -729,3 +730,45 @@ def test_aggregate_forecast_averages_empty_and_missing_trend_end():
     av2 = aggregate_forecast_averages([pred])
     assert av2["1d"]["n"] == 0
     assert av2["1d"]["mean"] is None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Horizon-aware trend windows (short 1d/1w, long 2w/4w)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_horizon_aware_windows_use_matched_slope():
+    # An accelerating series: the recent (short) slope is steeper than the long one.
+    closes = [100.0] * 30 + [100 + i * 0.8 for i in range(1, 31)]
+    fc = compute_forecast_from_closes(
+        closes, trend_window=20, trend_window_long=40, vol_source="hv"
+    )
+    slope_short = linear_trend(closes, 20)["slope"]
+    slope_long = linear_trend(closes, 40)["slope"]
+    assert slope_short != pytest.approx(slope_long)  # the fixture must differentiate
+
+    h = fc["horizons"]
+    # Short horizons use the short-window slope; long horizons the long-window slope.
+    assert h["1d"]["trend_slope"] == pytest.approx(slope_short)
+    assert h["1w"]["trend_slope"] == pytest.approx(slope_short)
+    assert h["2w"]["trend_slope"] == pytest.approx(slope_long)
+    assert h["4w"]["trend_slope"] == pytest.approx(slope_long)
+    # trend_end must be consistent with the per-horizon slope.
+    assert h["4w"]["trend_end"] == pytest.approx(
+        round(fc["price_at_creation"] + slope_long * h["4w"]["end_session"], 4)
+    )
+    # Top-level (headline) trend is the short window.
+    assert fc["trend"]["slope"] == pytest.approx(slope_short)
+
+
+def test_horizon_tier_map_covers_all_horizons():
+    assert set(HORIZON_TREND_TIER) == set(HORIZONS)
+    assert HORIZON_TREND_TIER == {"1d": "short", "1w": "short", "2w": "long", "4w": "long"}
+
+
+def test_single_window_when_long_equals_short():
+    closes = [100 + i * 0.5 for i in range(60)]
+    fc = compute_forecast_from_closes(
+        closes, trend_window=20, trend_window_long=20, vol_source="hv"
+    )
+    slopes = {fc["horizons"][h]["trend_slope"] for h in HORIZONS}
+    assert len(slopes) == 1  # every horizon shares the single window's slope
