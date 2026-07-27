@@ -249,6 +249,7 @@
         if (badge) badge.textContent = maxN ? ('n=' + maxN) : '—';
     }
 
+    function renderTable(data) {
         var tbody = document.getElementById('forecast-tbody');
         document.getElementById('forecastCount').textContent = (data.count || 0) + ' predictions';
         if (data.confidence != null) bandConf = data.confidence;
