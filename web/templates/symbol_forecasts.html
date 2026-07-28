@@ -226,6 +226,7 @@
         ['1d','1w','2w','4w'].forEach(function(k) {
             var a = av[k] || {};
             var n = a.n || 0;
+            var lb = a.lookback || 0;
             if (n > maxN) maxN = n;
             var meanTxt = (a.mean != null) ? '$' + num(a.mean) : '—';
             // Trimmed mean: shown for 1w/2w/4w only (never 1d), when available.
@@ -233,15 +234,16 @@
             if (k !== '1d') {
                 trimHtml = (a.trimmed_mean != null)
                     ? '<div style="font-size:0.72rem; color:var(--blue,#60a5fa); margin-top:0.3rem;" title="Trimmed mean — drops the top &amp; bottom 20% of trend projections. Robust to outliers.">↳ trimmed $' + num(a.trimmed_mean) + '</div>'
-                    : '<div style="font-size:0.72rem; color:var(--text-muted,#888); margin-top:0.3rem;" title="Trimmed mean needs ≥5 predictions in range.">↳ trimmed —</div>';
+                    : '<div style="font-size:0.72rem; color:var(--text-muted,#888); margin-top:0.3rem;" title="Trimmed mean needs ≥5 predictions.">↳ trimmed —</div>';
             }
+            var nFooter = lb ? ('n=' + n + ' · last ' + lb) : ('n=' + n);
             parts.push(
                 '<div style="background:var(--bg-input,#1a1a22); border:1px solid var(--border,#2d2d35); border-radius:var(--radius,8px); padding:0.75rem 0.9rem;">' +
                   '<div style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.03em; color:var(--text-muted,#888); margin-bottom:0.35rem;">' +
                     labels[k] + ' projected price</div>' +
-                  '<div style="font-size:1.6rem; font-weight:700; line-height:1; color:var(--text,#e5e7eb);" title="Mean of the trend projection at the ' + labels[k] + ' horizon end, over ' + n + ' prediction(s).">' + meanTxt + '</div>' +
+                  '<div style="font-size:1.6rem; font-weight:700; line-height:1; color:var(--text,#e5e7eb);" title="Mean of the ' + labels[k] + ' trend projection over the last ' + lb + ' prediction(s) (' + n + ' available).">' + meanTxt + '</div>' +
                   trimHtml +
-                  '<div style="font-size:0.72rem; color:var(--text-muted,#888); margin-top:0.35rem;">n=' + n + '</div>' +
+                  '<div style="font-size:0.72rem; color:var(--text-muted,#888); margin-top:0.35rem;" title="Averaged over the last ' + lb + ' predictions (horizon-matched lookback). n = predictions actually available.">' + nFooter + '</div>' +
                 '</div>'
             );
         });

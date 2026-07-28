@@ -919,25 +919,43 @@ def aggregate_forecast_averages(
     *,
     trim: float = 0.20,
 ) -> dict:
-    """Average projected (trend) price per horizon across many predictions.
+    """Average projected (trend) price per horizon over a horizon-matched lookback.
 
     For each horizon this averages the ``trend_end`` value (the directional
-    linear-trend projection at the horizon end) across the supplied predictions.
-    The band centre is deliberately ignored — it is always the price at creation
-    (a random-walk centre), so its mean carries no forward-looking signal.
+    linear-trend projection at the horizon end) across the **most recent N
+    predictions**, where ``N`` matches the horizon length in sessions:
 
-    Returns per horizon ``{n, mean, trimmed_mean}`` where:
-      - ``n``: predictions contributing a finite ``trend_end`` for that horizon.
+        1d → last 1 prediction   (just the latest projection)
+        1w → last 5 predictions
+        2w → last 10 predictions
+        4w → last 20 predictions
+
+    Predictions are ordered newest-first by ``created_date`` so the lookback
+    always takes the latest forecasts. The band centre is deliberately ignored —
+    it is always the price at creation (a random-walk centre), so its mean carries
+    no forward-looking signal.
+
+    Returns per horizon ``{n, lookback, mean, trimmed_mean}`` where:
+      - ``lookback``: the target number of recent predictions for that horizon.
+      - ``n``: predictions actually contributing a finite ``trend_end`` (``<=
+        lookback``; smaller when fewer predictions exist).
       - ``mean``: plain arithmetic mean (``None`` when ``n == 0``).
       - ``trimmed_mean``: symmetric 20% trimmed mean (``None`` when
-        ``n < TRIMMED_MEAN_MIN_N``). Callers may hide it for the ``1d`` horizon.
+        ``n < TRIMMED_MEAN_MIN_N``). Naturally ``None`` for ``1d`` (lookback 1).
     """
+    # Newest-first, so a per-horizon lookback picks the latest predictions.
+    ordered = sorted(
+        (p for p in preds if isinstance(p, dict)),
+        key=lambda p: p.get("created_date", ""),
+        reverse=True,
+    )
     out: Dict[str, dict] = {}
     for name in HORIZONS:
+        lookback = HORIZONS[name]["end_session"]  # 1d→1, 1w→5, 2w→10, 4w→20
         vals: List[float] = []
-        for p in preds:
-            if not isinstance(p, dict):
-                continue
+        for p in ordered:
+            if len(vals) >= lookback:
+                break
             band = (p.get("horizons") or {}).get(name) or {}
             te = band.get("trend_end")
             if _is_finite(te):
@@ -945,6 +963,7 @@ def aggregate_forecast_averages(
         n = len(vals)
         out[name] = {
             "n": n,
+            "lookback": lookback,
             "mean": round(sum(vals) / n, 4) if n else None,
             "trimmed_mean": (
                 round(tm, 4)

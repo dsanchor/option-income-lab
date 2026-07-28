@@ -2675,6 +2675,13 @@ async def api_symbol_forecasts(request: Request, symbol: str,
     latest_conf = rows[0]["confidence"] if rows else 0.68
     latest_outer = rows[0]["outer_confidence"] if rows else 0.95
 
+    # Averages use a fixed per-horizon lookback (1d→1, 1w→5, 2w→10, 4w→20 most
+    # recent predictions), independent of the table range selector. Fetch a window
+    # wide enough (~45 calendar days ≈ 30 sessions) to always satisfy the 4w=20
+    # lookback; the aggregator caps per horizon.
+    avg_from = (datetime.now(timezone.utc) - timedelta(days=45)).strftime("%Y-%m-%d")
+    avg_preds = cosmos.get_price_forecasts(sym, avg_from, None)
+
     return JSONResponse({
         "symbol": sym,
         "range": {"from": date_from, "to": date_to},
@@ -2683,7 +2690,7 @@ async def api_symbol_forecasts(request: Request, symbol: str,
         "outer_confidence": latest_outer,
         "rows": rows,
         "hit_rate": aggregate_hit_rate(preds),
-        "averages": aggregate_forecast_averages(preds),
+        "averages": aggregate_forecast_averages(avg_preds),
     })
 
 
