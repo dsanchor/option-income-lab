@@ -434,10 +434,27 @@ function openRecommendationModal(sourceAgent) {
         if (sel.options[i].value === act) { sel.selectedIndex = i; break; }
     }
 
+    // Defaults come from the original activity, but the Alpha Advisor's proposed
+    // alternative contract overrides them so the modal opens pre-filled with the
+    // exact strike/expiration/premium the alert recommends.
+    var origStrike = activityData.strike || activityData.new_strike || activityData.current_strike || '';
+    var origExpiration = activityData.expiration || activityData.new_expiration || activityData.current_expiration || '';
+    var origPremium = activityData.premium || '';
+
+    var recStrike = origStrike;
+    var recExpiration = origExpiration;
+    var recPremium = origPremium;
+    if (sourceAgent === 'alpha_advisor' && activityData.alpha_view && activityData.alpha_view.alternative) {
+        var alt = activityData.alpha_view.alternative;
+        if (alt.strike !== undefined && alt.strike !== null && alt.strike !== '') recStrike = alt.strike;
+        if (alt.expiration) recExpiration = alt.expiration;
+        if (alt.premium !== undefined && alt.premium !== null && alt.premium !== '') recPremium = alt.premium;
+    }
+
     document.getElementById('recConfidence').value = activityData.confidence || 'medium';
-    document.getElementById('recStrike').value = activityData.strike || activityData.new_strike || activityData.current_strike || '';
-    document.getElementById('recExpiration').value = activityData.expiration || activityData.new_expiration || activityData.current_expiration || '';
-    document.getElementById('recPremium').value = activityData.premium || '';
+    document.getElementById('recStrike').value = recStrike;
+    document.getElementById('recExpiration').value = recExpiration;
+    document.getElementById('recPremium').value = recPremium;
     document.getElementById('recIV').value = activityData.iv || '';
     document.getElementById('recRiskRating').value = activityData.risk_rating || '';
 
