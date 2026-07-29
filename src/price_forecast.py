@@ -919,29 +919,42 @@ def aggregate_forecast_averages(
     *,
     trim: float = 0.20,
 ) -> dict:
-    """Average projected (trend) price per horizon over a horizon-matched lookback.
+    """Project a smoothed-slope price per horizon, with a volatility range.
 
-    For each horizon this averages the ``trend_end`` value (the directional
-    linear-trend projection at the horizon end) across the **most recent N
-    predictions**, where ``N`` matches the horizon length in sessions:
+    Rather than averaging each prediction's ``trend_end`` (which blends
+    projections anchored on different days and therefore aimed at different
+    target dates), this **averages the recent per-horizon trend slopes** and
+    projects **once** from the latest anchor price to the horizon end::
 
-        1d → last 1 prediction   (just the latest projection)
-        1w → last 5 predictions
-        2w → last 10 predictions
-        4w → last 20 predictions
+        price = anchor + mean_slope * sessions
 
-    Predictions are ordered newest-first by ``created_date`` so the lookback
-    always takes the latest forecasts. The band centre is deliberately ignored —
-    it is always the price at creation (a random-walk centre), so its mean carries
-    no forward-looking signal.
+    where ``sessions`` is the horizon length (1d→1, 1w→5, 2w→10, 4w→20) and
+    ``anchor`` is the most recent prediction's band centre (today's price).
+    The slope is averaged over the most recent ``lookback`` predictions, with
+    ``lookback`` matching the horizon length (1 / 5 / 10 / 20). This smooths
+    day-to-day jitter in the direction while keeping a single, clean target
+    date.
 
-    Returns per horizon ``{n, lookback, mean, trimmed_mean}`` where:
-      - ``lookback``: the target number of recent predictions for that horizon.
-      - ``n``: predictions actually contributing a finite ``trend_end`` (``<=
-        lookback``; smaller when fewer predictions exist).
-      - ``mean``: plain arithmetic mean (``None`` when ``n == 0``).
-      - ``trimmed_mean``: symmetric 20% trimmed mean (``None`` when
-        ``n < TRIMMED_MEAN_MIN_N``). Naturally ``None`` for ``1d`` (lookback 1).
+    A symmetric range comes from the latest band's primary volatility
+    half-width (``high1 - center`` ≈ ``z1 * sigma``), so it is horizon-scaled
+    (narrow for 1d, wide for 4w) and reuses the same confidence the fan chart
+    uses — but recentred on the projected price instead of the creation price.
+
+    Predictions are ordered newest-first by ``created_date``. Legacy documents
+    without per-band ``trend_slope``/``center`` fall back to the top-level
+    ``trend.slope`` and ``price_at_creation``.
+
+    Returns per horizon ``{n, lookback, anchor, mean, trimmed_mean, low, high}``:
+      - ``lookback``: recent predictions whose slope is averaged (= sessions).
+      - ``n``: predictions actually contributing a finite slope (``<= lookback``).
+      - ``anchor``: latest anchor price the projection starts from (``None`` if
+        unavailable).
+      - ``mean``: price projected with the plain mean slope (``None`` when
+        ``n == 0`` or no anchor).
+      - ``trimmed_mean``: price projected with the symmetric 20% trimmed slope
+        (``None`` when ``n < TRIMMED_MEAN_MIN_N``; always ``None`` for 1d).
+      - ``low`` / ``high``: ``mean`` ± volatility half-width (``None`` when the
+        band width is unavailable).
     """
     # Newest-first, so a per-horizon lookback picks the latest predictions.
     ordered = sorted(
@@ -949,27 +962,75 @@ def aggregate_forecast_averages(
         key=lambda p: p.get("created_date", ""),
         reverse=True,
     )
+
+    def _band(p: dict, name: str) -> dict:
+        return (p.get("horizons") or {}).get(name) or {}
+
+    def _slope(p: dict, name: str) -> Optional[float]:
+        band = _band(p, name)
+        sl = band.get("trend_slope")
+        if sl is None:
+            top = p.get("trend")
+            sl = top.get("slope") if isinstance(top, dict) else None
+        return float(sl) if _is_finite(sl) else None
+
     out: Dict[str, dict] = {}
     for name in HORIZONS:
-        lookback = HORIZONS[name]["end_session"]  # 1d→1, 1w→5, 2w→10, 4w→20
-        vals: List[float] = []
+        sessions = HORIZONS[name]["end_session"]  # 1d→1, 1w→5, 2w→10, 4w→20
+        lookback = sessions
+
+        slopes: List[float] = []
         for p in ordered:
-            if len(vals) >= lookback:
+            if len(slopes) >= lookback:
                 break
-            band = (p.get("horizons") or {}).get(name) or {}
-            te = band.get("trend_end")
-            if _is_finite(te):
-                vals.append(float(te))
-        n = len(vals)
+            sl = _slope(p, name)
+            if sl is not None:
+                slopes.append(sl)
+        n = len(slopes)
+
+        # Anchor price + volatility half-width from the latest usable band.
+        anchor: Optional[float] = None
+        half_width: Optional[float] = None
+        for p in ordered:
+            band = _band(p, name)
+            center = band.get("center")
+            if not _is_finite(center):
+                center = p.get("price_at_creation")
+            if not _is_finite(center):
+                continue
+            anchor = float(center)
+            high1 = band.get("high1")
+            band_center = band.get("center")
+            if _is_finite(high1) and _is_finite(band_center):
+                half_width = abs(float(high1) - float(band_center))
+            elif _is_finite(band.get("sigma")) and _is_finite(band.get("z1")):
+                half_width = abs(float(band["sigma"]) * float(band["z1"]))
+            break
+
+        def _project(slope: Optional[float]) -> Optional[float]:
+            if slope is None or anchor is None:
+                return None
+            return round(anchor + slope * sessions, 4)
+
+        mean_slope = (sum(slopes) / n) if n else None
+        trimmed_slope = _trimmed_mean(slopes, trim=trim)
+
+        mean_price = _project(mean_slope)
+        trimmed_price = _project(trimmed_slope)
+
+        low = high = None
+        if mean_price is not None and half_width is not None:
+            low = round(mean_price - half_width, 4)
+            high = round(mean_price + half_width, 4)
+
         out[name] = {
             "n": n,
             "lookback": lookback,
-            "mean": round(sum(vals) / n, 4) if n else None,
-            "trimmed_mean": (
-                round(tm, 4)
-                if (tm := _trimmed_mean(vals, trim=trim)) is not None
-                else None
-            ),
+            "anchor": round(anchor, 4) if anchor is not None else None,
+            "mean": mean_price,
+            "trimmed_mean": trimmed_price,
+            "low": low,
+            "high": high,
         }
     return out
 

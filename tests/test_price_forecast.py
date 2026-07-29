@@ -670,14 +670,6 @@ def test_summarize_prediction_trend_end_and_mean_dev():
 # Trimmed mean + per-horizon projected-price averages
 # ---------------------------------------------------------------------------
 
-def _pred_with_trend_end(trend_ends):
-    """Build a prediction whose horizons carry the given ``trend_end`` values."""
-    pred = _pred(horizons=tuple(trend_ends.keys()))
-    for name, te in trend_ends.items():
-        pred["horizons"][name]["trend_end"] = te
-    return pred
-
-
 def test_trimmed_mean_none_below_min_samples():
     # Fewer than TRIMMED_MEAN_MIN_N samples → not meaningful → None.
     assert _trimmed_mean([1.0, 2.0, 3.0, 4.0]) is None
@@ -694,68 +686,99 @@ def test_trimmed_mean_ignores_non_finite():
     assert _trimmed_mean(vals) == pytest.approx(3.0)
 
 
-def test_aggregate_forecast_averages_mean_and_trim():
-    # Five predictions; 1w lookback is 5 → all count. 1w has an outlier the trim drops.
+def _pred_with_slope(slopes, *, center=100.0, high1=105.0):
+    """Build a prediction whose horizon bands carry the given ``trend_slope``.
+
+    ``center``/``high1`` seed the anchor price and the volatility half-width
+    (``high1 - center``) the aggregator uses to build the projected range.
+    """
+    pred = _pred(horizons=tuple(slopes.keys()))
+    for name, sl in slopes.items():
+        pred["horizons"][name]["trend_slope"] = sl
+        pred["horizons"][name]["center"] = center
+        pred["horizons"][name]["high1"] = high1
+    return pred
+
+
+def test_aggregate_forecast_averages_slope_projection_and_trim():
+    # Option 2: average per-horizon slope, project once from the latest anchor
+    # (price = anchor + mean_slope * sessions), range = mean ± (high1 - center).
     preds = [
-        _pred_with_trend_end({"1d": 100.0, "1w": 101.0}),
-        _pred_with_trend_end({"1d": 102.0, "1w": 102.0}),
-        _pred_with_trend_end({"1d": 104.0, "1w": 103.0}),
-        _pred_with_trend_end({"1d": 106.0, "1w": 104.0}),
-        _pred_with_trend_end({"1d": 108.0, "1w": 200.0}),  # 1w outlier
+        _pred_with_slope({"1d": 1.0, "1w": 0.0}),   # latest → anchor 100, half-width 5
+        _pred_with_slope({"1d": 1.0, "1w": 0.2}),
+        _pred_with_slope({"1d": 1.0, "1w": 0.4}),
+        _pred_with_slope({"1d": 1.0, "1w": 0.6}),
+        _pred_with_slope({"1d": 1.0, "1w": 2.0}),   # 1w slope outlier
     ]
     av = aggregate_forecast_averages(preds)
 
-    assert av["1w"]["lookback"] == 5
-    assert av["1w"]["n"] == 5
-    assert av["1w"]["mean"] == pytest.approx((101 + 102 + 103 + 104 + 200) / 5)
-    # Trimmed drops 200 and 101 → mean of 102, 103, 104.
-    assert av["1w"]["trimmed_mean"] == pytest.approx(103.0)
-    # 1d lookback is 1 → only the single latest prediction (order preserved: first).
-    assert av["1d"]["lookback"] == 1
-    assert av["1d"]["n"] == 1
-    assert av["1d"]["mean"] == pytest.approx(100.0)
+    # 1w: sessions=5, mean slope 0.64 → 100 + 0.64*5 = 103.2
+    assert av["1w"]["lookback"] == 5 and av["1w"]["n"] == 5
+    assert av["1w"]["anchor"] == pytest.approx(100.0)
+    assert av["1w"]["mean"] == pytest.approx(103.2)
+    # trimmed slope drops 0.0 and 2.0 → mean(0.2,0.4,0.6)=0.4 → 100 + 0.4*5 = 102.0
+    assert av["1w"]["trimmed_mean"] == pytest.approx(102.0)
+    # range = mean ± (high1 - center) = 103.2 ± 5
+    assert av["1w"]["low"] == pytest.approx(98.2)
+    assert av["1w"]["high"] == pytest.approx(108.2)
+
+    # 1d: sessions=1, lookback=1, n=1, slope 1.0 → 100 + 1*1 = 101; no trim.
+    assert av["1d"]["lookback"] == 1 and av["1d"]["n"] == 1
+    assert av["1d"]["mean"] == pytest.approx(101.0)
     assert av["1d"]["trimmed_mean"] is None
+    assert av["1d"]["low"] == pytest.approx(96.0)
+    assert av["1d"]["high"] == pytest.approx(106.0)
 
 
 def test_aggregate_forecast_averages_lookback_caps_per_horizon():
-    # 25 predictions with distinct created_date; newest gets the largest trend_end.
+    # 25 predictions with distinct created_date; slope == index, newest is i=24.
     preds = []
     for i in range(25):
-        p = _pred_with_trend_end({"1d": float(i), "1w": float(i),
-                                  "2w": float(i), "4w": float(i)})
+        p = _pred_with_slope({"1d": float(i), "1w": float(i),
+                              "2w": float(i), "4w": float(i)})
         p["created_date"] = f"2026-01-{i + 1:02d}"  # ascending; i=24 is newest
         preds.append(p)
     av = aggregate_forecast_averages(preds)
 
-    # Each horizon averages only its most-recent lookback predictions.
+    # Each horizon averages only its most-recent lookback slopes, projected
+    # from anchor 100 over `sessions` sessions (sessions == lookback here).
     assert av["1d"]["lookback"] == 1 and av["1d"]["n"] == 1
-    assert av["1d"]["mean"] == pytest.approx(24.0)                     # newest only
+    assert av["1d"]["mean"] == pytest.approx(100 + 24.0 * 1)              # newest slope
     assert av["1w"]["lookback"] == 5 and av["1w"]["n"] == 5
-    assert av["1w"]["mean"] == pytest.approx(sum(range(20, 25)) / 5)   # last 5: 20..24
+    assert av["1w"]["mean"] == pytest.approx(100 + (sum(range(20, 25)) / 5) * 5)
     assert av["2w"]["lookback"] == 10 and av["2w"]["n"] == 10
-    assert av["2w"]["mean"] == pytest.approx(sum(range(15, 25)) / 10)  # last 10
+    assert av["2w"]["mean"] == pytest.approx(100 + (sum(range(15, 25)) / 10) * 10)
     assert av["4w"]["lookback"] == 20 and av["4w"]["n"] == 20
-    assert av["4w"]["mean"] == pytest.approx(sum(range(5, 25)) / 20)   # last 20
+    assert av["4w"]["mean"] == pytest.approx(100 + (sum(range(5, 25)) / 20) * 20)
 
 
 def test_aggregate_forecast_averages_trim_none_when_few_samples():
-    preds = [_pred_with_trend_end({"1d": 100.0, "1w": 101.0}) for _ in range(3)]
+    preds = [_pred_with_slope({"1d": 1.0, "1w": 0.2}) for _ in range(3)]
     av = aggregate_forecast_averages(preds)
     assert av["1w"]["n"] == 3  # only 3 available (lookback 5)
-    assert av["1w"]["mean"] == pytest.approx(101.0)
+    assert av["1w"]["mean"] == pytest.approx(100 + 0.2 * 5)  # 101.0
     assert av["1w"]["trimmed_mean"] is None
 
 
-def test_aggregate_forecast_averages_empty_and_missing_trend_end():
-    # No predictions → all horizons report n=0 with None means.
+def test_aggregate_forecast_averages_empty_and_missing_slope():
+    # No predictions → all horizons report n=0 with None projections.
     av = aggregate_forecast_averages([])
     for name in HORIZONS:
         assert av[name] == {
             "n": 0,
             "lookback": HORIZONS[name]["end_session"],
+            "anchor": None,
             "mean": None,
             "trimmed_mean": None,
+            "low": None,
+            "high": None,
         }
+
+    # A prediction with no slope (and no top-level trend) contributes nothing.
+    pred = _pred(horizons=("1d",))  # bands lack trend_slope; no `trend` key
+    av2 = aggregate_forecast_averages([pred])
+    assert av2["1d"]["n"] == 0
+    assert av2["1d"]["mean"] is None
 
     # A prediction without a trend_end contributes nothing.
     pred = _pred(horizons=("1d",))  # no trend_end set
