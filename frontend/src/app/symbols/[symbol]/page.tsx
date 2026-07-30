@@ -2,7 +2,9 @@ import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 import { usd, timeAgo } from "@/lib/format";
 import SymbolActions from "@/components/SymbolActions";
-import type { SymbolDetail, Position, Activity, Plan } from "@/types/symbol-detail";
+import RecentActivities from "@/components/RecentActivities";
+import PositionsTable from "@/components/PositionsTable";
+import type { SymbolDetail, Plan } from "@/types/symbol-detail";
 
 export const dynamic = "force-dynamic";
 
@@ -51,7 +53,6 @@ export default async function SymbolDetailPage({
   const enr = d.enrichment ?? {};
   const price = enr.metrics?.current_price ?? null;
   const positions = d.positions ?? [];
-  const activePositions = positions.filter((p) => p.status === "active");
   const activities = d.activities ?? [];
   const plans = d.plans ?? [];
 
@@ -107,46 +108,7 @@ export default async function SymbolDetailPage({
       </div>
 
       {/* Positions */}
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Positions</h2>
-        <div className="overflow-x-auto rounded-[var(--radius)] border border-border bg-bg-card">
-          <table className="w-full min-w-[720px] text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
-                <th className="px-4 py-3 font-medium">Type</th>
-                <th className="px-4 py-3 text-right font-medium">Strike</th>
-                <th className="px-4 py-3 font-medium">Expiration</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 text-right font-medium">Premium</th>
-                <th className="px-4 py-3 font-medium">Assignment Risk</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activePositions.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-6 text-center text-text-muted">No active positions.</td>
-                </tr>
-              )}
-              {activePositions.map((p: Position, i) => (
-                <tr key={p.position_id ?? i} className="border-b border-border/60 last:border-0">
-                  <td className="px-4 py-3 capitalize">{p.type ?? "—"}</td>
-                  <td className="px-4 py-3 text-right font-mono">{p.strike != null ? `$${num(p.strike, 2)}` : "—"}</td>
-                  <td className="px-4 py-3 font-mono">{p.expiration ?? "—"}</td>
-                  <td className="px-4 py-3 capitalize">{p.status ?? "—"}</td>
-                  <td className="px-4 py-3 text-right font-mono">
-                    {p.display_premium != null ? `$${num(p.display_premium, 2)}` : "—"}
-                  </td>
-                  <td className="px-4 py-3">
-                    {p.assignment_risk ? (
-                      <Badge text={p.assignment_risk} className={riskClass(p.assignment_risk)} />
-                    ) : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <PositionsTable positions={positions} />
 
       {/* Plans */}
       {plans.length > 0 && (
@@ -167,35 +129,9 @@ export default async function SymbolDetailPage({
       )}
 
       {/* Recent activity */}
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Recent Activity</h2>
-        <div className="space-y-2">
-          {activities.length === 0 && <p className="text-sm text-text-muted">No recent activity.</p>}
-          {activities.slice(0, 30).map((a: Activity, i) => (
-            <div key={a.activity_id ?? i} className="rounded-[var(--radius)] border border-border bg-bg-card px-4 py-3">
-              <div className="flex items-center justify-between gap-3 text-xs text-text-muted">
-                <span className="flex items-center gap-2">
-                  {a.is_alert && <span className="text-accent-orange">⚠️</span>}
-                  {a._agent_label ?? a.agent_type}
-                </span>
-                <span>{timeAgo(a.timestamp)}</span>
-              </div>
-              {(a.decision || a.note || a.reason) && (
-                <p className="mt-1 text-sm">{a.decision || a.note || a.reason}</p>
-              )}
-            </div>
-          ))}
-        </div>
-      </section>
+      <RecentActivities activities={activities} agentTypes={d.agent_types ?? []} />
     </div>
   );
-}
-
-function riskClass(risk: string): string {
-  const r = risk.toLowerCase();
-  if (r.includes("high")) return "border-accent-red/40 bg-accent-red/10 text-accent-red";
-  if (r.includes("medium") || r.includes("moderate")) return "border-accent-orange/40 bg-accent-orange/10 text-accent-orange";
-  return "border-accent-green/40 bg-accent-green/10 text-accent-green";
 }
 
 function Badge({ text, className }: { text: string; className: string }) {

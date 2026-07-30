@@ -922,6 +922,9 @@ def _compute_symbol_detail(cosmos, symbol: str) -> Optional[dict]:
         "enrichment": enr,
         "positions": clean["positions"],
         "activities": [_clean_doc(a) for a in activities],
+        "agent_types": [
+            {"key": k, "label": m["label"]} for k, m in AGENT_TYPES.items()
+        ],
         "plans": [_clean_doc(p) for p in plans],
         "summary": {
             "in_calls": summary_in_calls,

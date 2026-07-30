@@ -30,22 +30,44 @@ export interface Position {
   moneyness?: string | null;
   display_premium?: number | null;
   display_buyback?: number | null;
+  opened_at?: string | null;
+  close_reason?: string | null;
+  notes?: string | null;
   source?: { agent_type?: string; premium?: unknown; [k: string]: unknown };
   [k: string]: unknown;
 }
 
 export interface Activity {
   activity_id?: string;
+  id?: string;
   agent_type?: string;
   _agent_key?: string;
   _agent_label?: string;
   decision?: string;
   note?: string;
   reason?: string;
+  activity?: string;
   confidence?: number | string;
   is_alert?: boolean;
+  data_error?: boolean;
   timestamp?: string;
+  strike?: number | string | null;
+  new_strike?: number | string | null;
+  current_strike?: number | string | null;
+  expiration?: string | null;
+  new_expiration?: string | null;
+  current_expiration?: string | null;
+  underlying_price?: number | string | null;
+  risk_rating?: number | null;
+  assignment_risk?: string | null;
+  supervisor_view?: { challenge_strength?: string; one_liner?: string; [k: string]: unknown } | null;
+  alpha_view?: { one_liner?: string; [k: string]: unknown } | null;
   [k: string]: unknown;
+}
+
+export interface AgentType {
+  key: string;
+  label: string;
 }
 
 export interface Plan {
@@ -76,6 +98,7 @@ export interface SymbolDetail {
   enrichment: Enrichment;
   positions: Position[];
   activities: Activity[];
+  agent_types?: AgentType[];
   plans: Plan[];
   summary: {
     in_calls: number;
