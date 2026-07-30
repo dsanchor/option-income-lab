@@ -33,6 +33,7 @@ from src.price_forecast import (
     summarize_prediction,
     aggregate_hit_rate,
     aggregate_forecast_averages,
+    compute_calibration_factor,
     _trimmed_mean,
     TRIMMED_MEAN_MIN_N,
     trading_session_offset,
@@ -827,3 +828,77 @@ def test_single_window_when_long_equals_short():
     )
     slopes = {fc["horizons"][h]["trend_slope"] for h in HORIZONS}
     assert len(slopes) == 1  # every horizon shares the single window's slope
+
+
+# ── Per-symbol volatility calibration ────────────────────────────────────────
+
+def _cal_pred(realized, *, center=100.0, sigma=10.0, k_applied=None, horizon="1w"):
+    """A minimal resolved-endpoint prediction for calibration tests."""
+    band = {"center": center, "sigma": sigma,
+            "start_session": HORIZONS[horizon]["start_session"],
+            "end_session": HORIZONS[horizon]["end_session"]}
+    pred = {"horizons": {horizon: band},
+            "endpoints": {horizon: {"price": realized}}}
+    if k_applied is not None:
+        pred["calibration"] = {"k": k_applied}
+    return pred
+
+
+def test_calibration_shrinks_when_band_over_wide():
+    # Realized closes sit 0.4·sigma from centre → band is too wide for target 50%.
+    preds = [_cal_pred(100.0 + 0.4 * 10.0) for _ in range(30)]
+    cal = compute_calibration_factor(preds, 0.50, prev_k=1.0)
+    assert cal["applied"] is True
+    assert cal["n"] == 30
+    # z_for_confidence(0.50) = 0.6745 → k_target = 0.4 / 0.6745 ≈ 0.593
+    assert cal["k_target"] == pytest.approx(0.593, abs=0.002)
+    # EWMA-smoothed toward prev_k=1.0: 0.3·0.593 + 0.7·1.0 ≈ 0.878
+    assert cal["k"] == pytest.approx(0.878, abs=0.002)
+    assert cal["k"] < 1.0
+
+
+def test_calibration_widens_when_band_over_narrow():
+    # Realized closes sit 1.5·sigma out → band is too narrow; k_target clamps at 2.0.
+    preds = [_cal_pred(100.0 + 1.5 * 10.0) for _ in range(30)]
+    cal = compute_calibration_factor(preds, 0.50, prev_k=1.0)
+    assert cal["k_target"] == pytest.approx(2.0)  # 1.5/0.6745=2.22 → clamp
+    assert cal["k"] == pytest.approx(1.3, abs=1e-9)  # 0.3·2.0 + 0.7·1.0
+    assert cal["k"] > 1.0
+
+
+def test_calibration_insufficient_samples_keeps_prev_k():
+    preds = [_cal_pred(104.0) for _ in range(5)]  # below default min_n
+    cal = compute_calibration_factor(preds, 0.50, prev_k=0.8)
+    assert cal["applied"] is False
+    assert cal["k"] == 0.8
+    assert cal["k_target"] is None
+    assert cal["n"] == 5
+
+
+def test_calibration_backs_out_previously_applied_k():
+    # A doc made with k_applied=0.5 stored sigma=5 (raw sigma was 10). A 4-point
+    # deviation must standardize by the RAW sigma (10) → r=0.4, not 4/5=0.8.
+    pred = _cal_pred(104.0, center=100.0, sigma=5.0, k_applied=0.5)
+    cal = compute_calibration_factor([pred], 0.50, prev_k=1.0, min_n=1)
+    assert cal["k_target"] == pytest.approx(0.593, abs=0.002)
+
+
+def test_calibration_pools_horizons_and_ignores_missing_sigma():
+    good = [_cal_pred(104.0, horizon="1w") for _ in range(10)]
+    good += [_cal_pred(102.0, horizon="4w") for _ in range(10)]
+    # A doc missing sigma contributes nothing.
+    broken = {"horizons": {"1d": {"center": 100.0}},
+              "endpoints": {"1d": {"price": 104.0}}}
+    cal = compute_calibration_factor(good + [broken], 0.50, prev_k=1.0, min_n=1)
+    assert cal["n"] == 20  # only the 20 well-formed endpoints
+
+
+def test_vol_scale_widens_band_proportionally():
+    base = compute_forecast(100.0, 0.20, {}, confidence=0.68, vol_scale=1.0)
+    wide = compute_forecast(100.0, 0.20, {}, confidence=0.68, vol_scale=2.0)
+    b1 = base["horizons"]["1w"]
+    w1 = wide["horizons"]["1w"]
+    assert w1["sigma"] == pytest.approx(2.0 * b1["sigma"], rel=1e-6)
+    # Centre is untouched; only the width doubles.
+    assert w1["center"] == b1["center"] == 100.0
+    assert (w1["high1"] - 100.0) == pytest.approx(2.0 * (b1["high1"] - 100.0), rel=1e-6)

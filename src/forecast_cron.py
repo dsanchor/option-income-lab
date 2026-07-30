@@ -24,6 +24,8 @@ from src.price_forecast import (
     HV_WINDOW,
     LIFECYCLE_SESSIONS,
     MIN_HISTORY_BARS,
+    CALIBRATION_WINDOW,
+    compute_calibration_factor,
     compute_forecast_from_closes,
     endpoint_direction_correct,
     evaluate_snapshot,
@@ -254,13 +256,23 @@ async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff, pf_sett
     if vol_source in ("iv", "iv_hv"):
         iv = await _fetch_atm_iv(symbol, latest_price)
 
+    # ── Per-symbol volatility recalibration ────────────────────────────
+    # Nudge the band width from this symbol's own recent hit-rate so the
+    # target-confidence interval stays honest. Non-retroactive: only today's
+    # (and future) forecasts use the new multiplier.
+    target_conf = pf_settings.get("band_confidence", 0.50)
+    recent = cosmos.get_price_forecasts(symbol, limit=CALIBRATION_WINDOW)
+    prev_k = ((recent[0].get("calibration") if recent else None) or {}).get("k", 1.0)
+    calibration = compute_calibration_factor(recent, target_conf, prev_k=prev_k)
+
     forecast = compute_forecast_from_closes(
         closes_series.tolist(),
         technicals,
         current_price=latest_price,
         hv_window=HV_WINDOW,
-        confidence=pf_settings.get("band_confidence", 0.50),
+        confidence=target_conf,
         vol_source=vol_source,
+        vol_scale=calibration["k"],
         iv=iv,
         trend_window=pf_settings.get("trend_window", 20),
         trend_window_long=pf_settings.get("trend_window_long", 40),
@@ -281,6 +293,7 @@ async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff, pf_sett
             "status": "open",
             "snapshots": [],
             "endpoints": {},
+            "calibration": {**calibration, "updated": today},
             "flags": _event_flags(cosmos, symbol, today),
         })
         if cosmos.write_price_forecast(symbol, forecast):

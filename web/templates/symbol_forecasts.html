@@ -180,11 +180,29 @@
         return s;
     }
 
-    function renderHitRate(hr) {
+    function renderHitRate(hr, calib) {
         var el = document.getElementById('forecast-hitrate');
         var badge = document.getElementById('hitRateBadge');
         var target = Math.round(bandConf * 100);
-        if (badge) badge.textContent = '±band target ≈ ' + target + '%';
+        if (badge) {
+            var txt = '±band target ≈ ' + target + '%';
+            if (calib && calib.k != null) {
+                var k = Number(calib.k);
+                var tag = (Math.abs(k - 1) < 0.005) ? 'neutral'
+                        : (k < 1 ? 'narrowed' : 'widened');
+                badge.textContent = txt + ' · vol calib ×' + k.toFixed(2)
+                    + (calib.applied === false ? ' (warming up)' : '');
+                badge.title = 'Per-symbol volatility calibration: the band width is '
+                    + 'multiplied by ' + k.toFixed(3) + ' (' + tag + ') so this symbol\'s '
+                    + 'realized hit-rate drifts toward the ' + target + '% target. '
+                    + 'Auto-adjusted each run from the last ' + (calib.n != null ? calib.n : 0)
+                    + ' resolved endpoint(s); k<1 shrinks an over-wide band, k>1 widens an '
+                    + 'over-narrow one. Not retroactive — only new forecasts use it.';
+            } else {
+                badge.textContent = txt;
+                badge.title = '';
+            }
+        }
         var labels = { '1d': '1d', '1w': '1w', '2w': '2w', '4w': '4w' };
         var parts = [];
         ['1d','1w','2w','4w'].forEach(function(k) {
@@ -263,7 +281,7 @@
         document.getElementById('forecastCount').textContent = (data.count || 0) + ' predictions';
         if (data.confidence != null) bandConf = data.confidence;
         if (data.outer_confidence != null) outerConf = data.outer_confidence;
-        renderHitRate(data.hit_rate || {});
+        renderHitRate(data.hit_rate || {}, data.calibration);
         renderAverages(data.averages || {});
         if (!data.rows || !data.rows.length) {
             tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; color:var(--text-muted); padding:1.5rem;">No forecasts in this range yet.</td></tr>';

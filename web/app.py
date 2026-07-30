@@ -2674,6 +2674,9 @@ async def api_symbol_forecasts(request: Request, symbol: str,
     # Confidence used by the most recent prediction — drives UI labels/target.
     latest_conf = rows[0]["confidence"] if rows else 0.68
     latest_outer = rows[0]["outer_confidence"] if rows else 0.95
+    # Per-symbol volatility calibration from the newest prediction (band-width
+    # multiplier that self-adjusts each cron run). None for legacy docs.
+    latest_calibration = preds[0].get("calibration") if preds else None
 
     # Averages use a fixed per-horizon lookback (1d→1, 1w→5, 2w→10, 4w→20 most
     # recent predictions), independent of the table range selector. Fetch a window
@@ -2688,6 +2691,7 @@ async def api_symbol_forecasts(request: Request, symbol: str,
         "count": len(rows),
         "confidence": latest_conf,
         "outer_confidence": latest_outer,
+        "calibration": latest_calibration,
         "rows": rows,
         "hit_rate": aggregate_hit_rate(preds),
         "averages": aggregate_forecast_averages(avg_preds),

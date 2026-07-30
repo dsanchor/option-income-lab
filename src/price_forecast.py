@@ -530,6 +530,7 @@ def compute_forecast(
     trend: Optional[dict] = None,
     horizon_trends: Optional[Dict[str, dict]] = None,
     vol_source: str = "hv",
+    vol_scale: float = 1.0,
     momentum: Optional[str] = None,
     momentum_technicals: Optional[dict] = None,
 ) -> Optional[dict]:
@@ -572,6 +573,10 @@ def compute_forecast(
         return None
 
     price = float(current_price)
+    # Per-symbol calibration multiplier scales the volatility (and thus the band
+    # width) without ever moving the honest random-walk centre.
+    scale = float(vol_scale) if _is_finite(vol_scale) and vol_scale > 0 else 1.0
+    vol = float(vol) * scale
     z1 = z_for_confidence(confidence)
     outer_conf = OUTER_CONFIDENCE if confidence < OUTER_CONFIDENCE else 0.99
     z2 = z_for_confidence(outer_conf)
@@ -632,6 +637,7 @@ def compute_forecast_from_closes(
     hv_window: int = HV_WINDOW,
     confidence: float = DEFAULT_CONFIDENCE,
     vol_source: str = "hv",
+    vol_scale: float = 1.0,
     iv: Optional[float] = None,
     trend_window: int = DEFAULT_TREND_WINDOW,
     trend_window_long: int = DEFAULT_TREND_WINDOW_LONG,
@@ -686,7 +692,8 @@ def compute_forecast_from_closes(
     return compute_forecast(
         current_price, vol, technicals,
         confidence=confidence, trend=trend_short, horizon_trends=horizon_trends,
-        vol_source=used, momentum=momentum, momentum_technicals=momentum_technicals,
+        vol_source=used, vol_scale=vol_scale,
+        momentum=momentum, momentum_technicals=momentum_technicals,
     )
 
 
@@ -888,6 +895,115 @@ def aggregate_hit_rate(preds: Sequence[dict]) -> dict:
             "mean_dev_n": len(dev_pcts),
         }
     return out
+
+
+# Per-symbol volatility recalibration (self-adjusting band width).
+# The band is a target-confidence interval (e.g. 50%). If a symbol's realized
+# closes land inside the band more/less often than the target, its volatility is
+# mis-estimated for that symbol. ``compute_calibration_factor`` derives a
+# multiplier ``k`` applied to volatility on the NEXT forecast so the band's
+# hit-rate drifts toward the target. It is never retroactive: past predictions
+# keep their width; each run nudges ``k`` from the recent resolved history.
+CALIBRATION_MIN_N = 20        # need this many resolved endpoints to recalibrate
+CALIBRATION_K_MIN = 0.5       # clamp: never shrink the band below half
+CALIBRATION_K_MAX = 2.0       # clamp: never widen the band beyond double
+CALIBRATION_ALPHA = 0.3       # EWMA weight on the freshly-computed target k
+CALIBRATION_WINDOW = 60       # most-recent predictions scanned for residuals
+
+
+def _percentile(sorted_vals: Sequence[float], q: float) -> float:
+    """Linear-interpolated ``q``-quantile (0..1) of an ascending sequence."""
+    if not sorted_vals:
+        return 0.0
+    if q <= 0:
+        return sorted_vals[0]
+    if q >= 1:
+        return sorted_vals[-1]
+    pos = q * (len(sorted_vals) - 1)
+    lo = int(math.floor(pos))
+    hi = int(math.ceil(pos))
+    if lo == hi:
+        return sorted_vals[lo]
+    frac = pos - lo
+    return sorted_vals[lo] * (1.0 - frac) + sorted_vals[hi] * frac
+
+
+def compute_calibration_factor(
+    preds: Sequence[dict],
+    target_confidence: float,
+    *,
+    prev_k: float = 1.0,
+    min_n: int = CALIBRATION_MIN_N,
+    k_min: float = CALIBRATION_K_MIN,
+    k_max: float = CALIBRATION_K_MAX,
+    alpha: float = CALIBRATION_ALPHA,
+    window: int = CALIBRATION_WINDOW,
+) -> dict:
+    """Derive a per-symbol volatility multiplier ``k`` from resolved endpoints.
+
+    For each resolved endpoint we standardize the realized-vs-centre deviation by
+    the band's own (raw, pre-``k``) sigma::
+
+        r = |realized_close - center| / (sigma / k_applied)
+
+    where ``sigma`` is the stored band width and ``k_applied`` is the multiplier
+    that was in force when that prediction was made (``calibration.k`` on the doc,
+    default ``1.0`` for legacy docs). Standardizing removes the √t horizon scale,
+    so residuals from all four horizons pool into one sample.
+
+    The target-central quantile of ``|r|`` is compared with the target z-value::
+
+        k_target = percentile(|r|, target_confidence) / z_for_confidence(target)
+
+    A perfectly-calibrated band gives ``k_target ≈ 1``; an over-wide band (band
+    hit-rate above target) gives ``k_target < 1`` (shrink); an under-wide band
+    gives ``k_target > 1`` (widen). The raw target is clamped to
+    ``[k_min, k_max]`` and EWMA-smoothed against ``prev_k`` so ``k`` moves
+    gradually and never oscillates or explodes.
+
+    Returns ``{k, k_target, prev_k, n, target, applied}``:
+      - ``k``: the multiplier to apply to volatility on the next forecast.
+      - ``k_target``: the freshly-computed (clamped) target before smoothing.
+      - ``n``: resolved endpoints used.
+      - ``applied``: ``False`` (and ``k == prev_k``) when ``n < min_n``.
+    """
+    z1 = z_for_confidence(target_confidence)
+    residuals: List[float] = []
+    for p in preds[:window] if window else preds:
+        if not isinstance(p, dict):
+            continue
+        endpoints = p.get("endpoints") or {}
+        horizons = p.get("horizons") or {}
+        k_applied = (p.get("calibration") or {}).get("k")
+        k_applied = float(k_applied) if _is_finite(k_applied) and k_applied else 1.0
+        for name, ep in endpoints.items():
+            if not isinstance(ep, dict):
+                continue
+            realized = ep.get("price")
+            band = horizons.get(name) or {}
+            center = band.get("center")
+            sigma = band.get("sigma")
+            if not (_is_finite(realized) and _is_finite(center) and _is_finite(sigma)):
+                continue
+            sigma_raw = float(sigma) / k_applied
+            if sigma_raw <= 0:
+                continue
+            residuals.append(abs(float(realized) - float(center)) / sigma_raw)
+
+    n = len(residuals)
+    prev_k = float(prev_k) if _is_finite(prev_k) and prev_k > 0 else 1.0
+    if n < min_n or z1 <= 0:
+        return {"k": round(prev_k, 4), "k_target": None, "prev_k": round(prev_k, 4),
+                "n": n, "target": round(float(target_confidence), 4), "applied": False}
+
+    residuals.sort()
+    q = _percentile(residuals, float(target_confidence))
+    k_target = q / z1
+    k_target = max(k_min, min(k_max, k_target))
+    k = alpha * k_target + (1.0 - alpha) * prev_k
+    k = max(k_min, min(k_max, k))
+    return {"k": round(k, 4), "k_target": round(k_target, 4), "prev_k": round(prev_k, 4),
+            "n": n, "target": round(float(target_confidence), 4), "applied": True}
 
 
 # Minimum number of samples required for the trimmed mean to be meaningful.
