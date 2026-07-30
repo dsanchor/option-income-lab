@@ -470,6 +470,29 @@ def _format_time(dt: datetime) -> str:
 # ---------------------------------------------------------------------------
 app = FastAPI(title="Option Income Lab")
 
+# When API_ONLY is set (api container), the backend serves JSON only: HTML page
+# routes are blocked so the Next.js frontend owns the UI. Off by default, so the
+# legacy monolith keeps serving HTML until the frontend reaches parity.
+API_ONLY = os.getenv("API_ONLY", "").lower() in ("1", "true", "yes")
+
+# Paths that remain available even in API-only mode.
+_API_ONLY_ALLOWED_PREFIXES = ("/api", "/static", "/healthz", "/docs", "/redoc", "/openapi.json")
+
+
+@app.get("/healthz", include_in_schema=False)
+async def healthz():
+    """Liveness probe — no external dependencies (safe for Container Apps)."""
+    return {"status": "ok", "api_only": API_ONLY}
+
+
+if API_ONLY:
+    @app.middleware("http")
+    async def _block_html_routes(request: Request, call_next):
+        path = request.url.path
+        if path == "/" or not path.startswith(_API_ONLY_ALLOWED_PREFIXES):
+            return JSONResponse({"detail": "Not found (api-only mode)"}, status_code=404)
+        return await call_next(request)
+
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")),
           name="static")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))

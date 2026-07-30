@@ -118,6 +118,7 @@ def main():
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--web-only", action="store_true", help="Start web dashboard only (no scheduler)")
     group.add_argument("--scheduler-only", action="store_true", help="Start scheduler only (no web UI)")
+    group.add_argument("--api-only", action="store_true", help="Start JSON API + scheduler, no HTML UI (for the api container)")
     parser.add_argument("--port", type=int, default=None, help="Web server port (default: from config or 8000)")
     args = parser.parse_args()
 
@@ -133,6 +134,14 @@ def main():
     elif args.web_only:
         _print_banner(host, port, cron, "web")
         from web.app import app
+        uvicorn.run(app, host=host, port=port)
+    elif args.api_only:
+        # JSON API + scheduler, HTML routes blocked (api container).
+        import os as _os
+        _os.environ["API_ONLY"] = "1"
+        _print_banner(host, port, cron, "both")
+        from web.app import app
+        app.router.lifespan_context = lifespan
         uvicorn.run(app, host=host, port=port)
     else:
         _print_banner(host, port, cron, "both")
