@@ -1,6 +1,6 @@
 export default function Home() {
   return (
-    <main className="mx-auto w-full max-w-5xl px-6 py-16">
+    <>
       <p className="text-sm text-text-muted">🧪 Option Income Lab</p>
       <h1 className="mt-2 text-4xl font-medium tracking-tight">
         Where boring dividends get interesting
@@ -34,6 +34,6 @@ export default function Home() {
           Outlined pill
         </button>
       </div>
-    </main>
+    </>
   );
 }
