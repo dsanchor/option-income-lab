@@ -123,6 +123,7 @@ Full traceability of every agent execution under **Settings → Agent Logs**: sy
 
 ```bash
 # 1. Install dependencies
+cd backend
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -142,7 +143,7 @@ export AI_PROVIDER=gemini
 export GOOGLE_API_KEY="your-google-api-key"
 export MODEL_DEPLOYMENT="gemini-2.0-flash"
 
-# 3. Run
+# 3. Run (from the backend/ directory)
 python run.py  # Full app (web + scheduler)
 ```
 

@@ -15,6 +15,7 @@
 #### 1. Create Virtual Environment and Install Dependencies
 
 ```bash
+cd backend
 python -m venv venv
 source venv/bin/activate 
 pip install -r requirements.txt
@@ -151,6 +152,8 @@ telegram:
 ```
 
 ### Running
+
+All commands run from the `backend/` directory.
 
 #### Full app (web dashboard + scheduler)
 
