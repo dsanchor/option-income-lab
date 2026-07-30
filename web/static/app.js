@@ -311,3 +311,104 @@ function togglePanel(panelType) {
         if (toggle) toggle.textContent = '▶';
     });
 })();
+
+// ── Symbol search (topnav) ──
+(function initSymbolSearch() {
+    var input = document.getElementById('symbol-search-input');
+    var results = document.getElementById('symbol-search-results');
+    var wrap = document.getElementById('nav-search');
+    if (!input || !results || !wrap) return;
+
+    var cache = null;      // [{symbol, display_name}]
+    var loading = false;
+    var filtered = [];
+    var activeIdx = -1;
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, function(c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    function loadSymbols() {
+        if (cache || loading) return Promise.resolve();
+        loading = true;
+        return fetch('/api/symbols')
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(data) {
+                cache = (Array.isArray(data) ? data : [])
+                    .map(function(s) {
+                        return {
+                            symbol: String(s.symbol || '').toUpperCase(),
+                            display_name: s.display_name || ''
+                        };
+                    })
+                    .filter(function(s) { return s.symbol; });
+                cache.sort(function(a, b) { return a.symbol.localeCompare(b.symbol); });
+            })
+            .catch(function() { cache = []; })
+            .finally(function() { loading = false; });
+    }
+
+    function render() {
+        var hasQuery = !!input.value.trim();
+        if (!filtered.length) {
+            results.innerHTML = hasQuery
+                ? '<div class="nav-search-empty">No matches</div>' : '';
+            results.classList.toggle('open', hasQuery);
+            return;
+        }
+        results.innerHTML = filtered.map(function(s, i) {
+            var name = (s.display_name && s.display_name !== s.symbol)
+                ? '<span class="nav-search-name">' + escapeHtml(s.display_name) + '</span>' : '';
+            return '<a href="/symbols/' + encodeURIComponent(s.symbol) + '"'
+                + ' class="nav-search-item' + (i === activeIdx ? ' active' : '') + '"'
+                + ' role="option" data-symbol="' + escapeHtml(s.symbol) + '">'
+                + '<span class="nav-search-sym">' + escapeHtml(s.symbol) + '</span>'
+                + name + '</a>';
+        }).join('');
+        results.classList.add('open');
+    }
+
+    function doFilter() {
+        var q = input.value.trim().toUpperCase();
+        activeIdx = -1;
+        if (!q) { filtered = []; render(); return; }
+        filtered = (cache || []).filter(function(s) {
+            return s.symbol.indexOf(q) !== -1
+                || (s.display_name && s.display_name.toUpperCase().indexOf(q) !== -1);
+        }).slice(0, 12);
+        render();
+    }
+
+    input.addEventListener('focus', function() { loadSymbols().then(doFilter); });
+    input.addEventListener('input', function() { loadSymbols().then(doFilter); });
+
+    input.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            input.value = ''; filtered = []; activeIdx = -1; render(); input.blur();
+            return;
+        }
+        if (!filtered.length) return;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            activeIdx = Math.min(activeIdx + 1, filtered.length - 1); render();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            activeIdx = Math.max(activeIdx - 1, 0); render();
+        } else if (e.key === 'Enter') {
+            var pick = filtered[activeIdx >= 0 ? activeIdx : 0];
+            if (pick) {
+                e.preventDefault();
+                window.location.href = '/symbols/' + encodeURIComponent(pick.symbol);
+            }
+        }
+    });
+
+    document.addEventListener('click', function(e) {
+        if (!wrap.contains(e.target)) results.classList.remove('open');
+    });
+    input.addEventListener('focus', function() {
+        if (filtered.length) results.classList.add('open');
+    });
+})();

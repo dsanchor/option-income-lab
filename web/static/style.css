@@ -124,6 +124,69 @@ h1, h2, h3, h4, h5, h6 {
     background: var(--bg-hover);
 }
 
+/* ── Symbol search (topnav) ── */
+.nav-search { position: relative; margin-left: auto; }
+.nav-search-input {
+    width: 220px;
+    padding: 0.4rem 0.9rem;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--border);
+    background: var(--bg-input);
+    color: var(--text);
+    font-size: 0.9rem;
+    outline: none;
+    transition: border-color 0.2s, width 0.2s;
+}
+.nav-search-input::placeholder { color: var(--text-muted); }
+.nav-search-input:focus { border-color: var(--accent-blue); width: 260px; }
+.nav-search-results {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 0.35rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    max-height: 340px;
+    overflow-y: auto;
+    z-index: 1000;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.nav-search-results.open { display: block; }
+.nav-search-item {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.55rem 0.9rem;
+    color: var(--text-muted);
+    border-radius: 0;
+}
+.nav-search-item:hover,
+.nav-search-item.active {
+    color: var(--text);
+    background: var(--bg-hover);
+    text-decoration: none;
+}
+.nav-search-sym {
+    font-weight: 600;
+    color: var(--text);
+    font-family: var(--font-mono);
+}
+.nav-search-name {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.nav-search-empty {
+    padding: 0.6rem 0.9rem;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
 /* ── Layout ── */
 .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
 
@@ -1151,6 +1214,11 @@ input:checked + .slider::before { transform: translateX(16px); background: #fff;
         margin-top: 0;
         padding-left: 1rem;
     }
+
+    /* Symbol search full-width on mobile */
+    .nav-search { margin-left: 0; width: 100%; order: 3; }
+    .nav-search-input,
+    .nav-search-input:focus { width: 100%; box-sizing: border-box; }
 
     /* Stacked filter controls */
     .filter-group { flex-wrap: wrap; gap: 0.4rem; }
