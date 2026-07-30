@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Option Income Lab — Revolut-inspired dark theme (see /DESIGN.md)
+   Tokens mirror web/static/style.css so the new UI matches the current one.
+   ────────────────────────────────────────────────────────────────────────── */
+:root {
+  --bg:            #191c1f;
+  --bg-card:       #222228;
+  --bg-input:      #2d2d35;
+  --bg-hover:      #2d2d35;
+  --border:        #2d2d35;
+  --text:          #ffffff;
+  --text-muted:    #8d969e;
+  --accent-blue:   #494fdf;
+  --accent-green:  #00a87e;
+  --accent-red:    #e23b4a;
+  --accent-orange: #ec7e00;
+  --accent-purple: #a78bfa;
+  --radius:        12px;
+  --radius-card:   20px;
+  --radius-pill:   9999px;
+}
+
+/* Expose the tokens to Tailwind v4 utilities (bg-bg, text-text-muted, etc.) */
+@theme inline {
+  --color-bg:            var(--bg);
+  --color-bg-card:       var(--bg-card);
+  --color-bg-input:      var(--bg-input);
+  --color-bg-hover:      var(--bg-hover);
+  --color-border:        var(--border);
+  --color-text:          var(--text);
+  --color-text-muted:    var(--text-muted);
+  --color-accent-blue:   var(--accent-blue);
+  --color-accent-green:  var(--accent-green);
+  --color-accent-red:    var(--accent-red);
+  --color-accent-orange: var(--accent-orange);
+  --color-accent-purple: var(--accent-purple);
+
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", "Fira Code", "Consolas", monospace;
+
+  --radius-md:   var(--radius);
+  --radius-card: var(--radius-card);
+  --radius-pill: var(--radius-pill);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 15px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  letter-spacing: 0.01em;
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+a {
+  color: var(--accent-blue);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+code {
+  font-family: var(--font-mono);
+  background: var(--bg-input);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
