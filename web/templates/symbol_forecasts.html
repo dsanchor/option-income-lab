@@ -232,7 +232,7 @@
             // Volatility range (mean ± ~1σ), recentred on the projection.
             var rangeHtml = '';
             if (a.low != null && a.high != null) {
-                rangeHtml = '<div style="font-size:0.72rem; color:var(--text-muted,#888); margin-top:0.3rem;" title="Projected price ± the ~1σ volatility half-width for this horizon (same band as the fan chart, recentred on the projection).">$' + num(a.low) + ' – $' + num(a.high) + '</div>';
+                rangeHtml = '<div style="font-size:0.72rem; color:var(--text-muted,#888); margin-top:0.3rem;" title="~1σ volatility range centred on the current price (the honest fan-chart cone). With a strong trend the projected price above may sit near the edge of — or outside — this range.">$' + num(a.low) + ' – $' + num(a.high) + '</div>';
             }
             // Trimmed projection: shown for 1w/2w/4w only (never 1d), when available.
             var trimHtml = '';

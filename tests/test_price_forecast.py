@@ -718,16 +718,16 @@ def test_aggregate_forecast_averages_slope_projection_and_trim():
     assert av["1w"]["mean"] == pytest.approx(103.2)
     # trimmed slope drops 0.0 and 2.0 → mean(0.2,0.4,0.6)=0.4 → 100 + 0.4*5 = 102.0
     assert av["1w"]["trimmed_mean"] == pytest.approx(102.0)
-    # range = mean ± (high1 - center) = 103.2 ± 5
-    assert av["1w"]["low"] == pytest.approx(98.2)
-    assert av["1w"]["high"] == pytest.approx(108.2)
+    # range = anchor ± (high1 - center) = 100 ± 5 (centred on current price)
+    assert av["1w"]["low"] == pytest.approx(95.0)
+    assert av["1w"]["high"] == pytest.approx(105.0)
 
     # 1d: sessions=1, lookback=1, n=1, slope 1.0 → 100 + 1*1 = 101; no trim.
     assert av["1d"]["lookback"] == 1 and av["1d"]["n"] == 1
     assert av["1d"]["mean"] == pytest.approx(101.0)
     assert av["1d"]["trimmed_mean"] is None
-    assert av["1d"]["low"] == pytest.approx(96.0)
-    assert av["1d"]["high"] == pytest.approx(106.0)
+    assert av["1d"]["low"] == pytest.approx(95.0)
+    assert av["1d"]["high"] == pytest.approx(105.0)
 
 
 def test_aggregate_forecast_averages_lookback_caps_per_horizon():

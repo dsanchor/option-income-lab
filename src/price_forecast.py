@@ -938,7 +938,12 @@ def aggregate_forecast_averages(
     A symmetric range comes from the latest band's primary volatility
     half-width (``high1 - center`` ≈ ``z1 * sigma``), so it is horizon-scaled
     (narrow for 1d, wide for 4w) and reuses the same confidence the fan chart
-    uses — but recentred on the projected price instead of the creation price.
+    uses. It is centred on the **current price** (the anchor), not on the
+    projection: recentring on the trend projection was validated to reduce
+    coverage, because direction is ~coin-flip at these horizons so the realized
+    close stays scattered around today's price. Consequence: when the trend is
+    strong and the horizon long, the projected price may sit near the edge of —
+    or outside — this range.
 
     Predictions are ordered newest-first by ``created_date``. Legacy documents
     without per-band ``trend_slope``/``center`` fall back to the top-level
@@ -953,8 +958,9 @@ def aggregate_forecast_averages(
         ``n == 0`` or no anchor).
       - ``trimmed_mean``: price projected with the symmetric 20% trimmed slope
         (``None`` when ``n < TRIMMED_MEAN_MIN_N``; always ``None`` for 1d).
-      - ``low`` / ``high``: ``mean`` ± volatility half-width (``None`` when the
-        band width is unavailable).
+      - ``low`` / ``high``: ``anchor`` ± volatility half-width — the ±1σ cone
+        centred on the current price (``None`` when the band width or projection
+        is unavailable).
     """
     # Newest-first, so a per-horizon lookback picks the latest predictions.
     ordered = sorted(
@@ -1019,9 +1025,13 @@ def aggregate_forecast_averages(
         trimmed_price = _project(trimmed_slope)
 
         low = high = None
-        if mean_price is not None and half_width is not None:
-            low = round(mean_price - half_width, 4)
-            high = round(mean_price + half_width, 4)
+        if mean_price is not None and anchor is not None and half_width is not None:
+            # Range is the honest ±1σ volatility cone centred on the CURRENT price
+            # (like the fan chart), not on the trend projection: recentring on the
+            # projection was validated to reduce coverage (the realized close stays
+            # near today's price, since direction is ~coin-flip at these horizons).
+            low = round(anchor - half_width, 4)
+            high = round(anchor + half_width, 4)
 
         out[name] = {
             "n": n,
