@@ -41,8 +41,9 @@
         <div class="summary-label">Puts Committed</div>
     </div>
 
-    <div class="summary-card summary-card-action">
-        <button id="run-full-analysis" class="btn-trigger btn-trigger-blue" title="Run all agents sequentially">▶▶ Run Full Analysis</button>
+    <div class="summary-card">
+        <div class="summary-value {{ 'positive' if open_roc_annualized >= 0 else 'negative' }}">{{ "%.1f"|format(open_roc_annualized) }}%</div>
+        <div class="summary-label" title="Capital-weighted annualized return on capital across your open positions">Avg RoC · annualized (open)</div>
     </div>
 </div>
 

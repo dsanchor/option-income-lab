@@ -2020,6 +2020,8 @@ async def dashboard(request: Request):
         "agent_tables": [],
         "grand_totals": {"today": 0, "week": 0, "month": 0, "total": 0},
         "symbol_count": 0, "position_count": 0, "activity": [],
+        "total_call_exposure": 0, "total_put_exposure": 0,
+        "open_roc_annualized": 0,
         "banner_items": [],
         "agent_types": AGENT_TYPES,
         "market_open": market_open,
@@ -2083,6 +2085,12 @@ async def dashboard(request: Request):
     agent_tables, grand_totals = _build_dashboard_tables(
         cosmos, all_symbols, all_alerts, all_activities)
 
+    # Annualized RoC on currently-open positions (income currently working).
+    # Reuses the economics engine for a consistent, capital-weighted figure.
+    open_roc_annualized = _build_economics_report(
+        all_symbols, status_filter="active"
+    )["summary"]["avg_roc_annualized"]
+
     activity = []
     for d in all_activities[:100]:
         agent_key = str(d.get("agent_type", ""))
@@ -2099,6 +2107,7 @@ async def dashboard(request: Request):
         "position_count": position_count,
         "total_call_exposure": total_call_exposure,
         "total_put_exposure": total_put_exposure,
+        "open_roc_annualized": open_roc_annualized,
         "activity": activity,
         "banner_items": (banner_doc or {}).get("items", []),
         "agent_types": AGENT_TYPES,

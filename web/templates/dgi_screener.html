@@ -8,18 +8,11 @@
 </div>
 
 <div class="dgi-actions">
-    <button class="btn-trigger" id="btnRunDgi" onclick="triggerDgi()">
-        🔄 Run DGI Screener
-    </button>
-    <button class="btn-trigger" id="btnAnalyzeSymbol" onclick="showSymbolInput()">
-        🔍 Analyze Symbol
-    </button>
-    <form id="symbolInputForm" action="/dgi/analyze/" method="get" style="display:none; align-items:center; gap:0.5rem;" onsubmit="return navigateToAnalysis(event)">
-        <input type="text" id="analyzeSymbolInput" placeholder="Enter symbol (e.g. AAPL)" maxlength="10"
-               class="input-field mono" style="width:160px; text-transform:uppercase;"
-               autofocus>
-        <button type="submit" class="btn-trigger">Go</button>
-        <button type="button" class="btn-sm" onclick="hideSymbolInput()">✕</button>
+    <form class="dgi-analyze-form" id="dgi-analyze-form" onsubmit="return false;">
+        <input type="text" id="dgi-analyze-input" class="nav-search-input"
+               placeholder="🔍 Analyze symbol (e.g. AAPL)" maxlength="10"
+               autocomplete="off" style="width:240px; text-transform:uppercase;">
+        <button type="submit" class="btn-trigger" id="dgi-analyze-go">Go</button>
     </form>
 </div>
 
@@ -167,24 +160,20 @@
     var _scoreChart = null;
     var _radarChart = null;
 
-    /* ── Analyze Symbol Input Toggle ── */
-    window.showSymbolInput = function() {
-        document.getElementById('symbolInputForm').style.display = 'flex';
-        document.getElementById('btnAnalyzeSymbol').style.display = 'none';
-        document.getElementById('analyzeSymbolInput').focus();
-    };
-    window.hideSymbolInput = function() {
-        document.getElementById('symbolInputForm').style.display = 'none';
-        document.getElementById('btnAnalyzeSymbol').style.display = '';
-        document.getElementById('analyzeSymbolInput').value = '';
-    };
-    window.navigateToAnalysis = function(e) {
-        e.preventDefault();
-        var sym = document.getElementById('analyzeSymbolInput').value.trim().toUpperCase();
-        if (!sym) return false;
-        window.location.href = '/dgi/analyze/' + encodeURIComponent(sym);
-        return false;
-    };
+    /* ── Analyze Symbol (navigates to /dgi/analyze/{symbol}) ── */
+    (function initAnalyzeInput() {
+        var input = document.getElementById('dgi-analyze-input');
+        var form = document.getElementById('dgi-analyze-form');
+        if (!input || !form) return;
+
+        function go() {
+            var sym = String(input.value || '').trim().toUpperCase();
+            if (!sym) { input.focus(); return; }
+            window.location.href = '/dgi/analyze/' + encodeURIComponent(sym);
+        }
+        form.addEventListener('submit', function(e) { e.preventDefault(); go(); });
+    })();
+
     /* ── Filter Panel Logic ── */
 
     window.clampPriceSliders = function(changed) {
@@ -283,35 +272,6 @@
         document.getElementById('filterPriceMax').value = 1000;
         updatePriceRangeFill();
         applyFilters();
-    };
-
-    /* ── Trigger DGI screener ── */
-    window.triggerDgi = async function() {
-        var btn = document.getElementById('btnRunDgi');
-        btn.classList.add('running');
-        btn.textContent = '⏳ Running…';
-        btn.disabled = true;
-        try {
-            var res = await fetch('/api/trigger/dgi_screener', { method: 'POST' });
-            var data = await res.json();
-            if (!res.ok) { btn.textContent = '❌ ' + (data.error || 'Error'); btn.classList.replace('running','error'); return; }
-            // Poll status
-            var poll = setInterval(async function() {
-                try {
-                    var sr = await fetch('/api/trigger/dgi_screener/status');
-                    var sd = await sr.json();
-                    if (!sd.running) {
-                        clearInterval(poll);
-                        btn.classList.replace('running','done');
-                        btn.textContent = '✅ Done — Reloading…';
-                        setTimeout(function() { location.reload(); }, 1500);
-                    }
-                } catch(_) {}
-            }, 3000);
-        } catch(e) {
-            btn.textContent = '❌ ' + e.message;
-            btn.classList.replace('running','error');
-        }
     };
 
     /* ── Quick Analysis (CSP) per row — redirects to chat page ── */

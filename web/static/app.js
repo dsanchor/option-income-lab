@@ -90,40 +90,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    // ── Run Full Analysis button ──
-    var runFullBtn = document.getElementById('run-full-analysis');
-    if (runFullBtn) {
-        var _fullAnalysisOrigText = runFullBtn.textContent;
-
-        runFullBtn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            runFullBtn.disabled = true;
-            runFullBtn.textContent = '⏳ Triggering…';
-
-            fetch('/api/trigger-all', { method: 'POST' })
-                .then(function(res) { return res.json(); })
-                .then(function(data) {
-                    if (data.status === 'started') {
-                        runFullBtn.textContent = '✓ Triggered';
-                        runFullBtn.classList.add('done');
-                    } else {
-                        runFullBtn.textContent = '✗ ' + (data.error || 'Error');
-                        runFullBtn.classList.add('error');
-                    }
-                })
-                .catch(function() {
-                    runFullBtn.textContent = '✗ Network error';
-                    runFullBtn.classList.add('error');
-                })
-                .finally(function() {
-                    setTimeout(function() {
-                        runFullBtn.textContent = _fullAnalysisOrigText;
-                        runFullBtn.disabled = false;
-                        runFullBtn.classList.remove('done', 'error');
-                    }, 3000);
-                });
-        });
-    }
     // ── Hamburger menu toggle ──
     var hamburger = document.querySelector('.hamburger');
     var topnav = document.querySelector('.topnav');
