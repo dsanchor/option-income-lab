@@ -395,7 +395,7 @@
                                         {% endif %}
                                     </div>
                                 </div>
-                                {% if pos.rolled_to %}
+                                {% if pos.rolled_to or pos._display_buyback is not none %}
                                 <div class="detail-field">
                                     <div class="detail-label">Buyback Cost</div>
                                     <div class="detail-value mono buyback-editable" data-symbol="{{ symbol_doc.symbol }}" data-pos-id="{{ pos.position_id }}">
@@ -495,7 +495,7 @@
                                         {% endif %}
                                     </div>
                                 </div>
-                                {% if pos.rolled_to %}
+                                {% if pos.rolled_to or pos._display_buyback is not none %}
                                 <div class="detail-field">
                                     <div class="detail-label">Buyback Cost</div>
                                     <div class="detail-value mono buyback-editable" data-symbol="{{ symbol_doc.symbol }}" data-pos-id="{{ pos.position_id }}">
