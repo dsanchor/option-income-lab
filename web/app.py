@@ -2055,13 +2055,45 @@ async def dashboard(request: Request):
         return templates.TemplateResponse("dashboard.html", empty_ctx)
 
     try:
-        all_symbols = cosmos.list_symbols()
-        all_alerts = cosmos.get_all_alerts(limit=500)
-        all_activities = cosmos.get_all_activities(limit=200)
-        banner_doc = cosmos.get_banner()
+        data = _compute_dashboard_data(cosmos)
     except Exception as e:
         empty_ctx["error"] = f"CosmosDB query failed: {e}"
         return templates.TemplateResponse("dashboard.html", empty_ctx)
+
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request,
+        **data,
+        "agent_types": AGENT_TYPES,
+        "market_open": market_open,
+    })
+
+
+@app.get("/api/dashboard")
+async def api_dashboard(request: Request):
+    """JSON dashboard payload consumed by the Next.js frontend (BFF)."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    market_open = is_us_market_open()
+    if cosmos is None:
+        error_detail = getattr(request.app.state, "cosmos_error", "unknown")
+        return JSONResponse(
+            {"error": f"CosmosDB not available: {error_detail}"}, status_code=503)
+    try:
+        data = _compute_dashboard_data(cosmos)
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"CosmosDB query failed: {e}"}, status_code=502)
+    return {**data, "market_open": market_open}
+
+
+def _compute_dashboard_data(cosmos) -> Dict[str, Any]:
+    """Shared dashboard computation used by both the HTML page and the JSON API.
+
+    Returns the data-only context (no `request`); callers add framing.
+    """
+    all_symbols = cosmos.list_symbols()
+    all_alerts = cosmos.get_all_alerts(limit=500)
+    all_activities = cosmos.get_all_activities(limit=200)
+    banner_doc = cosmos.get_banner()
 
     # Build set of closed position IDs so we can exclude their data
     closed_position_ids: set = set()
@@ -2122,8 +2154,7 @@ async def dashboard(request: Request):
             "label", agent_key)
         activity.append(d)
 
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
+    return {
         "agent_tables": agent_tables,
         "grand_totals": grand_totals,
         "symbol_count": symbol_count,
@@ -2133,9 +2164,7 @@ async def dashboard(request: Request):
         "open_roc_annualized": open_roc_annualized,
         "activity": activity,
         "banner_items": (banner_doc or {}).get("items", []),
-        "agent_types": AGENT_TYPES,
-        "market_open": market_open,
-    })
+    }
 
 
 # ===========================================================================
