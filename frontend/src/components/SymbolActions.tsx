@@ -1,0 +1,137 @@
+"use client";
+
+import Link from "next/link";
+import { useState, useRef, useEffect } from "react";
+
+type ToggleKey = "covered_call" | "cash_secured_put" | "buy_tracker" | "telegram_notifications_enabled";
+
+interface Props {
+  symbol: string;
+  covered_call: boolean;
+  cash_secured_put: boolean;
+  buy_tracker: boolean;
+  telegram_notifications_enabled: boolean;
+  isPaused: boolean;
+}
+
+const ANALYZE = [
+  { href: "options-chain", emoji: "📈", label: "Option Chain" },
+  { href: "chat", emoji: "💬", label: "Chat" },
+  { href: "report", emoji: "📊", label: "Report" },
+  { href: "technical-analysis", emoji: "🔬", label: "Tech Analysis" },
+  { href: "forecasts", emoji: "🎯", label: "Forecasts" },
+];
+
+export default function SymbolActions(props: Props) {
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState({
+    covered_call: props.covered_call,
+    cash_secured_put: props.cash_secured_put,
+    buy_tracker: props.buy_tracker,
+    telegram_notifications_enabled: props.telegram_notifications_enabled,
+  });
+  const [saving, setSaving] = useState<ToggleKey | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  async function toggle(key: ToggleKey) {
+    const next = !state[key];
+    setState((s) => ({ ...s, [key]: next }));
+    setSaving(key);
+    setError(null);
+    try {
+      const res = await fetch(`/api/symbols/${encodeURIComponent(props.symbol)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: next }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      setState((s) => ({ ...s, [key]: !next })); // revert
+      setError(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      {/* Analyze dropdown */}
+      <div className="relative" ref={menuRef}>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] bg-accent-blue px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
+          aria-expanded={open}
+        >
+          Analyze <span className="text-xs">▾</span>
+        </button>
+        {open && (
+          <div className="absolute left-0 z-20 mt-2 w-52 overflow-hidden rounded-[var(--radius)] border border-border bg-bg-card py-1 shadow-lg">
+            {ANALYZE.map((a) => (
+              <Link
+                key={a.href}
+                href={`/symbols/${props.symbol}/${a.href}`}
+                className="flex items-center gap-2 px-4 py-2 text-sm text-text hover:bg-bg-input"
+                onClick={() => setOpen(false)}
+              >
+                <span>{a.emoji}</span> {a.label}
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Tracking toggles */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Toggle label="CC" title="Covered Call tracking" checked={state.covered_call}
+          disabled={props.isPaused || saving === "covered_call"} onChange={() => toggle("covered_call")} />
+        <Toggle label="CSP" title="Cash-Secured Put tracking" checked={state.cash_secured_put}
+          disabled={props.isPaused || saving === "cash_secured_put"} onChange={() => toggle("cash_secured_put")} />
+        <Toggle label="Buy" title="Buy Tracker" checked={state.buy_tracker}
+          disabled={props.isPaused || saving === "buy_tracker"} onChange={() => toggle("buy_tracker")} />
+        <Toggle label="🔔" title="Telegram notifications" checked={state.telegram_notifications_enabled}
+          disabled={saving === "telegram_notifications_enabled"} onChange={() => toggle("telegram_notifications_enabled")} />
+      </div>
+
+      {props.isPaused && (
+        <span className="rounded-[var(--radius-pill)] border border-accent-orange/40 bg-accent-orange/10 px-3 py-1 text-xs text-accent-orange">
+          ⏸ Paused until earnings
+        </span>
+      )}
+      {error && <span className="text-xs text-accent-red">{error}</span>}
+    </div>
+  );
+}
+
+function Toggle({
+  label, title, checked, disabled, onChange,
+}: {
+  label: string; title: string; checked: boolean; disabled?: boolean; onChange: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onChange}
+      disabled={disabled}
+      aria-pressed={checked}
+      className={`inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border px-3 py-1.5 text-xs transition disabled:opacity-50 ${
+        checked
+          ? "border-accent-green/40 bg-accent-green/10 text-accent-green"
+          : "border-border bg-bg-input text-text-muted"
+      }`}
+    >
+      <span className={`h-2 w-2 rounded-full ${checked ? "bg-accent-green" : "bg-text-muted"}`} />
+      {label}
+    </button>
+  );
+}

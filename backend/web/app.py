@@ -837,6 +837,118 @@ async def api_get_symbol(request: Request, symbol: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+def _compute_symbol_detail(cosmos, symbol: str) -> Optional[dict]:
+    """View-model for the Symbol detail page (mirrors the legacy HTML route).
+
+    Returns the cleaned symbol doc plus a unified recent activity/alert feed,
+    monitor-enriched active positions, action plans, watchlist toggles, summary
+    exposure stats, next earnings date and paused state. Returns None if the
+    symbol does not exist.
+    """
+    sym = symbol.upper()
+    doc = cosmos.get_symbol(sym)
+    if not doc:
+        return None
+
+    plans = _sort_by_updated_at_desc(cosmos.get_plans(sym))
+
+    # Unified recent activity + alert feed across all agent types.
+    activities: List[Dict] = []
+    for agent_type, meta in AGENT_TYPES.items():
+        acts = cosmos.get_recent_activities(sym, agent_type, max_entries=50)
+        for a in acts:
+            a["_agent_key"] = str(a.get("agent_type", ""))
+            a["_agent_label"] = meta["label"]
+        activities.extend(acts)
+        alts = cosmos.get_recent_alerts(sym, agent_type, max_entries=30)
+        for a in alts:
+            a["_agent_key"] = str(a.get("agent_type", ""))
+            a["_agent_label"] = meta["label"]
+        activities.extend(alts)
+    activities.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
+    activities = activities[:80]
+
+    # Latest monitor activity per position (assignment risk / moneyness).
+    _monitor_agents = {"open_call_monitor", "open_put_monitor"}
+    latest_monitor: Dict[str, Dict] = {}
+    for act in activities:
+        pid = act.get("position_id")
+        if pid and act.get("agent_type") in _monitor_agents and pid not in latest_monitor:
+            latest_monitor[pid] = act
+
+    positions = []
+    for pos in doc.get("positions", []):
+        p = dict(pos)
+        mon = latest_monitor.get(pos.get("position_id"))
+        if mon:
+            p["assignment_risk"] = mon.get("assignment_risk")
+            p["moneyness"] = mon.get("moneyness")
+        source = pos.get("source")
+        if not isinstance(source, dict):
+            source = {}
+        p["display_premium"] = _parse_numeric(source.get("premium"))
+        p["display_buyback"] = _parse_numeric(pos.get("buyback_cost"))
+        positions.append(p)
+
+    active_positions = [p for p in doc.get("positions", []) if p.get("status") == "active"]
+    summary_in_calls = sum(100 for p in active_positions if p.get("type") == "call")
+    summary_put_exposure = sum(
+        float(p.get("strike", 0)) * 100 for p in active_positions if p.get("type") == "put"
+    )
+    summary_call_exposure = sum(
+        float(p.get("strike", 0)) * 100 for p in active_positions if p.get("type") == "call"
+    )
+
+    watchlist = doc.get("watchlist") or {}
+    enr = doc.get("enrichment") or {}
+
+    clean = _clean_doc(doc)
+    clean["positions"] = [
+        {k: v for k, v in p.items() if k not in _COSMOS_SYSTEM_KEYS} for p in positions
+    ]
+    return {
+        "symbol": clean.get("symbol", sym),
+        "display_name": clean.get("display_name", ""),
+        "exchange": clean.get("exchange", ""),
+        "total_shares": clean.get("total_shares", 0) or 0,
+        "watchlist": {
+            "covered_call": bool(watchlist.get("covered_call", False)),
+            "cash_secured_put": bool(watchlist.get("cash_secured_put", False)),
+            "buy_tracker": bool(watchlist.get("buy_tracker", False)),
+        },
+        "telegram_notifications_enabled": bool(
+            clean.get("telegram_notifications_enabled", False)
+        ),
+        "enrichment": enr,
+        "positions": clean["positions"],
+        "activities": [_clean_doc(a) for a in activities],
+        "plans": [_clean_doc(p) for p in plans],
+        "summary": {
+            "in_calls": summary_in_calls,
+            "put_exposure": summary_put_exposure,
+            "call_exposure": summary_call_exposure,
+            "active_count": len(active_positions),
+        },
+        "next_earnings_date": cosmos.get_next_earnings_date(sym),
+        "is_paused": is_watchlist_paused(doc),
+    }
+
+
+@app.get("/api/symbols/{symbol}/detail")
+async def api_symbol_detail(request: Request, symbol: str):
+    try:
+        cosmos = _get_cosmos(request)
+        data = _compute_symbol_detail(cosmos, symbol)
+        if data is None:
+            return JSONResponse({"error": f"Symbol {symbol} not found"},
+                                status_code=404)
+        return JSONResponse(data)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.put("/api/symbols/{symbol}")
 async def api_update_symbol(request: Request, symbol: str):
     try:
