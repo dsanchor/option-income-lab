@@ -6,7 +6,7 @@ import re
 import time
 import traceback
 import warnings
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -2882,6 +2882,7 @@ Respond in the required JSON format only."""
         telegram_notifier,
         activity_count: int = 3,
         model: str = None,
+        max_age_hours: int = 24,
     ):
         """Generate and send daily portfolio summary via Telegram.
         
@@ -2889,12 +2890,17 @@ Respond in the required JSON format only."""
             cosmos: CosmosDBService instance
             telegram_notifier: TelegramNotifier instance
             activity_count: Number of recent activities per symbol (default: 3)
+            max_age_hours: Only include activities newer than this many hours, so
+                stale analyses (old price/earnings/delta) never reach the summary.
+                Symbols without a fresh activity still appear via the portfolio
+                overview, just without stale specifics (default: 24).
         """
         from .summary_instructions import TV_SUMMARY_INSTRUCTIONS
         
         logger.info("="*70)
         logger.info("Summary Agent - Starting execution")
         logger.info("  Activity count per symbol: %d", activity_count)
+        logger.info("  Max activity age (hours): %s", max_age_hours)
         
         # Gate check: skip if Telegram is not enabled
         if telegram_notifier is None:
@@ -2998,8 +3004,14 @@ Respond in the required JSON format only."""
 
             # ── 2. Fetch recent activities and filter closed positions ──
             logger.info("Fetching recent activities from CosmosDB (limit=%d per symbol)", activity_count)
+            since = None
+            if max_age_hours and max_age_hours > 0:
+                since = (datetime.now(timezone.utc)
+                         - timedelta(hours=max_age_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                logger.info("Excluding activities older than %s (%dh cutoff)", since, max_age_hours)
             activities_by_symbol = cosmos.get_recent_activities_by_symbol(
-                limit_per_symbol=activity_count
+                limit_per_symbol=activity_count,
+                since=since,
             )
 
             # Filter out activities linked to closed positions

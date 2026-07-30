@@ -1336,7 +1336,8 @@ class CosmosDBService:
         ))
         return {r["symbol"]: r["count"] for r in results}
 
-    def get_recent_activities_by_symbol(self, limit_per_symbol: int = 3) -> dict[str, list[dict]]:
+    def get_recent_activities_by_symbol(self, limit_per_symbol: int = 3,
+                                        since: str | None = None) -> dict[str, list[dict]]:
         """Get N most recent activities per agent_type per symbol (cross-partition query).
         
         Fetches up to `limit_per_symbol` activities for EACH active agent_type within
@@ -1347,6 +1348,10 @@ class CosmosDBService:
         
         Args:
             limit_per_symbol: Number of activities to retrieve per agent_type per symbol (default: 3)
+            since: Optional ISO-8601 UTC timestamp (``YYYY-MM-DDTHH:MM:SSZ``). When
+                provided, only activities with ``timestamp >= since`` are returned, so
+                stale analyses (e.g. from days ago) are excluded. ISO-8601 UTC strings
+                sort lexicographically, so a string comparison is calendar-correct.
         
         Returns:
             Dictionary mapping symbol -> list of activity documents (newest first).
@@ -1369,19 +1374,26 @@ class CosmosDBService:
             
             # Query each agent_type separately to ensure representation
             for agent_type in agent_types:
+                where = [
+                    "c.doc_type = 'activity'",
+                    "c.agent_type = @agent_type",
+                    "(c.is_alert = false OR NOT IS_DEFINED(c.is_alert))",
+                ]
+                params = [
+                    {"name": "@limit", "value": limit_per_symbol},
+                    {"name": "@agent_type", "value": agent_type},
+                ]
+                if since:
+                    where.append("c.timestamp >= @since")
+                    params.append({"name": "@since", "value": since})
                 query = (
                     "SELECT TOP @limit * FROM c "
-                    "WHERE c.doc_type = 'activity' "
-                    "AND c.agent_type = @agent_type "
-                    "AND (c.is_alert = false OR NOT IS_DEFINED(c.is_alert)) "
+                    f"WHERE {' AND '.join(where)} "
                     "ORDER BY c.timestamp DESC"
                 )
                 activities = list(self.container.query_items(
                     query=query,
-                    parameters=[
-                        {"name": "@limit", "value": limit_per_symbol},
-                        {"name": "@agent_type", "value": agent_type}
-                    ],
+                    parameters=params,
                     partition_key=symbol,
                 ))
                 all_activities.extend(activities)

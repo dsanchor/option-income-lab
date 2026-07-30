@@ -300,11 +300,13 @@ class OptionsAgentScheduler:
         print(f"{'='*70}\n")
         
         activity_count = summary_config.get('activity_count', 3)
+        max_age_hours = summary_config.get('max_activity_age_hours', 24)
         await self.runner.run_summary_agent(
             cosmos=self.cosmos,
             telegram_notifier=self.runner.telegram_notifier,
             activity_count=activity_count,
             model=self.config.model_for('summary'),
+            max_age_hours=max_age_hours,
         )
 
     def run_plan_monitor_job(self):

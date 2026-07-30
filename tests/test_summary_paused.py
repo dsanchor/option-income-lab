@@ -54,7 +54,7 @@ class _FakeCosmos:
     def list_symbols(self):
         return self._symbols
 
-    def get_recent_activities_by_symbol(self, limit_per_symbol=3):
+    def get_recent_activities_by_symbol(self, limit_per_symbol=3, since=None):
         return {k: list(v) for k, v in self._activities.items()}
 
     def write_telemetry(self, *a, **k):
