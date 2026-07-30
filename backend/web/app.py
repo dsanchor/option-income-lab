@@ -625,6 +625,73 @@ async def api_list_symbols(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+def _compute_symbols_overview(cosmos):
+    """View-model for the Symbols list page (mirrors the legacy /symbols HTML).
+
+    Returns per-symbol rows with enrichment-derived columns plus active-position
+    exposure, sorted by DGI quality score descending, and aggregate totals.
+    """
+    symbols = cosmos.list_symbols() if cosmos else []
+    rows = []
+    total_call_exposure = 0.0
+    total_put_exposure = 0.0
+    enrichment_ts = ""
+    for s in symbols:
+        enr = s.get("enrichment") or {}
+        metrics = enr.get("metrics") or {}
+        technicals = enr.get("technicals") or {}
+        active = [p for p in s.get("positions", []) if p.get("status") == "active"]
+        in_calls = sum(100 for p in active if p.get("type") == "call")
+        put_exposure = sum(
+            float(p.get("strike", 0)) * 100 for p in active if p.get("type") == "put"
+        )
+        call_exposure = sum(
+            float(p.get("strike", 0)) * 100 for p in active if p.get("type") == "call"
+        )
+        total_call_exposure += call_exposure
+        total_put_exposure += put_exposure
+        last_updated = enr.get("last_updated", "") or ""
+        if last_updated > enrichment_ts:
+            enrichment_ts = last_updated
+        rows.append({
+            "symbol": s.get("symbol"),
+            "display_name": s.get("display_name", ""),
+            "category": enr.get("category", "") or "",
+            "dgi_score": enr.get("quality_score"),
+            "tech_timing": technicals.get("score"),
+            "entry_tag": enr.get("entry_tag", "") or "",
+            "momentum": enr.get("momentum", "") or "",
+            "price": metrics.get("current_price"),
+            "total_shares": s.get("total_shares", 0) or 0,
+            "active_count": len(active),
+            "in_calls": in_calls,
+            "put_exposure": put_exposure,
+            "call_exposure": call_exposure,
+        })
+    rows.sort(
+        key=lambda r: r["dgi_score"] if r["dgi_score"] is not None else -1,
+        reverse=True,
+    )
+    return {
+        "rows": rows,
+        "symbol_count": len(rows),
+        "total_call_exposure": total_call_exposure,
+        "total_put_exposure": total_put_exposure,
+        "last_update_ts": enrichment_ts,
+    }
+
+
+@app.get("/api/symbols/overview")
+async def api_symbols_overview(request: Request):
+    try:
+        cosmos = _get_cosmos(request)
+        return JSONResponse(_compute_symbols_overview(cosmos))
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/api/economics")
 async def api_economics(request: Request,
                         year: Optional[int] = Query(default=None),
