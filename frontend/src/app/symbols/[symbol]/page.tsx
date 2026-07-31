@@ -108,7 +108,7 @@ export default async function SymbolDetailPage({
       </div>
 
       {/* Positions */}
-      <PositionsTable positions={positions} />
+      <PositionsTable symbol={symbol} positions={positions} />
 
       {/* Plans */}
       {plans.length > 0 && (
