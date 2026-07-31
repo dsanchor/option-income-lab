@@ -26,6 +26,7 @@ export default function StatCard({
   tone = "neutral",
   icon,
   hint,
+  tooltip,
 }: {
   label: string;
   value?: number;
@@ -36,11 +37,13 @@ export default function StatCard({
   tone?: Tone;
   icon?: ReactNode;
   hint?: string;
+  tooltip?: string;
 }) {
   const t = TONE[tone];
   return (
     <div
-      className="surface card-hover relative flex h-full flex-col overflow-hidden p-5"
+      title={tooltip}
+      className={`surface card-hover relative flex h-full flex-col overflow-hidden p-5 ${tooltip ? "cursor-help" : ""}`}
       style={{ background: `radial-gradient(120% 120% at 100% 0%, ${t.glow}, transparent 55%), linear-gradient(180deg, var(--bg-card), var(--bg-card-2))` }}
     >
       <span className="absolute inset-y-0 left-0 w-1" style={{ background: t.bar }} aria-hidden />

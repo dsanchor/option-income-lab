@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import type { SymbolsOverview } from "@/types/symbols";
 
 type Item = { href: string; label: string };
@@ -26,50 +26,136 @@ function isActive(pathname: string, href: string, exact = false) {
 }
 
 const linkBase =
-  "rounded-[var(--radius-pill)] px-3 py-1.5 transition-all hover:bg-bg-hover no-underline";
+  "rounded-[var(--radius-pill)] px-3 py-1.5 transition-all no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/60";
 // `!` importance is required so nav links beat the un-layered global `a { color }`
 // rule (otherwise anchors render accent-blue while dropdown buttons render muted).
 function navClass(active: boolean) {
-  return `${linkBase} ${active ? "text-text!" : "text-text-muted! hover:text-text!"}`;
+  return `${linkBase} ${
+    active ? "bg-bg-hover text-text!" : "text-text-muted! hover:bg-bg-hover hover:text-text!"
+  }`;
 }
 
 export function TopNav() {
   const pathname = usePathname();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   const dashboardActive = pathname === "/" || isActive(pathname, "/dashboard");
   const symbolsActive =
     isActive(pathname, "/symbols") || isActive(pathname, "/plans");
   const settingsActive = isActive(pathname, "/settings");
 
+  // Close the mobile panel on route change (state-adjust-during-render pattern).
+  const [prevPath, setPrevPath] = useState(pathname);
+  if (prevPath !== pathname) {
+    setPrevPath(pathname);
+    setMobileOpen(false);
+  }
+
   return (
-    <nav className="sticky top-0 z-[100] flex flex-wrap items-center gap-x-8 gap-y-2 border-b border-border/70 bg-bg-card/80 px-6 py-3 shadow-[0_1px_0_rgba(255,255,255,0.03)] backdrop-blur-xl">
-      <Link href="/dashboard" className="group flex items-center gap-2 whitespace-nowrap text-[1.1rem] font-semibold no-underline">
-        <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-[image:var(--grad-blue)] text-base shadow-[var(--shadow-glow-blue)] transition-transform group-hover:scale-105">🧪</span>
-        <span className="text-gradient">Option Income Lab</span>
-      </Link>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Link href="/dashboard" className={navClass(dashboardActive)}>
-          Dashboard
+    <nav className="sticky top-0 z-[100] border-b border-border/70 bg-bg-card/80 shadow-[0_1px_0_rgba(255,255,255,0.03)] backdrop-blur-xl">
+      <div className="flex flex-wrap items-center gap-x-8 gap-y-2 px-6 py-3">
+        <Link
+          href="/dashboard"
+          className="group flex items-center gap-2 whitespace-nowrap text-[1.1rem] font-semibold no-underline"
+        >
+          <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-[image:var(--grad-blue)] text-base shadow-[var(--shadow-glow-blue)] transition-transform group-hover:scale-105">
+            🧪
+          </span>
+          <span className="text-gradient">Option Income Lab</span>
         </Link>
 
-        <Dropdown label="Symbols" items={DROPDOWNS.Symbols} active={symbolsActive} pathname={pathname} />
+        {/* Desktop nav */}
+        <div className="hidden flex-wrap items-center gap-2 md:flex">
+          <Link href="/dashboard" className={navClass(dashboardActive)}>
+            🏠 Dashboard
+          </Link>
 
-        <Link href="/economics" className={navClass(isActive(pathname, "/economics"))}>
-          Economics
-        </Link>
-        <Link href="/chat" className={navClass(isActive(pathname, "/chat", true))}>
-          Chat
-        </Link>
-        <Link href="/dgi" className={navClass(isActive(pathname, "/dgi"))}>
-          DGI Screener
-        </Link>
+          <Dropdown label="Symbols" items={DROPDOWNS.Symbols} active={symbolsActive} pathname={pathname} />
 
-        <Dropdown label="Settings" items={DROPDOWNS.Settings} active={settingsActive} pathname={pathname} />
+          <Link href="/economics" className={navClass(isActive(pathname, "/economics"))}>
+            💵 Economics
+          </Link>
+          <Link href="/chat" className={navClass(isActive(pathname, "/chat", true))}>
+            💬 Chat
+          </Link>
+          <Link href="/dgi" className={navClass(isActive(pathname, "/dgi"))}>
+            🔎 DGI Screener
+          </Link>
 
-        <SymbolSearch />
+          <Dropdown label="Settings" items={DROPDOWNS.Settings} active={settingsActive} pathname={pathname} />
+
+          <SymbolSearch />
+        </div>
+
+        {/* Mobile toggle */}
+        <button
+          type="button"
+          onClick={() => setMobileOpen((v) => !v)}
+          aria-label="Toggle navigation menu"
+          aria-expanded={mobileOpen}
+          aria-controls="mobile-nav-panel"
+          className="ml-auto grid h-9 w-9 place-items-center rounded-[var(--radius-pill)] border border-border text-text-muted transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/60 md:hidden"
+        >
+          <span className="text-lg leading-none">{mobileOpen ? "✕" : "☰"}</span>
+        </button>
       </div>
+
+      {/* Mobile panel */}
+      {mobileOpen && (
+        <div
+          id="mobile-nav-panel"
+          className="border-t border-border/70 px-4 pb-4 pt-2 md:hidden"
+        >
+          <div className="mb-3">
+            <SymbolSearch mobile />
+          </div>
+          <div className="flex flex-col gap-1">
+            <MobileLink href="/dashboard" label="🏠 Dashboard" active={dashboardActive} />
+            <MobileSection label="Symbols" items={DROPDOWNS.Symbols} pathname={pathname} />
+            <MobileLink href="/economics" label="💵 Economics" active={isActive(pathname, "/economics")} />
+            <MobileLink href="/chat" label="💬 Chat" active={isActive(pathname, "/chat", true)} />
+            <MobileLink href="/dgi" label="🔎 DGI Screener" active={isActive(pathname, "/dgi")} />
+            <MobileSection label="Settings" items={DROPDOWNS.Settings} pathname={pathname} />
+          </div>
+        </div>
+      )}
     </nav>
+  );
+}
+
+function MobileLink({ href, label, active }: { href: string; label: string; active: boolean }) {
+  return (
+    <Link
+      href={href}
+      className={`rounded-[var(--radius)] px-3 py-2 text-sm no-underline transition-colors ${
+        active ? "bg-bg-hover text-text!" : "text-text-muted! hover:bg-bg-hover hover:text-text!"
+      }`}
+    >
+      {label}
+    </Link>
+  );
+}
+
+function MobileSection({ label, items, pathname }: { label: string; items: Item[]; pathname: string }) {
+  return (
+    <div className="mt-1">
+      <div className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
+        {label}
+      </div>
+      {items.map((it) => (
+        <Link
+          key={it.href}
+          href={it.href}
+          className={`block rounded-[var(--radius)] px-3 py-2 text-sm no-underline transition-colors ${
+            isActive(pathname, it.href, it.href === "/symbols")
+              ? "bg-bg-hover text-text!"
+              : "text-text-muted! hover:bg-bg-hover hover:text-text!"
+          }`}
+        >
+          {it.label}
+        </Link>
+      ))}
+    </div>
   );
 }
 
@@ -84,19 +170,114 @@ function Dropdown({
   active: boolean;
   pathname: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearTimer = () => {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+  const openNow = useCallback(() => {
+    clearTimer();
+    setOpen(true);
+  }, []);
+  // Hover-intent: small delay before closing so a diagonal mouse move survives.
+  const closeSoon = () => {
+    clearTimer();
+    closeTimer.current = setTimeout(() => setOpen(false), 150);
+  };
+
+  // Close on route change (state-adjust-during-render pattern).
+  const [prevPath, setPrevPath] = useState(pathname);
+  if (prevPath !== pathname) {
+    setPrevPath(pathname);
+    setOpen(false);
+  }
+
+  // Close on outside click.
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+
+  useEffect(() => () => clearTimer(), []);
+
+  const focusItem = (idx: number) => {
+    const links = menuRef.current?.querySelectorAll<HTMLAnchorElement>("a");
+    if (!links || !links.length) return;
+    const i = (idx + links.length) % links.length;
+    links[i]?.focus();
+  };
+
+  const onTriggerKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openNow();
+      requestAnimationFrame(() => focusItem(0));
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    }
+  };
+
+  const onMenuKeyDown = (e: React.KeyboardEvent) => {
+    const links = Array.from(menuRef.current?.querySelectorAll<HTMLAnchorElement>("a") ?? []);
+    const cur = links.indexOf(document.activeElement as HTMLAnchorElement);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      focusItem(cur + 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      focusItem(cur - 1);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setOpen(false);
+      btnRef.current?.focus();
+    } else if (e.key === "Tab") {
+      setOpen(false);
+    }
+  };
+
   return (
-    <div className="group relative">
-      <span
-        className={`${navClass(active)} inline-block cursor-default select-none`}
+    <div ref={wrapRef} className="relative" onMouseEnter={openNow} onMouseLeave={closeSoon}>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={onTriggerKeyDown}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className={`${navClass(active)} inline-flex items-center gap-1 select-none`}
       >
         {label}
-      </span>
-      <div className="invisible absolute left-0 top-full z-[110] min-w-[190px] rounded-[var(--radius)] border border-border bg-bg-card py-1 opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100">
+        <span className={`text-[0.6rem] transition-transform ${open ? "rotate-180" : ""}`} aria-hidden>
+          ▾
+        </span>
+      </button>
+      <div
+        ref={menuRef}
+        role="menu"
+        aria-label={label}
+        onKeyDown={onMenuKeyDown}
+        className={`absolute left-0 top-full z-[110] mt-1 min-w-[190px] rounded-[var(--radius)] border border-border bg-bg-card py-1 shadow-lg transition-opacity ${
+          open ? "visible opacity-100" : "invisible opacity-0"
+        }`}
+      >
         {items.map((it) => (
           <Link
             key={it.href}
             href={it.href}
-            className={`block px-4 py-2 text-sm no-underline transition-colors hover:bg-bg-hover ${
+            role="menuitem"
+            tabIndex={open ? 0 : -1}
+            className={`block px-4 py-2 text-sm no-underline transition-colors hover:bg-bg-hover focus-visible:bg-bg-hover focus-visible:outline-none ${
               isActive(pathname, it.href, it.href === "/symbols") ? "text-text" : "text-text-muted"
             } hover:text-text`}
           >
@@ -110,7 +291,7 @@ function Dropdown({
 
 type Suggestion = { symbol: string; display_name: string };
 
-function SymbolSearch() {
+function SymbolSearch({ mobile = false }: { mobile?: boolean }) {
   const router = useRouter();
   const [q, setQ] = useState("");
   const [all, setAll] = useState<Suggestion[] | null>(null);
@@ -184,7 +365,7 @@ function SymbolSearch() {
   }
 
   return (
-    <div ref={boxRef} className="relative ml-1">
+    <div ref={boxRef} className={mobile ? "relative w-full" : "relative ml-1"}>
       <input
         value={q}
         onChange={(e) => {
@@ -204,13 +385,17 @@ function SymbolSearch() {
         role="combobox"
         aria-expanded={open && matches.length > 0}
         aria-controls="symbol-search-list"
-        className="w-[220px] rounded-[var(--radius-pill)] border border-border bg-bg-input px-3.5 py-1.5 text-[0.9rem] text-text placeholder:text-text-muted focus:border-accent-blue focus:outline-none"
+        className={`${
+          mobile ? "w-full" : "w-[220px]"
+        } rounded-[var(--radius-pill)] border border-border bg-bg-input px-3.5 py-1.5 text-[0.9rem] text-text placeholder:text-text-muted focus:border-accent-blue focus:outline-none`}
       />
-      {open && matches.length > 0 && (
+      {open && (query ? matches.length > 0 : false) && (
         <ul
           id="symbol-search-list"
           role="listbox"
-          className="absolute right-0 z-[120] mt-2 max-h-80 w-[260px] overflow-auto rounded-[var(--radius)] border border-border bg-bg-card py-1 shadow-lg"
+          className={`absolute z-[120] mt-2 max-h-80 overflow-auto rounded-[var(--radius)] border border-border bg-bg-card py-1 shadow-lg ${
+            mobile ? "left-0 right-0 w-full" : "right-0 w-[260px]"
+          }`}
         >
           {matches.map((m, i) => (
             <li key={m.symbol} role="option" aria-selected={i === active}>
@@ -230,6 +415,15 @@ function SymbolSearch() {
             </li>
           ))}
         </ul>
+      )}
+      {open && query && matches.length === 0 && all !== null && (
+        <div
+          className={`absolute z-[120] mt-2 rounded-[var(--radius)] border border-border bg-bg-card px-4 py-2 text-sm text-text-muted shadow-lg ${
+            mobile ? "left-0 right-0" : "right-0 w-[260px]"
+          }`}
+        >
+          No matches. Press Enter to open “{query}”.
+        </div>
       )}
     </div>
   );

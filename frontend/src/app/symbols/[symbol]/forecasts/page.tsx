@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
+import StatCard from "@/components/StatCard";
 import ForecastCharts from "@/components/ForecastCharts";
 import ForecastHistory from "@/components/ForecastHistory";
 import { HORIZONS } from "@/types/forecasts";
-import type { ForecastsResponse, Horizon } from "@/types/forecasts";
+import type { ForecastsResponse, ForecastCalibration, Horizon } from "@/types/forecasts";
 
 export const dynamic = "force-dynamic";
 
@@ -25,15 +26,6 @@ function num(n: number | null | undefined, digits = 2): string {
 
 function pctVal(n: number | null | undefined, digits = 0): string {
   return typeof n === "number" && isFinite(n) ? `${n.toFixed(digits)}%` : "—";
-}
-
-function Stat({ label, value, accent }: { label: string; value: string; accent?: string }) {
-  return (
-    <div className="rounded-[var(--radius)] border border-border bg-bg-card px-4 py-3">
-      <div className="text-xs uppercase tracking-wide text-text-muted">{label}</div>
-      <div className={`mt-1 font-mono text-lg ${accent ?? ""}`}>{value}</div>
-    </div>
-  );
 }
 
 export default async function ForecastsPage({
@@ -59,6 +51,17 @@ export default async function ForecastsPage({
   }
 
   const rows = d.rows ?? [];
+  const cal: ForecastCalibration | null =
+    d.calibration && typeof d.calibration === "object" ? d.calibration : null;
+  const k = cal?.k ?? (typeof d.calibration === "number" ? d.calibration : null);
+  const kHint =
+    cal?.applied === false
+      ? `warming up${cal?.n != null ? ` · n=${cal.n}` : ""}`
+      : cal?.n != null
+        ? `n=${cal.n}`
+        : undefined;
+  const confPct = Math.round((d.confidence ?? 0.68) * 100);
+  const outerPct = Math.round((d.outer_confidence ?? 0.95) * 100);
 
   return (
     <div className="space-y-6">
@@ -86,13 +89,39 @@ export default async function ForecastsPage({
 
       {/* Top-line stats */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Predictions" value={String(d.count ?? rows.length)} />
-        <Stat label="Confidence" value={pctVal((d.confidence ?? 0) * 100)} accent="text-accent-blue" />
-        <Stat label="Outer band" value={pctVal((d.outer_confidence ?? 0) * 100)} />
-        <Stat
+        <StatCard
+          label="Predictions"
+          value={d.count ?? rows.length}
+          tone="neutral"
+          icon="🎯"
+          tooltip="Number of price forecasts generated in the selected date range."
+        />
+        <StatCard
+          label="Confidence"
+          value={confPct}
+          suffix="%"
+          tone="blue"
+          icon="🎚️"
+          tooltip="Central probability of the inner (±1σ) predicted price band. The band is sized so the actual close should land inside it about this often."
+        />
+        <StatCard
+          label="Outer band"
+          value={outerPct}
+          suffix="%"
+          tone="green"
+          icon="📏"
+          tooltip="Probability of the wider (±2σ) band. The close should almost always fall within it — breaches signal an unusually large move."
+        />
+        <StatCard
           label="Calibration k"
-          value={d.calibration != null ? num(d.calibration, 2) : "—"}
-          accent="text-accent-purple"
+          value={k != null ? k : undefined}
+          display={k != null ? undefined : "—"}
+          prefix="×"
+          decimals={2}
+          tone="purple"
+          icon="🛠️"
+          hint={kHint}
+          tooltip="Per-symbol volatility multiplier applied to the band width so this symbol's realized hit-rate drifts toward the confidence target. k<1 narrows an over-wide band, k>1 widens an over-narrow one. Auto-adjusts each run from recent resolved endpoints; shows “—” until enough have resolved (warming up)."
         />
       </div>
 

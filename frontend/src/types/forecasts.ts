@@ -99,13 +99,23 @@ export interface AverageEntry {
   high: number | null;
 }
 
+export interface ForecastCalibration {
+  k: number | null;
+  k_target?: number | null;
+  prev_k?: number | null;
+  n?: number | null;
+  target?: number | null;
+  applied?: boolean | null;
+  updated?: string | null;
+}
+
 export interface ForecastsResponse {
   symbol: string;
   range: { from: string | null; to: string | null };
   count: number;
   confidence: number;
   outer_confidence: number;
-  calibration: number | null;
+  calibration: ForecastCalibration | number | null;
   rows: ForecastRow[];
   hit_rate: Partial<Record<Horizon, HitRateEntry>>;
   averages: Partial<Record<Horizon, AverageEntry>>;
