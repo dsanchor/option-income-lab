@@ -5144,8 +5144,15 @@ async def trigger_agent(request: Request, agent_type: str):
             {"error": "Scheduler not running — cannot trigger agents"},
             status_code=503)
 
-    body = await request.json() if request.headers.get("content-type") == "application/json" else {}
-    symbol = body.get("symbol")
+    body = {}
+    if request.headers.get("content-type", "").startswith("application/json"):
+        try:
+            raw = await request.body()
+            if raw:
+                body = json.loads(raw)
+        except (ValueError, json.JSONDecodeError):
+            body = {}
+    symbol = body.get("symbol") if isinstance(body, dict) else None
 
     thread = threading.Thread(
         target=_run_agent_in_background,
