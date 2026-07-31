@@ -53,7 +53,7 @@ Scheduler (main.py)
        (same two-phase pipeline with supervisor + alpha phase, different agent instructions)
 ```
 
-**Data gathering:** Python pre-fetches ALL market data deterministically via `YFinanceDataProvider` (`src/yfinance_data_provider.py`). Five data types are fetched per symbol — overview, technicals, forecast, dividends, and options chain — all through the `yfinance` Python library. No browser, no scraping, no authentication required. The provider includes built-in rate limiting (2 calls/sec) and a TTL cache (5 min) to avoid redundant fetches. Options chains include 23+ expirations with computed Greeks (delta, gamma, theta, vega) via Black-Scholes (py-vollib). The LLM never makes HTTP requests — it receives pre-fetched data as text and only performs analysis. See [Pre-fetch Architecture](#pre-fetch-architecture-yfinance) below.
+**Data gathering:** Python pre-fetches ALL market data deterministically via `YFinanceDataProvider` (`backend/src/yfinance_data_provider.py`). Five data types are fetched per symbol — overview, technicals, forecast, dividends, and options chain — all through the `yfinance` Python library. No browser, no scraping, no authentication required. The provider includes built-in rate limiting (2 calls/sec) and a TTL cache (5 min) to avoid redundant fetches. Options chains include 23+ expirations with computed Greeks (delta, gamma, theta, vega) via Black-Scholes (py-vollib). The LLM never makes HTTP requests — it receives pre-fetched data as text and only performs analysis. See [Pre-fetch Architecture](#pre-fetch-architecture-yfinance) below.
 
 **Per-symbol context injection:** Before each symbol is analyzed, the runner reads that symbol's recent activities from CosmosDB and injects them into the prompt. Each activity includes whether it triggered an alert (via the `is_alert` field). The LLM sees only context for the symbol it's currently analyzing — not a mix of all symbols. Context depth is configurable in `config.yaml` (`context.max_activity_entries`, default 2, range 0–5).
 
@@ -63,7 +63,7 @@ Scheduler (main.py)
 
 LLMs don't reliably make multi-step HTTP tool calls. When given fetching tools directly, they skip steps, fabricate data, and ignore sequencing instructions.
 
-The solution: `YFinanceDataProvider` (`src/yfinance_data_provider.py`) fetches all market data via the `yfinance` Python library — a clean, zero-auth API wrapper over Yahoo Finance. No browser automation, no scraping, no HTML parsing. It gathers five data sets per symbol with built-in rate limiting (2 calls/sec) and a TTL cache (5 min default) to avoid redundant fetches when multiple agents or endpoints request the same symbol data:
+The solution: `YFinanceDataProvider` (`backend/src/yfinance_data_provider.py`) fetches all market data via the `yfinance` Python library — a clean, zero-auth API wrapper over Yahoo Finance. No browser automation, no scraping, no HTML parsing. It gathers five data sets per symbol with built-in rate limiting (2 calls/sec) and a TTL cache (5 min default) to avoid redundant fetches when multiple agents or endpoints request the same symbol data:
 
 | Data | Method | Content |
 |------|--------|---------|
@@ -98,7 +98,7 @@ The yfinance provider includes a built-in TTL cache that sits between consumers 
 
 ## Options Chain Cache
 
-A separate, centralized **Options Chain Cache** (`src/options_chain_cache.py`) provides the single source of truth for options chain data across the entire application. This addresses gaps in yfinance data (missing strikes) by merging with TradingView.
+A separate, centralized **Options Chain Cache** (`backend/src/options_chain_cache.py`) provides the single source of truth for options chain data across the entire application. This addresses gaps in yfinance data (missing strikes) by merging with TradingView.
 
 **Load procedure (on miss or hourly cron refresh):**
 1. Fetch from **yfinance** — all expirations with computed Greeks (delta, gamma, theta, vega)
@@ -165,12 +165,29 @@ Activities older than 90 days can be configured for TTL-based cleanup. Alerts ar
 
 ## Project Structure
 
+Monorepo with two deployable components — `backend/` (Python FastAPI JSON API +
+in-process scheduler) and `frontend/` (Next.js App Router web app acting as a BFF).
+Each has its own `Dockerfile` and env vars; both deploy to the same Azure Container
+Apps environment and share the same CosmosDB.
+
 ```
 stock-options-manager/
+├── backend/          # Python FastAPI JSON API + scheduler (Docker: backend/Dockerfile)
+├── frontend/         # Next.js App Router web app / BFF (Docker: frontend/Dockerfile)
+├── docs/
+├── DESIGN.md
+└── README.md
+```
+
+### `backend/` — Python API + scheduler
+
+```
+backend/
 ├── config.yaml                           # Configuration (AI provider, CosmosDB, scheduling, context limits)
+├── run.py                                # Entry point (web + scheduler; --api-only / --web-only / --scheduler-only)
 ├── src/
 │   ├── __init__.py
-│   ├── main.py                           # Entry point — scheduler with immediate + periodic runs
+│   ├── main.py                           # Scheduler with immediate + periodic runs
 │   ├── config.py                         # YAML config loader with env var substitution and validation
 │   ├── llm.py                            # LLM provider factory (Azure OpenAI / Google Gemini)
 │   ├── cosmos_db.py                      # CosmosDB service layer — all database operations
@@ -223,31 +240,34 @@ stock-options-manager/
 │   ├── stockanalysis_fetcher.py          # StockAnalysis.com scraper
 │   └── telegram_notifier.py             # Telegram notification service
 ├── scripts/
-│   └── provision_cosmosdb.sh             # Azure CosmosDB provisioning via az CLI
-├── web/
+│   ├── provision_cosmosdb.sh             # Azure CosmosDB provisioning via az CLI
+│   └── backfill_price_forecast.py        # Historical price-forecast rebuild (+ other maintenance scripts)
+├── web/                                  # FastAPI app (JSON /api/* + legacy Jinja HTML routes)
 │   ├── __init__.py
-│   ├── app.py                            # FastAPI web dashboard — all routes + CosmosDB queries
-│   ├── templates/                        # Jinja2 HTML templates (Revolut-inspired dark theme)
-│   │   ├── base.html                     # Base layout with nav
-│   │   ├── dashboard.html                # Main dashboard — alert overview + activity feed
-│   │   ├── alerts.html                   # Alert list for agent+symbol
-│   │   ├── alert_detail.html             # Single alert + backing activities
-│   │   ├── settings.html                 # Settings (cron expression, error stats)
-│   │   ├── settings_config.html           # Settings config tab (scheduler toggles, Run Now buttons)
-│   │   ├── symbols.html                   # Symbols watchlist (signal filters, momentum, put exposure)
-│   │   ├── symbol_detail.html            # Symbol detail with positions, activities, notes
-│   │   ├── symbol_report.html            # Per-symbol report display page
-│   │   ├── symbol_chat.html              # Per-symbol chat page with context selection
-│   │   ├── fetch_preview.html            # Raw data debug/preview page
-│   │   ├── dgi_screener.html             # DGI Screener Top 20 page
-│   │   ├── economics.html                # Economics P&L analytics dashboard
-│   │   ├── calendar.html                 # Events Calendar (earnings & ex-dividend dates)
-│   │   └── chat.html                     # Chat interface (dual-mode)
-│   └── static/
-│       ├── style.css                     # Revolut-inspired dark trading theme CSS
-│       └── app.js                        # Client-side JS
-├── run_web.py                            # Web dashboard entry point
+│   ├── app.py                            # FastAPI app — JSON API routes + CosmosDB queries (HTML routes legacy, superseded by frontend/)
+│   ├── templates/                        # Legacy Jinja2 HTML templates (kept as parity reference; new UI lives in frontend/)
+│   └── static/                           # Legacy CSS/JS for the Jinja templates
+├── tests/
+├── run_web.py                            # Web-only entry point (legacy convenience)
 ├── requirements.txt
-├── DESIGN.md                             # UI/UX design reference
-└── README.md
+└── Dockerfile                            # api image
+```
+
+### `frontend/` — Next.js web app (BFF)
+
+```
+frontend/
+├── src/
+│   ├── app/                              # App Router pages + BFF route handlers
+│   │   ├── api/                          # Route handlers proxying to the internal api (BFF)
+│   │   ├── dashboard/  symbols/  economics/  calendar/  plans/  dgi/  chat/  settings/
+│   │   ├── layout.tsx  page.tsx  globals.css   # Root layout + dark theme tokens (from DESIGN.md)
+│   ├── components/                       # Server + client React components (views, TopNav, charts)
+│   ├── lib/                              # api.ts (server-only apiFetch, BFF-aware via API_BASE_URL)
+│   └── types/                            # TypeScript interfaces mirroring backend JSON
+├── public/
+├── next.config.ts                        # output: 'standalone'
+├── package.json
+├── .env.example                          # API_BASE_URL, etc.
+└── Dockerfile                            # web image
 ```

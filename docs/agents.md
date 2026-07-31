@@ -50,7 +50,7 @@ If Telegram is disabled, the summary is still generated but not sent.
 
 ## Symbol Report
 
-The "Generate Report" button on each symbol's detail page triggers a comprehensive, on-demand analysis report via the **Report Agent** (`src/report_agent.py`).
+The "Generate Report" button on each symbol's detail page triggers a comprehensive, on-demand analysis report via the **Report Agent** (`backend/src/report_agent.py`).
 
 ### What's Included
 
@@ -67,7 +67,7 @@ Each report covers:
 1. User clicks "Generate Report" on the symbol detail page
 2. The Report Agent uses the same `AgentRunner → Agent → OpenAIChatCompletionClient` pattern as other agents
 3. Market data is loaded via the [Data Cache](#data-cache) for fast context assembly
-4. The LLM generates a structured report from the system prompt (`src/tv_report_instructions.py`)
+4. The LLM generates a structured report from the system prompt (`backend/src/tv_report_instructions.py`)
 5. The report is stored in CosmosDB as a `doc_type="report"` document and displayed on a dedicated page (`/symbols/{symbol}/report`)
 
 ## Action Plans
@@ -88,7 +88,7 @@ Action plans are user-created trading intentions tracked against live market dat
 
 ### Plan Monitor Agent
 
-The Plan Monitor agent (`src/plan_monitor_instructions.py`) evaluates active plans against current market data on a cron schedule (default: `0 4,16 * * 1-5` — twice daily on weekdays). It only analyzes plans with `"planned"` status.
+The Plan Monitor agent (`backend/src/plan_monitor_instructions.py`) evaluates active plans against current market data on a cron schedule (default: `0 4,16 * * 1-5` — twice daily on weekdays). It only analyzes plans with `"planned"` status.
 
 **Input:** The plan (title, objective, conditions, type, status, notes), symbol enrichment data (price, momentum, entry tag, DGI score, technicals), active positions, and options chain data.
 
