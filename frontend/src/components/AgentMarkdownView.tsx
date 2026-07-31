@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { renderMarkdown } from "@/lib/markdown";
 
@@ -66,10 +65,7 @@ export default function AgentMarkdownView({
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <Link href={`/symbols/${symbol}`} className="text-sm text-text-muted hover:text-text">
-            ← {symbol}
-          </Link>
-          <h1 className="mt-1 text-2xl font-semibold">{title}</h1>
+          <h1 className="text-2xl font-semibold">{title}</h1>
           <p className="text-sm text-text-muted">{subtitle}</p>
         </div>
         <button

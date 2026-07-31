@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 import type { AgentTraceDetailResponse } from "@/types/agent-traces";
 
@@ -57,9 +56,6 @@ export default async function TraceDetailPage({
   if (error || !data?.trace) {
     return (
       <div className="flex flex-col gap-4">
-        <Link href="/settings/logs" className="text-sm text-text-muted hover:text-text">
-          ← Back to Agent Logs
-        </Link>
         <div className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-4 py-3 text-sm">
           ⚠️ {error ?? "Trace not found"}
         </div>
@@ -76,10 +72,7 @@ export default async function TraceDetailPage({
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <Link href="/settings/logs" className="text-sm text-text-muted hover:text-text">
-          ← Back to Agent Logs
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold">🧾 Agent Trace</h1>
+        <h1 className="text-2xl font-semibold">🧾 Agent Trace</h1>
         <p className="text-sm text-text-muted">{t.timestamp}</p>
       </div>
 

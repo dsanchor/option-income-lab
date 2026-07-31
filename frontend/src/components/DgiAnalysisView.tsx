@@ -1,4 +1,3 @@
-import Link from "next/link";
 import type {
   DgiAnalysis,
   DgiAnalysisQualityDetail,
@@ -284,12 +283,6 @@ export default function DgiAnalysisView({ result }: { result: DgiAnalysis }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
-        <Link
-          href="/dgi"
-          className="rounded-[var(--radius-pill)] border border-border bg-bg-input px-4 py-2 text-sm text-text-muted transition-colors hover:bg-hover"
-        >
-          ← Back to Screener
-        </Link>
         <DgiAnalyzeSearch />
       </div>
 

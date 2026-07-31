@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { use, useEffect, useState } from "react";
 import type { OptionBucket, OptionContract, OptionsChainResponse } from "@/types/options-chain";
 
@@ -128,10 +127,6 @@ export default function OptionsChainPage({
 
   return (
     <div className="space-y-6">
-      <Link href={`/symbols/${symbol}`} className="text-sm text-text-muted hover:text-text">
-        ← {symbol}
-      </Link>
-
       <div>
         <h1 className="text-2xl font-semibold">📈 {symbol} Option Chain</h1>
         <p className="text-sm text-text-muted">

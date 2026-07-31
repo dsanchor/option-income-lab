@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { renderMarkdown } from "@/lib/markdown";
 
@@ -55,10 +54,7 @@ export default function ActivityChat({
   return (
     <div className="space-y-6">
       <div>
-        <Link href={`/activities/${encodeURIComponent(activityId)}`} className="text-sm text-text-muted hover:text-text">
-          ← Activity Detail
-        </Link>
-        <h1 className="mt-1 text-2xl font-semibold">💬 Discuss Activity</h1>
+        <h1 className="text-2xl font-semibold">💬 Discuss Activity</h1>
         <p className="text-sm text-text-muted">
           Ask about this {displayName} activity — uses live option chain, technicals, and the linked position.
         </p>

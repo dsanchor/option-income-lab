@@ -53,16 +53,9 @@ export default async function ForecastsPage({
   const range = RANGES.includes((sp.range ?? "") as (typeof RANGES)[number]) ? sp.range! : "30d";
   const d = await getData(symbol, range);
 
-  const back = (
-    <Link href={`/symbols/${symbol}`} className="text-sm text-text-muted hover:text-text">
-      ← {symbol}
-    </Link>
-  );
-
   if (d.error) {
     return (
       <div className="space-y-4">
-        {back}
         <div className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-4 py-3 text-sm">
           ⚠️ {d.error}
         </div>
@@ -74,8 +67,6 @@ export default async function ForecastsPage({
 
   return (
     <div className="space-y-6">
-      {back}
-
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">🎯 {d.symbol} Forecasts</h1>

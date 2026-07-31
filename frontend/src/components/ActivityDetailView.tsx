@@ -181,9 +181,6 @@ export default function ActivityDetailView({ data }: { data: ActivityDetail }) {
   return (
     <div className="space-y-6">
       <div className="space-y-2">
-        <Link href={`/symbols/${encodeURIComponent(data.symbol)}`} className="text-sm text-accent-blue hover:underline">
-          ← {data.display_name}
-        </Link>
         <h1 className="text-2xl font-semibold">Activity Detail</h1>
 
         {data.is_alert && (

@@ -15,7 +15,6 @@ const DROPDOWNS: Record<string, Item[]> = {
   ],
   Settings: [
     { href: "/settings/config", label: "⚙️ Configuration" },
-    { href: "/settings/runtime", label: "📊 Runtime Stats" },
     { href: "/settings/logs", label: "🧾 Agent Logs" },
     { href: "/settings/debug", label: "🔍 Debug" },
   ],
@@ -27,8 +26,12 @@ function isActive(pathname: string, href: string, exact = false) {
 }
 
 const linkBase =
-  "rounded-[var(--radius-pill)] px-3 py-1.5 text-text-muted transition-all hover:bg-bg-hover hover:text-text no-underline";
-const linkActive = "text-text";
+  "rounded-[var(--radius-pill)] px-3 py-1.5 transition-all hover:bg-bg-hover no-underline";
+// `!` importance is required so nav links beat the un-layered global `a { color }`
+// rule (otherwise anchors render accent-blue while dropdown buttons render muted).
+function navClass(active: boolean) {
+  return `${linkBase} ${active ? "text-text!" : "text-text-muted! hover:text-text!"}`;
+}
 
 export function TopNav() {
   const pathname = usePathname();
@@ -46,19 +49,19 @@ export function TopNav() {
       </Link>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Link href="/dashboard" className={`${linkBase} ${dashboardActive ? linkActive : ""}`}>
+        <Link href="/dashboard" className={navClass(dashboardActive)}>
           Dashboard
         </Link>
 
         <Dropdown label="Symbols" items={DROPDOWNS.Symbols} active={symbolsActive} pathname={pathname} />
 
-        <Link href="/economics" className={`${linkBase} ${isActive(pathname, "/economics") ? linkActive : ""}`}>
+        <Link href="/economics" className={navClass(isActive(pathname, "/economics"))}>
           Economics
         </Link>
-        <Link href="/chat" className={`${linkBase} ${isActive(pathname, "/chat", true) ? linkActive : ""}`}>
+        <Link href="/chat" className={navClass(isActive(pathname, "/chat", true))}>
           Chat
         </Link>
-        <Link href="/dgi" className={`${linkBase} ${isActive(pathname, "/dgi") ? linkActive : ""}`}>
+        <Link href="/dgi" className={navClass(isActive(pathname, "/dgi"))}>
           DGI Screener
         </Link>
 
@@ -84,7 +87,7 @@ function Dropdown({
   return (
     <div className="group relative">
       <span
-        className={`${linkBase} inline-block cursor-default select-none ${active ? linkActive : ""}`}
+        className={`${navClass(active)} inline-block cursor-default select-none`}
       >
         {label}
       </span>

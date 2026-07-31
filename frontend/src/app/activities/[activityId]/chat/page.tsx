@@ -1,4 +1,3 @@
-import Link from "next/link";
 import ActivityChat from "@/components/ActivityChat";
 import { apiFetch } from "@/lib/api";
 import type { ActivityDetail } from "@/types/activity-detail";
@@ -37,12 +36,6 @@ export default async function ActivityChatPage({
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-semibold">Discuss Activity</h1>
-        <Link
-          href="/"
-          className="inline-block rounded-[var(--radius-pill)] border border-border bg-bg-input px-4 py-2 text-sm text-text-muted transition-colors hover:bg-hover"
-        >
-          ← Back to Dashboard
-        </Link>
         <div className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-4 py-3 text-sm">
           ⚠️ {error ?? "Activity not found"}
         </div>
