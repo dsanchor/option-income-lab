@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { Activity, AgentType } from "@/types/symbol-detail";
 
 const TIME_RANGES = [
@@ -59,6 +60,7 @@ export default function RecentActivities({
   activities: Activity[];
   agentTypes: AgentType[];
 }) {
+  const router = useRouter();
   const [days, setDays] = useState(1);
   const [agent, setAgent] = useState("");
   const [confidence, setConfidence] = useState("");
@@ -149,8 +151,15 @@ export default function RecentActivities({
               const showSupervisor =
                 isWait && sv && ["MODERATE", "STRONG"].includes(String(sv.challenge_strength));
               const conf = String(d.confidence ?? "");
+              const actId = d.id ?? d.activity_id;
               return (
-                <tr key={d.id ?? d.activity_id ?? i} className="border-b border-border/60 last:border-0">
+                <tr
+                  key={actId ?? i}
+                  onClick={actId ? () => router.push(`/activities/${encodeURIComponent(String(actId))}`) : undefined}
+                  className={`border-b border-border/60 last:border-0 ${
+                    actId ? "cursor-pointer transition-colors hover:bg-hover" : ""
+                  }`}
+                >
                   <td className="px-4 py-3 font-mono text-text-muted">
                     {d.timestamp ? String(d.timestamp).slice(0, 19) : "—"}
                   </td>

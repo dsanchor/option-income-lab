@@ -3370,6 +3370,34 @@ async def api_create_activity_from_recommendation(request: Request):
 # REST API — Activity Delete
 # ===========================================================================
 
+@app.get("/api/activities/{activity_id}")
+async def api_activity_detail(request: Request, activity_id: str):
+    """JSON detail for a single activity (mirrors the /activities/{id} page)."""
+    try:
+        cosmos = _get_cosmos(request)
+        activity = cosmos.get_activity_by_id(activity_id)
+        if not activity:
+            return JSONResponse({"error": "Activity not found"},
+                                status_code=404)
+        symbol = activity.get("symbol", "")
+        agent_type = activity.get("agent_type", "")
+        agent_label = AGENT_TYPES.get(agent_type, {}).get("label", agent_type)
+        sym_doc = cosmos.get_symbol(symbol) if symbol else None
+        display_name = sym_doc["display_name"] if sym_doc else symbol
+        return JSONResponse({
+            "activity": _clean_doc(activity),
+            "symbol": symbol,
+            "display_name": display_name,
+            "agent_type": agent_type,
+            "agent_label": agent_label,
+            "is_alert": activity.get("is_alert", False),
+        })
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.delete("/api/activities/{activity_id}")
 async def api_delete_activity(request: Request, activity_id: str):
     try:
