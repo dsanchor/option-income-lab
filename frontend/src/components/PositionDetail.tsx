@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   CartesianGrid,
   Line,
@@ -539,6 +540,30 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
   const posId = position.position_id ?? "";
   const isActive = position.status === "active";
   const source = (position.source ?? {}) as Record<string, unknown>;
+  const router = useRouter();
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function deletePosition() {
+    if (!posId) return;
+    if (!confirm("Delete this position permanently?")) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(
+        `/api/symbols/${encodeURIComponent(symbol)}/positions/${encodeURIComponent(posId)}`,
+        { method: "DELETE", headers: { Accept: "application/json" } },
+      );
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      router.refresh();
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : "Failed to delete");
+      setDeleting(false);
+    }
+  }
 
   const [snapshots, setSnapshots] = useState<Snapshot[] | null>(null);
   const [snapError, setSnapError] = useState<string | null>(null);
@@ -630,6 +655,21 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
             <RollTableView symbol={symbol} positionId={posId} />
           </div>
         </>
+      )}
+
+      {/* Delete */}
+      {posId && (
+        <div className="flex items-center justify-end gap-3 border-t border-dashed border-border pt-3">
+          {deleteError && <span className="text-xs text-accent-red">⚠️ {deleteError}</span>}
+          <button
+            type="button"
+            onClick={deletePosition}
+            disabled={deleting}
+            className="rounded-[var(--radius-pill)] border border-accent-red/40 bg-accent-red/10 px-3 py-1.5 text-xs text-accent-red transition hover:bg-accent-red/20 disabled:opacity-50"
+          >
+            {deleting ? "Deleting…" : "🗑 Delete Position"}
+          </button>
+        </div>
       )}
     </div>
   );

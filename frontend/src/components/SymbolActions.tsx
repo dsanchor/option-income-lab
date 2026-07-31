@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 
 type ToggleKey = "covered_call" | "cash_secured_put" | "buy_tracker" | "telegram_notifications_enabled";
 
@@ -12,6 +13,7 @@ interface Props {
   buy_tracker: boolean;
   telegram_notifications_enabled: boolean;
   isPaused: boolean;
+  nextEarningsDate?: string | null;
 }
 
 const ANALYZE = [
@@ -24,6 +26,7 @@ const ANALYZE = [
 
 export default function SymbolActions(props: Props) {
   const [open, setOpen] = useState(false);
+  const router = useRouter();
   const [state, setState] = useState({
     covered_call: props.covered_call,
     cash_secured_put: props.cash_secured_put,
@@ -32,6 +35,7 @@ export default function SymbolActions(props: Props) {
   });
   const [saving, setSaving] = useState<ToggleKey | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pausing, setPausing] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -41,6 +45,25 @@ export default function SymbolActions(props: Props) {
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
+
+  async function togglePause() {
+    setPausing(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/symbols/${encodeURIComponent(props.symbol)}/pause`, {
+        method: props.isPaused ? "DELETE" : "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed");
+      setPausing(false);
+    }
+  }
 
   async function toggle(key: ToggleKey) {
     const next = !state[key];
@@ -102,10 +125,31 @@ export default function SymbolActions(props: Props) {
           disabled={saving === "telegram_notifications_enabled"} onChange={() => toggle("telegram_notifications_enabled")} />
       </div>
 
-      {props.isPaused && (
-        <span className="rounded-[var(--radius-pill)] border border-accent-orange/40 bg-accent-orange/10 px-3 py-1 text-xs text-accent-orange">
-          ⏸ Paused until earnings
-        </span>
+      {/* Pause / Resume watchlist */}
+      {props.isPaused ? (
+        <button
+          type="button"
+          onClick={togglePause}
+          disabled={pausing}
+          title="Resume covered call, cash-secured put, and buy tracker now"
+          className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border border-accent-green/40 bg-accent-green/10 px-3 py-1.5 text-xs text-accent-green transition hover:bg-accent-green/20 disabled:opacity-50"
+        >
+          ▶ Resume
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={togglePause}
+          disabled={pausing || !props.nextEarningsDate}
+          title={
+            props.nextEarningsDate
+              ? `Pause covered call, cash-secured put, and buy tracker until ${props.nextEarningsDate}`
+              : "No upcoming earnings date found. Sync the calendar first."
+          }
+          className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border border-accent-orange/40 bg-accent-orange/10 px-3 py-1.5 text-xs text-accent-orange transition hover:bg-accent-orange/20 disabled:opacity-50"
+        >
+          ⏸ Pause
+        </button>
       )}
       {error && <span className="text-xs text-accent-red">{error}</span>}
     </div>

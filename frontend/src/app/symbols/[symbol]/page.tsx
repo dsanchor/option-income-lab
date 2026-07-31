@@ -4,6 +4,9 @@ import SymbolActions from "@/components/SymbolActions";
 import RecentActivities from "@/components/RecentActivities";
 import PositionsTable from "@/components/PositionsTable";
 import SymbolSummary from "@/components/SymbolSummary";
+import AddPositionForm from "@/components/AddPositionForm";
+import RtChart from "@/components/RtChart";
+import TradingViewSymbolInfo from "@/components/TradingViewSymbolInfo";
 import type { SymbolDetail, Plan } from "@/types/symbol-detail";
 
 export const dynamic = "force-dynamic";
@@ -75,8 +78,13 @@ export default async function SymbolDetailPage({
           buy_tracker={d.watchlist?.buy_tracker ?? false}
           telegram_notifications_enabled={d.telegram_notifications_enabled ?? false}
           isPaused={d.is_paused ?? false}
+          nextEarningsDate={d.next_earnings_date ?? null}
         />
       </div>
+
+      {/* TradingView symbol info + RT chart */}
+      <TradingViewSymbolInfo symbol={d.symbol} exchange={d.exchange} />
+      <RtChart symbol={d.symbol} exchange={d.exchange} />
 
       {/* Summary (click to open Timing & Score modal) */}
       <SymbolSummary
@@ -88,6 +96,9 @@ export default async function SymbolDetailPage({
 
       {/* Positions */}
       <PositionsTable symbol={symbol} positions={positions} />
+
+      {/* Add position */}
+      <AddPositionForm symbol={symbol} />
 
       {/* Plans */}
       {plans.length > 0 && (
