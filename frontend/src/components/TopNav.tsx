@@ -27,8 +27,8 @@ function isActive(pathname: string, href: string, exact = false) {
 }
 
 const linkBase =
-  "rounded-[var(--radius-pill)] px-3 py-1.5 text-text-muted transition-colors hover:bg-bg-hover hover:text-text no-underline";
-const linkActive = "bg-bg-hover text-text";
+  "rounded-[var(--radius-pill)] px-3 py-1.5 text-text-muted transition-all hover:bg-bg-hover hover:text-text no-underline";
+const linkActive = "bg-bg-hover text-text shadow-[inset_0_0_0_1px_rgba(91,97,255,0.35)]";
 
 export function TopNav() {
   const pathname = usePathname();
@@ -39,9 +39,10 @@ export function TopNav() {
   const settingsActive = isActive(pathname, "/settings");
 
   return (
-    <nav className="sticky top-0 z-[100] flex flex-wrap items-center gap-x-8 gap-y-2 border-b border-border bg-bg-card px-6 py-3">
-      <Link href="/dashboard" className="whitespace-nowrap text-[1.1rem] font-medium text-text no-underline">
-        🧪 Option Income Lab
+    <nav className="sticky top-0 z-[100] flex flex-wrap items-center gap-x-8 gap-y-2 border-b border-border/70 bg-bg-card/80 px-6 py-3 shadow-[0_1px_0_rgba(255,255,255,0.03)] backdrop-blur-xl">
+      <Link href="/dashboard" className="group flex items-center gap-2 whitespace-nowrap text-[1.1rem] font-semibold no-underline">
+        <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-[image:var(--grad-blue)] text-base shadow-[var(--shadow-glow-blue)] transition-transform group-hover:scale-105">🧪</span>
+        <span className="text-gradient">Option Income Lab</span>
       </Link>
 
       <div className="flex flex-wrap items-center gap-2">

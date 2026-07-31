@@ -25,9 +25,9 @@ function num(n: number | null | undefined, digits = 1): string {
 
 function Metric({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
-    <div className="rounded-[var(--radius)] border border-border bg-bg-card px-4 py-3">
+    <div className="surface card-hover px-4 py-3">
       <div className="text-xs uppercase tracking-wide text-text-muted">{label}</div>
-      <div className={`mt-1 font-mono text-lg ${accent ?? ""}`}>{value}</div>
+      <div className={`mt-1 font-mono text-lg font-semibold ${accent ?? ""}`}>{value}</div>
     </div>
   );
 }

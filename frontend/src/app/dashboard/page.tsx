@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
-import { usd, pct, timeAgo } from "@/lib/format";
+import { timeAgo } from "@/lib/format";
+import StatCard from "@/components/StatCard";
+import Reveal from "@/components/Reveal";
 import type { DashboardData, ActivityItem, BannerItem } from "@/types/dashboard";
 
 export const dynamic = "force-dynamic";
@@ -28,66 +30,95 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-8">
+      {/* Header */}
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+          <p className="text-sm text-text-muted">Portfolio exposure &amp; latest agent activity</p>
+        </div>
+        <span
+          className={`inline-flex items-center gap-2 rounded-[var(--radius-pill)] border px-3 py-1.5 text-sm ${
+            d.market_open
+              ? "border-accent-green/40 bg-accent-green/10 text-accent-green"
+              : "border-border bg-bg-input text-text-muted"
+          }`}
+        >
+          <span className={`h-2 w-2 rounded-full ${d.market_open ? "bg-accent-green animate-pulse" : "bg-text-muted"}`} />
+          Market {d.market_open ? "Open" : "Closed"}
+        </span>
+      </div>
+
       {d.banner_items && d.banner_items.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {d.banner_items.map((b: BannerItem, i) => (
-            <div
-              key={i}
-              className="flex items-center gap-2 rounded-[var(--radius-pill)] border border-border bg-bg-card px-3 py-1.5 text-sm"
-              title={[b.category, b.symbol].filter(Boolean).join(" · ")}
-            >
-              {b.emoji && <span>{b.emoji}</span>}
-              {b.symbol && <span className="font-mono font-semibold">{b.symbol}</span>}
-              {b.text && <span className="text-text-muted">{b.text}</span>}
-            </div>
+            <Reveal key={i} index={i}>
+              <div
+                className="flex items-center gap-2 rounded-[var(--radius-pill)] border border-border bg-bg-card/70 px-3 py-1.5 text-sm backdrop-blur card-hover"
+                title={[b.category, b.symbol].filter(Boolean).join(" · ")}
+              >
+                {b.emoji && <span>{b.emoji}</span>}
+                {b.symbol && <span className="font-mono font-semibold">{b.symbol}</span>}
+                {b.text && <span className="text-text-muted">{b.text}</span>}
+              </div>
+            </Reveal>
           ))}
         </div>
       )}
 
       {/* Summary cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Card label="Calls Exposure" value={`$${usd(d.total_call_exposure)}`} accent="text-accent-blue" />
-        <Card label="Puts Committed" value={`$${usd(d.total_put_exposure)}`} accent="text-accent-blue" />
-        <Card
-          label="Avg RoC · annualized (open)"
-          value={pct(roc)}
-          accent={roc >= 0 ? "text-accent-green" : "text-accent-red"}
-        />
+        <Reveal index={0}>
+          <StatCard label="Calls Exposure" value={d.total_call_exposure ?? 0} prefix="$" tone="blue" icon="📞" />
+        </Reveal>
+        <Reveal index={1}>
+          <StatCard label="Puts Committed" value={d.total_put_exposure ?? 0} prefix="$" tone="blue" icon="🛡️" />
+        </Reveal>
+        <Reveal index={2}>
+          <StatCard
+            label="Avg RoC · annualized (open)"
+            value={roc}
+            suffix="%"
+            decimals={1}
+            tone={roc >= 0 ? "green" : "red"}
+            icon="📈"
+          />
+        </Reveal>
       </div>
 
       {/* Secondary counters */}
       <div className="grid gap-4 sm:grid-cols-3">
-        <Card label="Symbols" value={String(d.symbol_count ?? 0)} />
-        <Card label="Active Positions" value={String(d.position_count ?? 0)} />
-        <Card
-          label="Market"
-          value={d.market_open ? "Open" : "Closed"}
-          accent={d.market_open ? "text-accent-green" : "text-text-muted"}
-        />
+        <Reveal index={0}>
+          <StatCard label="Symbols" value={d.symbol_count ?? 0} tone="purple" icon="📊" />
+        </Reveal>
+        <Reveal index={1}>
+          <StatCard label="Active Positions" value={d.position_count ?? 0} tone="orange" icon="🎯" />
+        </Reveal>
+        <Reveal index={2}>
+          <StatCard
+            label="Market"
+            display={d.market_open ? "Open" : "Closed"}
+            tone={d.market_open ? "green" : "neutral"}
+            icon={d.market_open ? "🟢" : "⚪"}
+          />
+        </Reveal>
       </div>
 
       {/* Recent activity */}
       <section>
-        <h2 className="mb-3 text-lg font-medium">Recent Activity</h2>
+        <h2 className="mb-3 text-lg font-semibold">Recent Activity</h2>
         {d.activity && d.activity.length > 0 ? (
-          <div className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border bg-bg-card">
+          <div className="surface table-modern divide-y divide-border/70 overflow-hidden">
             {d.activity.slice(0, 20).map((a: ActivityItem, i) => (
               <ActivityRow key={a.id ?? i} a={a} />
             ))}
           </div>
         ) : (
-          <p className="text-sm text-text-muted">No recent activity.</p>
+          <div className="surface p-8 text-center text-sm text-text-muted">
+            <div className="mb-1 text-2xl">💤</div>
+            No recent activity yet.
+          </div>
         )}
       </section>
-    </div>
-  );
-}
-
-function Card({ label, value, accent }: { label: string; value: string; accent?: string }) {
-  return (
-    <div className="rounded-[var(--radius-card)] border border-border bg-bg-card p-5">
-      <div className={`font-mono text-3xl ${accent ?? "text-text"}`}>{value}</div>
-      <div className="mt-1 text-sm text-text-muted">{label}</div>
     </div>
   );
 }
@@ -98,7 +129,10 @@ function ActivityRow({ a }: { a: ActivityItem }) {
     <div className="flex items-center justify-between gap-3 px-4 py-3">
       <div className="flex min-w-0 items-center gap-3">
         {a.symbol && (
-          <Link href={`/symbols/${a.symbol}`} className="font-mono font-semibold text-text no-underline hover:underline">
+          <Link
+            href={`/symbols/${a.symbol}`}
+            className="rounded-md bg-bg-input px-2 py-0.5 font-mono text-sm font-semibold text-text no-underline transition-colors hover:bg-bg-hover"
+          >
             {a.symbol}
           </Link>
         )}
