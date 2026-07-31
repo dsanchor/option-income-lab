@@ -4,6 +4,7 @@ import Reveal from "@/components/Reveal";
 import DashboardBanner from "@/components/DashboardBanner";
 import DashboardAgentTables from "@/components/DashboardAgentTables";
 import DashboardActivity from "@/components/DashboardActivity";
+import AutoRefresh from "@/components/AutoRefresh";
 import type { DashboardData } from "@/types/dashboard";
 
 export const dynamic = "force-dynamic";
@@ -33,6 +34,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-8">
+      <AutoRefresh />
       {/* Header */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>

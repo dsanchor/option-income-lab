@@ -2267,7 +2267,35 @@ async def api_dashboard(request: Request):
     return {**data, "market_open": market_open}
 
 
-def _compute_dashboard_data(cosmos) -> Dict[str, Any]:
+@app.get("/api/dashboard/status")
+async def api_dashboard_status(request: Request):
+    """Lightweight change-signature for the dashboard (BFF polling).
+
+    Returns per-agent last_run timestamps plus the latest activity
+    timestamp. The frontend polls this cheap endpoint and only re-fetches
+    the full dashboard when the signature changes — avoiding constant heavy
+    reloads. Reads in-memory scheduler state + a single TOP 1 activity query.
+    """
+    agents: Dict[str, Any] = {}
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is not None and getattr(scheduler, "registry", None) is not None:
+        try:
+            for task in scheduler.registry.get_all_task_metadata():
+                agents[task["name"]] = task.get("last_run")
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    latest_activity = None
+    cosmos = getattr(request.app.state, "cosmos", None)
+    if cosmos is not None:
+        try:
+            recent = cosmos.get_all_activities(limit=1)
+            if recent:
+                latest_activity = recent[0].get("timestamp")
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    return JSONResponse({"agents": agents, "latest_activity": latest_activity})
     """Shared dashboard computation used by both the HTML page and the JSON API.
 
     Returns the data-only context (no `request`); callers add framing.
