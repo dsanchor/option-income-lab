@@ -3913,12 +3913,12 @@ async def settings_config_page(request: Request):
     )
 
 
-@app.post("/settings/config", response_class=HTMLResponse)
-async def settings_config_save(request: Request):
-    """Save configuration settings."""
-    form = await request.form()
+def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
+    """Core settings-config apply logic, shared by the HTML form route and the
+    JSON API route. ``form`` is any object exposing ``.get(key, default)``
+    (Starlette ``FormData`` for the form route, or a small dict-like wrapper for
+    JSON). Booleans are represented as the string ``"true"`` when set."""
     saved: List[str] = []
-    cosmos = getattr(request.app.state, "cosmos", None)
 
     # Monitoring agent enabled toggle
     monitoring_enabled = form.get("monitoring_enabled") == "true"
@@ -4276,10 +4276,52 @@ async def settings_config_save(request: Request):
         except (ValueError, KeyError):
             pass
 
+    return saved
+
+
+@app.post("/settings/config", response_class=HTMLResponse)
+async def settings_config_save(request: Request):
+    """Save configuration settings (HTML form)."""
+    form = await request.form()
+    cosmos = getattr(request.app.state, "cosmos", None)
+    saved = _apply_settings_config(request, cosmos, form)
     return templates.TemplateResponse(
         "settings_config.html",
         _build_settings_config_context(request, cosmos, saved=saved),
     )
+
+
+@app.get("/api/settings/config")
+async def api_settings_config(request: Request):
+    """Configuration settings context (JSON) for the Next.js frontend."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    ctx = _build_settings_config_context(request, cosmos)
+    ctx.pop("request", None)
+    return JSONResponse(ctx)
+
+
+@app.post("/api/settings/config")
+async def api_settings_config_save(request: Request):
+    """Save configuration settings (JSON). The body mirrors the form field
+    names; booleans are accepted as JSON booleans. Returns the list of saved
+    sections."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    class _JsonForm:
+        def get(self, key, default=""):
+            if key not in body:
+                return default
+            v = body[key]
+            if isinstance(v, bool):
+                return "true" if v else "false"
+            return str(v)
+
+    saved = _apply_settings_config(request, cosmos, _JsonForm())
+    return JSONResponse({"success": True, "saved": saved})
 
 
 @app.get("/settings/runtime", response_class=HTMLResponse)
@@ -4310,6 +4352,36 @@ async def settings_runtime_page(request: Request):
 
     return templates.TemplateResponse("settings_runtime.html", {
         "request": request,
+        "telemetry_stats": telemetry_stats,
+        "cache_stats": cache_stats,
+        "recent_errors": recent_errors,
+    })
+
+
+@app.get("/api/settings/runtime")
+async def api_settings_runtime(request: Request):
+    """Runtime stats (JSON): telemetry, options-chain cache, recent errors."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    telemetry_stats: dict = {}
+    recent_errors: list = []
+    if cosmos:
+        try:
+            telemetry_stats = cosmos.get_telemetry_stats()
+        except Exception:
+            pass
+        try:
+            recent_errors = cosmos.get_recent_fetch_errors(limit=10)
+        except Exception:
+            pass
+
+    cache_stats: dict = {}
+    try:
+        from src.options_chain_cache import get_options_chain_cache
+        cache_stats = get_options_chain_cache().stats()
+    except Exception:
+        pass
+
+    return JSONResponse({
         "telemetry_stats": telemetry_stats,
         "cache_stats": cache_stats,
         "recent_errors": recent_errors,
@@ -4568,6 +4640,45 @@ async def settings_debug_page(request: Request):
     
     return templates.TemplateResponse("settings_debug.html", {
         "request": request,
+        "cosmos_endpoint": cosmos_endpoint,
+        "cosmos_database": cosmos_database,
+        "cosmos_status": cosmos_status,
+        "cosmos_error": cosmos_error,
+        "symbols": symbols,
+        "cache_stats": cache_stats,
+    })
+
+
+@app.get("/api/settings/debug")
+async def api_settings_debug(request: Request):
+    """Debug diagnostics (JSON): Cosmos connection info, provider cache, symbols."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    config = _load_config()
+    cosmos_endpoint = _resolve_env(config.get("cosmosdb", {}).get("endpoint", ""))
+    cosmos_database = config.get("cosmosdb", {}).get("database", "stock-options-manager")
+    cosmos_status = "Connected" if cosmos else "Not connected"
+    cosmos_error = getattr(request.app.state, "cosmos_error", None)
+
+    provider = getattr(request.app.state, "yf_provider", None)
+    if provider:
+        cache_stats = {
+            "total_entries": len(provider._cache),
+            "symbols": list(provider._cache.keys()),
+        }
+    else:
+        cache_stats = {"total_entries": 0, "symbols": []}
+
+    symbols = []
+    if cosmos:
+        try:
+            symbols = [
+                {"symbol": s.get("symbol"), "display_name": s.get("display_name", s.get("symbol"))}
+                for s in cosmos.list_symbols()
+            ]
+        except Exception:
+            symbols = []
+
+    return JSONResponse({
         "cosmos_endpoint": cosmos_endpoint,
         "cosmos_database": cosmos_database,
         "cosmos_status": cosmos_status,
