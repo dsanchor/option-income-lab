@@ -2,6 +2,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import PositionDetail from "@/components/PositionDetail";
 import type { Position } from "@/types/symbol-detail";
 
 const STATUS_FILTERS = [
@@ -70,6 +71,7 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
   const [closeFor, setCloseFor] = useState<string | null>(null);
   const [notesFor, setNotesFor] = useState<string | null>(null);
   const [notesDraft, setNotesDraft] = useState("");
+  const [detailsFor, setDetailsFor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -330,36 +332,56 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
                       )}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      {isActive && posId ? (
-                        <div className="flex justify-end gap-1">
+                      <div className="flex justify-end gap-1">
+                        {isActive && posId && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = rollFor === posId ? null : posId;
+                                resetEditors();
+                                setRollFor(next);
+                              }}
+                              className="rounded-[var(--radius-pill)] border border-border px-2 py-0.5 text-xs text-text-muted hover:text-text"
+                            >
+                              Roll
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = closeFor === posId ? null : posId;
+                                resetEditors();
+                                setCloseFor(next);
+                              }}
+                              className="rounded-[var(--radius-pill)] border border-border px-2 py-0.5 text-xs text-text-muted hover:text-text"
+                            >
+                              Close
+                            </button>
+                          </>
+                        )}
+                        {posId ? (
                           <button
                             type="button"
-                            onClick={() => {
-                              const next = rollFor === posId ? null : posId;
-                              resetEditors();
-                              setRollFor(next);
-                            }}
+                            onClick={() => setDetailsFor((cur) => (cur === posId ? null : posId))}
                             className="rounded-[var(--radius-pill)] border border-border px-2 py-0.5 text-xs text-text-muted hover:text-text"
+                            aria-expanded={detailsFor === posId}
                           >
-                            Roll
+                            {detailsFor === posId ? "▲ Details" : "▼ Details"}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const next = closeFor === posId ? null : posId;
-                              resetEditors();
-                              setCloseFor(next);
-                            }}
-                            className="rounded-[var(--radius-pill)] border border-border px-2 py-0.5 text-xs text-text-muted hover:text-text"
-                          >
-                            Close
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="text-text-muted">—</span>
-                      )}
+                        ) : (
+                          <span className="text-text-muted">—</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
+
+                  {detailsFor === posId && posId && (
+                    <tr className="border-b border-border/60 bg-bg-input/30">
+                      <td colSpan={COLS} className="px-4 py-4">
+                        <PositionDetail symbol={symbol} position={p} />
+                      </td>
+                    </tr>
+                  )}
 
                   {rollFor === posId && (
                     <tr className="border-b border-border/60 bg-bg-input/40">

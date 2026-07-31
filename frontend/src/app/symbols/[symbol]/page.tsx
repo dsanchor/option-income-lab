@@ -4,6 +4,7 @@ import { usd, timeAgo } from "@/lib/format";
 import SymbolActions from "@/components/SymbolActions";
 import RecentActivities from "@/components/RecentActivities";
 import PositionsTable from "@/components/PositionsTable";
+import SymbolCharts from "@/components/SymbolCharts";
 import type { SymbolDetail, Plan } from "@/types/symbol-detail";
 
 export const dynamic = "force-dynamic";
@@ -109,6 +110,9 @@ export default async function SymbolDetailPage({
 
       {/* Positions */}
       <PositionsTable symbol={symbol} positions={positions} />
+
+      {/* Timing & score detail (radar + timing history + fundamentals) */}
+      <SymbolCharts symbol={symbol} enrichment={enr} />
 
       {/* Plans */}
       {plans.length > 0 && (

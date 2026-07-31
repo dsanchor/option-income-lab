@@ -276,12 +276,20 @@ export default function ActivityDetailView({ data }: { data: ActivityDetail }) {
       {a.alpha_view && <AlphaPanel av={a.alpha_view} activity={a} />}
 
       {a.id && (
-        <ActivityActions
-          symbol={data.symbol}
-          activityId={a.id}
-          agentType={data.agent_type}
-          isAlert={data.is_alert}
-        />
+        <div className="flex flex-wrap items-center gap-3">
+          <ActivityActions
+            symbol={data.symbol}
+            activityId={a.id}
+            agentType={data.agent_type}
+            isAlert={data.is_alert}
+          />
+          <Link
+            href={`/activities/${encodeURIComponent(a.id)}/chat`}
+            className="rounded-[var(--radius-pill)] border border-border bg-bg-input px-4 py-2 text-sm text-text transition-colors hover:bg-hover"
+          >
+            💬 Discuss
+          </Link>
+        </div>
       )}
     </div>
   );
