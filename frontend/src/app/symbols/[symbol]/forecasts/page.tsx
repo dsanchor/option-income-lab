@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
+import ForecastCharts from "@/components/ForecastCharts";
 import { HORIZONS } from "@/types/forecasts";
 import type { ForecastsResponse, ForecastRow, Horizon } from "@/types/forecasts";
 
@@ -111,6 +112,9 @@ export default async function ForecastsPage({
           accent="text-accent-purple"
         />
       </div>
+
+      {/* Charts: projection fan + calibration hit-rate */}
+      <ForecastCharts rows={rows} hitRate={d.hit_rate ?? {}} />
 
       {/* Endpoint hit-rate + averages per horizon */}
       <section className="space-y-3">
