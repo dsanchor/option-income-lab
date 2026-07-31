@@ -62,7 +62,7 @@ Container Apps environment and share a single CosmosDB:
 
 | Tier | Stack |
 |------|-------|
-| **Frontend (`web`)** | Next.js 16 (App Router, Turbopack), React 19, TypeScript, Tailwind CSS v4, recharts. `output: "standalone"`, Node 24 runtime, port **3000**. |
+| **Frontend (`web`)** | Next.js 16 (App Router, Turbopack), React 19, TypeScript, Tailwind CSS v4. Data: TanStack Query (client cache/refresh); charts: recharts; motion (Framer Motion) for transitions; lucide-react icons; sonner toasts; countup.js number animation. `output: "standalone"`, Node 24 runtime, port **3000**. |
 | **Backend (`api`)** | Python 3.12, FastAPI + Uvicorn, APScheduler, `yfinance`, Playwright (Chromium), Azure Cosmos SDK. Port **8000**. |
 | **Data** | Azure CosmosDB (NoSQL, serverless) — 6 containers, symbol-centric partitioning. |
 | **AI** | Azure AI Foundry (default) **or** Google Gemini, selected via `AI_PROVIDER`. |

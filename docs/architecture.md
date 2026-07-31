@@ -269,3 +269,12 @@ frontend/
 ├── .env.example                          # API_BASE_URL, etc.
 └── Dockerfile                            # web image
 ```
+
+**Frontend tech stack (all in the `web` tier):** Next.js 16 (App Router, Turbopack, `output:
+"standalone"`) + React 19 + TypeScript render the UI; **route handlers under `app/api/**` are the
+BFF** — the only code that reads `API_BASE_URL` and reaches the internal `api`. Styling is
+**Tailwind CSS v4** driven by design tokens in `globals.css`. Client data fetching/caching uses
+**TanStack Query**; charts use **recharts**; **motion** (Framer Motion) handles entrance/modal
+transitions; **lucide-react** provides the nav icon set; **sonner** renders global toasts; and
+**countup.js** animates KPI numbers. Client components fetch only same-origin `/api/*` routes —
+never the `api` directly.
