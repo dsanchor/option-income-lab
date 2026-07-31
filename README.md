@@ -198,8 +198,8 @@ export MODEL_DEPLOYMENT="gpt-5.1"
 # export MODEL_DEPLOYMENT="gemini-2.0-flash"
 
 python run.py                       # FastAPI + in-process scheduler on :8000
-# python run.py --api-only          # JSON-only (HTML blocked), scheduler still runs — api-container mode
-# python run.py --web-only          # web/API without the scheduler
+# python run.py --web-only          # JSON API without the scheduler
+# python run.py --scheduler-only    # scheduler only, no API server
 ```
 
 ### 2. Frontend — `web`
@@ -272,7 +272,6 @@ Env vars are **per component**. The `api` takes the backend vars; the `web` take
 | `GOOGLE_API_KEY` | `AI_PROVIDER=gemini` | Google AI Studio API key |
 | `TELEGRAM_BOT_TOKEN` | Optional | Telegram bot token (notifications) |
 | `TELEGRAM_CHAT_ID` | Optional | Telegram chat ID (notifications) |
-| `API_ONLY` | Optional | `1` (or `run.py --api-only`) blocks the legacy HTML routes so the container serves JSON only — the mode used by the `api` container. The in-process scheduler still runs (use `--web-only` for a no-scheduler instance). |
 
 **`web` (`frontend/`):**
 
@@ -280,7 +279,7 @@ Env vars are **per component**. The `api` takes the backend vars; the `web` take
 |---|---|---|
 | `API_BASE_URL` | Always | Base URL of the internal `api` (e.g. `https://<api-app>.internal.<env>.<region>.azurecontainerapps.io`). Defaults to `http://localhost:8000` for local dev. |
 
-→ [Full deployment walkthrough (CosmosDB provisioning, cutover/rollback, GHCR auth)](docs/deployment.md)
+→ [Full deployment walkthrough (CosmosDB provisioning, scheduler notes, GHCR auth)](docs/deployment.md)
 
 ---
 

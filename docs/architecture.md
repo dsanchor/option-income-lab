@@ -184,7 +184,7 @@ stock-options-manager/
 ```
 backend/
 ├── config.yaml                           # Configuration (AI provider, CosmosDB, scheduling, context limits)
-├── run.py                                # Entry point (web + scheduler; --api-only / --web-only / --scheduler-only)
+├── run.py                                # Entry point (JSON API + scheduler; --web-only / --scheduler-only)
 ├── src/
 │   ├── __init__.py
 │   ├── main.py                           # Scheduler with immediate + periodic runs
@@ -242,11 +242,9 @@ backend/
 ├── scripts/
 │   ├── provision_cosmosdb.sh             # Azure CosmosDB provisioning via az CLI
 │   └── backfill_price_forecast.py        # Historical price-forecast rebuild (+ other maintenance scripts)
-├── web/                                  # FastAPI app (JSON /api/* + legacy Jinja HTML routes)
+├── web/                                  # FastAPI app (JSON /api/* only — no HTML)
 │   ├── __init__.py
-│   ├── app.py                            # FastAPI app — JSON API routes + CosmosDB queries (HTML routes legacy, superseded by frontend/)
-│   ├── templates/                        # Legacy Jinja2 HTML templates (kept as parity reference; new UI lives in frontend/)
-│   └── static/                           # Legacy CSS/JS for the Jinja templates
+│   └── app.py                            # FastAPI app — JSON API routes + CosmosDB queries (UI lives in frontend/)
 ├── tests/
 ├── run_web.py                            # Web-only entry point (legacy convenience)
 ├── requirements.txt

@@ -309,35 +309,16 @@ az containerapp update --name "$API_APP" --resource-group "$RESOURCE_GROUP" --im
 az containerapp update --name "$WEB_APP" --resource-group "$RESOURCE_GROUP" --image "$WEB_IMAGE"
 ```
 
-## Cutover & Rollback
+## Scheduler
 
-The legacy monolith app (`$CONTAINER_APP`) keeps serving HTML until the new `web` reaches parity.
-Cut over by scaling the monolith to zero once the new stack is verified:
+Both the `api` container and any additional instance you run include the **in-process
+scheduler** (APScheduler). To avoid duplicate cron runs (double agent executions /
+notifications), only **one** instance should run the scheduler at a time:
 
-```bash
-# 1. Deploy api + web (above) alongside the still-running monolith.
-
-# 2. Smoke-test the new stack:
-#    - web public URL loads and authenticates
-#    - a few pages render (dashboard, symbols, DGI, settings)
-#    - api is NOT publicly reachable (internal ingress) — confirm the monolith/web reach it only internally
-
-# 3. Cutover — scale the old monolith to zero:
-az containerapp update --name "$CONTAINER_APP" --resource-group "$RESOURCE_GROUP" \
-  --min-replicas 0 --max-replicas 0
-
-# 4. ROLLBACK (if the new stack misbehaves) — scale the monolith back up:
-az containerapp update --name "$CONTAINER_APP" --resource-group "$RESOURCE_GROUP" \
-  --min-replicas 1 --max-replicas 1
-#    Optionally scale web to zero while investigating:
-az containerapp update --name "$WEB_APP" --resource-group "$RESOURCE_GROUP" \
-  --min-replicas 0 --max-replicas 0
-```
-
-> **Scheduler note:** both the monolith and the new `api` run the in-process scheduler. To avoid
-> duplicate cron runs (double agent executions / notifications), only ONE of them should have the
-> scheduler active at a time. Run the `api` with `--api-only` (or `API_ONLY=1`) while the monolith
-> still owns the scheduler, then flip once you cut over.
+- Run the primary `api` normally (`python run.py`) — API + scheduler.
+- Any extra API replica used purely to serve requests should start with `--web-only`
+  (JSON API, no scheduler). Keep `--min-replicas`/`--max-replicas` at `1` on the
+  scheduler-owning app so the cron never runs concurrently.
 
 ---
 
@@ -360,7 +341,6 @@ Telegram, scheduler); the `web` container takes only `API_BASE_URL`.
 | `GOOGLE_API_KEY` | Gemini | Google AI API key from [AI Studio](https://aistudio.google.com/apikey) |
 | `TELEGRAM_BOT_TOKEN` | Optional | Telegram bot token (if notifications enabled) |
 | `TELEGRAM_CHAT_ID` | Optional | Telegram chat ID (if notifications enabled) |
-| `API_ONLY` | Optional | Set `1` (or run `run.py --api-only`) to serve JSON only and block legacy HTML routes. Use while the monolith still owns the scheduler to avoid duplicate cron runs. |
 
 **`web` (`frontend/`):**
 

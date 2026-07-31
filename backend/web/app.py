@@ -17,9 +17,7 @@ from croniter import croniter
 from fastapi import FastAPI, Request, Query
 
 from src.market_hours import is_us_market_open
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse
 
 from src.cosmos_db import is_watchlist_paused
 
@@ -470,66 +468,12 @@ def _format_time(dt: datetime) -> str:
 # ---------------------------------------------------------------------------
 app = FastAPI(title="Option Income Lab")
 
-# When API_ONLY is set (api container), the backend serves JSON only: HTML page
-# routes are blocked so the Next.js frontend owns the UI. Off by default, so the
-# legacy monolith keeps serving HTML until the frontend reaches parity.
-API_ONLY = os.getenv("API_ONLY", "").lower() in ("1", "true", "yes")
-
-# Paths that remain available even in API-only mode.
-_API_ONLY_ALLOWED_PREFIXES = ("/api", "/static", "/healthz", "/docs", "/redoc", "/openapi.json")
-
 
 @app.get("/healthz", include_in_schema=False)
 async def healthz():
     """Liveness probe — no external dependencies (safe for Container Apps)."""
-    return {"status": "ok", "api_only": API_ONLY}
+    return {"status": "ok"}
 
-
-if API_ONLY:
-    @app.middleware("http")
-    async def _block_html_routes(request: Request, call_next):
-        path = request.url.path
-        if path == "/" or not path.startswith(_API_ONLY_ALLOWED_PREFIXES):
-            return JSONResponse({"detail": "Not found (api-only mode)"}, status_code=404)
-        return await call_next(request)
-
-app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")),
-          name="static")
-templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-
-
-def _json_pretty(value: Any) -> str:
-    return json.dumps(value, indent=2, default=str)
-
-templates.env.filters["json_pretty"] = _json_pretty
-
-
-def _time_ago(ts_str: str) -> str:
-    """Convert ISO timestamp to 'Xh Ym ago' format."""
-    if not ts_str:
-        return ""
-    try:
-        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        delta = datetime.now(timezone.utc) - dt.astimezone(timezone.utc)
-        total_minutes = int(delta.total_seconds() // 60)
-        if total_minutes < 0:
-            return "just now"
-        hours = total_minutes // 60
-        minutes = total_minutes % 60
-        if hours > 0 and minutes > 0:
-            return f"{hours}h {minutes}m ago"
-        elif hours > 0:
-            return f"{hours}h ago"
-        elif minutes > 0:
-            return f"{minutes}m ago"
-        else:
-            return "just now"
-    except (ValueError, TypeError):
-        return ""
-
-templates.env.filters["time_ago"] = _time_ago
 
 async def init_cosmos(app_instance):
     """Initialise CosmosDB on the given FastAPI app. Safe to call from
@@ -2213,41 +2157,6 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
     return agent_tables, grand_totals
 
 
-@app.get("/", response_class=HTMLResponse)
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    cosmos = getattr(request.app.state, "cosmos", None)
-
-    market_open = is_us_market_open()
-
-    empty_ctx = {
-        "request": request,
-        "agent_tables": [],
-        "grand_totals": {"today": 0, "week": 0, "month": 0, "total": 0},
-        "symbol_count": 0, "position_count": 0, "activity": [],
-        "total_call_exposure": 0, "total_put_exposure": 0,
-        "open_roc_annualized": 0,
-        "banner_items": [],
-        "agent_types": AGENT_TYPES,
-        "market_open": market_open,
-    }
-    if cosmos is None:
-        error_detail = getattr(request.app.state, "cosmos_error", "unknown")
-        empty_ctx["error"] = f"CosmosDB not available: {error_detail}"
-        return templates.TemplateResponse("dashboard.html", empty_ctx)
-
-    try:
-        data = _compute_dashboard_data(cosmos)
-    except Exception as e:
-        empty_ctx["error"] = f"CosmosDB query failed: {e}"
-        return templates.TemplateResponse("dashboard.html", empty_ctx)
-
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        **data,
-        "agent_types": AGENT_TYPES,
-        "market_open": market_open,
-    })
 
 
 @app.get("/api/dashboard")
@@ -2384,82 +2293,20 @@ def _compute_dashboard_data(cosmos) -> Dict[str, Any]:
 # Page Routes — Economics
 # ===========================================================================
 
-@app.get("/economics", response_class=HTMLResponse)
-async def economics_page(request: Request):
-    return templates.TemplateResponse("economics.html", {
-        "request": request,
-    })
 
 
 # ===========================================================================
 # Page Routes — Plans
 # ===========================================================================
 
-@app.get("/plans", response_class=HTMLResponse)
-async def plans_page(request: Request):
-    cosmos = getattr(request.app.state, "cosmos", None)
-    symbols = cosmos.list_symbols() if cosmos else []
-    plans = _sort_by_updated_at_desc(cosmos.get_plans() if cosmos else [])
-    return templates.TemplateResponse("plans.html", {
-        "request": request,
-        "plans": plans,
-        "symbols": sorted(
-            s.get("symbol", "")
-            for s in symbols
-            if s.get("symbol")
-        ),
-    })
 
 
 # ===========================================================================
 # Page Routes — Symbols
 # ===========================================================================
 
-@app.get("/symbols", response_class=HTMLResponse)
-async def symbols_page(request: Request):
-    cosmos = getattr(request.app.state, "cosmos", None)
-    symbols = cosmos.list_symbols() if cosmos else []
-    for s in symbols:
-        active_positions = [p for p in s.get("positions", [])
-                           if p.get("status") == "active"]
-        s["_active_count"] = len(active_positions)
-        s["_shares_in_use"] = len(active_positions) * 100
-        s["_in_calls"] = sum(100 for p in active_positions
-                            if p.get("type") == "call")
-        s["_put_exposure"] = sum(
-            float(p.get("strike", 0)) * 100
-            for p in active_positions if p.get("type") == "put"
-        )
-        s["_call_exposure"] = sum(
-            float(p.get("strike", 0)) * 100
-            for p in active_positions if p.get("type") == "call"
-        )
-    # Sort by enrichment quality_score descending (enriched first)
-    symbols.sort(
-        key=lambda s: (s.get("enrichment", {}) or {}).get("quality_score", -1),
-        reverse=True,
-    )
-    # Most recent enrichment timestamp for "last update" display
-    enrichment_ts = max(
-        ((s.get("enrichment") or {}).get("last_updated", "") for s in symbols),
-        default=""
-    )
-    # Aggregate exposure totals
-    total_call_exposure = sum(s.get("_call_exposure", 0) for s in symbols)
-    total_put_exposure = sum(s.get("_put_exposure", 0) for s in symbols)
-
-    return templates.TemplateResponse("symbols.html", {
-        "request": request,
-        "symbols": symbols,
-        "last_update_ts": enrichment_ts,
-        "total_call_exposure": total_call_exposure,
-        "total_put_exposure": total_put_exposure,
-    })
 
 
-@app.get("/symbols/calendar", response_class=HTMLResponse)
-async def symbols_calendar_page(request: Request):
-    return templates.TemplateResponse("calendar.html", {"request": request})
 
 
 @app.get("/api/calendar")
@@ -2574,142 +2421,12 @@ async def api_calendar_refresh(request: Request):
             "calendar_container_available": cosmos.calendar_container is not None}
 
 
-@app.get("/symbols/{symbol}", response_class=HTMLResponse)
-async def symbol_detail_page(request: Request, symbol: str):
-    cosmos = getattr(request.app.state, "cosmos", None)
-    if cosmos is None:
-        error_detail = getattr(request.app.state, "cosmos_error", "unknown")
-        return HTMLResponse(f"CosmosDB not available: {error_detail}",
-                            status_code=503)
-
-    doc = cosmos.get_symbol(symbol.upper())
-    if not doc:
-        return HTMLResponse(f"Symbol {symbol} not found", status_code=404)
-    plans = _sort_by_updated_at_desc(cosmos.get_plans(symbol.upper()))
-
-    # Gather recent activities AND alerts across all agent types (unified list)
-    activities: List[Dict] = []
-    for agent_type, meta in AGENT_TYPES.items():
-        # Get non-alert activities
-        acts = cosmos.get_recent_activities(
-            symbol.upper(), agent_type, max_entries=50)
-        for d in acts:
-            d["_agent_key"] = str(d.get("agent_type", ""))
-            d["_agent_label"] = meta["label"]
-        activities.extend(acts)
-        
-        # Get alerts
-        alts = cosmos.get_recent_alerts(
-            symbol.upper(), agent_type, max_entries=30)
-        for s in alts:
-            s["_agent_key"] = str(s.get("agent_type", ""))
-            s["_agent_label"] = meta["label"]
-        activities.extend(alts)
-    
-    # Sort unified list by timestamp and cap at ~80 items
-    activities.sort(key=lambda d: d.get("timestamp", ""), reverse=True)
-    activities = activities[:80]
-
-    # Enrich open positions with latest monitor data (assignment_risk, moneyness)
-    _monitor_agents = {"open_call_monitor", "open_put_monitor"}
-    latest_monitor: Dict[str, Dict] = {}  # position_id -> latest activity
-    for act in activities:
-        pid = act.get("position_id")
-        if pid and act.get("agent_type") in _monitor_agents and pid not in latest_monitor:
-            latest_monitor[pid] = act
-    for pos in doc.get("positions", []):
-        mon = latest_monitor.get(pos.get("position_id"))
-        if mon:
-            pos["_assignment_risk"] = mon.get("assignment_risk")
-            pos["_moneyness"] = mon.get("moneyness")
-        
-        # Normalize premium and buyback for display (same logic as economics)
-        # This ensures the UI shows values consistently with the economics page
-        source = pos.get("source")
-        if not isinstance(source, dict):
-            source = {}
-        pos["_display_premium"] = _parse_numeric(source.get("premium"))
-        pos["_display_buyback"] = _parse_numeric(pos.get("buyback_cost"))
-
-    # Gather alerts separately for latest_sell_alerts computation
-    alerts: List[Dict] = []
-    for agent_type, meta in AGENT_TYPES.items():
-        alts = cosmos.get_recent_alerts(
-            symbol.upper(), agent_type, max_entries=30)
-        for s in alts:
-            s["_agent_label"] = meta["label"]
-        alerts.extend(alts)
-    alerts.sort(key=lambda s: s.get("timestamp", ""), reverse=True)
-
-    # Latest alert per watchlist agent type (for position pre-fill where relevant)
-    latest_sell_alerts: Dict[str, Dict | None] = {
-        "covered_call": None,
-        "cash_secured_put": None,
-        "buy_tracker": None,
-    }
-    for alt in alerts:
-        at = alt.get("agent_type")
-        if at in latest_sell_alerts and latest_sell_alerts[at] is None:
-            latest_sell_alerts[at] = {
-                "agent_type": at,
-                "strike": alt.get("strike"),
-                "expiration": alt.get("expiration"),
-                "premium": alt.get("premium"),
-                "confidence": alt.get("confidence"),
-                "reason": alt.get("reason"),
-                "iv": alt.get("iv"),
-                "underlying_price": alt.get("underlying_price"),
-                "risk_flags": alt.get("risk_flags", []),
-                "activity_id": alt.get("activity_id"),
-                "timestamp": alt.get("timestamp"),
-            }
-
-    # Compute summary stats for the symbol detail summary table
-    active_positions = [p for p in doc.get("positions", [])
-                        if p.get("status") == "active"]
-    summary_in_calls = sum(100 for p in active_positions if p.get("type") == "call")
-    summary_put_exposure = sum(
-        float(p.get("strike", 0)) * 100
-        for p in active_positions if p.get("type") == "put"
-    )
-    next_earnings_date = cosmos.get_next_earnings_date(symbol.upper())
-    is_paused = is_watchlist_paused(doc)
-
-    return templates.TemplateResponse("symbol_detail.html", {
-        "request": request,
-        "symbol_doc": doc,
-        "activities": activities,
-        "alerts": alerts,
-        "plans": plans,
-        "latest_sell_alerts": latest_sell_alerts,
-        "agent_types": AGENT_TYPES,
-        "summary_in_calls": summary_in_calls,
-        "summary_put_exposure": summary_put_exposure,
-        "next_earnings_date": next_earnings_date,
-        "is_paused": is_paused,
-    })
 
 
 # ===========================================================================
 # Page Routes — Fetch Preview (raw market data)
 # ===========================================================================
 
-@app.get("/symbols/{symbol}/fetch-preview", response_class=HTMLResponse)
-async def fetch_preview_page(request: Request, symbol: str):
-    cosmos = getattr(request.app.state, "cosmos", None)
-    if cosmos is None:
-        error_detail = getattr(request.app.state, "cosmos_error", "unknown")
-        return HTMLResponse(f"CosmosDB not available: {error_detail}",
-                            status_code=503)
-
-    doc = cosmos.get_symbol(symbol.upper())
-    if not doc:
-        return HTMLResponse(f"Symbol {symbol} not found", status_code=404)
-
-    return templates.TemplateResponse("fetch_preview.html", {
-        "request": request,
-        "symbol_doc": doc,
-    })
 
 
 # ===========================================================================
@@ -2766,42 +2483,8 @@ async def symbol_report_api(request: Request, symbol: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@app.get("/symbols/{symbol}/report", response_class=HTMLResponse)
-async def symbol_report_page(request: Request, symbol: str):
-    """Render the dedicated report page for a symbol."""
-    cosmos = getattr(request.app.state, "cosmos", None)
-    if cosmos is None:
-        error_detail = getattr(request.app.state, "cosmos_error", "unknown")
-        return HTMLResponse(f"CosmosDB not available: {error_detail}",
-                            status_code=503)
-
-    doc = cosmos.get_symbol(symbol.upper())
-    if not doc:
-        return HTMLResponse(f"Symbol {symbol} not found", status_code=404)
-
-    return templates.TemplateResponse("symbol_report.html", {
-        "request": request,
-        "symbol_doc": doc,
-    })
 
 
-@app.get("/symbols/{symbol}/forecasts", response_class=HTMLResponse)
-async def symbol_forecasts_page(request: Request, symbol: str):
-    """Render the deterministic price-forecast history page for a symbol."""
-    cosmos = getattr(request.app.state, "cosmos", None)
-    if cosmos is None:
-        error_detail = getattr(request.app.state, "cosmos_error", "unknown")
-        return HTMLResponse(f"CosmosDB not available: {error_detail}",
-                            status_code=503)
-
-    doc = cosmos.get_symbol(symbol.upper())
-    if not doc:
-        return HTMLResponse(f"Symbol {symbol} not found", status_code=404)
-
-    return templates.TemplateResponse("symbol_forecasts.html", {
-        "request": request,
-        "symbol_doc": doc,
-    })
 
 
 @app.post("/api/symbols/{symbol}/technical-analysis")
@@ -2853,42 +2536,8 @@ async def symbol_technical_analysis_api(request: Request, symbol: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@app.get("/symbols/{symbol}/technical-analysis", response_class=HTMLResponse)
-async def symbol_technical_analysis_page(request: Request, symbol: str):
-    """Render the dedicated technical analysis page for a symbol."""
-    cosmos = getattr(request.app.state, "cosmos", None)
-    if cosmos is None:
-        error_detail = getattr(request.app.state, "cosmos_error", "unknown")
-        return HTMLResponse(f"CosmosDB not available: {error_detail}",
-                            status_code=503)
-
-    doc = cosmos.get_symbol(symbol.upper())
-    if not doc:
-        return HTMLResponse(f"Symbol {symbol} not found", status_code=404)
-
-    return templates.TemplateResponse("symbol_technical_analysis.html", {
-        "request": request,
-        "symbol_doc": doc,
-    })
 
 
-@app.get("/symbols/{symbol}/options-chain", response_class=HTMLResponse)
-async def symbol_options_chain_page(request: Request, symbol: str):
-    """Render the option chain visualisation page for a symbol."""
-    cosmos = getattr(request.app.state, "cosmos", None)
-    if cosmos is None:
-        error_detail = getattr(request.app.state, "cosmos_error", "unknown")
-        return HTMLResponse(f"CosmosDB not available: {error_detail}",
-                            status_code=503)
-
-    doc = cosmos.get_symbol(symbol.upper())
-    if not doc:
-        return HTMLResponse(f"Symbol {symbol} not found", status_code=404)
-
-    return templates.TemplateResponse("symbol_options_chain.html", {
-        "request": request,
-        "symbol_doc": doc,
-    })
 
 
 def _resolve_forecast_range(range_param, date_from, date_to):
@@ -3605,36 +3254,6 @@ Technical Analysis:
 # Page Routes — Activity Detail
 # ===========================================================================
 
-@app.get("/activities/{activity_id}", response_class=HTMLResponse)
-async def activity_detail_page(request: Request, activity_id: str):
-    cosmos = getattr(request.app.state, "cosmos", None)
-    if cosmos is None:
-        error_detail = getattr(request.app.state, "cosmos_error", "unknown")
-        return HTMLResponse(f"CosmosDB not available: {error_detail}",
-                            status_code=503)
-
-    activity = cosmos.get_activity_by_id(activity_id)
-    if not activity:
-        return HTMLResponse("Activity not found", status_code=404)
-
-    symbol = activity.get("symbol", "")
-    agent_type = activity.get("agent_type", "")
-    agent_label = AGENT_TYPES.get(agent_type, {}).get("label", agent_type)
-    is_alert = activity.get("is_alert", False)
-
-    # Build display_name from symbol config (for back link)
-    sym_doc = cosmos.get_symbol(symbol)
-    display_name = sym_doc["display_name"] if sym_doc else symbol
-
-    return templates.TemplateResponse("activity_detail.html", {
-        "request": request,
-        "activity": activity,
-        "symbol": symbol,
-        "display_name": display_name,
-        "agent_label": agent_label,
-        "agent_type": agent_type,
-        "is_alert": is_alert,
-    })
 
 
 # ===========================================================================
@@ -3962,14 +3581,6 @@ def _build_settings_config_context(
     }
 
 
-@app.get("/settings/config", response_class=HTMLResponse)
-async def settings_config_page(request: Request):
-    """Configuration page — Scheduler and Telegram."""
-    cosmos = getattr(request.app.state, "cosmos", None)
-    return templates.TemplateResponse(
-        "settings_config.html",
-        _build_settings_config_context(request, cosmos),
-    )
 
 
 def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
@@ -4338,16 +3949,6 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
     return saved
 
 
-@app.post("/settings/config", response_class=HTMLResponse)
-async def settings_config_save(request: Request):
-    """Save configuration settings (HTML form)."""
-    form = await request.form()
-    cosmos = getattr(request.app.state, "cosmos", None)
-    saved = _apply_settings_config(request, cosmos, form)
-    return templates.TemplateResponse(
-        "settings_config.html",
-        _build_settings_config_context(request, cosmos, saved=saved),
-    )
 
 
 @app.get("/api/settings/config")
@@ -4383,38 +3984,6 @@ async def api_settings_config_save(request: Request):
     return JSONResponse({"success": True, "saved": saved})
 
 
-@app.get("/settings/runtime", response_class=HTMLResponse)
-async def settings_runtime_page(request: Request):
-    """Runtime stats page — Agent runs, cache, and fetch statistics."""
-    cosmos = getattr(request.app.state, "cosmos", None)
-    
-    telemetry_stats = {}
-    recent_errors = []
-    if cosmos:
-        try:
-            telemetry_stats = cosmos.get_telemetry_stats()
-        except Exception:
-            pass
-        try:
-            recent_errors = cosmos.get_recent_fetch_errors(limit=10)
-        except Exception:
-            pass
-
-    # Options chain cache stats
-    cache_stats = {}
-    try:
-        from src.options_chain_cache import get_options_chain_cache
-        cache = get_options_chain_cache()
-        cache_stats = cache.stats()
-    except Exception:
-        pass
-
-    return templates.TemplateResponse("settings_runtime.html", {
-        "request": request,
-        "telemetry_stats": telemetry_stats,
-        "cache_stats": cache_stats,
-        "recent_errors": recent_errors,
-    })
 
 
 @app.get("/api/settings/runtime")
@@ -4470,90 +4039,12 @@ def _get_trace_enabled_types(cosmos) -> dict:
     return {key: bool(stored.get(key, True)) for key in TRACEABLE_AGENT_TYPES}
 
 
-@app.get("/settings/logs", response_class=HTMLResponse)
-async def settings_logs_page(request: Request):
-    """Agent execution logs — traced requests/responses with filters."""
-    cosmos = getattr(request.app.state, "cosmos", None)
-    traces = []
-    total = 0
-    symbols = []
-    if cosmos is not None:
-        try:
-            traces = cosmos.list_agent_traces(limit=500)
-        except Exception:
-            traces = []
-        try:
-            total = cosmos.count_agent_traces()
-        except Exception:
-            total = len(traces)
-        try:
-            symbols = sorted({t.get("symbol") for t in traces if t.get("symbol") and t.get("symbol") != "_"})
-        except Exception:
-            symbols = []
-
-    return templates.TemplateResponse("settings_logs.html", {
-        "request": request,
-        "traces": traces,
-        "total": total,
-        "symbols": symbols,
-        "agent_types": TRACEABLE_AGENT_TYPES,
-        "trace_enabled": _get_trace_enabled_types(cosmos),
-        "cosmos_available": cosmos is not None,
-    })
 
 
-@app.get("/settings/logs/{trace_id}", response_class=HTMLResponse)
-async def settings_log_detail_page(request: Request, trace_id: str):
-    """Full detail of a single agent execution trace."""
-    cosmos = getattr(request.app.state, "cosmos", None)
-    if cosmos is None:
-        return HTMLResponse("CosmosDB not available", status_code=503)
-    trace = cosmos.get_agent_trace(trace_id)
-    if not trace:
-        return HTMLResponse("Trace not found", status_code=404)
-    agent_label = TRACEABLE_AGENT_TYPES.get(
-        trace.get("agent_type"), {}).get("label", trace.get("agent_type", ""))
-    return templates.TemplateResponse("settings_log_detail.html", {
-        "request": request,
-        "trace": trace,
-        "agent_label": agent_label,
-    })
 
 
-@app.post("/settings/logs/config")
-async def settings_logs_config_save(request: Request):
-    """Persist per-agent-type trace enablement (checkboxes)."""
-    cosmos = getattr(request.app.state, "cosmos", None)
-    form = await request.form()
-    enabled = {key: (key in form) for key in TRACEABLE_AGENT_TYPES}
-    if cosmos is not None:
-        try:
-            settings = _load_settings_from_cosmos(cosmos) or {}
-            settings.setdefault("agent_trace", {})
-            settings["agent_trace"]["enabled_types"] = enabled
-            _save_settings_to_cosmos(cosmos, settings)
-        except Exception:
-            logger.warning("Failed to save agent_trace config", exc_info=True)
-    return RedirectResponse(url="/settings/logs", status_code=303)
 
 
-@app.post("/settings/logs/purge")
-async def settings_logs_purge(request: Request):
-    """Purge agent traces (all, or older than a number of days)."""
-    cosmos = getattr(request.app.state, "cosmos", None)
-    form = await request.form()
-    older_than = form.get("older_than_days")
-    deleted = 0
-    if cosmos is not None:
-        try:
-            days = int(older_than) if older_than not in (None, "", "all") else None
-        except (TypeError, ValueError):
-            days = None
-        try:
-            deleted = cosmos.purge_agent_traces(older_than_days=days)
-        except Exception:
-            logger.warning("Failed to purge agent traces", exc_info=True)
-    return RedirectResponse(url=f"/settings/logs?purged={deleted}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -4667,45 +4158,6 @@ async def api_debug_clear_cache(request: Request):
     return JSONResponse({"success": True, "cleared": cleared})
 
 
-@app.get("/settings/debug", response_class=HTMLResponse)
-async def settings_debug_page(request: Request):
-    """Debug page — data fetch and CosmosDB diagnostics."""
-    cosmos = getattr(request.app.state, "cosmos", None)
-    
-    # CosmosDB connection info
-    config = _load_config()
-    cosmos_endpoint = _resolve_env(config.get("cosmosdb", {}).get("endpoint", ""))
-    cosmos_database = config.get("cosmosdb", {}).get("database", "stock-options-manager")
-    cosmos_status = "Connected" if cosmos else "Not connected"
-    cosmos_error = getattr(request.app.state, "cosmos_error", None)
-    
-    # Cache stats from yfinance provider
-    provider = getattr(request.app.state, "yf_provider", None)
-    if provider:
-        cache_stats = {
-            "total_entries": len(provider._cache),
-            "symbols": list(provider._cache.keys()),
-        }
-    else:
-        cache_stats = {"total_entries": 0, "symbols": []}
-    
-    # Get symbols for debug dropdown
-    symbols = []
-    if cosmos:
-        try:
-            symbols = cosmos.list_symbols()
-        except Exception:
-            pass
-    
-    return templates.TemplateResponse("settings_debug.html", {
-        "request": request,
-        "cosmos_endpoint": cosmos_endpoint,
-        "cosmos_database": cosmos_database,
-        "cosmos_status": cosmos_status,
-        "cosmos_error": cosmos_error,
-        "symbols": symbols,
-        "cache_stats": cache_stats,
-    })
 
 
 @app.get("/api/settings/debug")
@@ -4748,11 +4200,6 @@ async def api_settings_debug(request: Request):
 
 
 # Redirect old /settings to /settings/config for backward compatibility
-@app.get("/settings", response_class=HTMLResponse)
-async def settings_redirect(request: Request):
-    """Redirect old settings URL to config page."""
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/settings/config", status_code=301)
 
 
 # ===========================================================================
@@ -5424,94 +4871,8 @@ async def scheduler_health(request: Request):
 # DGI Screener — Page & API
 # ===========================================================================
 
-@app.get("/dgi", response_class=HTMLResponse)
-async def dgi_page(request: Request):
-    """DGI Screener page — Top dividend growth stocks."""
-    cosmos = getattr(request.app.state, "cosmos", None)
-    top_entries: list = []
-    last_run = ""
-    next_run = ""
-    error = None
-
-    if cosmos is None:
-        error = "CosmosDB not available"
-    else:
-        try:
-            top_entries = cosmos.get_dgi_top()
-            top_entries.sort(key=lambda x: x.get("rank", 999))
-        except Exception as e:
-            error = f"Failed to load DGI data: {e}"
-
-    # Determine last run from the most recent last_updated timestamp
-    dgi_last_update_ts = ""
-    if top_entries:
-        timestamps = [e.get("last_updated", "") for e in top_entries if e.get("last_updated")]
-        if timestamps:
-            try:
-                latest = max(timestamps)
-                dgi_last_update_ts = str(latest)
-                last_dt = datetime.fromisoformat(str(latest).replace("Z", "+00:00"))
-                if last_dt.tzinfo is None:
-                    last_dt = last_dt.replace(tzinfo=timezone.utc)
-                last_run = _format_time(last_dt)
-            except Exception:
-                last_run = str(latest) if timestamps else ""
-
-    # Calculate next scheduled run
-    config = _load_config()
-    dgi_cfg = config.get("dgi_screener", {})
-    dgi_cron_expr = dgi_cfg.get("cron", "0 6 * * 1-5")
-    if dgi_cfg.get("enabled", True) and dgi_cron_expr:
-        try:
-            now_tz = _local_now()
-            cron = croniter(dgi_cron_expr, now_tz)
-            next_run_dt = cron.get_next(datetime)
-            next_run = _format_time(next_run_dt)
-        except Exception:
-            next_run = "Invalid cron"
-
-    return templates.TemplateResponse("dgi_screener.html", {
-        "request": request,
-        "top20": top_entries,
-        "last_run": last_run,
-        "next_run": next_run,
-        "last_update_ts": dgi_last_update_ts,
-        "error": error,
-    })
 
 
-@app.get("/dgi/analyze/{symbol}", response_class=HTMLResponse)
-async def dgi_analyze_symbol(request: Request, symbol: str):
-    """DGI single-symbol analysis — detailed scoring breakdown (read-only)."""
-    import threading
-
-    symbol = symbol.strip().upper()
-    if not symbol or len(symbol) > 10:
-        return templates.TemplateResponse("dgi_analysis.html", {
-            "request": request,
-            "error": "Invalid symbol",
-            "result": None,
-        })
-
-    # Run the blocking yfinance fetch in a thread to avoid blocking the event loop
-    from src.dgi_screener import analyze_single_symbol
-
-    # Load filters: CosmosDB first, fallback to config.yaml
-    cosmos = getattr(request.app.state, "cosmos", None)
-    cosmos_settings = _load_settings_from_cosmos(cosmos)
-    cfg = cosmos_settings if cosmos_settings else _load_config()
-    dgi_filters = cfg.get("dgi_screener", {}).get("filters", {})
-
-    result = await asyncio.get_event_loop().run_in_executor(
-        None, analyze_single_symbol, symbol, dgi_filters
-    )
-
-    error = result.get("error") if isinstance(result, dict) else "Analysis failed"
-    return templates.TemplateResponse("dgi_analysis.html", {
-        "request": request,
-        "result": result if not error else None,
-        "error": error if error else None,
-    })
 
 
 @app.get("/api/dgi/analyze/{symbol}")
@@ -5561,9 +4922,6 @@ async def api_dgi_top(request: Request):
 # Chat
 # ===========================================================================
 
-@app.get("/chat", response_class=HTMLResponse)
-async def chat_page(request: Request):
-    return templates.TemplateResponse("chat.html", {"request": request})
 
 
 @app.post("/api/chat/fetch-symbol")
@@ -5878,22 +5236,6 @@ async def chat_api(request: Request):
 # Per-Symbol Chat
 # ===========================================================================
 
-@app.get("/symbols/{symbol}/chat", response_class=HTMLResponse)
-async def symbol_chat_page(request: Request, symbol: str):
-    cosmos = getattr(request.app.state, "cosmos", None)
-    if cosmos is None:
-        error_detail = getattr(request.app.state, "cosmos_error", "unknown")
-        return HTMLResponse(f"CosmosDB not available: {error_detail}",
-                            status_code=503)
-
-    doc = cosmos.get_symbol(symbol.upper())
-    if not doc:
-        return HTMLResponse(f"Symbol {symbol} not found", status_code=404)
-
-    return templates.TemplateResponse("symbol_chat.html", {
-        "request": request,
-        "symbol_doc": doc,
-    })
 
 
 async def _build_symbol_context(symbol: str, cosmos, 
