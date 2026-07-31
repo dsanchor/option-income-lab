@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import MultiSelect from "@/components/MultiSelect";
+import StatCard from "@/components/StatCard";
+import Reveal from "@/components/Reveal";
 import type {
   EconomicsBySymbolRow,
   EconomicsMonthlyRow,
@@ -77,35 +79,30 @@ function Pills({
   );
 }
 
-function SummaryCard({
-  value,
-  label,
-  className = "",
-}: {
-  value: string;
-  label: string;
-  className?: string;
-}) {
-  return (
-    <div className="rounded-[var(--radius)] border border-border bg-bg-card px-4 py-3">
-      <div className={`text-xl font-semibold ${className}`}>{value}</div>
-      <div className="mt-1 text-xs text-text-muted">{label}</div>
-    </div>
-  );
-}
-
 function SummaryRow({ summary }: { summary: EconomicsSummary }) {
+  const net = summary.net_income ?? 0;
+  const roc = summary.avg_roc_annualized ?? summary.avg_roc_pct ?? 0;
+  const cards = [
+    { label: "Total Premium Collected", value: summary.total_premium ?? 0, prefix: "$", suffix: "", decimals: 2, tone: "green" as const },
+    { label: "Total Buyback Costs", value: summary.total_buyback ?? 0, prefix: "$", suffix: "", decimals: 2, tone: "orange" as const },
+    { label: "Net Income", value: net, prefix: "$", suffix: "", decimals: 2, tone: (net >= 0 ? "green" : "red") as "green" | "red" },
+    { label: "Avg RoC% (Annualized)", value: roc, prefix: "", suffix: "%", decimals: 2, tone: "blue" as const },
+    { label: "Win Rate", value: summary.win_rate ?? 0, prefix: "", suffix: "%", decimals: 2, tone: "purple" as const },
+  ];
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-      <SummaryCard value={currency(summary.total_premium)} label="Total Premium Collected" className="text-accent-green" />
-      <SummaryCard value={currency(summary.total_buyback)} label="Total Buyback Costs" className="text-accent-orange" />
-      <SummaryCard
-        value={currency(summary.net_income)}
-        label="Net Income"
-        className={netColor(summary.net_income)}
-      />
-      <SummaryCard value={pct(summary.avg_roc_annualized ?? summary.avg_roc_pct)} label="Avg RoC% (Annualized)" />
-      <SummaryCard value={pct(summary.win_rate)} label="Win Rate" />
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+      {cards.map((c, i) => (
+        <Reveal key={c.label} index={i} className="h-full">
+          <StatCard
+            label={c.label}
+            value={c.value}
+            prefix={c.prefix}
+            suffix={c.suffix}
+            decimals={c.decimals}
+            tone={c.tone}
+          />
+        </Reveal>
+      ))}
     </div>
   );
 }
@@ -268,10 +265,10 @@ function PositionsDetail({ rows }: { rows: EconomicsPosition[] }) {
   }
 
   return (
-    <details open className="rounded-[var(--radius)] border border-border bg-bg-card">
+    <details open className="surface overflow-hidden">
       <summary className="flex cursor-pointer items-center justify-between px-4 py-3">
-        <span className="text-lg font-semibold">Positions Detail</span>
-        <span className="rounded-[var(--radius-pill)] border border-border bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+        <span className="text-base font-semibold">Positions Detail</span>
+        <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
           {rows.length} rows
         </span>
       </summary>
@@ -300,7 +297,7 @@ function PositionsDetail({ rows }: { rows: EconomicsPosition[] }) {
               </tr>
             )}
             {sorted.map((p, i) => (
-              <tr key={p.position_id ?? i} className="border-b border-border/60 last:border-0">
+              <tr key={p.position_id ?? i} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
                 <td className="px-3 py-2 font-semibold">{p.symbol}</td>
                 <td className="px-3 py-2">
                   <span
@@ -390,10 +387,10 @@ export default function EconomicsView() {
   const symbolOptions = (data?.filters.symbols ?? []).map((s) => ({ value: s, label: s }));
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-semibold">Economics</h1>
-        <p className="text-sm text-text-muted">
+        <h1 className="text-2xl font-semibold tracking-tight">Economics</h1>
+        <p className="mt-1 text-sm text-text-muted">
           Premium, buybacks, net income, and options RoC analytics across all symbols.
         </p>
       </div>
@@ -406,10 +403,10 @@ export default function EconomicsView() {
 
       {data && <SummaryRow summary={data.summary} />}
 
-      <div className="rounded-[var(--radius)] border border-border bg-bg-card p-4">
+      <div className="surface p-4">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Filters</h2>
-          <span className="rounded-[var(--radius-pill)] border border-border bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+          <h2 className="text-base font-semibold">Filters</h2>
+          <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
             {data?.summary.total_positions ?? 0} positions
           </span>
         </div>
@@ -449,7 +446,7 @@ export default function EconomicsView() {
       </div>
 
       {loading && !data && (
-        <div className="rounded-[var(--radius)] border border-border bg-bg-card px-4 py-12 text-center text-text-muted">
+        <div className="surface px-4 py-12 text-center text-text-muted">
           Loading economics data…
         </div>
       )}
@@ -459,8 +456,8 @@ export default function EconomicsView() {
           <MonthlySection rows={data.monthly} />
           <BySymbolSection rows={data.by_symbol} />
 
-          <div className="rounded-[var(--radius)] border border-border bg-bg-card p-4">
-            <h2 className="mb-4 text-lg font-semibold">Charts</h2>
+          <div className="surface p-4">
+            <h2 className="mb-4 text-base font-semibold">Charts</h2>
             <div className="grid gap-6 lg:grid-cols-2">
               <div>
                 <h3 className="mb-2 text-sm font-medium text-text-muted">Monthly Net Income</h3>
@@ -482,8 +479,13 @@ export default function EconomicsView() {
 
 function MonthlySection({ rows }: { rows: EconomicsMonthlyRow[] }) {
   return (
-    <div className="rounded-[var(--radius)] border border-border bg-bg-card">
-      <h2 className="px-4 py-3 text-lg font-semibold">Monthly P&amp;L</h2>
+    <div className="surface overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3">
+        <h2 className="text-base font-semibold">Monthly P&amp;L</h2>
+        <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+          {rows.length} months
+        </span>
+      </div>
       <div className="overflow-x-auto border-t border-border">
         <table className="w-full min-w-[720px] text-sm">
           <thead>
@@ -507,7 +509,7 @@ function MonthlySection({ rows }: { rows: EconomicsMonthlyRow[] }) {
               </tr>
             )}
             {rows.map((r) => (
-              <tr key={`${r.year}-${r.month}`} className="border-b border-border/60 last:border-0">
+              <tr key={`${r.year}-${r.month}`} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
                 <td className="px-3 py-2">{r.label}</td>
                 <td className="px-3 py-2 text-right font-mono">{currency(r.premium)}</td>
                 <td className="px-3 py-2 text-right font-mono">{currency(r.buyback)}</td>
@@ -527,8 +529,13 @@ function MonthlySection({ rows }: { rows: EconomicsMonthlyRow[] }) {
 
 function BySymbolSection({ rows }: { rows: EconomicsBySymbolRow[] }) {
   return (
-    <div className="rounded-[var(--radius)] border border-border bg-bg-card">
-      <h2 className="px-4 py-3 text-lg font-semibold">By Symbol</h2>
+    <div className="surface overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3">
+        <h2 className="text-base font-semibold">By Symbol</h2>
+        <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+          {rows.length} symbols
+        </span>
+      </div>
       <div className="overflow-x-auto border-t border-border">
         <table className="w-full min-w-[640px] text-sm">
           <thead>
@@ -550,7 +557,7 @@ function BySymbolSection({ rows }: { rows: EconomicsBySymbolRow[] }) {
               </tr>
             )}
             {rows.map((r) => (
-              <tr key={r.symbol} className="border-b border-border/60 last:border-0">
+              <tr key={r.symbol} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
                 <td className="px-3 py-2 font-semibold">{r.symbol}</td>
                 <td className="px-3 py-2 text-right font-mono">{currency(r.premium)}</td>
                 <td className="px-3 py-2 text-right font-mono">{currency(r.buyback)}</td>
