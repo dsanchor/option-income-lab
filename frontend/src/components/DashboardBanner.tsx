@@ -2,43 +2,20 @@
 
 import type { BannerItem } from "@/types/dashboard";
 
-const PRIORITY_ACCENT: Record<string, string> = {
-  "1": "var(--accent-red)",
-  "2": "var(--accent-orange)",
-  "3": "var(--accent-blue)",
-  "4": "var(--accent-cyan)",
-  "5": "var(--accent-green)",
-};
-
-function accentFor(priority?: number | string): string {
-  return PRIORITY_ACCENT[String(priority ?? "")] ?? "var(--accent-purple)";
-}
-
 function Group({ items }: { items: BannerItem[] }) {
   return (
     <div className="flex shrink-0 items-center gap-2 pr-2">
-      {items.map((b, i) => {
-        const accent = accentFor(b.priority);
-        return (
-          <div
-            key={i}
-            title={[b.category, b.symbol].filter(Boolean).join(" · ")}
-            className="flex items-center gap-2 whitespace-nowrap rounded-[var(--radius-pill)] border px-3 py-1.5 text-sm"
-            style={{
-              borderColor: `color-mix(in srgb, ${accent} 35%, transparent)`,
-              background: `color-mix(in srgb, ${accent} 10%, var(--bg-card))`,
-            }}
-          >
-            {b.emoji && <span>{b.emoji}</span>}
-            {b.symbol && (
-              <span className="font-mono font-semibold" style={{ color: accent }}>
-                {b.symbol}
-              </span>
-            )}
-            {b.text && <span className="text-text-muted">{b.text}</span>}
-          </div>
-        );
-      })}
+      {items.map((b, i) => (
+        <div
+          key={i}
+          title={[b.category, b.symbol].filter(Boolean).join(" · ")}
+          className="flex items-center gap-2 whitespace-nowrap rounded-[var(--radius-pill)] border border-border bg-bg-input px-3 py-1.5 text-sm"
+        >
+          {b.emoji && <span>{b.emoji}</span>}
+          {b.symbol && <span className="font-mono font-semibold text-text">{b.symbol}</span>}
+          {b.text && <span className="text-text-muted">{b.text}</span>}
+        </div>
+      ))}
     </div>
   );
 }

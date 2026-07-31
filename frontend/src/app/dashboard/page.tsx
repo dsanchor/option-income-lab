@@ -37,18 +37,7 @@ export default async function DashboardPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-          <p className="text-sm text-text-muted">Portfolio exposure &amp; latest agent activity</p>
         </div>
-        <span
-          className={`inline-flex items-center gap-2 rounded-[var(--radius-pill)] border px-3 py-1.5 text-sm ${
-            d.market_open
-              ? "border-accent-green/40 bg-accent-green/10 text-accent-green"
-              : "border-border bg-bg-input text-text-muted"
-          }`}
-        >
-          <span className={`h-2 w-2 rounded-full ${d.market_open ? "bg-accent-green animate-pulse" : "bg-text-muted"}`} />
-          Market {d.market_open ? "Open" : "Closed"}
-        </span>
       </div>
 
       {/* Banner marquee */}
@@ -58,21 +47,19 @@ export default async function DashboardPage() {
 
       {/* Summary cards (3, matching legacy) */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Reveal index={0}>
-          <StatCard label="Calls Exposure" value={d.total_call_exposure ?? 0} prefix="$" tone="blue" icon="📞" />
+        <Reveal index={0} className="h-full">
+          <StatCard label="Calls Exposure" value={d.total_call_exposure ?? 0} prefix="$" tone="blue" />
         </Reveal>
-        <Reveal index={1}>
-          <StatCard label="Puts Committed" value={d.total_put_exposure ?? 0} prefix="$" tone="blue" icon="🛡️" />
+        <Reveal index={1} className="h-full">
+          <StatCard label="Puts Committed" value={d.total_put_exposure ?? 0} prefix="$" tone="blue" />
         </Reveal>
-        <Reveal index={2}>
+        <Reveal index={2} className="h-full">
           <StatCard
             label="Avg RoC · annualized (open)"
             value={roc}
             suffix="%"
             decimals={1}
             tone={roc >= 0 ? "green" : "red"}
-            icon="📈"
-            hint="Capital-weighted annualized return on your open positions"
           />
         </Reveal>
       </div>

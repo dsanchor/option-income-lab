@@ -40,7 +40,7 @@ export default function StatCard({
   const t = TONE[tone];
   return (
     <div
-      className="surface card-hover relative overflow-hidden p-5"
+      className="surface card-hover relative flex h-full flex-col overflow-hidden p-5"
       style={{ background: `radial-gradient(120% 120% at 100% 0%, ${t.glow}, transparent 55%), linear-gradient(180deg, var(--bg-card), var(--bg-card-2))` }}
     >
       <span className="absolute inset-y-0 left-0 w-1" style={{ background: t.bar }} aria-hidden />

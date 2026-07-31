@@ -257,12 +257,29 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
               const editingNotes = notesFor === posId;
               return (
                 <Fragment key={posId || i}>
-                  <tr className={`border-b border-border/60 last:border-0 ${p.status !== "active" ? "text-text-muted" : ""}`}>
+                  <tr
+                    onClick={() => posId && setDetailsFor((cur) => (cur === posId ? null : posId))}
+                    aria-expanded={detailsFor === posId}
+                    className={`border-b border-border/60 transition-colors ${
+                      posId ? "cursor-pointer hover:bg-bg-hover" : ""
+                    } ${
+                      p.status !== "active" ? "text-text-muted opacity-55 saturate-50" : ""
+                    } ${detailsFor === posId ? "bg-bg-input/50" : ""}`}
+                  >
                     <td className="px-4 py-3">
-                      <Badge
-                        text={(p.type ?? "—").toUpperCase()}
-                        className={p.type === "call" ? "border-accent-green/40 bg-accent-green/10 text-accent-green" : "border-accent-blue/40 bg-accent-blue/10 text-accent-blue"}
-                      />
+                      <span className="inline-flex items-center gap-2">
+                        <span
+                          className="text-text-muted transition-transform duration-200"
+                          style={{ transform: detailsFor === posId ? "rotate(90deg)" : "none" }}
+                          aria-hidden
+                        >
+                          ▸
+                        </span>
+                        <Badge
+                          text={(p.type ?? "—").toUpperCase()}
+                          className={p.type === "call" ? "border-accent-green/40 bg-accent-green/10 text-accent-green" : "border-accent-blue/40 bg-accent-blue/10 text-accent-blue"}
+                        />
+                      </span>
                     </td>
                     <td className="px-4 py-3 text-right font-mono">{p.strike != null ? `$${num(p.strike)}` : "—"}</td>
                     <td className="px-4 py-3 font-mono">{p.expiration ?? "—"}</td>
@@ -287,7 +304,7 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
                     <td className="px-4 py-3 text-right font-mono">
                       {p.display_premium != null ? `$${num(p.display_premium)}` : "—"}
                     </td>
-                    <td className="px-4 py-3 max-w-[200px]">
+                    <td className="px-4 py-3 max-w-[200px]" onClick={(e) => e.stopPropagation()}>
                       {editingNotes ? (
                         <div className="flex items-start gap-1">
                           <textarea
@@ -331,9 +348,9 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
                         </button>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex justify-end gap-1">
-                        {isActive && posId && (
+                        {isActive && posId ? (
                           <>
                             <button
                               type="button"
@@ -358,16 +375,6 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
                               Close
                             </button>
                           </>
-                        )}
-                        {posId ? (
-                          <button
-                            type="button"
-                            onClick={() => setDetailsFor((cur) => (cur === posId ? null : posId))}
-                            className="rounded-[var(--radius-pill)] border border-border px-2 py-0.5 text-xs text-text-muted hover:text-text"
-                            aria-expanded={detailsFor === posId}
-                          >
-                            {detailsFor === posId ? "▲ Details" : "▼ Details"}
-                          </button>
                         ) : (
                           <span className="text-text-muted">—</span>
                         )}

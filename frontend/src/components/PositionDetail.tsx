@@ -110,10 +110,10 @@ function SnapshotChart({ snapshots }: { snapshots: Snapshot[] }) {
           ))}
         </div>
       </div>
-      <div className="rounded-[var(--radius)] bg-bg-input p-2" style={{ height: 240 }}>
+      <div className="rounded-[var(--radius)] border border-border/70 bg-bg-card p-3" style={{ height: 220 }}>
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
-            <CartesianGrid stroke="rgba(148,163,184,0.10)" vertical={false} />
+          <LineChart data={data} margin={{ top: 6, right: 10, bottom: 2, left: 2 }}>
+            <CartesianGrid stroke="rgba(148,163,184,0.08)" strokeDasharray="3 3" />
             <XAxis
               dataKey="label"
               tick={{ fill: "#8d969e", fontSize: 10 }}
@@ -123,6 +123,7 @@ function SnapshotChart({ snapshots }: { snapshots: Snapshot[] }) {
             />
             <YAxis hide domain={[0, 1]} />
             <Tooltip
+              cursor={{ stroke: "rgba(148,163,184,0.35)", strokeWidth: 1 }}
               contentStyle={{
                 background: "var(--bg-card)",
                 border: "1px solid var(--border)",
@@ -141,13 +142,13 @@ function SnapshotChart({ snapshots }: { snapshots: Snapshot[] }) {
             {activeSeries.map((s) => (
               <Line
                 key={s.key}
-                type="monotone"
+                type="linear"
                 dataKey={s.key}
                 name={s.label}
                 stroke={s.color}
-                strokeWidth={1.75}
-                dot={false}
-                activeDot={{ r: 3 }}
+                strokeWidth={2}
+                dot={{ r: 1.5, fill: s.color, strokeWidth: 0 }}
+                activeDot={{ r: 3.5 }}
                 connectNulls
                 isAnimationActive={false}
               />
