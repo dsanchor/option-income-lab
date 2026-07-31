@@ -25,8 +25,8 @@ function pctVal(n: number | null | undefined, digits = 0): string {
   return typeof n === "number" && isFinite(n) ? `${n.toFixed(digits)}%` : "—";
 }
 
-function readingClass(reading: string | null | undefined): string {
-  const r = (reading ?? "").toLowerCase();
+function readingClass(reading: unknown): string {
+  const r = String(reading ?? "").toLowerCase();
   if (r.includes("bull") || r.includes("up")) return "text-accent-green";
   if (r.includes("bear") || r.includes("down")) return "text-accent-red";
   return "text-text-muted";
