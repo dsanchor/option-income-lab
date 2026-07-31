@@ -5,7 +5,8 @@
 .squad/sessions/
 # Squad: SubSquad activation file (local to this machine)
 .squad-workstream
-logs/
+/logs/
+backend/logs/
 src/__pycache__/
 .env
 __pycache__/

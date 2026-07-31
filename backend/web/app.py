@@ -4425,6 +4425,106 @@ async def settings_logs_purge(request: Request):
     return RedirectResponse(url=f"/settings/logs?purged={deleted}", status_code=303)
 
 
+# ---------------------------------------------------------------------------
+# Agent Logs — JSON API (for the Next.js frontend)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/agent-traces")
+async def api_agent_traces(request: Request):
+    """List agent execution traces plus filter metadata (JSON)."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    traces: List[dict] = []
+    total = 0
+    symbols: List[str] = []
+    if cosmos is not None:
+        try:
+            traces = cosmos.list_agent_traces(limit=500)
+        except Exception:
+            traces = []
+        try:
+            total = cosmos.count_agent_traces()
+        except Exception:
+            total = len(traces)
+        try:
+            symbols = sorted({
+                t.get("symbol") for t in traces
+                if t.get("symbol") and t.get("symbol") != "_"
+            })
+        except Exception:
+            symbols = []
+    agent_types = {
+        key: {"label": meta.get("label", key)}
+        for key, meta in TRACEABLE_AGENT_TYPES.items()
+    }
+    return JSONResponse({
+        "traces": traces,
+        "total": total,
+        "symbols": symbols,
+        "agent_types": agent_types,
+        "trace_enabled": _get_trace_enabled_types(cosmos),
+        "cosmos_available": cosmos is not None,
+    })
+
+
+@app.get("/api/agent-traces/{trace_id}")
+async def api_agent_trace_detail(request: Request, trace_id: str):
+    """Full detail of a single agent execution trace (JSON)."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    if cosmos is None:
+        return JSONResponse({"error": "CosmosDB not available"}, status_code=503)
+    trace = cosmos.get_agent_trace(trace_id)
+    if not trace:
+        return JSONResponse({"error": "Trace not found"}, status_code=404)
+    agent_label = TRACEABLE_AGENT_TYPES.get(
+        trace.get("agent_type"), {}).get("label", trace.get("agent_type", ""))
+    return JSONResponse({"trace": trace, "agent_label": agent_label})
+
+
+@app.post("/api/agent-traces/config")
+async def api_agent_traces_config(request: Request):
+    """Persist per-agent-type trace enablement (JSON body: {enabled_types})."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    requested = body.get("enabled_types") or {}
+    enabled = {key: bool(requested.get(key, False)) for key in TRACEABLE_AGENT_TYPES}
+    if cosmos is not None:
+        try:
+            settings = _load_settings_from_cosmos(cosmos) or {}
+            settings.setdefault("agent_trace", {})
+            settings["agent_trace"]["enabled_types"] = enabled
+            _save_settings_to_cosmos(cosmos, settings)
+        except Exception:
+            logger.warning("Failed to save agent_trace config", exc_info=True)
+            return JSONResponse({"error": "Failed to save"}, status_code=500)
+    return JSONResponse({"success": True, "enabled_types": enabled})
+
+
+@app.post("/api/agent-traces/purge")
+async def api_agent_traces_purge(request: Request):
+    """Purge agent traces (JSON body: {older_than_days: int|null|'all'})."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    older_than = body.get("older_than_days")
+    deleted = 0
+    if cosmos is not None:
+        try:
+            days = int(older_than) if older_than not in (None, "", "all") else None
+        except (TypeError, ValueError):
+            days = None
+        try:
+            deleted = cosmos.purge_agent_traces(older_than_days=days)
+        except Exception:
+            logger.warning("Failed to purge agent traces", exc_info=True)
+            return JSONResponse({"error": "Failed to purge"}, status_code=500)
+    return JSONResponse({"success": True, "deleted": deleted})
+
+
 @app.post("/api/debug/clear-cache")
 async def api_debug_clear_cache(request: Request):
     """Clear all yfinance provider cache entries."""
