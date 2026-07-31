@@ -28,7 +28,7 @@ function isActive(pathname: string, href: string, exact = false) {
 
 const linkBase =
   "rounded-[var(--radius-pill)] px-3 py-1.5 text-text-muted transition-all hover:bg-bg-hover hover:text-text no-underline";
-const linkActive = "bg-bg-hover text-text shadow-[inset_0_0_0_1px_rgba(91,97,255,0.35)]";
+const linkActive = "text-text";
 
 export function TopNav() {
   const pathname = usePathname();
