@@ -74,3 +74,24 @@ export function riskRatingLabel(n: number): string {
   if (n <= 8) return "high";
   return "very-high";
 }
+
+// ── Tailwind class-string helpers (shared by Symbols watchlist + DGI screener) ──
+
+/** DGI dividend category pill classes (Aristocrat/Rising Star/Compounder/High Yield/Balanced). */
+export function categoryClass(cat?: string): string {
+  const c = (cat || "").toLowerCase();
+  if (c === "aristocrat") return "text-accent-orange border-accent-orange/40 bg-accent-orange/10";
+  if (c === "rising star") return "text-accent-cyan border-accent-cyan/40 bg-accent-cyan/10";
+  if (c === "compounder") return "text-accent-purple border-accent-purple/40 bg-accent-purple/10";
+  if (c === "high yield") return "text-accent-green border-accent-green/40 bg-accent-green/10";
+  return "text-text-muted border-border bg-bg-input";
+}
+
+/** Entry-tag pill classes (Strong Buy/Buy/Accumulate/Wait). */
+export function entryClass(tag?: string): string {
+  const t = (tag || "").toLowerCase();
+  if (t === "strong buy" || t === "buy") return "text-accent-green border-accent-green/40 bg-accent-green/10";
+  if (t === "accumulate") return "text-accent-blue border-accent-blue/40 bg-accent-blue/10";
+  if (t === "wait") return "text-accent-red border-accent-red/40 bg-accent-red/10";
+  return "text-text-muted border-border bg-bg-input";
+}

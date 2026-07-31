@@ -3,17 +3,12 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { usd } from "@/lib/format";
+import { categoryClass, entryClass } from "@/lib/badges";
+import SymbolInfoModal from "@/components/SymbolInfoModal";
 import type { SymbolRow } from "@/types/symbols";
 
 function num(n: number | null | undefined, digits = 1): string {
   return typeof n === "number" && isFinite(n) ? n.toFixed(digits) : "—";
-}
-function entryClass(tag: string): string {
-  const t = (tag || "").toLowerCase();
-  if (t === "strong buy" || t === "buy") return "text-accent-green border-accent-green/40 bg-accent-green/10";
-  if (t === "accumulate") return "text-accent-blue border-accent-blue/40 bg-accent-blue/10";
-  if (t === "wait") return "text-accent-red border-accent-red/40 bg-accent-red/10";
-  return "text-text-muted border-border bg-bg-input";
 }
 function momentumClass(m: string): string {
   const t = (m || "").toLowerCase();
@@ -21,12 +16,6 @@ function momentumClass(m: string): string {
   if (t.startsWith("bearish")) return "text-accent-red border-accent-red/40 bg-accent-red/10";
   if (t === "weakening") return "text-accent-orange border-accent-orange/40 bg-accent-orange/10";
   return "text-text-muted border-border bg-bg-input";
-}
-function scoreClass(s: number | null): string {
-  if (s == null) return "text-text-muted";
-  if (s >= 70) return "text-accent-green";
-  if (s >= 40) return "text-text";
-  return "text-accent-red";
 }
 function Pill({ text, className }: { text: string; className: string }) {
   if (!text) return <span className="text-text-muted">—</span>;
@@ -52,8 +41,9 @@ const COLUMNS: { key: SortKey; label: string; align?: "right"; num?: boolean }[]
 
 export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
   const [q, setQ] = useState("");
-  const [sort, setSort] = useState<SortKey>("dgi_score");
-  const [dir, setDir] = useState<"asc" | "desc">("desc");
+  const [sort, setSort] = useState<SortKey>("symbol");
+  const [dir, setDir] = useState<"asc" | "desc">("asc");
+  const [modalSymbol, setModalSymbol] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const query = q.trim().toUpperCase();
@@ -125,14 +115,22 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
               </tr>
             )}
             {filtered.map((r) => (
-              <tr key={r.symbol} className="border-b border-border/60 last:border-0">
+              <tr
+                key={r.symbol}
+                onClick={() => setModalSymbol(r.symbol)}
+                className="cursor-pointer border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/50"
+              >
                 <td className="px-4 py-3">
-                  <Link href={`/symbols/${r.symbol}`} className="font-semibold text-text hover:text-accent-blue">
+                  <Link
+                    href={`/symbols/${r.symbol}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="font-semibold text-text hover:text-accent-blue"
+                  >
                     {r.symbol}
                   </Link>
                 </td>
-                <td className="px-4 py-3"><Pill text={r.category} className="text-text-muted border-border bg-bg-input" /></td>
-                <td className={`px-4 py-3 text-right font-mono ${scoreClass(r.dgi_score)}`}>{num(r.dgi_score)}</td>
+                <td className="px-4 py-3"><Pill text={r.category} className={categoryClass(r.category)} /></td>
+                <td className="px-4 py-3 text-right font-mono">{num(r.dgi_score)}</td>
                 <td className="px-4 py-3 text-right font-mono">{num(r.tech_timing)}</td>
                 <td className="px-4 py-3"><Pill text={r.entry_tag} className={entryClass(r.entry_tag)} /></td>
                 <td className="px-4 py-3"><Pill text={r.momentum} className={momentumClass(r.momentum)} /></td>
@@ -149,6 +147,10 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
           </tbody>
         </table>
       </div>
+
+      {modalSymbol && (
+        <SymbolInfoModal symbol={modalSymbol} onClose={() => setModalSymbol(null)} />
+      )}
     </div>
   );
 }

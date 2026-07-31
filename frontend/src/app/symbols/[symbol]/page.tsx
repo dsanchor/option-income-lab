@@ -1,13 +1,14 @@
-import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 import SymbolActions from "@/components/SymbolActions";
 import RecentActivities from "@/components/RecentActivities";
 import PositionsTable from "@/components/PositionsTable";
 import SymbolSummary from "@/components/SymbolSummary";
 import AddPositionForm from "@/components/AddPositionForm";
+import SymbolPlansTable from "@/components/SymbolPlansTable";
 import RtChart from "@/components/RtChart";
 import TradingViewSymbolInfo from "@/components/TradingViewSymbolInfo";
-import type { SymbolDetail, Plan } from "@/types/symbol-detail";
+import type { SymbolDetail } from "@/types/symbol-detail";
+import type { Plan as PlanRow } from "@/types/plans";
 
 export const dynamic = "force-dynamic";
 
@@ -21,10 +22,6 @@ async function getData(symbol: string): Promise<SymbolDetail> {
   }
 }
 
-function num(n: number | null | undefined, digits = 1): string {
-  return typeof n === "number" && isFinite(n) ? n.toFixed(digits) : "—";
-}
-
 export default async function SymbolDetailPage({
   params,
 }: {
@@ -36,7 +33,6 @@ export default async function SymbolDetailPage({
   if (d.error) {
     return (
       <div className="space-y-4">
-        <Link href="/symbols" className="text-sm text-text-muted hover:text-text">← Symbols</Link>
         <div className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-4 py-3 text-sm">
           ⚠️ {d.error}
         </div>
@@ -45,32 +41,14 @@ export default async function SymbolDetailPage({
   }
 
   const enr = d.enrichment ?? {};
-  const price = enr.metrics?.current_price ?? null;
   const positions = d.positions ?? [];
   const activities = d.activities ?? [];
   const plans = d.plans ?? [];
 
   return (
     <div className="space-y-6">
-      <Link href="/symbols" className="text-sm text-text-muted hover:text-text">← Symbols</Link>
-
-      {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold">{d.symbol}</h1>
-            {price != null && <span className="font-mono text-xl text-text-muted">${num(price, 2)}</span>}
-          </div>
-          {d.display_name && <p className="text-sm text-text-muted">{d.display_name}</p>}
-          <div className="mt-2 flex flex-wrap gap-2 text-xs">
-            {enr.category && <Badge text={enr.category} className="border-border bg-bg-input text-text-muted" />}
-            {enr.entry_tag && <Badge text={enr.entry_tag} className="border-accent-blue/40 bg-accent-blue/10 text-accent-blue" />}
-            {enr.momentum && <Badge text={enr.momentum} className="border-border bg-bg-input text-text-muted" />}
-            {d.next_earnings_date && (
-              <Badge text={`Earnings ${d.next_earnings_date}`} className="border-accent-orange/40 bg-accent-orange/10 text-accent-orange" />
-            )}
-          </div>
-        </div>
+      {/* Toolbar: actions (symbol title/price/badges live in the widget + Summary) */}
+      <div className="flex flex-wrap items-center justify-end gap-4">
         <SymbolActions
           symbol={d.symbol}
           covered_call={d.watchlist?.covered_call ?? false}
@@ -101,33 +79,10 @@ export default async function SymbolDetailPage({
       <AddPositionForm symbol={symbol} />
 
       {/* Plans */}
-      {plans.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold">Action Plans</h2>
-          <div className="space-y-2">
-            {plans.map((pl: Plan, i) => (
-              <div key={pl.id ?? i} className="rounded-[var(--radius)] border border-border bg-bg-card px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="font-medium">{pl.title || pl.plan_type || "Plan"}</span>
-                  {pl.status && <Badge text={pl.status} className="border-border bg-bg-input text-text-muted" />}
-                </div>
-                {pl.objective && <p className="mt-1 text-sm text-text-muted">{pl.objective}</p>}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      <SymbolPlansTable plans={plans as unknown as PlanRow[]} />
 
       {/* Recent activity */}
       <RecentActivities activities={activities} agentTypes={d.agent_types ?? []} />
     </div>
-  );
-}
-
-function Badge({ text, className }: { text: string; className: string }) {
-  return (
-    <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${className}`}>
-      {text}
-    </span>
   );
 }

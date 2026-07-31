@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { usd, timeAgo } from "@/lib/format";
+import { usd } from "@/lib/format";
 import { TimingScoreContent } from "@/components/SymbolCharts";
 import type { Enrichment, SymbolSummary as Summary } from "@/types/symbol-detail";
 
@@ -9,13 +9,39 @@ function num(n: number | null | undefined, digits = 1): string {
   return typeof n === "number" && isFinite(n) ? n.toFixed(digits) : "—";
 }
 
-function Metric({ label, value, accent }: { label: string; value: string; accent?: string }) {
+function scoreTone(score: number): string {
+  if (score >= 70) return "text-accent-green";
+  if (score >= 40) return "text-accent-orange";
+  return "text-accent-red";
+}
+
+function scoreBar(score: number): string {
+  if (score >= 70) return "var(--grad-green)";
+  if (score >= 40) return "var(--grad-warm)";
+  return "linear-gradient(135deg,#ff4d5e,#a3123a)";
+}
+
+function Badge({ text, className }: { text: string; className: string }) {
   return (
-    <div className="surface card-hover px-4 py-3">
-      <div className="text-xs uppercase tracking-wide text-text-muted">{label}</div>
-      <div className={`mt-1 font-mono text-lg font-semibold ${accent ?? ""}`}>{value}</div>
-    </div>
+    <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${className}`}>
+      {text}
+    </span>
   );
+}
+
+function momentumClass(m: string): string {
+  const base = m.toLowerCase();
+  if (base.includes("bull")) return "border-accent-green/40 bg-accent-green/10 text-accent-green";
+  if (base.includes("bear")) return "border-accent-red/40 bg-accent-red/10 text-accent-red";
+  if (base.includes("weaken")) return "border-accent-orange/40 bg-accent-orange/10 text-accent-orange";
+  return "border-border bg-bg-input text-text-muted";
+}
+
+function entryClass(t: string): string {
+  const base = t.toLowerCase();
+  if (base.includes("strong")) return "border-accent-green/40 bg-accent-green/10 text-accent-green";
+  if (base === "buy" || base.includes("accumulate")) return "border-accent-blue/40 bg-accent-blue/10 text-accent-blue";
+  return "border-border bg-bg-input text-text-muted";
 }
 
 export default function SymbolSummary({
@@ -45,42 +71,69 @@ export default function SymbolSummary({
     };
   }, [open]);
 
+  const score = enr.quality_score ?? 0;
+  const techScore = enr.technicals?.score;
+  const price = enr.metrics?.current_price;
+  const momentum = enr.momentum ?? "";
+  const momWarn = momentum.includes("overextended") || momentum.includes("oversold");
+
+  const HEAD = ["Category", "DGI Score", "Tech Timing", "Entry", "Momentum", "Price", "Shares", "In Calls", "Puts $"];
+
   return (
     <>
-      <div className="space-y-1.5">
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          title="View timing & score detail"
-          className="flex w-full items-center justify-between text-left"
-        >
-          <h2 className="text-sm font-semibold text-text-muted">
-            Summary <span className="text-xs font-normal text-accent-blue">· click for timing &amp; score</span>
-          </h2>
-          <span className="text-text-muted">📊</span>
-        </button>
-        <div
-          onClick={() => setOpen(true)}
-          className="grid cursor-pointer gap-3 sm:grid-cols-2 lg:grid-cols-4"
-        >
-          <Metric label="DGI Score" value={num(enr.quality_score)} />
-          <Metric label="Tech Timing" value={num(enr.technicals?.score)} />
-          <Metric label="Shares" value={totalShares > 0 ? String(totalShares) : "—"} />
-          <Metric label="Active Positions" value={String(summary?.active_count ?? 0)} />
-          <Metric label="In Calls" value={summary?.in_calls ? String(summary.in_calls) : "—"} />
-          <Metric
-            label="Puts Committed"
-            value={summary?.put_exposure ? `$${usd(summary.put_exposure)}` : "—"}
-            accent="text-accent-blue"
-          />
-          <Metric
-            label="Calls Exposure"
-            value={summary?.call_exposure ? `$${usd(summary.call_exposure)}` : "—"}
-            accent="text-accent-blue"
-          />
-          {enr.last_updated && <Metric label="Enriched" value={timeAgo(enr.last_updated)} />}
+      <section className="surface overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3">
+          <h2 className="text-base font-semibold">Summary</h2>
+          <span className="text-xs text-accent-blue">click for timing &amp; score →</span>
         </div>
-      </div>
+        <div className="overflow-x-auto border-t border-border">
+          <table className="w-full min-w-[820px] text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
+                {HEAD.map((h, i) => (
+                  <th key={h} className={`px-3 py-2 font-medium ${i >= 5 ? "text-right" : ""}`}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                onClick={() => setOpen(true)}
+                title="View timing & score detail"
+                className="cursor-pointer transition-colors hover:bg-bg-hover/50"
+              >
+                <td className="px-3 py-3">
+                  {enr.category ? (
+                    <Badge text={enr.category} className="border-accent-purple/40 bg-accent-purple/10 text-accent-purple" />
+                  ) : "—"}
+                </td>
+                <td className="px-3 py-3">
+                  {score > 0 ? (
+                    <div className="flex items-center gap-2">
+                      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-bg-input">
+                        <span className="block h-full rounded-full" style={{ width: `${Math.min(score, 100)}%`, background: scoreBar(score) }} />
+                      </span>
+                      <span className={`font-mono font-semibold ${scoreTone(score)}`}>{num(score)}</span>
+                    </div>
+                  ) : "—"}
+                </td>
+                <td className="px-3 py-3 font-mono">{techScore != null ? num(techScore) : "—"}</td>
+                <td className="px-3 py-3">
+                  {enr.entry_tag ? <Badge text={enr.entry_tag} className={entryClass(enr.entry_tag)} /> : "—"}
+                </td>
+                <td className="px-3 py-3">
+                  {momentum ? (
+                    <Badge text={`${momWarn ? "⚠️ " : ""}${momentum}`} className={momentumClass(momentum)} />
+                  ) : "—"}
+                </td>
+                <td className="px-3 py-3 text-right font-mono">{price != null ? `$${price.toFixed(2)}` : "—"}</td>
+                <td className="px-3 py-3 text-right font-mono">{totalShares > 0 ? totalShares : "—"}</td>
+                <td className="px-3 py-3 text-right font-mono">{summary?.in_calls ? summary.in_calls : "—"}</td>
+                <td className="px-3 py-3 text-right font-mono">{summary?.put_exposure ? `$${usd(summary.put_exposure)}` : "—"}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       {open && (
         <div

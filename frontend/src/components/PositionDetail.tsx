@@ -122,7 +122,15 @@ function SnapshotChart({ snapshots }: { snapshots: Snapshot[] }) {
               axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
               minTickGap={24}
             />
-            <YAxis hide domain={[0, 1]} />
+            <YAxis
+              domain={[0, 1]}
+              ticks={[0, 0.25, 0.5, 0.75, 1]}
+              tickFormatter={(v) => `${Math.round(Number(v) * 100)}%`}
+              tick={{ fill: "#8d969e", fontSize: 10 }}
+              tickLine={false}
+              axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
+              width={38}
+            />
             <Tooltip
               cursor={{ stroke: "rgba(148,163,184,0.35)", strokeWidth: 1 }}
               contentStyle={{
