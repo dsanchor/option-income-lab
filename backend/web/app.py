@@ -2296,6 +2296,9 @@ async def api_dashboard_status(request: Request):
             pass
 
     return JSONResponse({"agents": agents, "latest_activity": latest_activity})
+
+
+def _compute_dashboard_data(cosmos) -> Dict[str, Any]:
     """Shared dashboard computation used by both the HTML page and the JSON API.
 
     Returns the data-only context (no `request`); callers add framing.
