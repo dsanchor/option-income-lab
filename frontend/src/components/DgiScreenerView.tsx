@@ -7,6 +7,7 @@ import type {
   DgiFilterCheck,
   DgiScorePoint,
 } from "@/types/dgi";
+import { categoryClass, entryClass } from "@/lib/badges";
 
 type SortState = { col: string; asc: boolean };
 
@@ -410,40 +411,51 @@ export default function DgiScreenerView({ entries }: { entries: DgiEntry[] }) {
       ) : (
         <>
           {/* Filters */}
-          <div className="rounded-[var(--radius)] border border-border bg-bg-card p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Filters</h2>
-              <span className="rounded-[var(--radius-pill)] border border-border bg-bg-input px-2 py-0.5 text-xs text-text-muted">
-                Showing {filtered.length} of {entries.length}
+          <div className="surface overflow-hidden">
+            <div className="flex items-center justify-between border-b border-border px-5 py-3">
+              <h2 className="flex items-center gap-2 text-base font-semibold">
+                <span>🎛️</span> Filters
+              </h2>
+              <span className="rounded-[var(--radius-pill)] bg-bg-input px-2.5 py-0.5 text-xs text-text-muted">
+                Showing <span className="font-semibold text-text">{filtered.length}</span> of {entries.length}
               </span>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <Slider label="Quality Score ≥" value={filters.qs} display={String(filters.qs)} onChange={(v) => setFilters((f) => ({ ...f, qs: v }))} />
-              <Slider label="Div Yield ≥" value={filters.dy} display={`${(filters.dy / 10).toFixed(1)}%`} onChange={(v) => setFilters((f) => ({ ...f, dy: v }))} />
-              <Slider label="Div Growth ≥" value={filters.dg} display={`${filters.dg}%`} onChange={(v) => setFilters((f) => ({ ...f, dg: v }))} />
-              <Slider label="Years ≥" value={filters.years} display={String(filters.years)} onChange={(v) => setFilters((f) => ({ ...f, years: v }))} />
-              <Slider label="Timing ≥" value={filters.timing} display={String(filters.timing)} onChange={(v) => setFilters((f) => ({ ...f, timing: v }))} />
-              <div>
-                <label className="mb-1 block text-xs text-text-muted">
-                  💲 Price: ${filters.priceMin} – ${filters.priceMax}
-                </label>
-                <div className="flex items-center gap-2">
+            <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3">
+              <Slider icon="⭐" label="Quality Score ≥" value={filters.qs} display={String(filters.qs)} onChange={(v) => setFilters((f) => ({ ...f, qs: v }))} />
+              <Slider icon="💰" label="Div Yield ≥" value={filters.dy} display={`${(filters.dy / 10).toFixed(1)}%`} onChange={(v) => setFilters((f) => ({ ...f, dy: v }))} />
+              <Slider icon="📈" label="Div Growth ≥" value={filters.dg} display={`${filters.dg}%`} onChange={(v) => setFilters((f) => ({ ...f, dg: v }))} />
+              <Slider icon="📅" label="Years ≥" value={filters.years} display={String(filters.years)} onChange={(v) => setFilters((f) => ({ ...f, years: v }))} />
+              <Slider icon="🎯" label="Timing ≥" value={filters.timing} display={String(filters.timing)} onChange={(v) => setFilters((f) => ({ ...f, timing: v }))} />
+              <div className="rounded-[var(--radius)] border border-border bg-bg-input/60 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-xs text-text-muted">💲 Price Range</span>
+                  <span className="rounded-[var(--radius-pill)] bg-accent-blue/15 px-2 py-0.5 font-mono text-xs font-semibold text-accent-blue">
+                    ${filters.priceMin} – ${filters.priceMax}
+                  </span>
+                </div>
+                <div className="space-y-2">
                   <input
                     type="range" min={0} max={1000} step={5} value={filters.priceMin}
                     onChange={(e) => setFilters((f) => ({ ...f, priceMin: Math.min(Number(e.target.value), f.priceMax) }))}
-                    className="w-full"
+                    className="range-accent"
+                    style={{ background: `linear-gradient(to right, var(--accent-blue) ${(filters.priceMin / 1000) * 100}%, var(--bg-input) ${(filters.priceMin / 1000) * 100}%)` }}
                   />
                   <input
                     type="range" min={0} max={1000} step={5} value={filters.priceMax}
                     onChange={(e) => setFilters((f) => ({ ...f, priceMax: Math.max(Number(e.target.value), f.priceMin) }))}
-                    className="w-full"
+                    className="range-accent"
+                    style={{ background: `linear-gradient(to right, var(--accent-blue) ${(filters.priceMax / 1000) * 100}%, var(--bg-input) ${(filters.priceMax / 1000) * 100}%)` }}
                   />
                 </div>
               </div>
             </div>
-            <div className="mt-3 flex gap-2">
-              <button type="button" onClick={applyBeasts} className="rounded border border-border bg-bg-input px-3 py-1 text-xs hover:text-text">🐂 Beasts</button>
-              <button type="button" onClick={() => setFilters(DEFAULT_FILTERS)} className="rounded border border-border bg-bg-input px-3 py-1 text-xs hover:text-text">Reset Filters</button>
+            <div className="flex flex-wrap gap-2 border-t border-border px-5 py-3">
+              <button type="button" onClick={applyBeasts} className="rounded-[var(--radius-pill)] border border-accent-orange/40 bg-accent-orange/10 px-3 py-1.5 text-xs font-medium text-accent-orange transition hover:bg-accent-orange/20">
+                🐂 Beasts
+              </button>
+              <button type="button" onClick={() => setFilters(DEFAULT_FILTERS)} className="rounded-[var(--radius-pill)] border border-border bg-bg-input px-3 py-1.5 text-xs text-text-muted transition hover:text-text">
+                ↺ Reset Filters
+              </button>
             </div>
           </div>
 
@@ -475,7 +487,7 @@ export default function DgiScreenerView({ entries }: { entries: DgiEntry[] }) {
                       <td className="px-3 py-2 font-mono">{e.rank ?? i + 1}</td>
                       <td className="px-3 py-2 font-semibold">{e.symbol}</td>
                       <td className="px-3 py-2">
-                        <span className="inline-block rounded-[var(--radius-pill)] border border-border bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+                        <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${categoryClass(e.category)}`}>
                           {e.category ?? "—"}
                         </span>
                       </td>
@@ -493,7 +505,7 @@ export default function DgiScreenerView({ entries }: { entries: DgiEntry[] }) {
                       <td className="px-3 py-2 font-mono">{e.days_on_list ?? 0}</td>
                       <td className="px-3 py-2 font-mono">{num(e.technicals?.score).toFixed(1)}</td>
                       <td className="px-3 py-2">
-                        <span className="inline-block rounded-[var(--radius-pill)] border border-border bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+                        <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${entryClass(e.entry_tag)}`}>
                           {e.entry_tag ?? "—"}
                         </span>
                       </td>
@@ -523,24 +535,42 @@ function Slider({
   value,
   display,
   onChange,
+  min = 0,
+  max = 100,
+  step = 1,
+  icon,
 }: {
   label: string;
   value: number;
   display: string;
   onChange: (v: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  icon?: string;
 }) {
+  const pct = max > min ? ((value - min) / (max - min)) * 100 : 0;
   return (
-    <div>
-      <label className="mb-1 block text-xs text-text-muted">
-        {label} <span className="text-text">{display}</span>
-      </label>
+    <div className="rounded-[var(--radius)] border border-border bg-bg-input/60 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-xs text-text-muted">
+          {icon ? `${icon} ` : ""}{label}
+        </span>
+        <span className="rounded-[var(--radius-pill)] bg-accent-blue/15 px-2 py-0.5 font-mono text-xs font-semibold text-accent-blue">
+          {display}
+        </span>
+      </div>
       <input
         type="range"
-        min={0}
-        max={100}
+        min={min}
+        max={max}
+        step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full"
+        className="range-accent"
+        style={{
+          background: `linear-gradient(to right, var(--accent-blue) ${pct}%, var(--bg-input) ${pct}%)`,
+        }}
       />
     </div>
   );
