@@ -1,10 +1,9 @@
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
-import { usd, timeAgo } from "@/lib/format";
 import SymbolActions from "@/components/SymbolActions";
 import RecentActivities from "@/components/RecentActivities";
 import PositionsTable from "@/components/PositionsTable";
-import SymbolCharts from "@/components/SymbolCharts";
+import SymbolSummary from "@/components/SymbolSummary";
 import type { SymbolDetail, Plan } from "@/types/symbol-detail";
 
 export const dynamic = "force-dynamic";
@@ -21,15 +20,6 @@ async function getData(symbol: string): Promise<SymbolDetail> {
 
 function num(n: number | null | undefined, digits = 1): string {
   return typeof n === "number" && isFinite(n) ? n.toFixed(digits) : "—";
-}
-
-function Metric({ label, value, accent }: { label: string; value: string; accent?: string }) {
-  return (
-    <div className="surface card-hover px-4 py-3">
-      <div className="text-xs uppercase tracking-wide text-text-muted">{label}</div>
-      <div className={`mt-1 font-mono text-lg font-semibold ${accent ?? ""}`}>{value}</div>
-    </div>
-  );
 }
 
 export default async function SymbolDetailPage({
@@ -88,31 +78,16 @@ export default async function SymbolDetailPage({
         />
       </div>
 
-      {/* Key metrics */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Metric label="DGI Score" value={num(enr.quality_score)} />
-        <Metric label="Tech Timing" value={num(enr.technicals?.score)} />
-        <Metric label="Shares" value={d.total_shares > 0 ? String(d.total_shares) : "—"} />
-        <Metric label="Active Positions" value={String(d.summary?.active_count ?? 0)} />
-        <Metric label="In Calls" value={d.summary?.in_calls ? String(d.summary.in_calls) : "—"} />
-        <Metric
-          label="Puts Committed"
-          value={d.summary?.put_exposure ? `$${usd(d.summary.put_exposure)}` : "—"}
-          accent="text-accent-blue"
-        />
-        <Metric
-          label="Calls Exposure"
-          value={d.summary?.call_exposure ? `$${usd(d.summary.call_exposure)}` : "—"}
-          accent="text-accent-blue"
-        />
-        {enr.last_updated && <Metric label="Enriched" value={timeAgo(enr.last_updated)} />}
-      </div>
+      {/* Summary (click to open Timing & Score modal) */}
+      <SymbolSummary
+        symbol={symbol}
+        enrichment={enr}
+        summary={d.summary}
+        totalShares={d.total_shares}
+      />
 
       {/* Positions */}
       <PositionsTable symbol={symbol} positions={positions} />
-
-      {/* Timing & score detail (radar + timing history + fundamentals) */}
-      <SymbolCharts symbol={symbol} enrichment={enr} />
 
       {/* Plans */}
       {plans.length > 0 && (

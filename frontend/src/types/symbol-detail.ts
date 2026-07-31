@@ -88,6 +88,13 @@ export interface WatchlistToggles {
   buy_tracker: boolean;
 }
 
+export interface SymbolSummary {
+  in_calls: number;
+  put_exposure: number;
+  call_exposure: number;
+  active_count: number;
+}
+
 export interface SymbolDetail {
   symbol: string;
   display_name: string;
@@ -100,12 +107,7 @@ export interface SymbolDetail {
   activities: Activity[];
   agent_types?: AgentType[];
   plans: Plan[];
-  summary: {
-    in_calls: number;
-    put_exposure: number;
-    call_exposure: number;
-    active_count: number;
-  };
+  summary: SymbolSummary;
   next_earnings_date?: string | null;
   is_paused: boolean;
   error?: string;

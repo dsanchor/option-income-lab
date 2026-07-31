@@ -253,9 +253,8 @@ function TimingHistory({ symbol }: { symbol: string }) {
   );
 }
 
-/* ---------------- Main collapsible section ---------------- */
-export default function SymbolCharts({ symbol, enrichment }: { symbol: string; enrichment: Enrichment }) {
-  const [open, setOpen] = useState(false);
+/* ---------------- Timing & Score content (used inside the summary modal) ---------------- */
+export function TimingScoreContent({ symbol, enrichment }: { symbol: string; enrichment: Enrichment }) {
   const enr = enrichment || {};
   const qd = (enr.quality_detail as Record<string, QualityFactor> | undefined) || undefined;
   const filterDetail = enr.filter_detail as { passes_all?: boolean; checks?: Record<string, FilterCheck> } | undefined;
@@ -263,48 +262,35 @@ export default function SymbolCharts({ symbol, enrichment }: { symbol: string; e
   const technicals = enr.technicals as Record<string, unknown> | undefined;
   const hasData = enr.quality_score != null || (qd && Object.keys(qd).length > 0);
 
+  if (!hasData) {
+    return (
+      <div className="py-6 text-center text-sm text-text-muted">
+        No enrichment data available yet. Run watchlist enrichment to populate.
+      </div>
+    );
+  }
+
   return (
-    <section className="rounded-[var(--radius)] border border-border bg-bg-card">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between px-4 py-3 text-left"
-      >
-        <span className="text-lg font-semibold">📊 Timing &amp; Score Detail</span>
-        <span className="text-text-muted">{open ? "▲" : "▼"}</span>
-      </button>
-
-      {open && (
-        <div className="space-y-4 border-t border-border px-4 py-4">
-          {!hasData ? (
-            <div className="py-4 text-center text-sm text-text-muted">
-              No enrichment data available yet. Run watchlist enrichment to populate.
-            </div>
-          ) : (
-            <>
-              <div className="grid gap-6 lg:grid-cols-2">
-                <div>
-                  <Section
-                    title="Overview"
-                    obj={{
-                      quality_score: enr.quality_score,
-                      category: enr.category,
-                      entry_tag: enr.entry_tag,
-                    }}
-                  />
-                  {filterDetail && <FilterStatus detail={filterDetail} />}
-                </div>
-                {qd && <Radar qd={qd} />}
-              </div>
-
-              <TimingHistory symbol={symbol} />
-
-              {metrics && Object.keys(metrics).length > 0 && <Section title="Fundamentals" obj={metrics} />}
-              {technicals && Object.keys(technicals).length > 0 && <Section title="Technical Timing" obj={technicals} />}
-            </>
-          )}
+    <div className="space-y-4">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div>
+          <Section
+            title="Overview"
+            obj={{
+              quality_score: enr.quality_score,
+              category: enr.category,
+              entry_tag: enr.entry_tag,
+            }}
+          />
+          {filterDetail && <FilterStatus detail={filterDetail} />}
         </div>
-      )}
-    </section>
+        {qd && <Radar qd={qd} />}
+      </div>
+
+      <TimingHistory symbol={symbol} />
+
+      {metrics && Object.keys(metrics).length > 0 && <Section title="Fundamentals" obj={metrics} />}
+      {technicals && Object.keys(technicals).length > 0 && <Section title="Technical Timing" obj={technicals} />}
+    </div>
   );
 }
