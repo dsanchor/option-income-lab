@@ -5448,6 +5448,35 @@ async def dgi_analyze_symbol(request: Request, symbol: str):
     })
 
 
+@app.get("/api/dgi/analyze/{symbol}")
+async def api_dgi_analyze_symbol(request: Request, symbol: str):
+    """DGI single-symbol analysis (JSON) — detailed scoring breakdown.
+
+    Returns the full ``analyze_single_symbol`` result (metrics, technicals,
+    quality-score breakdown, category, entry tag, momentum) or ``{"error": ...}``
+    with a 400/500 status so the Next.js frontend can render the failure.
+    """
+    symbol = symbol.strip().upper()
+    if not symbol or len(symbol) > 10:
+        return JSONResponse({"error": "Invalid symbol"}, status_code=400)
+
+    from src.dgi_screener import analyze_single_symbol
+
+    cosmos = getattr(request.app.state, "cosmos", None)
+    cosmos_settings = _load_settings_from_cosmos(cosmos)
+    cfg = cosmos_settings if cosmos_settings else _load_config()
+    dgi_filters = cfg.get("dgi_screener", {}).get("filters", {})
+
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, analyze_single_symbol, symbol, dgi_filters
+    )
+
+    error = result.get("error") if isinstance(result, dict) else "Analysis failed"
+    if error:
+        return JSONResponse({"error": error}, status_code=500)
+    return JSONResponse(result)
+
+
 @app.get("/api/dgi/top")
 async def api_dgi_top(request: Request):
     """Return the DGI top entries as JSON."""
