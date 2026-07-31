@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 import ForecastCharts from "@/components/ForecastCharts";
+import ForecastHistory from "@/components/ForecastHistory";
 import { HORIZONS } from "@/types/forecasts";
-import type { ForecastsResponse, ForecastRow, Horizon } from "@/types/forecasts";
+import type { ForecastsResponse, Horizon } from "@/types/forecasts";
 
 export const dynamic = "force-dynamic";
 
@@ -24,24 +25,6 @@ function num(n: number | null | undefined, digits = 2): string {
 
 function pctVal(n: number | null | undefined, digits = 0): string {
   return typeof n === "number" && isFinite(n) ? `${n.toFixed(digits)}%` : "—";
-}
-
-function readingText(reading: unknown): string {
-  if (reading == null) return "";
-  if (typeof reading === "object") {
-    const o = reading as Record<string, unknown>;
-    const label = o.label ?? o.code ?? "";
-    const icon = o.icon ? `${o.icon} ` : "";
-    return `${icon}${String(label)}`.trim();
-  }
-  return String(reading);
-}
-
-function readingClass(reading: unknown): string {
-  const r = readingText(reading).toLowerCase();
-  if (r.includes("bull") || r.includes("up")) return "text-accent-green";
-  if (r.includes("bear") || r.includes("down")) return "text-accent-red";
-  return "text-text-muted";
 }
 
 function Stat({ label, value, accent }: { label: string; value: string; accent?: string }) {
@@ -159,63 +142,13 @@ export default async function ForecastsPage({
         </div>
       </section>
 
-      {/* Prediction history */}
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Prediction history</h2>
-        <div className="overflow-x-auto rounded-[var(--radius)] border border-border bg-bg-card">
-          <table className="w-full min-w-[820px] text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
-                <th className="px-4 py-3 font-medium">Created</th>
-                <th className="px-4 py-3 font-medium">Window</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 text-right font-medium">Anchor</th>
-                <th className="px-4 py-3 text-right font-medium">HV</th>
-                <th className="px-4 py-3 font-medium">Reading</th>
-                {HORIZONS.map((h) => (
-                  <th key={h} className="px-4 py-3 text-right font-medium uppercase">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={6 + HORIZONS.length} className="px-4 py-6 text-center text-text-muted">
-                    No forecasts in this range.
-                  </td>
-                </tr>
-              )}
-              {rows.map((r: ForecastRow, i) => (
-                <tr key={r.id ?? i} className="border-b border-border/60 last:border-0">
-                  <td className="px-4 py-3 font-mono">{r.created_date ?? "—"}</td>
-                  <td className="px-4 py-3 font-mono text-text-muted">
-                    {r.start_date ?? "?"} → {r.end_date ?? "?"}
-                  </td>
-                  <td className="px-4 py-3 capitalize">{r.status ?? "—"}</td>
-                  <td className="px-4 py-3 text-right font-mono">
-                    {r.price_at_creation != null ? `$${num(r.price_at_creation)}` : "—"}
-                  </td>
-                  <td className="px-4 py-3 text-right font-mono text-text-muted">
-                    {r.hv != null ? pctVal(r.hv * 100, 1) : "—"}
-                  </td>
-                  <td className={`px-4 py-3 ${readingClass(r.reading)}`}>{readingText(r.reading) || "—"}</td>
-                  {HORIZONS.map((h) => {
-                    const hz = r.horizons?.[h];
-                    return (
-                      <td key={h} className="px-4 py-3 text-right font-mono">
-                        {hz?.center != null ? `$${num(hz.center)}` : "—"}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p className="text-xs text-text-muted">
-          Per-horizon columns show the predicted center price for each window (1d / 1w / 2w / 4w).
-        </p>
-      </section>
+      {/* Prediction history (rich cells + click-through fan chart) */}
+      <ForecastHistory
+        symbol={symbol}
+        rows={rows}
+        confidence={d.confidence ?? 0.68}
+        outerConfidence={d.outer_confidence ?? 0.95}
+      />
     </div>
   );
 }
