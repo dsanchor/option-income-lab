@@ -3,6 +3,21 @@
 import Link from "next/link";
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import {
+  ChevronDown,
+  CandlestickChart,
+  MessageSquare,
+  FileText,
+  Microscope,
+  Target,
+  TrendingUp,
+  TrendingDown,
+  ShoppingCart,
+  Bell,
+  Play,
+  Pause,
+  type LucideIcon,
+} from "lucide-react";
 
 type ToggleKey = "covered_call" | "cash_secured_put" | "buy_tracker" | "telegram_notifications_enabled";
 
@@ -16,12 +31,12 @@ interface Props {
   nextEarningsDate?: string | null;
 }
 
-const ANALYZE = [
-  { href: "options-chain", emoji: "📈", label: "Option Chain" },
-  { href: "chat", emoji: "💬", label: "Chat" },
-  { href: "report", emoji: "📊", label: "Report" },
-  { href: "technical-analysis", emoji: "🔬", label: "Tech Analysis" },
-  { href: "forecasts", emoji: "🎯", label: "Forecasts" },
+const ANALYZE: { href: string; icon: LucideIcon; label: string }[] = [
+  { href: "options-chain", icon: CandlestickChart, label: "Option Chain" },
+  { href: "chat", icon: MessageSquare, label: "Chat" },
+  { href: "report", icon: FileText, label: "Report" },
+  { href: "technical-analysis", icon: Microscope, label: "Tech Analysis" },
+  { href: "forecasts", icon: Target, label: "Forecasts" },
 ];
 
 export default function SymbolActions(props: Props) {
@@ -92,36 +107,45 @@ export default function SymbolActions(props: Props) {
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
-          className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] bg-accent-blue px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
+          className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] bg-accent-blue px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/60"
           aria-expanded={open}
+          aria-haspopup="menu"
         >
-          Analyze <span className="text-xs">▾</span>
+          Analyze
+          <ChevronDown size={14} className={`transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
         </button>
         {open && (
-          <div className="absolute left-0 z-20 mt-2 w-52 overflow-hidden rounded-[var(--radius)] border border-border bg-bg-card py-1 shadow-lg">
-            {ANALYZE.map((a) => (
-              <Link
-                key={a.href}
-                href={`/symbols/${props.symbol}/${a.href}`}
-                className="flex items-center gap-2 px-4 py-2 text-sm text-text hover:bg-bg-input"
-                onClick={() => setOpen(false)}
-              >
-                <span>{a.emoji}</span> {a.label}
-              </Link>
-            ))}
+          <div
+            role="menu"
+            className="absolute left-0 z-20 mt-1 w-52 overflow-hidden rounded-[var(--radius)] border border-border bg-bg-card py-1 shadow-lg"
+          >
+            {ANALYZE.map((a) => {
+              const Icon = a.icon;
+              return (
+                <Link
+                  key={a.href}
+                  href={`/symbols/${props.symbol}/${a.href}`}
+                  role="menuitem"
+                  className="flex items-center gap-2 px-4 py-2 text-sm text-text-muted no-underline transition-colors hover:bg-bg-hover hover:text-text"
+                  onClick={() => setOpen(false)}
+                >
+                  <Icon size={15} className="shrink-0 opacity-80" /> {a.label}
+                </Link>
+              );
+            })}
           </div>
         )}
       </div>
 
       {/* Tracking toggles */}
       <div className="flex flex-wrap items-center gap-2">
-        <Toggle label="CC" title="Covered Call tracking" checked={state.covered_call}
+        <Toggle label="CC" icon={TrendingUp} title="Covered Call tracking" checked={state.covered_call}
           disabled={props.isPaused || saving === "covered_call"} onChange={() => toggle("covered_call")} />
-        <Toggle label="CSP" title="Cash-Secured Put tracking" checked={state.cash_secured_put}
+        <Toggle label="CSP" icon={TrendingDown} title="Cash-Secured Put tracking" checked={state.cash_secured_put}
           disabled={props.isPaused || saving === "cash_secured_put"} onChange={() => toggle("cash_secured_put")} />
-        <Toggle label="Buy" title="Buy Tracker" checked={state.buy_tracker}
+        <Toggle label="Buy" icon={ShoppingCart} title="Buy Tracker" checked={state.buy_tracker}
           disabled={props.isPaused || saving === "buy_tracker"} onChange={() => toggle("buy_tracker")} />
-        <Toggle label="🔔" title="Telegram notifications" checked={state.telegram_notifications_enabled}
+        <Toggle label="Alerts" icon={Bell} title="Telegram notifications" checked={state.telegram_notifications_enabled}
           disabled={saving === "telegram_notifications_enabled"} onChange={() => toggle("telegram_notifications_enabled")} />
       </div>
 
@@ -134,7 +158,7 @@ export default function SymbolActions(props: Props) {
           title="Resume covered call, cash-secured put, and buy tracker now"
           className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border border-accent-green/40 bg-accent-green/10 px-3 py-1.5 text-xs text-accent-green transition hover:bg-accent-green/20 disabled:opacity-50"
         >
-          ▶ Resume
+          <Play size={13} className="shrink-0" /> Resume
         </button>
       ) : (
         <button
@@ -148,7 +172,7 @@ export default function SymbolActions(props: Props) {
           }
           className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border border-accent-orange/40 bg-accent-orange/10 px-3 py-1.5 text-xs text-accent-orange transition hover:bg-accent-orange/20 disabled:opacity-50"
         >
-          ⏸ Pause
+          <Pause size={13} className="shrink-0" /> Pause
         </button>
       )}
       {error && <span className="text-xs text-accent-red">{error}</span>}
@@ -157,9 +181,9 @@ export default function SymbolActions(props: Props) {
 }
 
 function Toggle({
-  label, title, checked, disabled, onChange,
+  label, icon: Icon, title, checked, disabled, onChange,
 }: {
-  label: string; title: string; checked: boolean; disabled?: boolean; onChange: () => void;
+  label: string; icon: LucideIcon; title: string; checked: boolean; disabled?: boolean; onChange: () => void;
 }) {
   return (
     <button
@@ -168,13 +192,13 @@ function Toggle({
       onClick={onChange}
       disabled={disabled}
       aria-pressed={checked}
-      className={`inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border px-3 py-1.5 text-xs transition disabled:opacity-50 ${
+      className={`inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border px-3 py-1.5 text-xs transition disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/60 ${
         checked
           ? "border-accent-green/40 bg-accent-green/10 text-accent-green"
-          : "border-border bg-bg-input text-text-muted"
+          : "border-border bg-bg-input text-text-muted hover:bg-bg-hover hover:text-text"
       }`}
     >
-      <span className={`h-2 w-2 rounded-full ${checked ? "bg-accent-green" : "bg-text-muted"}`} />
+      <Icon size={14} className="shrink-0" />
       {label}
     </button>
   );

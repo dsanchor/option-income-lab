@@ -93,7 +93,6 @@ export default async function ForecastsPage({
           label="Predictions"
           value={d.count ?? rows.length}
           tone="neutral"
-          icon="🎯"
           tooltip="Number of price forecasts generated in the selected date range."
         />
         <StatCard
@@ -101,7 +100,6 @@ export default async function ForecastsPage({
           value={confPct}
           suffix="%"
           tone="blue"
-          icon="🎚️"
           tooltip="Central probability of the inner (±1σ) predicted price band. The band is sized so the actual close should land inside it about this often."
         />
         <StatCard
@@ -109,7 +107,6 @@ export default async function ForecastsPage({
           value={outerPct}
           suffix="%"
           tone="green"
-          icon="📏"
           tooltip="Probability of the wider (±2σ) band. The close should almost always fall within it — breaches signal an unusually large move."
         />
         <StatCard
@@ -119,7 +116,6 @@ export default async function ForecastsPage({
           prefix="×"
           decimals={2}
           tone="purple"
-          icon="🛠️"
           hint={kHint}
           tooltip="Per-symbol volatility multiplier applied to the band width so this symbol's realized hit-rate drifts toward the confidence target. k<1 narrows an over-wide band, k>1 widens an over-narrow one. Auto-adjusts each run from recent resolved endpoints; shows “—” until enough have resolved (warming up)."
         />
