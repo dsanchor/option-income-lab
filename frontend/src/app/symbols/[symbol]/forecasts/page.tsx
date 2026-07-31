@@ -25,8 +25,19 @@ function pctVal(n: number | null | undefined, digits = 0): string {
   return typeof n === "number" && isFinite(n) ? `${n.toFixed(digits)}%` : "—";
 }
 
+function readingText(reading: unknown): string {
+  if (reading == null) return "";
+  if (typeof reading === "object") {
+    const o = reading as Record<string, unknown>;
+    const label = o.label ?? o.code ?? "";
+    const icon = o.icon ? `${o.icon} ` : "";
+    return `${icon}${String(label)}`.trim();
+  }
+  return String(reading);
+}
+
 function readingClass(reading: unknown): string {
-  const r = String(reading ?? "").toLowerCase();
+  const r = readingText(reading).toLowerCase();
   if (r.includes("bull") || r.includes("up")) return "text-accent-green";
   if (r.includes("bear") || r.includes("down")) return "text-accent-red";
   return "text-text-muted";
@@ -183,7 +194,7 @@ export default async function ForecastsPage({
                   <td className="px-4 py-3 text-right font-mono text-text-muted">
                     {r.hv != null ? pctVal(r.hv * 100, 1) : "—"}
                   </td>
-                  <td className={`px-4 py-3 ${readingClass(r.reading)}`}>{r.reading ?? "—"}</td>
+                  <td className={`px-4 py-3 ${readingClass(r.reading)}`}>{readingText(r.reading) || "—"}</td>
                   {HORIZONS.map((h) => {
                     const hz = r.horizons?.[h];
                     return (
