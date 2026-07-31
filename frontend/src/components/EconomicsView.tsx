@@ -4,6 +4,20 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import MultiSelect from "@/components/MultiSelect";
 import StatCard from "@/components/StatCard";
 import Reveal from "@/components/Reveal";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import type {
   EconomicsBySymbolRow,
   EconomicsMonthlyRow,
@@ -108,107 +122,134 @@ function SummaryRow({ summary }: { summary: EconomicsSummary }) {
 }
 
 /** Dependency-free stacked bar chart: monthly calls net + puts net. */
-function MonthlyNetChart({ rows }: { rows: EconomicsMonthlyRow[] }) {
-  if (!rows.length) return <p className="text-sm text-text-muted">No data.</p>;
-  const w = Math.max(rows.length * 48, 240);
-  const h = 200;
-  const pad = { top: 10, bottom: 40, left: 4, right: 4 };
-  const values = rows.flatMap((r) => [r.calls_net, r.puts_net, r.calls_net + r.puts_net]);
-  const max = Math.max(1, ...values, 0);
-  const min = Math.min(0, ...values);
-  const range = max - min || 1;
-  const plotH = h - pad.top - pad.bottom;
-  const y0 = pad.top + (max / range) * plotH; // baseline (value 0)
-  const bw = (w - pad.left - pad.right) / rows.length;
-  const scale = (v: number) => (v / range) * plotH;
+const CALLS_COLOR = "#00c493";
+const PUTS_COLOR = "#ff9416";
+const NET_COLOR = "#5b61ff";
 
+function ChartTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: { name?: string; value?: number; color?: string }[];
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
   return (
-    <div className="overflow-x-auto">
-      <svg width={w} height={h} role="img" aria-label="Monthly net income">
-        <line x1={pad.left} y1={y0} x2={w - pad.right} y2={y0} stroke="var(--color-border)" />
-        {rows.map((r, i) => {
-          const cx = pad.left + i * bw + bw / 2;
-          const barW = Math.min(bw * 0.6, 26);
-          const x = cx - barW / 2;
-          // stack calls then puts above/below the zero line
-          const cH = scale(r.calls_net);
-          const pH = scale(r.puts_net);
-          const callsY = r.calls_net >= 0 ? y0 - cH : y0;
-          const putsBase = y0 - Math.max(cH, 0);
-          const putsY = r.puts_net >= 0 ? putsBase - pH : y0 - Math.min(cH, 0);
-          return (
-            <g key={i}>
-              <rect x={x} y={callsY} width={barW} height={Math.abs(cH)} fill="#00a87e" rx={2} />
-              <rect x={x} y={putsY} width={barW} height={Math.abs(pH)} fill="#ec7e00" rx={2} />
-              <text
-                x={cx}
-                y={h - pad.bottom + 14}
-                textAnchor="middle"
-                className="fill-text-muted"
-                fontSize={9}
-                transform={`rotate(35 ${cx} ${h - pad.bottom + 14})`}
-              >
-                {r.label}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-      <div className="mt-1 flex gap-4 text-xs text-text-muted">
-        <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm" style={{ background: "#00a87e" }} /> Calls Net</span>
-        <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm" style={{ background: "#ec7e00" }} /> Puts Net</span>
-      </div>
+    <div className="rounded-[10px] border border-border bg-bg-card px-3 py-2 text-xs shadow-lg">
+      {label && <div className="mb-1 font-medium text-text">{label}</div>}
+      {payload.map((p, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <span className="inline-block h-2 w-2 rounded-sm" style={{ background: p.color }} />
+          <span className="text-text-muted">{p.name}</span>
+          <span className="ml-auto font-mono text-text">{currency(Number(p.value ?? 0))}</span>
+        </div>
+      ))}
     </div>
   );
 }
 
-/** Dependency-free doughnut chart: calls vs puts net (absolute weights). */
+function MonthlyNetChart({ rows }: { rows: EconomicsMonthlyRow[] }) {
+  if (!rows.length) return <p className="text-sm text-text-muted">No data.</p>;
+  const chartData = rows.map((r) => ({
+    label: r.label,
+    calls_net: r.calls_net,
+    puts_net: r.puts_net,
+    net: r.calls_net + r.puts_net,
+  }));
+
+  return (
+    <div style={{ height: 260 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 4, left: 2 }} barGap={2}>
+          <CartesianGrid stroke="rgba(148,163,184,0.08)" strokeDasharray="3 3" vertical={false} />
+          <XAxis
+            dataKey="label"
+            tick={{ fill: "#8d969e", fontSize: 10 }}
+            tickLine={false}
+            axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
+            interval={0}
+            angle={-30}
+            textAnchor="end"
+            height={48}
+          />
+          <YAxis
+            tick={{ fill: "#8d969e", fontSize: 10 }}
+            tickLine={false}
+            axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
+            tickFormatter={(v) => currency(Number(v))}
+            width={56}
+          />
+          <ReferenceLine y={0} stroke="rgba(148,163,184,0.35)" />
+          <Tooltip cursor={{ fill: "rgba(148,163,184,0.08)" }} content={<ChartTooltip />} />
+          <Legend
+            wrapperStyle={{ fontSize: 11, color: "#8d969e" }}
+            iconType="circle"
+            iconSize={8}
+          />
+          <Bar dataKey="calls_net" name="Calls Net" fill={CALLS_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+          <Bar dataKey="puts_net" name="Puts Net" fill={PUTS_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+          <Bar dataKey="net" name="Net" fill={NET_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/** Recharts donut: calls vs puts net (absolute weights). */
 function TypeDoughnut({ callsNet, putsNet }: { callsNet: number; putsNet: number }) {
   const a = Math.abs(callsNet);
   const b = Math.abs(putsNet);
   const total = a + b;
-  const size = 160;
-  const r = 60;
-  const cx = size / 2;
-  const cy = size / 2;
-  const stroke = 24;
-  const circ = 2 * Math.PI * r;
-  const callsFrac = total > 0 ? a / total : 0;
-  const putsFrac = total > 0 ? b / total : 0;
+  const pieData = [
+    { name: "Calls", value: a, raw: callsNet, color: CALLS_COLOR },
+    { name: "Puts", value: b, raw: putsNet, color: PUTS_COLOR },
+  ];
 
   return (
-    <div className="flex flex-col items-center gap-2">
-      <svg width={size} height={size} role="img" aria-label="Calls vs puts net">
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--color-border)" strokeWidth={stroke} />
-        {total > 0 && (
-          <>
-            <circle
-              cx={cx}
-              cy={cy}
-              r={r}
-              fill="none"
-              stroke="#00a87e"
-              strokeWidth={stroke}
-              strokeDasharray={`${callsFrac * circ} ${circ}`}
-              transform={`rotate(-90 ${cx} ${cy})`}
+    <div style={{ height: 260 }} className="flex flex-col">
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie
+            data={total > 0 ? pieData : [{ name: "No data", value: 1, raw: 0, color: "var(--color-border)" }]}
+            dataKey="value"
+            nameKey="name"
+            cx="50%"
+            cy="50%"
+            innerRadius={58}
+            outerRadius={88}
+            paddingAngle={total > 0 ? 2 : 0}
+            stroke="none"
+            isAnimationActive={false}
+          >
+            {(total > 0 ? pieData : [{ color: "var(--color-border)" }]).map((d, i) => (
+              <Cell key={i} fill={d.color} />
+            ))}
+          </Pie>
+          {total > 0 && (
+            <Tooltip
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const p = payload[0].payload as { name: string; raw: number; color: string };
+                return (
+                  <div className="rounded-[10px] border border-border bg-bg-card px-3 py-2 text-xs shadow-lg">
+                    <span className="flex items-center gap-2">
+                      <span className="inline-block h-2 w-2 rounded-sm" style={{ background: p.color }} />
+                      <span className="text-text-muted">{p.name}</span>
+                      <span className="ml-auto font-mono text-text">{currency(p.raw)}</span>
+                    </span>
+                  </div>
+                );
+              }}
             />
-            <circle
-              cx={cx}
-              cy={cy}
-              r={r}
-              fill="none"
-              stroke="#ec7e00"
-              strokeWidth={stroke}
-              strokeDasharray={`${putsFrac * circ} ${circ}`}
-              strokeDashoffset={-callsFrac * circ}
-              transform={`rotate(-90 ${cx} ${cy})`}
-            />
-          </>
-        )}
-      </svg>
-      <div className="flex gap-4 text-xs text-text-muted">
-        <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm" style={{ background: "#00a87e" }} /> Calls {currency(callsNet)}</span>
-        <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm" style={{ background: "#ec7e00" }} /> Puts {currency(putsNet)}</span>
+          )}
+          <Legend wrapperStyle={{ fontSize: 11, color: "#8d969e" }} iconType="circle" iconSize={8} />
+        </PieChart>
+      </ResponsiveContainer>
+      <div className="flex justify-center gap-4 text-xs text-text-muted">
+        <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm" style={{ background: CALLS_COLOR }} /> Calls {currency(callsNet)}</span>
+        <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm" style={{ background: PUTS_COLOR }} /> Puts {currency(putsNet)}</span>
       </div>
     </div>
   );
@@ -527,7 +568,39 @@ function MonthlySection({ rows }: { rows: EconomicsMonthlyRow[] }) {
   );
 }
 
+type BySymbolKey = keyof Pick<
+  EconomicsBySymbolRow,
+  "symbol" | "premium" | "buyback" | "net" | "positions_count" | "avg_roc_annualized"
+>;
+
+const BY_SYMBOL_COLS: { key: BySymbolKey; label: string; num?: boolean }[] = [
+  { key: "symbol", label: "Symbol" },
+  { key: "premium", label: "Premium", num: true },
+  { key: "buyback", label: "Buyback", num: true },
+  { key: "net", label: "Net", num: true },
+  { key: "positions_count", label: "# Positions", num: true },
+  { key: "avg_roc_annualized", label: "Avg RoC% (Ann.)", num: true },
+];
+
 function BySymbolSection({ rows }: { rows: EconomicsBySymbolRow[] }) {
+  const [sortKey, setSortKey] = useState<BySymbolKey>("net");
+  const [dir, setDir] = useState<"asc" | "desc">("desc");
+
+  const sorted = useMemo(() => {
+    return [...rows].sort((a, b) => {
+      const c = compareValues(a[sortKey], b[sortKey]);
+      return dir === "asc" ? c : -c;
+    });
+  }, [rows, sortKey, dir]);
+
+  function onSort(key: BySymbolKey) {
+    if (key === sortKey) setDir((d) => (d === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(key);
+      setDir(key === "symbol" ? "asc" : "desc");
+    }
+  }
+
   return (
     <div className="surface overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3">
@@ -540,23 +613,27 @@ function BySymbolSection({ rows }: { rows: EconomicsBySymbolRow[] }) {
         <table className="w-full min-w-[640px] text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
-              <th className="px-3 py-2 font-medium">Symbol</th>
-              <th className="px-3 py-2 text-right font-medium">Premium</th>
-              <th className="px-3 py-2 text-right font-medium">Buyback</th>
-              <th className="px-3 py-2 text-right font-medium">Net</th>
-              <th className="px-3 py-2 text-right font-medium"># Positions</th>
-              <th className="px-3 py-2 text-right font-medium">Avg RoC% (Ann.)</th>
+              {BY_SYMBOL_COLS.map((c) => (
+                <th
+                  key={c.key}
+                  onClick={() => onSort(c.key)}
+                  className={`cursor-pointer select-none px-3 py-2 font-medium hover:text-text ${c.num ? "text-right" : ""}`}
+                >
+                  {c.label}
+                  <span className="ml-1">{sortKey === c.key ? (dir === "asc" ? "▲" : "▼") : ""}</span>
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && (
+            {sorted.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-3 py-6 text-center text-text-muted">
                   No symbol-level economics available.
                 </td>
               </tr>
             )}
-            {rows.map((r) => (
+            {sorted.map((r) => (
               <tr key={r.symbol} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
                 <td className="px-3 py-2 font-semibold">{r.symbol}</td>
                 <td className="px-3 py-2 text-right font-mono">{currency(r.premium)}</td>
