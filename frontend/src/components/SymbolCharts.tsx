@@ -1,7 +1,25 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  PolarAngleAxis,
+  PolarGrid,
+  PolarRadiusAxis,
+  RadarChart,
+  ReferenceArea,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+  Radar as RechartsRadar,
+} from "recharts";
 import type { Enrichment } from "@/types/symbol-detail";
+
+const Recharts = { Radar: RechartsRadar };
 
 /* ---- momentum band colors (mirror legacy MOMENTUM_BAND) ---- */
 const MOMENTUM_BAND: Record<string, string> = {
@@ -118,95 +136,46 @@ function FilterStatus({ detail }: { detail: { passes_all?: boolean; checks?: Rec
   );
 }
 
-/* ---------------- Radar chart (SVG) ---------------- */
+/* ---------------- Radar chart (Recharts) ---------------- */
 interface QualityFactor {
   score?: number;
   max?: number;
   weight?: number;
 }
 function Radar({ qd }: { qd: Record<string, QualityFactor> }) {
-  const labels: string[] = [];
-  const values: number[] = [];
-  const maxVals: number[] = [];
+  const data: { label: string; score: number; max: number }[] = [];
   for (const [k, v] of Object.entries(qd)) {
     if (v && typeof v === "object" && "score" in v) {
-      labels.push(k.replace(/_/g, " "));
-      values.push(v.score || 0);
-      maxVals.push(v.max || v.weight || 25);
+      data.push({ label: k.replace(/_/g, " "), score: v.score || 0, max: v.max || v.weight || 25 });
     }
   }
-  const n = labels.length;
-  if (n < 3) return null;
-
-  const size = 320;
-  const cx = size / 2;
-  const cy = size / 2;
-  const R = size / 2 - 54;
-  const scaleMax = Math.max(100, ...maxVals, ...values);
-  const angle = (i: number) => (Math.PI * 2 * i) / n - Math.PI / 2;
-  const point = (i: number, val: number) => {
-    const r = (Math.min(val, scaleMax) / scaleMax) * R;
-    return [cx + r * Math.cos(angle(i)), cy + r * Math.sin(angle(i))];
-  };
-  const poly = (arr: number[]) => arr.map((v, i) => point(i, v).join(",")).join(" ");
-  const rings = [0.25, 0.5, 0.75, 1];
+  if (data.length < 3) return null;
+  const scaleMax = Math.max(100, ...data.map((d) => Math.max(d.max, d.score)));
 
   return (
     <div className="flex flex-col items-center">
       <h4 className="mb-2 self-start text-xs uppercase tracking-wide text-text-muted">Score Contribution</h4>
-      <svg viewBox={`0 0 ${size} ${size}`} className="max-w-[320px]" role="img" aria-label="Quality score radar">
-        {rings.map((rr, ri) => (
-          <polygon
-            key={ri}
-            points={labels.map((_, i) => {
-              const r = rr * R;
-              return `${cx + r * Math.cos(angle(i))},${cy + r * Math.sin(angle(i))}`;
-            }).join(" ")}
-            fill="none"
-            stroke="rgba(255,255,255,0.08)"
-            strokeWidth={1}
-          />
-        ))}
-        {labels.map((_, i) => {
-          const [x, y] = point(i, scaleMax);
-          return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="rgba(255,255,255,0.08)" strokeWidth={1} />;
-        })}
-        <polygon points={poly(maxVals)} fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.18)" strokeWidth={1} strokeDasharray="4 4" />
-        <polygon points={poly(values)} fill="rgba(99,102,241,0.25)" stroke="rgba(99,102,241,0.85)" strokeWidth={2} />
-        {values.map((v, i) => {
-          const [x, y] = point(i, v);
-          return <circle key={i} cx={x} cy={y} r={3} fill="rgba(99,102,241,1)" />;
-        })}
-        {labels.map((lab, i) => {
-          const [x, y] = point(i, scaleMax * 1.13);
-          return (
-            <text
-              key={i}
-              x={x}
-              y={y}
-              fill="#ccc"
-              fontSize={10}
-              textAnchor={Math.abs(x - cx) < 8 ? "middle" : x > cx ? "start" : "end"}
-              dominantBaseline="middle"
-            >
-              {lab}
-            </text>
-          );
-        })}
-      </svg>
-      <div className="mt-1 flex gap-4 text-xs text-text-muted">
-        <span className="inline-flex items-center gap-1">
-          <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: "rgba(99,102,241,0.85)" }} /> Score
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="inline-block h-2.5 w-2.5 rounded-sm border border-dashed border-white/30" /> Max
-        </span>
+      <div style={{ width: "100%", maxWidth: 360, height: 300 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <RadarChart data={data} outerRadius="72%">
+            <PolarGrid stroke="rgba(255,255,255,0.10)" />
+            <PolarAngleAxis dataKey="label" tick={{ fill: "#ccc", fontSize: 10 }} />
+            <PolarRadiusAxis domain={[0, scaleMax]} tick={{ fill: "#777", fontSize: 9 }} axisLine={false} />
+            <Recharts.Radar name="Max" dataKey="max" stroke="rgba(255,255,255,0.25)" strokeDasharray="4 4" fill="rgba(255,255,255,0.04)" fillOpacity={1} isAnimationActive={false} />
+            <Recharts.Radar name="Score" dataKey="score" stroke="rgba(99,102,241,0.9)" fill="rgba(99,102,241,0.28)" fillOpacity={1} isAnimationActive={false} />
+            <Tooltip
+              contentStyle={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 10, fontSize: 12 }}
+              labelStyle={{ color: "#8d969e" }}
+            />
+            <Legend wrapperStyle={{ fontSize: 11, color: "#ccc" }} />
+          </RadarChart>
+        </ResponsiveContainer>
       </div>
     </div>
   );
 }
 
-/* ---------------- Timing history chart (SVG) ---------------- */
+/* ---------------- Timing history chart (Recharts) ---------------- */
 interface TimingPoint {
   date?: string;
   tech_timing?: number;
@@ -230,57 +199,46 @@ function TimingHistory({ symbol }: { symbol: string }) {
   if (points == null) return <div className="py-4 text-sm text-text-muted">Loading timing history…</div>;
   if (points.length < 2) return null;
 
-  const W = 640;
-  const H = 200;
-  const padL = 32;
-  const padR = 12;
-  const padT = 12;
-  const padB = 24;
   const n = points.length;
-  const x = (i: number) => padL + (i / (n - 1)) * (W - padL - padR);
-  const y = (v: number) => padT + (1 - Math.max(0, Math.min(100, v)) / 100) * (H - padT - padB);
-  const path = points
-    .map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p.tech_timing ?? 0).toFixed(1)}`)
-    .join(" ");
+  const data = points.map((p) => ({
+    label: p.date ? p.date.slice(5) : "",
+    tech_timing: p.tech_timing ?? null,
+    momentum: p.momentum ?? "",
+  }));
 
-  /* momentum bands as background rects per contiguous run */
-  const bands: { x0: number; x1: number; color: string; m: string }[] = [];
-  for (let i = 0; i < n; i++) {
-    const m = points[i].momentum || "";
-    const x0 = i === 0 ? padL : (x(i - 1) + x(i)) / 2;
-    const x1 = i === n - 1 ? W - padR : (x(i) + x(i + 1)) / 2;
-    bands.push({ x0, x1, color: momentumBand(m), m });
+  /* contiguous momentum runs → shaded reference areas */
+  const runs: { x1: string; x2: string; color: string }[] = [];
+  let start = 0;
+  for (let i = 1; i <= n; i++) {
+    if (i === n || data[i].momentum !== data[start].momentum) {
+      const m = data[start].momentum;
+      if (m) runs.push({ x1: data[start].label, x2: data[i - 1].label, color: momentumBand(m) });
+      start = i;
+    }
   }
   const usedMoms = Array.from(new Set(points.map((p) => p.momentum).filter(Boolean))) as string[];
 
   return (
     <div>
       <h4 className="mb-2 text-xs uppercase tracking-wide text-text-muted">Tech Timing — last {n} days</h4>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Tech timing history">
-        {bands.map((b, i) => (
-          <rect key={i} x={b.x0} y={padT} width={Math.max(0, b.x1 - b.x0)} height={H - padT - padB} fill={b.color} />
-        ))}
-        {[0, 25, 50, 75, 100].map((g) => (
-          <g key={g}>
-            <line x1={padL} y1={y(g)} x2={W - padR} y2={y(g)} stroke="rgba(148,163,184,0.12)" strokeWidth={1} />
-            <text x={padL - 6} y={y(g)} fill="#9ca3af" fontSize={9} textAnchor="end" dominantBaseline="middle">{g}</text>
-          </g>
-        ))}
-        <path d={path} fill="none" stroke="#e5e7eb" strokeWidth={2} />
-        {points.map((p, i) => (
-          <text
-            key={i}
-            x={x(i)}
-            y={H - 8}
-            fill="#9ca3af"
-            fontSize={8}
-            textAnchor="middle"
-            style={{ display: n > 14 && i % Math.ceil(n / 12) !== 0 ? "none" : undefined }}
-          >
-            {p.date ? p.date.slice(5) : ""}
-          </text>
-        ))}
-      </svg>
+      <div style={{ width: "100%", height: 220 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+            {runs.map((r, i) => (
+              <ReferenceArea key={i} x1={r.x1} x2={r.x2} fill={r.color} fillOpacity={1} ifOverflow="extendDomain" />
+            ))}
+            <CartesianGrid stroke="rgba(148,163,184,0.10)" vertical={false} />
+            <XAxis dataKey="label" tick={{ fill: "#8d969e", fontSize: 10 }} tickLine={false} axisLine={{ stroke: "rgba(148,163,184,0.15)" }} minTickGap={24} />
+            <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fill: "#8d969e", fontSize: 10 }} tickLine={false} axisLine={false} width={28} />
+            <Tooltip
+              contentStyle={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 10, fontSize: 12 }}
+              labelStyle={{ color: "#8d969e" }}
+              formatter={(v, _n, item) => [v as number | string, (item as { payload?: { momentum?: string } })?.payload?.momentum ? `Timing · ${(item as { payload?: { momentum?: string } }).payload!.momentum}` : "Tech Timing"]}
+            />
+            <Line type="monotone" dataKey="tech_timing" stroke="#e5e7eb" strokeWidth={2} dot={n <= 40 ? { r: 2 } : false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
       {usedMoms.length > 0 && (
         <div className="mt-1 flex flex-wrap gap-3 text-xs text-text-muted">
           {usedMoms.map((m) => (

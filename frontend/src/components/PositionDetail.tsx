@@ -1,6 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { renderMarkdown } from "@/lib/markdown";
 import type { Position } from "@/types/symbol-detail";
 
@@ -49,39 +58,36 @@ function SnapshotChart({ snapshots }: { snapshots: Snapshot[] }) {
     return <p className="text-sm text-text-muted">No monitoring data yet.</p>;
   }
 
-  const W = 720;
-  const H = 190;
-  const padX = 8;
-  const padY = 10;
-  const n = rows.length;
-  const xAt = (i: number) => padX + (n <= 1 ? 0 : (i * (W - 2 * padX)) / (n - 1));
-
-  function pathFor(field: string): string {
-    const vals = rows.map((r) => numOrNull(r.s[field]));
-    const present = vals.filter((v): v is number => v !== null);
-    if (present.length === 0) return "";
-    const min = Math.min(...present);
-    const max = Math.max(...present);
-    const span = max - min || 1;
-    let d = "";
-    let penDown = false;
-    vals.forEach((v, i) => {
-      if (v === null) {
-        penDown = false;
-        return;
-      }
-      const y = padY + (H - 2 * padY) * (1 - (v - min) / span);
-      const x = xAt(i);
-      d += `${penDown ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)} `;
-      penDown = true;
-    });
-    return d.trim();
-  }
-
-  const firstLabel = rows[0].d!;
-  const lastLabel = rows[n - 1].d!;
   const fmtLabel = (d: Date) =>
     d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+  // Per-series min/max for 0..1 normalization (mixed scales → compare shape).
+  const bounds: Record<string, { min: number; max: number }> = {};
+  for (const s of SERIES) {
+    const present = rows
+      .map((r) => numOrNull(r.s[s.field]))
+      .filter((v): v is number => v !== null);
+    bounds[s.field] = present.length
+      ? { min: Math.min(...present), max: Math.max(...present) }
+      : { min: 0, max: 1 };
+  }
+
+  const data = rows.map((r) => {
+    const row: Record<string, number | string | null> = { label: fmtLabel(r.d!) };
+    for (const s of SERIES) {
+      const v = numOrNull(r.s[s.field]);
+      row[`${s.key}_raw`] = v;
+      if (v === null) row[s.key] = null;
+      else {
+        const { min, max } = bounds[s.field];
+        const span = max - min || 1;
+        row[s.key] = (v - min) / span;
+      }
+    }
+    return row;
+  });
+
+  const activeSeries = SERIES.filter((s) => visible[s.key]);
 
   return (
     <div className="space-y-2">
@@ -104,22 +110,58 @@ function SnapshotChart({ snapshots }: { snapshots: Snapshot[] }) {
           ))}
         </div>
       </div>
-      <div className="overflow-x-auto rounded-[var(--radius)] bg-bg-input p-2">
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: 480, height: H }}>
-          {SERIES.filter((s) => visible[s.key]).map((s) => {
-            const d = pathFor(s.field);
-            if (!d) return null;
-            return <path key={s.key} d={d} fill="none" stroke={s.color} strokeWidth={1.5} />;
-          })}
-        </svg>
+      <div className="rounded-[var(--radius)] bg-bg-input p-2" style={{ height: 240 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+            <CartesianGrid stroke="rgba(148,163,184,0.10)" vertical={false} />
+            <XAxis
+              dataKey="label"
+              tick={{ fill: "#8d969e", fontSize: 10 }}
+              tickLine={false}
+              axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
+              minTickGap={24}
+            />
+            <YAxis hide domain={[0, 1]} />
+            <Tooltip
+              contentStyle={{
+                background: "var(--bg-card)",
+                border: "1px solid var(--border)",
+                borderRadius: 10,
+                fontSize: 12,
+              }}
+              labelStyle={{ color: "#8d969e" }}
+              formatter={(_v, _n, item) => {
+                const it = item as { dataKey?: unknown; payload?: Record<string, unknown> };
+                const key = String(it?.dataKey ?? "").replace(/_norm$/, "");
+                const meta = SERIES.find((s) => s.key === key);
+                const raw = it?.payload?.[`${key}_raw`];
+                return [raw != null ? Number(raw).toFixed(2) : "—", meta?.label ?? key];
+              }}
+            />
+            {activeSeries.map((s) => (
+              <Line
+                key={s.key}
+                type="monotone"
+                dataKey={s.key}
+                name={s.label}
+                stroke={s.color}
+                strokeWidth={1.75}
+                dot={false}
+                activeDot={{ r: 3 }}
+                connectNulls
+                isAnimationActive={false}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
       </div>
       <div className="flex justify-between text-xs text-text-muted">
-        <span>{fmtLabel(firstLabel)}</span>
-        <span>{n} snapshots</span>
-        <span>{fmtLabel(lastLabel)}</span>
+        <span>{fmtLabel(rows[0].d!)}</span>
+        <span>{rows.length} snapshots</span>
+        <span>{fmtLabel(rows[rows.length - 1].d!)}</span>
       </div>
       <div className="flex flex-wrap gap-3 text-xs">
-        {SERIES.filter((s) => visible[s.key]).map((s) => {
+        {activeSeries.map((s) => {
           const last = [...rows].reverse().find((r) => numOrNull(r.s[s.field]) !== null);
           const v = last ? numOrNull(last.s[s.field]) : null;
           return (

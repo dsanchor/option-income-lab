@@ -11,10 +11,21 @@ export async function POST(
   { params }: { params: Promise<{ name: string }> },
 ) {
   const { name } = await params;
+  let body: string | undefined;
+  try {
+    const raw = await _req.text();
+    if (raw) body = raw;
+  } catch {
+    /* no body */
+  }
   try {
     const res = await fetch(
       `${API_BASE_URL}/api/trigger/${encodeURIComponent(name)}`,
-      { method: "POST", headers: { Accept: "application/json" } },
+      {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body,
+      },
     );
     const data = await res.json().catch(() => ({}));
     return NextResponse.json(data, { status: res.status });

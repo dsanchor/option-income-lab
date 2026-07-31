@@ -1,9 +1,10 @@
-import Link from "next/link";
 import { apiFetch } from "@/lib/api";
-import { timeAgo } from "@/lib/format";
 import StatCard from "@/components/StatCard";
 import Reveal from "@/components/Reveal";
-import type { DashboardData, ActivityItem, BannerItem } from "@/types/dashboard";
+import DashboardBanner from "@/components/DashboardBanner";
+import DashboardAgentTables from "@/components/DashboardAgentTables";
+import DashboardActivity from "@/components/DashboardActivity";
+import type { DashboardData } from "@/types/dashboard";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,8 @@ export default async function DashboardPage() {
   }
 
   const roc = d.open_roc_annualized ?? 0;
+  const tables = d.agent_tables ?? [];
+  const activity = d.activity ?? [];
 
   return (
     <div className="space-y-8">
@@ -48,24 +51,12 @@ export default async function DashboardPage() {
         </span>
       </div>
 
+      {/* Banner marquee */}
       {d.banner_items && d.banner_items.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {d.banner_items.map((b: BannerItem, i) => (
-            <Reveal key={i} index={i}>
-              <div
-                className="flex items-center gap-2 rounded-[var(--radius-pill)] border border-border bg-bg-card/70 px-3 py-1.5 text-sm backdrop-blur card-hover"
-                title={[b.category, b.symbol].filter(Boolean).join(" · ")}
-              >
-                {b.emoji && <span>{b.emoji}</span>}
-                {b.symbol && <span className="font-mono font-semibold">{b.symbol}</span>}
-                {b.text && <span className="text-text-muted">{b.text}</span>}
-              </div>
-            </Reveal>
-          ))}
-        </div>
+        <DashboardBanner items={d.banner_items} />
       )}
 
-      {/* Summary cards */}
+      {/* Summary cards (3, matching legacy) */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <Reveal index={0}>
           <StatCard label="Calls Exposure" value={d.total_call_exposure ?? 0} prefix="$" tone="blue" icon="📞" />
@@ -81,67 +72,16 @@ export default async function DashboardPage() {
             decimals={1}
             tone={roc >= 0 ? "green" : "red"}
             icon="📈"
+            hint="Capital-weighted annualized return on your open positions"
           />
         </Reveal>
       </div>
 
-      {/* Secondary counters */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Reveal index={0}>
-          <StatCard label="Symbols" value={d.symbol_count ?? 0} tone="purple" icon="📊" />
-        </Reveal>
-        <Reveal index={1}>
-          <StatCard label="Active Positions" value={d.position_count ?? 0} tone="orange" icon="🎯" />
-        </Reveal>
-        <Reveal index={2}>
-          <StatCard
-            label="Market"
-            display={d.market_open ? "Open" : "Closed"}
-            tone={d.market_open ? "green" : "neutral"}
-            icon={d.market_open ? "🟢" : "⚪"}
-          />
-        </Reveal>
-      </div>
+      {/* Agent tables (open positions + trackings) */}
+      {tables.length > 0 && <DashboardAgentTables tables={tables} />}
 
-      {/* Recent activity */}
-      <section>
-        <h2 className="mb-3 text-lg font-semibold">Recent Activity</h2>
-        {d.activity && d.activity.length > 0 ? (
-          <div className="surface table-modern divide-y divide-border/70 overflow-hidden">
-            {d.activity.slice(0, 20).map((a: ActivityItem, i) => (
-              <ActivityRow key={a.id ?? i} a={a} />
-            ))}
-          </div>
-        ) : (
-          <div className="surface p-8 text-center text-sm text-text-muted">
-            <div className="mb-1 text-2xl">💤</div>
-            No recent activity yet.
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function ActivityRow({ a }: { a: ActivityItem }) {
-  const when = timeAgo(a.timestamp ?? a.created_at);
-  return (
-    <div className="flex items-center justify-between gap-3 px-4 py-3">
-      <div className="flex min-w-0 items-center gap-3">
-        {a.symbol && (
-          <Link
-            href={`/symbols/${a.symbol}`}
-            className="rounded-md bg-bg-input px-2 py-0.5 font-mono text-sm font-semibold text-text no-underline transition-colors hover:bg-bg-hover"
-          >
-            {a.symbol}
-          </Link>
-        )}
-        <span className="truncate text-sm text-text-muted">{a._agent_label}</span>
-      </div>
-      <div className="flex shrink-0 items-center gap-3 text-sm">
-        {a.decision && <span className="text-text">{String(a.decision)}</span>}
-        {when && <span className="text-text-muted">{when}</span>}
-      </div>
+      {/* Recent activity with filters */}
+      {activity.length > 0 && <DashboardActivity items={activity} />}
     </div>
   );
 }
