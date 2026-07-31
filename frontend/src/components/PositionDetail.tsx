@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import {
   CartesianGrid,
@@ -512,45 +512,96 @@ function RollTableView({ symbol, positionId }: { symbol: string; positionId: str
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, ri) => {
-              const cellsByExp: Record<string, RollCell> = {};
-              (row.cells ?? []).forEach((c) => {
-                if (c.expiration) cellsByExp[c.expiration] = c;
+            {(() => {
+              const curStrike = cp.strike != null ? Number(cp.strike) : null;
+              const eqStrike = (a?: number, b: number | null = curStrike) =>
+                a != null && b != null && Math.abs(Number(a) - b) < 1e-6;
+              const refRow =
+                curStrike != null ? (
+                  <tr key="your-strike-ref">
+                    <td
+                      className="px-2 py-1 text-left font-bold"
+                      style={{ color: "#d29922" }}
+                    >
+                      ◀ Your strike{" "}
+                      <span className="font-semibold text-[0.73rem]">
+                        ${fmt2(curStrike)}
+                        {appliedPct(curStrike) ? ` (${appliedPct(curStrike)})` : ""}
+                      </span>
+                    </td>
+                    <td
+                      colSpan={expirations.length}
+                      style={{
+                        borderTop: "2px dashed #d29922",
+                        borderBottom: "2px dashed #d29922",
+                        background: "rgba(210,153,34,0.08)",
+                      }}
+                    />
+                  </tr>
+                ) : null;
+
+              const out: ReactNode[] = [];
+              let refInserted = false;
+              rows.forEach((row, ri) => {
+                if (
+                  curStrike != null &&
+                  !refInserted &&
+                  row.strike != null &&
+                  Number(row.strike) < curStrike
+                ) {
+                  out.push(refRow);
+                  refInserted = true;
+                }
+                const cellsByExp: Record<string, RollCell> = {};
+                (row.cells ?? []).forEach((c) => {
+                  if (c.expiration) cellsByExp[c.expiration] = c;
+                });
+                let label = row.label ?? "";
+                if (row.label === "ATM") {
+                  label = underlying ? `ATM ($${fmt2(underlying)})` : "ATM";
+                } else if (row.offset != null && row.offset !== 0) {
+                  const off = Number(row.offset);
+                  const pctLabel = `${off > 0 ? "+" : ""}${Math.round(off * 100)}%`;
+                  const money = off > 0 ? (isPut ? "ITM" : "OTM") : isPut ? "OTM" : "ITM";
+                  label = `${money} (${pctLabel})`;
+                }
+                out.push(
+                  <tr key={ri} className="border-b border-border/40">
+                    <td className="px-2 py-1 text-left font-medium">{label}</td>
+                    {expirations.map((exp) => {
+                      const cell = cellsByExp[exp.date];
+                      if (!cell || cell.color === "gray") {
+                        return <td key={exp.date} className="px-2 py-1 text-center text-text-muted">—</td>;
+                      }
+                      const isYou = !!exp.is_current && eqStrike(cell.strike);
+                      return (
+                        <td
+                          key={exp.date}
+                          className="px-2 py-1 text-center align-top"
+                          style={{
+                            background: CELL_BG[cell.color ?? ""] ?? "transparent",
+                            ...(isYou ? { outline: "2px solid #d29922", outlineOffset: "-2px" } : {}),
+                          }}
+                        >
+                          {isYou && (
+                            <div className="text-[0.62rem] font-bold tracking-wide" style={{ color: "#d29922" }}>
+                              ● YOUR POSITION
+                            </div>
+                          )}
+                          <span className="font-semibold">${fmt2(cell.strike)}</span>{" "}
+                          <span className="text-text-muted">({appliedPct(cell.strike)})</span>
+                          <div className="text-text-muted">{fmt2(cell.bid)}/{fmt2(cell.ask)}</div>
+                          <div className="text-text-muted">Δ {fmt2(cell.delta)}</div>
+                          <div className="font-semibold">{cell.net_credit != null ? `$${fmt2(cell.net_credit)}` : "—"}</div>
+                        </td>
+                      );
+                    })}
+                  </tr>,
+                );
               });
-              let label = row.label ?? "";
-              if (row.label === "ATM") {
-                label = underlying ? `ATM ($${fmt2(underlying)})` : "ATM";
-              } else if (row.offset != null && row.offset !== 0) {
-                const off = Number(row.offset);
-                const pctLabel = `${off > 0 ? "+" : ""}${Math.round(off * 100)}%`;
-                const moneyness = off > 0 ? (isPut ? "ITM" : "OTM") : isPut ? "OTM" : "ITM";
-                label = `${moneyness} (${pctLabel})`;
-              }
-              return (
-                <tr key={ri} className="border-b border-border/40">
-                  <td className="px-2 py-1 text-left font-medium">{label}</td>
-                  {expirations.map((exp) => {
-                    const cell = cellsByExp[exp.date];
-                    if (!cell || cell.color === "gray") {
-                      return <td key={exp.date} className="px-2 py-1 text-center text-text-muted">—</td>;
-                    }
-                    return (
-                      <td
-                        key={exp.date}
-                        className="px-2 py-1 text-center align-top"
-                        style={{ background: CELL_BG[cell.color ?? ""] ?? "transparent" }}
-                      >
-                        <span className="font-semibold">${fmt2(cell.strike)}</span>{" "}
-                        <span className="text-text-muted">({appliedPct(cell.strike)})</span>
-                        <div className="text-text-muted">{fmt2(cell.bid)}/{fmt2(cell.ask)}</div>
-                        <div className="text-text-muted">Δ {fmt2(cell.delta)}</div>
-                        <div className="font-semibold">{cell.net_credit != null ? `$${fmt2(cell.net_credit)}` : "—"}</div>
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
+              if (curStrike != null && !refInserted) out.push(refRow);
+              return out;
+            })()}
           </tbody>
         </table>
       </div>
