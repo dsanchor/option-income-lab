@@ -84,7 +84,6 @@ export default function SymbolSummary({
       <section className="surface overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3">
           <h2 className="text-base font-semibold">Summary</h2>
-          <span className="text-xs text-accent-blue">click for timing &amp; score →</span>
         </div>
         <div className="overflow-x-auto border-t border-border">
           <table className="w-full min-w-[820px] text-sm">

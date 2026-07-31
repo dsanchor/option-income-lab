@@ -326,9 +326,6 @@ export default function GlobalChatView() {
                           : "border-border bg-bg-input hover:border-accent-blue/30 hover:bg-bg-hover"
                       }`}
                     >
-                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-bg-card text-lg">
-                        {a.icon}
-                      </span>
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center justify-between gap-2">
                           <span className="truncate text-sm font-medium">{a.label}</span>

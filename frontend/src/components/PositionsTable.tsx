@@ -63,7 +63,7 @@ const labelCls = "mb-1 block text-xs text-text-muted";
 
 export default function PositionsTable({ symbol, positions }: { symbol: string; positions: Position[] }) {
   const router = useRouter();
-  const [status, setStatus] = useState("active");
+  const [status, setStatus] = useState("");
   const [days, setDays] = useState(0);
 
   // Which position currently has an open Roll / Close / Notes editor.

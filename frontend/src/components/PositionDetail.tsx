@@ -446,10 +446,35 @@ function RollTableView({ symbol, positionId }: { symbol: string; positionId: str
     return `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`;
   };
 
+  // Moneyness of the current position's strike vs. the underlying price.
+  const moneyness = (strike?: number): { label: string; pct: string; color: string } | null => {
+    if (!underlying || strike == null) return null;
+    const diff = ((strike - underlying) / underlying) * 100;
+    const pctLabel = `${diff >= 0 ? "+" : ""}${diff.toFixed(1)}%`;
+    if (Math.abs(diff) < 0.5) return { label: "ATM", pct: pctLabel, color: "var(--accent-orange)" };
+    const above = diff > 0;
+    const label = above ? (isPut ? "ITM" : "OTM") : isPut ? "OTM" : "ITM";
+    const color = label === "ITM" ? "var(--accent-red)" : "var(--accent-green)";
+    return { label, pct: pctLabel, color };
+  };
+  const cpMoneyness = moneyness(cp.strike);
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
         <span><span className="text-text-muted">Strike:</span> <span className="font-mono">${cp.strike ?? "—"}</span></span>
+        {cpMoneyness && (
+          <span
+            className="rounded-[var(--radius-pill)] px-2 py-0.5 font-semibold"
+            style={{ background: `${cpMoneyness.color}22`, color: cpMoneyness.color }}
+            title="Your position's moneyness vs. current underlying price"
+          >
+            {cpMoneyness.label} · {cpMoneyness.pct}
+          </span>
+        )}
+        {underlying ? (
+          <span><span className="text-text-muted">Underlying:</span> <span className="font-mono">${fmt2(underlying)}</span></span>
+        ) : null}
         <span><span className="text-text-muted">Exp:</span> <span className="font-mono">{cp.expiration ?? "—"}</span></span>
         {cp.premium_received ? (
           <span><span className="text-text-muted">Premium rcvd:</span> <span className="font-mono">${fmt2(cp.premium_received)}</span></span>
