@@ -10,14 +10,16 @@ type ChatMessage = { role: "user" | "assistant"; content: string; ephemeral?: bo
 interface AgentDef {
   value: string;
   label: string;
+  icon: string;
+  desc: string;
 }
 
 const PORTFOLIO_AGENTS: AgentDef[] = [
-  { value: "open_call_monitor", label: "Open Call Monitor" },
-  { value: "open_put_monitor", label: "Open Put Monitor" },
-  { value: "covered_call", label: "Following · Covered Call" },
-  { value: "cash_secured_put", label: "Following · Cash-Secured Put" },
-  { value: "buy_tracker", label: "Following · Buy Tracker" },
+  { value: "open_call_monitor", label: "Open Call Monitor", icon: "📞", desc: "Live covered-call positions & assignment risk" },
+  { value: "open_put_monitor", label: "Open Put Monitor", icon: "🛡️", desc: "Live cash-secured puts & downside exposure" },
+  { value: "covered_call", label: "Following · Covered Call", icon: "📈", desc: "Watchlist symbols flagged for covered calls" },
+  { value: "cash_secured_put", label: "Following · Cash-Secured Put", icon: "💵", desc: "Watchlist symbols flagged for CSPs" },
+  { value: "buy_tracker", label: "Following · Buy Tracker", icon: "🛒", desc: "Symbols tracked for share accumulation" },
 ];
 
 interface SymbolData {
@@ -269,7 +271,7 @@ export default function GlobalChatView() {
       </div>
 
       {phase === "select" && (
-        <section className="rounded-[var(--radius)] border border-border bg-bg-card">
+        <section className="surface overflow-hidden">
           <div className="border-b border-border px-5 py-3">
             <h2 className="text-base font-semibold">Choose Chat Mode</h2>
           </div>
@@ -279,63 +281,121 @@ export default function GlobalChatView() {
               title="Portfolio Chat"
               desc="Chat about your tracked symbols and recent analysis activities"
               onClick={() => selectMode("portfolio")}
+              tone="blue"
             />
             <ModeCard
               icon="🔍"
               title="Quick Analysis"
               desc="Analyze any symbol (not yet tracked) using live market data"
               onClick={() => selectMode("quick-analysis")}
+              tone="purple"
             />
           </div>
         </section>
       )}
 
       {phase === "portfolio-config" && (
-        <section className="rounded-[var(--radius)] border border-border bg-bg-card">
+        <section className="surface overflow-hidden">
           <div className="flex items-center justify-between border-b border-border px-5 py-3">
             <h2 className="text-base font-semibold">💼 Portfolio Chat</h2>
             <BackBtn onClick={reset} />
           </div>
-          <div className="flex flex-col gap-4 px-5 py-4">
+          <div className="flex flex-col gap-6 px-5 py-5">
             <div>
-              <label className="mb-2 block text-sm text-text-muted">Agents</label>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {PORTFOLIO_AGENTS.map((a) => (
-                  <label key={a.value} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={!!agentChecked[a.value]}
-                      onChange={(e) =>
-                        setAgentChecked((prev) => ({ ...prev, [a.value]: e.target.checked }))
+              <div className="mb-3 flex items-center justify-between">
+                <label className="text-xs font-medium uppercase tracking-wide text-text-muted">
+                  Features · Agents
+                </label>
+                <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+                  {selectedAgents.length} of {PORTFOLIO_AGENTS.length}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                {PORTFOLIO_AGENTS.map((a) => {
+                  const on = !!agentChecked[a.value];
+                  return (
+                    <button
+                      key={a.value}
+                      type="button"
+                      onClick={() =>
+                        setAgentChecked((prev) => ({ ...prev, [a.value]: !prev[a.value] }))
                       }
-                      className="accent-[var(--color-accent-blue)]"
-                    />
-                    {a.label}
-                  </label>
-                ))}
+                      className={`flex items-start gap-3 rounded-[var(--radius)] border p-3 text-left transition-all ${
+                        on
+                          ? "border-accent-blue/50 bg-accent-blue/10"
+                          : "border-border bg-bg-input hover:border-accent-blue/30 hover:bg-bg-hover"
+                      }`}
+                    >
+                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-bg-card text-lg">
+                        {a.icon}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="truncate text-sm font-medium">{a.label}</span>
+                          <span
+                            className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border text-[10px] ${
+                              on
+                                ? "border-accent-blue bg-accent-blue text-white"
+                                : "border-border text-transparent"
+                            }`}
+                          >
+                            ✓
+                          </span>
+                        </span>
+                        <span className="mt-0.5 block text-xs text-text-muted">{a.desc}</span>
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
-            <div className="max-w-xs">
-              <label className="mb-1 block text-sm text-text-muted">
-                Max activities per position/symbol
+
+            <div>
+              <label className="mb-3 block text-xs font-medium uppercase tracking-wide text-text-muted">
+                Context
               </label>
-              <input
-                type="number"
-                min={1}
-                value={activitiesLimit}
-                onChange={(e) => setActivitiesLimit(Number(e.target.value))}
-                className="w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm"
-              />
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between gap-4 rounded-[var(--radius)] border border-border bg-bg-input px-4 py-3">
+                  <div>
+                    <div className="text-sm font-medium">Max activities per position/symbol</div>
+                    <div className="text-xs text-text-muted">How much recent history to feed the advisor</div>
+                  </div>
+                  <input
+                    type="number"
+                    min={1}
+                    value={activitiesLimit}
+                    onChange={(e) => setActivitiesLimit(Number(e.target.value))}
+                    className="w-20 rounded-[var(--radius)] border border-border bg-bg-card px-3 py-2 text-center text-sm"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIncludeSymbolData((v) => !v)}
+                  className={`flex items-center justify-between gap-4 rounded-[var(--radius)] border px-4 py-3 text-left transition-all ${
+                    includeSymbolData
+                      ? "border-accent-blue/50 bg-accent-blue/10"
+                      : "border-border bg-bg-input hover:bg-bg-hover"
+                  }`}
+                >
+                  <div>
+                    <div className="text-sm font-medium">Include symbol data</div>
+                    <div className="text-xs text-text-muted">Fundamentals, technicals & quality scores</div>
+                  </div>
+                  <span
+                    className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+                      includeSymbolData ? "bg-accent-blue" : "bg-bg-card"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${
+                        includeSymbolData ? "left-[18px]" : "left-0.5"
+                      }`}
+                    />
+                  </span>
+                </button>
+              </div>
             </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={includeSymbolData}
-                onChange={(e) => setIncludeSymbolData(e.target.checked)}
-                className="accent-[var(--color-accent-blue)]"
-              />
-              Include symbol data (fundamentals, technicals, quality)
-            </label>
+
             <div>
               <button
                 type="button"
@@ -497,20 +557,38 @@ function ModeCard({
   title,
   desc,
   onClick,
+  tone = "blue",
 }: {
   icon: string;
   title: string;
   desc: string;
   onClick: () => void;
+  tone?: "blue" | "purple";
 }) {
+  const t =
+    tone === "purple"
+      ? { bar: "var(--grad-purple)", glow: "rgba(167,139,250,0.14)" }
+      : { bar: "var(--grad-blue)", glow: "rgba(91,97,255,0.14)" };
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex flex-col items-center rounded-[var(--radius)] border border-border bg-bg-input px-6 py-6 text-center transition-colors hover:border-accent-blue/50 hover:bg-hover"
+      className="surface card-hover group relative flex h-full flex-col overflow-hidden p-6 text-left"
+      style={{
+        background: `radial-gradient(120% 120% at 100% 0%, ${t.glow}, transparent 55%), linear-gradient(180deg, var(--bg-card), var(--bg-card-2))`,
+      }}
     >
-      <div className="mb-3 text-4xl">{icon}</div>
-      <h3 className="mb-1 text-base font-semibold">{title}</h3>
+      <span className="absolute inset-y-0 left-0 w-1" style={{ background: t.bar }} aria-hidden />
+      <span
+        className="mb-4 grid h-12 w-12 place-items-center rounded-[14px] text-2xl shadow-[var(--shadow-glow-blue)] transition-transform group-hover:scale-105"
+        style={{ background: t.bar, color: "#fff" }}
+      >
+        {icon}
+      </span>
+      <h3 className="mb-1 flex items-center gap-1.5 text-base font-semibold">
+        {title}
+        <span className="text-text-muted transition-transform group-hover:translate-x-1">→</span>
+      </h3>
       <p className="text-sm text-text-muted">{desc}</p>
     </button>
   );
