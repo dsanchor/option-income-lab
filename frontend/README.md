@@ -1,36 +1,67 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Option Income Lab — `web` (Next.js frontend)
 
-## Getting Started
+The public entrypoint of [Option Income Lab](../README.md). A **Next.js 16 App Router** app
+(React 19, TypeScript, Tailwind CSS v4, recharts) that runs as a **Backend-for-Frontend (BFF)**:
+its server-side route handlers proxy browser requests to the internal FastAPI `api`
+(`../backend/`). The browser never calls the API directly.
 
-First, run the development server:
+## Requirements
+
+- Node.js 24+
+- A running `api` (see [`../backend`](../backend)) reachable via `API_BASE_URL`
+
+## Environment
+
+| Variable | Required | Description |
+|---|---|---|
+| `API_BASE_URL` | Always | Base URL of the internal `api`. Read **at runtime** by server components / route handlers. Defaults to `http://localhost:8000` for local dev. |
+
+## Local development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+export API_BASE_URL="http://localhost:8000"   # point at your local api
+npm run dev                                    # dev server on http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open **http://localhost:3000**.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Build & run (production)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build      # Turbopack build → .next/standalone (output: "standalone")
+node .next/standalone/server.js   # serves on PORT (default 3000)
+```
 
-## Learn More
+> **Note (OneDrive/WSL):** delete `.next` before building if you hit filesystem `EIO`
+> errors: `rm -rf .next && npm run build`.
 
-To learn more about Next.js, take a look at the following resources:
+## Docker
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+docker build -t oil-web .
+docker run -p 3000:3000 -e API_BASE_URL="http://host.docker.internal:8000" oil-web
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+The multi-stage `Dockerfile` produces a slim standalone runtime (Node 24, port 3000,
+`node server.js`).
 
-## Deploy on Vercel
+## Lint
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+npm run lint                 # whole project
+npx eslint src/path/File.tsx # a single file (stricter React Compiler rules apply)
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Structure
+
+```
+src/
+  app/          App Router pages + BFF route handlers under app/api/**
+  components/   Client/server React components (charts, tables, chat, position detail…)
+  lib/          Shared helpers (API client, formatting, badges, markdown)
+  types/        Shared TypeScript types
+```
+
+See the repo [README](../README.md) and [docs/architecture.md](../docs/architecture.md) for the
+full two-container topology and deployment.

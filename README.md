@@ -25,7 +25,52 @@ The result: a DGI portfolio that generates income from **dividends AND option pr
 
 ## Architecture
 
-Eight specialized AI agents power the platform:
+The platform runs as **two decoupled tiers** that ship as **two containers** in the same Azure
+Container Apps environment and share a single CosmosDB:
+
+```
+                 ┌──────────────────────────────────────────────────────────┐
+   Browser  ───► │  web  (frontend/)          Next.js 16 App Router          │  external ingress
+   (HTTPS)       │  ─────────────────────     React 19 · Tailwind v4         │  :3000
+                 │  Server-side BFF proxy      recharts · standalone build    │
+                 └───────────────┬──────────────────────────────────────────┘
+                                 │  internal DNS (API_BASE_URL)
+                                 │  browser NEVER calls the api directly
+                 ┌───────────────▼──────────────────────────────────────────┐
+   Scheduler ◄── │  api  (backend/)           FastAPI (JSON-only)            │  internal ingress
+   (in-proc)     │  ─────────────────────     APScheduler cron               │  :8000
+                 │  8 AI agents · forecast     Playwright/Chromium fallback   │
+                 └───────────────┬──────────────────────────────────────────┘
+                                 │
+                 ┌───────────────▼───────────┐   ┌──────────────────────────┐
+                 │  Azure CosmosDB (NoSQL)    │   │  Yahoo Finance (yfinance) │
+                 │  6 containers, /symbol PK  │   │  quotes · chains · Greeks │
+                 └────────────────────────────┘   └──────────────────────────┘
+```
+
+- **`web` (`frontend/`)** — Next.js 16 App Router (React 19, Tailwind v4, recharts), built as a
+  standalone Node server. It is the **public entrypoint** and acts as a **Backend-for-Frontend
+  (BFF)**: every browser request for data hits a Next.js route handler that proxies to the internal
+  `api` over the environment's private DNS (`API_BASE_URL`). The browser never talks to the API
+  directly; authentication is delegated to Container Apps ingress.
+- **`api` (`backend/`)** — FastAPI serving JSON-only `/api/*` endpoints plus an **in-process
+  APScheduler** that runs the agent cron jobs. **Internal ingress only** (not publicly reachable),
+  no app-level auth. Uses `yfinance` for market data and Playwright/Chromium only as a TradingView
+  fallback.
+
+### Tech stack
+
+| Tier | Stack |
+|------|-------|
+| **Frontend (`web`)** | Next.js 16 (App Router, Turbopack), React 19, TypeScript, Tailwind CSS v4, recharts. `output: "standalone"`, Node 24 runtime, port **3000**. |
+| **Backend (`api`)** | Python 3.12, FastAPI + Uvicorn, APScheduler, `yfinance`, Playwright (Chromium), Azure Cosmos SDK. Port **8000**. |
+| **Data** | Azure CosmosDB (NoSQL, serverless) — 6 containers, symbol-centric partitioning. |
+| **AI** | Azure AI Foundry (default) **or** Google Gemini, selected via `AI_PROVIDER`. |
+| **CI/CD** | GitHub Actions matrix build → two GHCR images (`<repo>-api`, `<repo>-front`) → Azure Container Apps. |
+
+### AI agents
+
+Eight specialized AI agents power the backend:
 
 - **Covered Call & Cash-Secured Put Agents** — Analyze entry opportunities with category-specific parameters (Aristocrat, Compounder, Rising Star, High Yield, Balanced)
 - **Position Monitors** — Two-phase pipeline watches open positions for assignment risk, suggests rolls with full economics
@@ -41,9 +86,10 @@ Eight specialized AI agents power the platform:
 
 **Storage:** Azure CosmosDB with symbol-centric partitioning across 6 containers (symbols, telemetry, settings, dgi_screener, calendar, agent_traces).
 
-**Deployment topology:** The app ships as **two containers** in the same Azure Container Apps environment, sharing the same CosmosDB:
-- **`api`** (`backend/`) — FastAPI JSON-only API + in-process scheduler. **Internal ingress only**, no app-level auth.
-- **`web`** (`frontend/`) — Next.js App Router app that acts as a **BFF**: its server proxies browser requests to the internal `api` over the environment's internal DNS (the browser never hits `api` directly). Auth is delegated to Container Apps ingress. CI builds two images (`<repo>-api`, `<repo>-front`).
+**CI/CD:** On every push, a GitHub Actions matrix build publishes two images to GHCR —
+`ghcr.io/<owner>/<repo>-api` (from `backend/`) and `ghcr.io/<owner>/<repo>-front` (from
+`frontend/`) — tagged with the branch, commit SHA, and `latest` on the default branch. See
+[Deployment](#deployment-azure-container-apps) below.
 
 → [Full architecture details](docs/architecture.md)
 
@@ -123,37 +169,118 @@ Full traceability of every agent execution under **Settings → Agent Logs**: sy
 
 ---
 
-## Quick Start
+## Quick Start (local)
+
+Run the two tiers in **two terminals**: the `api` (FastAPI, port 8000) and the `web`
+(Next.js BFF, port 3000). The browser only ever opens the `web` app.
+
+### 1. Backend — `api`
 
 ```bash
-# 1. Install dependencies
 cd backend
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+source venv/bin/activate            # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# 2. Set environment variables
+# CosmosDB
 export COSMOSDB_ENDPOINT="https://your-account.documents.azure.com:443/"
 export COSMOSDB_KEY="your-primary-key"
 
-# Azure OpenAI
+# LLM — Azure AI Foundry (default)
 export AI_PROVIDER=azure
 export AZURE_AI_PROJECT_ENDPOINT="https://your-project.services.ai.azure.com"
 export AZURE_OPENAI_API_KEY="your-api-key"
 export MODEL_DEPLOYMENT="gpt-5.1"
 
-# OR Google Gemini
-export AI_PROVIDER=gemini
-export GOOGLE_API_KEY="your-google-api-key"
-export MODEL_DEPLOYMENT="gemini-2.0-flash"
+# …OR Google Gemini
+# export AI_PROVIDER=gemini
+# export GOOGLE_API_KEY="your-google-api-key"
+# export MODEL_DEPLOYMENT="gemini-2.0-flash"
 
-# 3. Run (from the backend/ directory)
-python run.py  # Full app (web + scheduler)
+python run.py                       # FastAPI + in-process scheduler on :8000
+# python run.py --api-only          # JSON-only (HTML blocked), scheduler still runs — api-container mode
+# python run.py --web-only          # web/API without the scheduler
 ```
 
-Access the dashboard at http://localhost:8000
+### 2. Frontend — `web`
 
-→ [Full setup guide](docs/local-setup.md) | [Azure deployment](docs/deployment.md)
+```bash
+cd frontend
+npm install
+export API_BASE_URL="http://localhost:8000"   # where the BFF proxies data requests
+npm run dev                                    # Next.js dev server on :3000
+```
+
+Open the app at **http://localhost:3000** (not 8000 — that's the internal API).
+
+> **Docker (either tier):** `docker build -t oil-api ./backend` and
+> `docker build -t oil-web ./frontend`, then run `oil-web` with `-e API_BASE_URL=...` pointing at
+> the `oil-api` container.
+
+→ [Full setup guide](docs/local-setup.md)
+
+---
+
+## Deployment (Azure Container Apps)
+
+The app deploys as **two container apps** in the same Container Apps environment, sharing one
+CosmosDB. CI (GitHub Actions) publishes both images to GHCR on every push:
+`ghcr.io/<owner>/<repo>-api` and `ghcr.io/<owner>/<repo>-front`.
+
+| App | Image | Ingress | Port | Auth |
+|-----|-------|---------|------|------|
+| **`api`** | `…/<repo>-api:latest` (from `backend/`) | **internal** | 8000 | none (private) |
+| **`web`** | `…/<repo>-front:latest` (from `frontend/`) | **external** | 3000 | Container Apps ingress (Entra ID) |
+
+The `web` app reaches the `api` over the environment's internal DNS via `API_BASE_URL`; the browser
+never hits the `api` directly. Concise flow:
+
+```bash
+# api — INTERNAL ingress, takes all backend env vars (CosmosDB + LLM)
+az containerapp create --name ca-oil-api --resource-group $RG --environment $ENV \
+  --image ghcr.io/<owner>/<repo>-api:latest \
+  --target-port 8000 --ingress internal --cpu 1 --memory 2Gi \
+  --env-vars COSMOSDB_ENDPOINT=... COSMOSDB_KEY=... AI_PROVIDER=azure \
+             MODEL_DEPLOYMENT=... AZURE_AI_PROJECT_ENDPOINT=... AZURE_OPENAI_API_KEY=...
+
+# grab the api's internal FQDN
+API_FQDN=$(az containerapp show --name ca-oil-api --resource-group $RG \
+  --query "properties.configuration.ingress.fqdn" -o tsv)
+
+# web — EXTERNAL ingress, only needs API_BASE_URL pointing at the api
+az containerapp create --name ca-oil-web --resource-group $RG --environment $ENV \
+  --image ghcr.io/<owner>/<repo>-front:latest \
+  --target-port 3000 --ingress external --cpu 0.5 --memory 1Gi \
+  --env-vars API_BASE_URL="https://$API_FQDN"
+```
+
+### Environment variables
+
+Env vars are **per component**. The `api` takes the backend vars; the `web` takes only
+`API_BASE_URL`.
+
+**`api` (`backend/`):**
+
+| Variable | Required when | Description |
+|---|---|---|
+| `COSMOSDB_ENDPOINT` | Always | CosmosDB account endpoint (`https://<account>.documents.azure.com:443/`) |
+| `COSMOSDB_KEY` | Always | CosmosDB primary key |
+| `AI_PROVIDER` | Optional | `azure` (default) or `gemini` |
+| `MODEL_DEPLOYMENT` | Always | Default model for all agents (Azure deployment name or Gemini model ID) |
+| `AZURE_AI_PROJECT_ENDPOINT` | `AI_PROVIDER=azure` | Azure AI Foundry project endpoint |
+| `AZURE_OPENAI_API_KEY` | `AI_PROVIDER=azure` | Azure OpenAI API key |
+| `GOOGLE_API_KEY` | `AI_PROVIDER=gemini` | Google AI Studio API key |
+| `TELEGRAM_BOT_TOKEN` | Optional | Telegram bot token (notifications) |
+| `TELEGRAM_CHAT_ID` | Optional | Telegram chat ID (notifications) |
+| `API_ONLY` | Optional | `1` (or `run.py --api-only`) blocks the legacy HTML routes so the container serves JSON only — the mode used by the `api` container. The in-process scheduler still runs (use `--web-only` for a no-scheduler instance). |
+
+**`web` (`frontend/`):**
+
+| Variable | Required when | Description |
+|---|---|---|
+| `API_BASE_URL` | Always | Base URL of the internal `api` (e.g. `https://<api-app>.internal.<env>.<region>.azurecontainerapps.io`). Defaults to `http://localhost:8000` for local dev. |
+
+→ [Full deployment walkthrough (CosmosDB provisioning, cutover/rollback, GHCR auth)](docs/deployment.md)
 
 ---
 
