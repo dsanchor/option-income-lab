@@ -13,6 +13,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { AnimatePresence, motion } from "motion/react";
+import { toast } from "sonner";
 import { HORIZONS, HORIZON_END_SESSION } from "@/types/forecasts";
 import type {
   ForecastRow,
@@ -353,10 +355,17 @@ function DetailModal({
       .then((r) => r.json())
       .then((d: ForecastDetail) => {
         if (!alive) return;
-        if (d.error) setErr(d.error);
-        else setDoc(d);
+        if (d.error) {
+          setErr(d.error);
+          toast.error(`Failed to load forecast: ${d.error}`);
+        } else setDoc(d);
       })
-      .catch((e) => alive && setErr(e instanceof Error ? e.message : "Failed to load"));
+      .catch((e) => {
+        if (!alive) return;
+        const msg = e instanceof Error ? e.message : "Failed to load";
+        setErr(msg);
+        toast.error(`Failed to load forecast: ${msg}`);
+      });
     return () => {
       alive = false;
     };
@@ -372,13 +381,21 @@ function DetailModal({
   const r2 = doc?.trend?.r2;
 
   return (
-    <div
+    <motion.div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onClick={onClose}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
     >
-      <div
+      <motion.div
         className="max-h-[90vh] w-full max-w-[880px] overflow-y-auto rounded-[var(--radius)] border border-border bg-bg-card shadow-xl"
         onClick={(e) => e.stopPropagation()}
+        initial={{ opacity: 0, scale: 0.96, y: 16 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96, y: 16 }}
+        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
       >
         <div className="flex items-center justify-between border-b border-border px-5 py-3">
           <h3 className="text-sm font-semibold">
@@ -433,8 +450,8 @@ function DetailModal({
             </>
           )}
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -557,7 +574,9 @@ export default function ForecastHistory({
           </>
         )}
       </p>
-      {openId && <DetailModal symbol={symbol} id={openId} onClose={close} />}
+      <AnimatePresence>
+        {openId && <DetailModal symbol={symbol} id={openId} onClose={close} />}
+      </AnimatePresence>
     </section>
   );
 }

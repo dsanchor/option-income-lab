@@ -3,20 +3,37 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useRef, useEffect, useCallback } from "react";
+import {
+  FlaskConical,
+  LayoutDashboard,
+  Banknote,
+  MessageSquare,
+  Search,
+  LineChart,
+  CalendarDays,
+  ClipboardList,
+  Settings,
+  ScrollText,
+  Bug,
+  Menu,
+  X,
+  ChevronDown,
+  type LucideIcon,
+} from "lucide-react";
 import type { SymbolsOverview } from "@/types/symbols";
 
-type Item = { href: string; label: string };
+type Item = { href: string; label: string; icon: LucideIcon };
 
 const DROPDOWNS: Record<string, Item[]> = {
   Symbols: [
-    { href: "/symbols", label: "📊 Watchlist" },
-    { href: "/symbols/calendar", label: "📅 Calendar" },
-    { href: "/plans", label: "📋 Action Plans" },
+    { href: "/symbols", label: "Watchlist", icon: LineChart },
+    { href: "/symbols/calendar", label: "Calendar", icon: CalendarDays },
+    { href: "/plans", label: "Action Plans", icon: ClipboardList },
   ],
   Settings: [
-    { href: "/settings/config", label: "⚙️ Configuration" },
-    { href: "/settings/logs", label: "🧾 Agent Logs" },
-    { href: "/settings/debug", label: "🔍 Debug" },
+    { href: "/settings/config", label: "Configuration", icon: Settings },
+    { href: "/settings/logs", label: "Agent Logs", icon: ScrollText },
+    { href: "/settings/debug", label: "Debug", icon: Bug },
   ],
 };
 
@@ -26,7 +43,7 @@ function isActive(pathname: string, href: string, exact = false) {
 }
 
 const linkBase =
-  "rounded-[var(--radius-pill)] px-3 py-1.5 transition-all no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/60";
+  "inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] px-3 py-1.5 transition-all no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/60";
 // `!` importance is required so nav links beat the un-layered global `a { color }`
 // rule (otherwise anchors render accent-blue while dropdown buttons render muted).
 function navClass(active: boolean) {
@@ -58,8 +75,8 @@ export function TopNav() {
           href="/dashboard"
           className="group flex items-center gap-2 whitespace-nowrap text-[1.1rem] font-semibold no-underline"
         >
-          <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-[image:var(--grad-blue)] text-base shadow-[var(--shadow-glow-blue)] transition-transform group-hover:scale-105">
-            🧪
+          <span className="grid h-8 w-8 place-items-center rounded-[10px] bg-[image:var(--grad-blue)] text-base text-white shadow-[var(--shadow-glow-blue)] transition-transform group-hover:scale-105">
+            <FlaskConical size={17} />
           </span>
           <span className="text-gradient">Option Income Lab</span>
         </Link>
@@ -67,19 +84,19 @@ export function TopNav() {
         {/* Desktop nav */}
         <div className="hidden flex-wrap items-center gap-2 md:flex">
           <Link href="/dashboard" className={navClass(dashboardActive)}>
-            🏠 Dashboard
+            <LayoutDashboard size={16} className="shrink-0" /> Dashboard
           </Link>
 
           <Dropdown label="Symbols" items={DROPDOWNS.Symbols} active={symbolsActive} pathname={pathname} />
 
           <Link href="/economics" className={navClass(isActive(pathname, "/economics"))}>
-            💵 Economics
+            <Banknote size={16} className="shrink-0" /> Economics
           </Link>
           <Link href="/chat" className={navClass(isActive(pathname, "/chat", true))}>
-            💬 Chat
+            <MessageSquare size={16} className="shrink-0" /> Chat
           </Link>
           <Link href="/dgi" className={navClass(isActive(pathname, "/dgi"))}>
-            🔎 DGI Screener
+            <Search size={16} className="shrink-0" /> DGI Screener
           </Link>
 
           <Dropdown label="Settings" items={DROPDOWNS.Settings} active={settingsActive} pathname={pathname} />
@@ -96,7 +113,7 @@ export function TopNav() {
           aria-controls="mobile-nav-panel"
           className="ml-auto grid h-9 w-9 place-items-center rounded-[var(--radius-pill)] border border-border text-text-muted transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/60 md:hidden"
         >
-          <span className="text-lg leading-none">{mobileOpen ? "✕" : "☰"}</span>
+          {mobileOpen ? <X size={18} /> : <Menu size={18} />}
         </button>
       </div>
 
@@ -110,11 +127,11 @@ export function TopNav() {
             <SymbolSearch mobile />
           </div>
           <div className="flex flex-col gap-1">
-            <MobileLink href="/dashboard" label="🏠 Dashboard" active={dashboardActive} />
+            <MobileLink href="/dashboard" label="Dashboard" icon={LayoutDashboard} active={dashboardActive} />
             <MobileSection label="Symbols" items={DROPDOWNS.Symbols} pathname={pathname} />
-            <MobileLink href="/economics" label="💵 Economics" active={isActive(pathname, "/economics")} />
-            <MobileLink href="/chat" label="💬 Chat" active={isActive(pathname, "/chat", true)} />
-            <MobileLink href="/dgi" label="🔎 DGI Screener" active={isActive(pathname, "/dgi")} />
+            <MobileLink href="/economics" label="Economics" icon={Banknote} active={isActive(pathname, "/economics")} />
+            <MobileLink href="/chat" label="Chat" icon={MessageSquare} active={isActive(pathname, "/chat", true)} />
+            <MobileLink href="/dgi" label="DGI Screener" icon={Search} active={isActive(pathname, "/dgi")} />
             <MobileSection label="Settings" items={DROPDOWNS.Settings} pathname={pathname} />
           </div>
         </div>
@@ -123,15 +140,15 @@ export function TopNav() {
   );
 }
 
-function MobileLink({ href, label, active }: { href: string; label: string; active: boolean }) {
+function MobileLink({ href, label, icon: Icon, active }: { href: string; label: string; icon: LucideIcon; active: boolean }) {
   return (
     <Link
       href={href}
-      className={`rounded-[var(--radius)] px-3 py-2 text-sm no-underline transition-colors ${
+      className={`flex items-center gap-2 rounded-[var(--radius)] px-3 py-2 text-sm no-underline transition-colors ${
         active ? "bg-bg-hover text-text!" : "text-text-muted! hover:bg-bg-hover hover:text-text!"
       }`}
     >
-      {label}
+      <Icon size={16} className="shrink-0" /> {label}
     </Link>
   );
 }
@@ -142,19 +159,22 @@ function MobileSection({ label, items, pathname }: { label: string; items: Item[
       <div className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
         {label}
       </div>
-      {items.map((it) => (
-        <Link
-          key={it.href}
-          href={it.href}
-          className={`block rounded-[var(--radius)] px-3 py-2 text-sm no-underline transition-colors ${
-            isActive(pathname, it.href, it.href === "/symbols")
-              ? "bg-bg-hover text-text!"
-              : "text-text-muted! hover:bg-bg-hover hover:text-text!"
-          }`}
-        >
-          {it.label}
-        </Link>
-      ))}
+      {items.map((it) => {
+        const Icon = it.icon;
+        return (
+          <Link
+            key={it.href}
+            href={it.href}
+            className={`flex items-center gap-2 rounded-[var(--radius)] px-3 py-2 text-sm no-underline transition-colors ${
+              isActive(pathname, it.href, it.href === "/symbols")
+                ? "bg-bg-hover text-text!"
+                : "text-text-muted! hover:bg-bg-hover hover:text-text!"
+            }`}
+          >
+            <Icon size={16} className="shrink-0" /> {it.label}
+          </Link>
+        );
+      })}
     </div>
   );
 }
@@ -258,9 +278,7 @@ function Dropdown({
         className={`${navClass(active)} inline-flex items-center gap-1 select-none`}
       >
         {label}
-        <span className={`text-[0.6rem] transition-transform ${open ? "rotate-180" : ""}`} aria-hidden>
-          ▾
-        </span>
+        <ChevronDown size={13} className={`transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
       </button>
       <div
         ref={menuRef}
@@ -271,19 +289,22 @@ function Dropdown({
           open ? "visible opacity-100" : "invisible opacity-0"
         }`}
       >
-        {items.map((it) => (
-          <Link
-            key={it.href}
-            href={it.href}
-            role="menuitem"
-            tabIndex={open ? 0 : -1}
-            className={`block px-4 py-2 text-sm no-underline transition-colors hover:bg-bg-hover focus-visible:bg-bg-hover focus-visible:outline-none ${
-              isActive(pathname, it.href, it.href === "/symbols") ? "text-text" : "text-text-muted"
-            } hover:text-text`}
-          >
-            {it.label}
-          </Link>
-        ))}
+        {items.map((it) => {
+          const Icon = it.icon;
+          return (
+            <Link
+              key={it.href}
+              href={it.href}
+              role="menuitem"
+              tabIndex={open ? 0 : -1}
+              className={`flex items-center gap-2 px-4 py-2 text-sm no-underline transition-colors hover:bg-bg-hover focus-visible:bg-bg-hover focus-visible:outline-none ${
+                isActive(pathname, it.href, it.href === "/symbols") ? "text-text" : "text-text-muted"
+              } hover:text-text`}
+            >
+              <Icon size={15} className="shrink-0 opacity-80" /> {it.label}
+            </Link>
+          );
+        })}
       </div>
     </div>
   );

@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/lib/query-client";
 import { TopNav } from "@/components/TopNav";
+import { Toaster } from "sonner";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -26,6 +27,20 @@ export default function RootLayout({
         <Providers>
           <TopNav />
           <main className="mx-auto w-full max-w-[1200px] px-6 py-6">{children}</main>
+          <Toaster
+            theme="dark"
+            position="top-right"
+            richColors
+            closeButton
+            toastOptions={{
+              style: {
+                background: "var(--bg-card)",
+                border: "1px solid var(--border)",
+                color: "var(--text)",
+                borderRadius: "var(--radius)",
+              },
+            }}
+          />
         </Providers>
       </body>
     </html>

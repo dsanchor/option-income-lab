@@ -1,4 +1,7 @@
+"use client";
+
 import type { ReactNode } from "react";
+import { motion } from "motion/react";
 import AnimatedNumber from "@/components/AnimatedNumber";
 
 type Tone = "blue" | "green" | "red" | "orange" | "purple" | "neutral";
@@ -41,7 +44,11 @@ export default function StatCard({
 }) {
   const t = TONE[tone];
   return (
-    <div
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: "-40px" }}
+      transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
       title={tooltip}
       className={`surface card-hover relative flex h-full flex-col overflow-hidden p-5 ${tooltip ? "cursor-help" : ""}`}
       style={{ background: `radial-gradient(120% 120% at 100% 0%, ${t.glow}, transparent 55%), linear-gradient(180deg, var(--bg-card), var(--bg-card-2))` }}
@@ -66,6 +73,6 @@ export default function StatCard({
         )}
       </div>
       {hint && <div className="mt-1 text-xs text-text-muted">{hint}</div>}
-    </div>
+    </motion.div>
   );
 }
