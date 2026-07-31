@@ -1,5 +1,6 @@
 import Link from "next/link";
 import ActivityActions from "@/components/ActivityActions";
+import ApplyRecommendation from "@/components/ApplyRecommendation";
 import type { ActivityDetail, ActivityDoc } from "@/types/activity-detail";
 
 function activityClass(a: string | undefined): string {
@@ -59,7 +60,7 @@ function pick(...vals: (number | string | null | undefined)[]): number | string 
   return null;
 }
 
-function SupervisorPanel({ sv }: { sv: NonNullable<ActivityDoc["supervisor_view"]> }) {
+function SupervisorPanel({ sv, activity }: { sv: NonNullable<ActivityDoc["supervisor_view"]>; activity: ActivityDoc }) {
   const strength = String(sv.challenge_strength ?? "").toUpperCase();
   const strengthLabel =
     strength === "WEAK" ? "Decision is solid"
@@ -95,11 +96,16 @@ function SupervisorPanel({ sv }: { sv: NonNullable<ActivityDoc["supervisor_view"
           <span>✅ <strong>Original decision holds</strong>{sv.one_liner && <> — <em>{sv.one_liner}</em></>}</span>
         )}
       </div>
+      {activity.id && (
+        <div className="pt-1">
+          <ApplyRecommendation activity={activity} sourceAgent="supervisor" />
+        </div>
+      )}
     </section>
   );
 }
 
-function AlphaPanel({ av }: { av: NonNullable<ActivityDoc["alpha_view"]> }) {
+function AlphaPanel({ av, activity }: { av: NonNullable<ActivityDoc["alpha_view"]>; activity: ActivityDoc }) {
   const strength = String(av.opportunity_strength ?? "").toUpperCase();
   const strengthLabel =
     strength === "NONE" ? "No safe relaxation"
@@ -156,6 +162,11 @@ function AlphaPanel({ av }: { av: NonNullable<ActivityDoc["alpha_view"]> }) {
           <span>🔓 <strong>Parameter relaxation alternative</strong>{av.one_liner && <> — <em>{av.one_liner}</em></>}</span>
         )}
       </div>
+      {activity.id && (
+        <div className="pt-1">
+          <ApplyRecommendation activity={activity} sourceAgent="alpha_advisor" />
+        </div>
+      )}
     </section>
   );
 }
@@ -261,8 +272,8 @@ export default function ActivityDetailView({ data }: { data: ActivityDetail }) {
         </div>
       </section>
 
-      {a.supervisor_view && <SupervisorPanel sv={a.supervisor_view} />}
-      {a.alpha_view && <AlphaPanel av={a.alpha_view} />}
+      {a.supervisor_view && <SupervisorPanel sv={a.supervisor_view} activity={a} />}
+      {a.alpha_view && <AlphaPanel av={a.alpha_view} activity={a} />}
 
       {a.id && (
         <ActivityActions
