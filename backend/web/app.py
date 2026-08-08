@@ -132,6 +132,11 @@ def _parse_numeric(value: Any) -> Optional[float]:
     return None
 
 
+def _parse_non_negative_number(value: Any) -> Optional[float]:
+    numeric = _parse_numeric(value)
+    return numeric if numeric is not None and numeric >= 0 else None
+
+
 def _parse_datetime_value(value: Any) -> Optional[datetime]:
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
@@ -597,6 +602,7 @@ def _compute_symbols_overview(cosmos):
         last_updated = enr.get("last_updated", "") or ""
         if last_updated > enrichment_ts:
             enrichment_ts = last_updated
+        wl = s.get("watchlist") or {}
         rows.append({
             "symbol": s.get("symbol"),
             "display_name": s.get("display_name", ""),
@@ -611,6 +617,11 @@ def _compute_symbols_overview(cosmos):
             "in_calls": in_calls,
             "put_exposure": put_exposure,
             "call_exposure": call_exposure,
+            "watchlist": {
+                "covered_call": bool(wl.get("covered_call", False)),
+                "cash_secured_put": bool(wl.get("cash_secured_put", False)),
+                "buy_tracker": bool(wl.get("buy_tracker", False)),
+            },
         })
     rows.sort(
         key=lambda r: r["dgi_score"] if r["dgi_score"] is not None else -1,
@@ -751,12 +762,41 @@ async def api_create_symbol(request: Request):
                     DEFAULT_BACKFILL_SESSIONS,
                     backfill_symbol_forecasts,
                 )
-                asyncio.run(backfill_symbol_forecasts(
+                backfill = backfill_symbol_forecasts(
                     cosmos, yf_provider, symbol,
                     sessions=DEFAULT_BACKFILL_SESSIONS,
-                ))
-            except Exception:
-                pass
+                )
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    result = asyncio.run(backfill)
+                    logger.info("Forecast backfill completed for %s: %s", symbol, result)
+                else:
+                    task = loop.create_task(backfill)
+
+                    def _log_backfill_result(completed):
+                        try:
+                            logger.info(
+                                "Forecast backfill completed for %s: %s",
+                                symbol,
+                                completed.result(),
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Forecast backfill failed for newly created symbol %s: %s",
+                                symbol,
+                                exc,
+                                exc_info=True,
+                            )
+
+                    task.add_done_callback(_log_backfill_result)
+            except Exception as exc:
+                logger.warning(
+                    "Forecast backfill failed for newly created symbol %s: %s",
+                    symbol,
+                    exc,
+                    exc_info=True,
+                )
         threading.Thread(target=_seed_forecasts, daemon=True).start()
 
         return JSONResponse(_clean_doc(doc), status_code=201)
@@ -906,6 +946,15 @@ async def api_update_symbol(request: Request, symbol: str):
                                 status_code=404)
 
         body = await request.json()
+        update_fields = {
+            "display_name", "covered_call", "cash_secured_put", "buy_tracker",
+            "exchange", "telegram_notifications_enabled", "total_shares",
+        }
+        if not any(field in body for field in update_fields):
+            return JSONResponse(
+                {"error": "total_shares or another supported update field is required"},
+                status_code=400,
+            )
         if "display_name" in body:
             doc["display_name"] = body["display_name"]
         if "covered_call" in body:
@@ -919,7 +968,18 @@ async def api_update_symbol(request: Request, symbol: str):
         if "telegram_notifications_enabled" in body:
             doc["telegram_notifications_enabled"] = bool(body["telegram_notifications_enabled"])
         if "total_shares" in body:
-            doc["total_shares"] = int(body["total_shares"])
+            total_shares = body["total_shares"]
+            if type(total_shares) is not int:
+                return JSONResponse(
+                    {"error": "total_shares must be a non-negative integer"},
+                    status_code=400,
+                )
+            if total_shares < 0:
+                return JSONResponse(
+                    {"error": "total_shares must be a non-negative integer"},
+                    status_code=400,
+                )
+            doc["total_shares"] = total_shares
 
         doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
         updated = cosmos.replace_symbol(doc)
@@ -1368,15 +1428,21 @@ async def api_update_position_premium(request: Request, symbol: str,
     """Update premium on a position."""
     try:
         cosmos = _get_cosmos(request)
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "JSON body must be an object"},
+                                status_code=400)
         premium = body.get("premium")
         if premium is None:
             return JSONResponse({"error": "premium is required"},
                                 status_code=400)
-        try:
-            premium = float(premium)
-        except (TypeError, ValueError):
-            return JSONResponse({"error": "premium must be a number"},
+        premium = _parse_non_negative_number(premium)
+        if premium is None:
+            return JSONResponse(
+                {"error": "premium must be a finite, non-negative number"},
                                 status_code=400)
         doc = cosmos.update_position_premium(symbol.upper(), position_id, premium)
         return JSONResponse(_clean_doc(doc))
@@ -1394,15 +1460,21 @@ async def api_update_position_buyback_cost(request: Request, symbol: str,
     """Update buyback cost on a rolled position."""
     try:
         cosmos = _get_cosmos(request)
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "JSON body must be an object"},
+                                status_code=400)
         buyback_cost = body.get("buyback_cost")
         if buyback_cost is None:
             return JSONResponse({"error": "buyback_cost is required"},
                                 status_code=400)
-        try:
-            buyback_cost = float(buyback_cost)
-        except (TypeError, ValueError):
-            return JSONResponse({"error": "buyback_cost must be a number"},
+        buyback_cost = _parse_non_negative_number(buyback_cost)
+        if buyback_cost is None:
+            return JSONResponse(
+                {"error": "buyback_cost must be a finite, non-negative number"},
                                 status_code=400)
         doc = cosmos.update_position_buyback_cost(symbol.upper(), position_id,
                                                   buyback_cost)

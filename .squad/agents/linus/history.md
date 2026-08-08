@@ -9,6 +9,7 @@
 
 ## Learnings
 
+- 2026-08-08: The Symbols watchlist suitability pills are deterministic Entry + Momentum classifications, not watchlist tracking flags. `frontend/src/lib/symbolSuitability.ts` now owns normalized matching for Ideal Puts, Ideal Calls, No Puts, and No Calls; RSI modifiers independently route oversold to Ideal Puts and overextended to Ideal Calls, while No Puts/No Calls require pure unmodified Bearish/Bullish momentum.
 - 2026-07-23: Roll table test suite updated for new expiration column layout with `is_current` and `is_previous` flags; 51 tests passing. Current expiration now highlighted in UI with "● open" marker, previous expiration tagged "(prev)", and ATM row displays underlying price context (e.g., "ATM ($71.54)").
 - 2026-07-01: Roll candidate table now sorted by Ann.Ret% (was Net Credit) to favor shorter-DTE rolls aligned with the 21-35 DTE target; approved by dsanchor 2026-07-01.
 - 2026-07-01: Roll target is now 21-35 DTE primary with 45 DTE fallback cap, and post-earnings hard block is 0-7 days with 8-13 days as a caution zone; applied symmetrically across calls/puts after dsanchor approval.

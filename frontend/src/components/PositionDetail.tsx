@@ -619,6 +619,125 @@ function DField({ label, children }: { label: string; children: React.ReactNode 
   );
 }
 
+function EditableFinancialField({
+  symbol,
+  positionId,
+  label,
+  field,
+  value,
+}: {
+  symbol: string;
+  positionId: string;
+  label: string;
+  field: "premium" | "buyback_cost";
+  value: number | null | undefined;
+}) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value != null ? String(value) : "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    const parsed = Number(draft);
+    if (draft.trim() === "" || !Number.isFinite(parsed) || parsed < 0) {
+      setError(`${label} must be a non-negative number.`);
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/symbols/${encodeURIComponent(symbol)}/positions/${encodeURIComponent(positionId)}/${field}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ [field]: parsed }),
+        },
+      );
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      setEditing(false);
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to update ${label.toLowerCase()}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-1" onClick={(event) => event.stopPropagation()}>
+      <div className="text-xs uppercase tracking-wide text-text-muted">{label}</div>
+      {editing ? (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <span className="text-sm text-text-muted">$</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              inputMode="decimal"
+              aria-label={label}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void save();
+                } else if (event.key === "Escape") {
+                  setEditing(false);
+                  setError(null);
+                }
+              }}
+              disabled={saving}
+              autoFocus
+              className="w-24 rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1 font-mono text-sm text-text outline-none focus:border-accent-blue disabled:opacity-60"
+            />
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={saving}
+              className="rounded-[var(--radius-pill)] bg-accent-blue px-2.5 py-1 text-xs text-white disabled:opacity-60"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(false);
+                setError(null);
+              }}
+              disabled={saving}
+              className="rounded-[var(--radius-pill)] border border-border px-2.5 py-1 text-xs text-text-muted hover:text-text disabled:opacity-60"
+            >
+              Cancel
+            </button>
+          </div>
+          {error && <div className="text-xs text-accent-red">⚠️ {error}</div>}
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 text-sm text-text">
+          <span className="font-mono">{value != null ? `$${fmt2(value)}` : "N/A"}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(value != null ? String(value) : "");
+              setError(null);
+              setEditing(true);
+            }}
+            className="rounded-[var(--radius-pill)] border border-border px-2 py-0.5 text-xs text-text-muted hover:border-accent-blue/60 hover:text-accent-blue"
+          >
+            Edit
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────
 export default function PositionDetail({ symbol, position }: { symbol: string; position: Position }) {
   const posId = position.position_id ?? "";
@@ -696,8 +815,28 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
         {typeof position.contracts === "number" && <DField label="Contracts">{position.contracts}</DField>}
         <DField label="Opened"><span className="font-mono">{position.opened_at ? String(position.opened_at).slice(0, 10) : "—"}</span></DField>
         {position.closed_at ? <DField label="Closed"><span className="font-mono">{String(position.closed_at).slice(0, 10)}</span></DField> : null}
-        <DField label="Premium"><span className="font-mono">{position.display_premium != null ? `$${fmt2(position.display_premium)}` : "N/A"}</span></DField>
-        {position.display_buyback != null && <DField label="Buyback"><span className="font-mono">${fmt2(position.display_buyback)}</span></DField>}
+        {posId ? (
+          <EditableFinancialField
+            symbol={symbol}
+            positionId={posId}
+            label="Premium"
+            field="premium"
+            value={position.display_premium}
+          />
+        ) : (
+          <DField label="Premium"><span className="font-mono">{position.display_premium != null ? `$${fmt2(position.display_premium)}` : "N/A"}</span></DField>
+        )}
+        {posId ? (
+          <EditableFinancialField
+            symbol={symbol}
+            positionId={posId}
+            label="Buyback"
+            field="buyback_cost"
+            value={position.display_buyback}
+          />
+        ) : (
+          <DField label="Buyback"><span className="font-mono">{position.display_buyback != null ? `$${fmt2(position.display_buyback)}` : "N/A"}</span></DField>
+        )}
         {position.assignment_risk && <DField label="Assignment Risk">{position.assignment_risk}</DField>}
         {position.moneyness && <DField label="Moneyness">{position.moneyness}</DField>}
         {srcAgent && <DField label="Source Agent">{srcAgent}</DField>}

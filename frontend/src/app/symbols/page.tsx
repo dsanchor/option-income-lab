@@ -1,6 +1,7 @@
 import { apiFetch } from "@/lib/api";
 import { usd, timeAgo } from "@/lib/format";
 import SymbolsTable from "@/components/SymbolsTable";
+import AddSymbolForm from "@/components/AddSymbolForm";
 import type { SymbolsOverview } from "@/types/symbols";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +43,7 @@ export default async function SymbolsPage() {
         </div>
       </div>
 
+      <AddSymbolForm />
       <SymbolsTable rows={rows} />
     </div>
   );

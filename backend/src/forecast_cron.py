@@ -261,7 +261,12 @@ async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff, pf_sett
     # target-confidence interval stays honest. Non-retroactive: only today's
     # (and future) forecasts use the new multiplier.
     target_conf = pf_settings.get("band_confidence", 0.50)
-    recent = cosmos.get_price_forecasts(symbol, limit=CALIBRATION_WINDOW)
+    get_price_forecasts = getattr(cosmos, "get_price_forecasts", None)
+    recent = (
+        get_price_forecasts(symbol, limit=CALIBRATION_WINDOW)
+        if callable(get_price_forecasts)
+        else []
+    )
     prev_k = ((recent[0].get("calibration") if recent else None) or {}).get("k", 1.0)
     calibration = compute_calibration_factor(recent, target_conf, prev_k=prev_k)
 

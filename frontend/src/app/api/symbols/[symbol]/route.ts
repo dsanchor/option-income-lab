@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { apiFetch } from "@/lib/api";
+import { API_BASE_URL, apiFetch } from "@/lib/api";
 
 /**
  * BFF proxy for a single symbol: browser → this Next route → internal Python API.
@@ -27,13 +27,14 @@ export async function PUT(
 ) {
   const { symbol } = await params;
   try {
-    const body = await req.json();
-    const data = await apiFetch<unknown>(`/api/symbols/${encodeURIComponent(symbol)}`, {
+    const body = await req.text();
+    const res = await fetch(`${API_BASE_URL}/api/symbols/${encodeURIComponent(symbol)}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body,
     });
-    return NextResponse.json(data);
+    const data = await res.json().catch(() => ({}));
+    return NextResponse.json(data, { status: res.status });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Upstream API error" },

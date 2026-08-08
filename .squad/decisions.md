@@ -5816,3 +5816,32 @@ Enhanced roll table column layout to display current expiration as the primary r
 - Clearer user navigation: current expiration is visually distinguished
 - Previous expiration context available without clutter
 - Price anchor context removes ambiguity in moneyness calculations
+---
+
+### 2026-08-08: Symbols Suitability and Durable Symbol Creation
+
+**Author:** Team (Rusty, Linus, Basher review)
+**Status:** Implemented and approved
+
+#### Suitability Classification
+
+The Symbols UI exposes exactly `All`, `Ideal Puts`, `Ideal Calls`, `No Puts`, and `No Calls`. These categories are deterministic classifications derived from normalized `entry_tag` and momentum values:
+
+- `Ideal Puts`: Strong Buy/Buy with Bullish, Neutral, or Weakening momentum, plus the Bearish (Oversold) override.
+- `Ideal Calls`: Hold/Wait with Weakening, Bearish, or Neutral momentum, plus the Bullish (Overextended) override.
+- `No Puts`: Strong Buy/Buy with pure Bearish momentum.
+- `No Calls`: Wait with pure Bullish momentum.
+
+The suitability categories are not derived from `watchlist.covered_call`, `watchlist.cash_secured_put`, or `watchlist.buy_tracker`; those flags only control operational tracking. They are also distinct from backend option-chain type/delta filters. A pure frontend helper owns the documented suitability semantics and normalizes case and whitespace.
+
+#### Symbol Creation and Shares
+
+- Symbol creation uses a collapsible inline client component and the existing BFF/backend contract.
+- `total_shares` is edited inline through partial `PUT`, with optimistic client state, server refresh on success, and rollback on failure.
+- The backend accepts only non-negative JSON integers for `total_shares`; invalid values fail before persistence.
+- A successful symbol creation persists the symbol before starting `backfill_symbol_forecasts` for that ticker with `DEFAULT_BACKFILL_SESSIONS`.
+- Forecast backfill runs independently. A backfill failure is logged but never rolls back the symbol or changes the successful `201` response.
+
+#### Validation
+
+Final review passed 49 watchlist tests, 41 position financial tests, an 11/11 suitability runtime matrix, focused frontend lint, and TypeScript typecheck.

@@ -119,3 +119,35 @@ The Portfolio Chat context contract now accepts `include_symbol_data` (default `
 - `symbol_detail.html` addition: Roll table section inserted inside `{% if pos.status == 'active' %}` guard, after the `dps-analysis-section` div, inside `.position-snapshot-chart` wrapper. Triggers auto-on-expand via `window._loadRollTable(section)` hooked into both `tr.pos-row` click handler and the roll-button expand handler. Loads once per position (guarded by `dataset.rollLoaded`).
 - JS scoped in IIFE, exposes only `window._loadRollTable`. Reuses exact same cell styles, formatters, summary builder, and grid builder from the activity detail implementation.
 - Jinja balanced 81/81 for symbol_detail.html. `python3 -m pytest tests/test_roll_table.py -q` → 46 passed. `python3 -m py_compile web/app.py` → OK. `import web.app` → OK.
+
+
+### 2026-08-08 — Watchlist UI Fix (shares inline edit + add symbol + strategy filters)
+**Status:** ✅ Completed
+**Scope:** frontend symbols/watchlist — SymbolsTable, AddSymbolForm, types, backend overview
+
+**Changes:**
+- `backend/web/app.py` — `_compute_symbols_overview` añade campo `watchlist` (covered_call, cash_secured_put, buy_tracker) en cada fila del overview.
+- `frontend/src/types/symbols.ts` — Añadido `SymbolWatchlistFlags` + campo `watchlist?` en `SymbolRow`.
+- `frontend/src/components/SymbolsTable.tsx` — Edición inline de shares (input controlado, actualización optimista, PUT BFF, router.refresh). Filtros de estrategia (pills: All / Calls / Puts / Buy Tracker). Error banner descartable.
+- `frontend/src/components/AddSymbolForm.tsx` — Nuevo componente (botón colapsa/expande), campos: symbol, exchange, checkboxes de estrategia. Manejo 409, router.refresh en éxito.
+- `frontend/src/app/symbols/page.tsx` — Importa y renderiza AddSymbolForm sobre la tabla.
+
+**Key patterns:**
+- Optimistic `localShares` local → revert en error; la fuente de verdad regresa via `router.refresh()`.
+- `useCallback` en `saveShares`/`startEdit`/`cancelEdit` para estabilidad de deps.
+- `total_shares` requiere entero JSON no negativo; el BFF conserva errores/status del backend y la celda editable detiene propagación hacia el modal.
+- El alta dispara `backfill_symbol_forecasts` después de persistir; el fallo se registra pero nunca revierte la creación.
+- `forecast_cron` trata `get_price_forecasts` como capacidad opcional para conservar compatibilidad con adaptadores mínimos y tests.
+- Validación: `pytest tests/test_watchlist_symbols.py tests/test_forecast_cron.py -q` → 57 passed; ESLint focalizado + `tsc --noEmit` → OK.
+
+### 2026-08-08 — Position Premium and Buyback Editing
+- `PositionDetail` expone editores independientes para Premium y Buyback; Buyback se renderiza y puede editarse aunque el valor actual sea nulo.
+- Los guardados no son optimistas: mantienen el valor confirmado ante fallos, muestran estado/error y ejecutan `router.refresh()` solo tras éxito.
+- Los BFF PATCH de `premium` y `buyback_cost` replican el proxy de notas y conservan el status y cuerpo de error del backend.
+- Ambos endpoints backend exigen valores finitos y no negativos, rechazan booleanos, valores malformados, NaN/Infinity y negativos con 400, y conservan 404/503 para errores de Cosmos.
+- Validación: `test_position_financial_updates.py` → 30 passed; tests de posición relacionados → 3 passed; ESLint focalizado + `tsc --noEmit` → OK.
+
+### 2026-08-08 — Cross-Agent Suitability Correction
+- Linus replaced the temporary watchlist-flag filter pills with the documented suitability categories: Ideal Puts, Ideal Calls, No Puts, and No Calls.
+- Suitability is derived from normalized `entry_tag` plus momentum. Watchlist flags remain separate operational tracking controls, and option-chain type/delta filters are a different backend concern.
+- Basher's final current-state review approved the integrated implementation; earlier concurrent-snapshot findings are superseded.

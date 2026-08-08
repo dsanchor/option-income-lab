@@ -1,3 +1,9 @@
+export interface SymbolWatchlistFlags {
+  covered_call: boolean;
+  cash_secured_put: boolean;
+  buy_tracker: boolean;
+}
+
 export interface SymbolRow {
   symbol: string;
   display_name: string;
@@ -12,6 +18,7 @@ export interface SymbolRow {
   in_calls: number;
   put_exposure: number;
   call_exposure: number;
+  watchlist?: SymbolWatchlistFlags;
 }
 
 export interface SymbolsOverview {

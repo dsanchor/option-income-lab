@@ -28,6 +28,25 @@
 
 ## Learnings
 
+### Integrated Suitability and Position Financial Review (2026-08-08)
+- Re-reviewed the current filesystem after Rusty's implementation landed; prior concurrent-snapshot findings no longer apply.
+- Symbols suitability now exposes exactly All, Ideal Puts, Ideal Calls, No Puts, and No Calls. The pure helper matches `docs/screener.md`, normalizes case/whitespace, honors oversold/overextended overrides, and excludes modified momentum from No Puts/No Calls.
+- No frontend test runner is configured. A Node 24 TypeScript strip-types runtime matrix covered 11 classification cases and passed; focused ESLint and `tsc --noEmit` also passed.
+- Renamed misleading option-chain delta test descriptions in `backend/tests/test_watchlist_symbols.py` so they no longer claim UI suitability coverage; 49 tests passed.
+- PositionDetail now edits premium and absent/present buyback cost through distinct BFF/backend routes with save, cancel, error, and propagation handling. Expanded `backend/tests/test_position_financial_updates.py` for malformed/non-object JSON, numeric NaN/Infinity, and existing buyback overwrite; 41 tests passed. Related close/economics validation passed.
+- Final reviewer verdict: A APPROVE, B APPROVE, overall APPROVE.
+
+### Position Financial Editing Review (2026-08-08)
+- Added `backend/tests/test_position_financial_updates.py` with 30 hermetic tests for premium and buyback-cost persistence, invalid-input atomicity, and 404/503 status preservation.
+- Backend review found boolean, negative, NaN, and Infinity values reach persistence; booleans/negatives return 200, while non-finite values are written before response serialization produces a misleading 404. Result: 20 passed, 10 failed.
+- Frontend review found no premium/buyback editing controls in `PositionDetail` and no distinct premium or buyback-cost BFF route files. Focused ESLint passed, but acceptance criteria 3, 5, and 6 are unmet. Reviewer verdict: REJECT.
+
+### Watchlist Feature Review (2026-08-08)
+- Expanded `backend/tests/test_watchlist_symbols.py` to 49 hermetic tests covering normalized symbol creation, all strategy flags, exactly-once forecast backfill with `DEFAULT_BACKFILL_SESSIONS`, no backfill for rejected creates, and creation durability when backfill fails.
+- `PUT /api/symbols/{symbol}` now accepts only non-negative JSON integers for `total_shares`; negative, fractional, boolean, string, null, and missing values return a clear 400 without persistence.
+- Frontend review confirmed add-symbol controls, Calls/Puts/Buy Tracker watchlist filters, and shares editing that stops row-click propagation. Ideal calls/puts remain a separate backend options-chain type-plus-delta pipeline.
+- Validation: `python3 -m pytest tests/test_watchlist_symbols.py -q` -> 49 passed; focused frontend ESLint -> clean. Reviewer verdict: APPROVE.
+
 ### Watchlist Pause Semantics (2026-07-16)
 - Tested `src.cosmos_db.is_watchlist_paused`: missing/empty `watchlist_pause` or missing `until` is not paused; `until >= today` is paused, including the inclusive boundary where `until == today`.
 - The watchlist reactivation job predicate is `until < today`: expired pauses reactivate, while future and same-day pauses remain active.
