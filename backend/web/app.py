@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import logging
 import math
@@ -56,6 +57,9 @@ def _write_config(config: Dict[str, Any]):
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
 
+_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+
+
 def _resolve_env(s: str) -> str:
     """Resolve ${VAR_NAME} patterns in a string."""
     def _repl(m):
@@ -67,13 +71,23 @@ def _resolve_env(s: str) -> str:
     return re.sub(r'\$\{([^}]+)\}', _repl, s)
 
 
-def _llm_settings_response():
+def _function_llm_config(config_obj, function_id: str):
+    resolver = getattr(config_obj, "llm_config_for_function", None)
+    return resolver(function_id) if resolver else config_obj.llm_config()
+
+
+def _llm_settings_response(function_id: str | None = None):
     """Load Config and return (config_obj, error_response_or_none)."""
     from src.config import Config
     from src.llm import validate_llm_config
 
     config_obj = Config()
-    err = validate_llm_config(config_obj.llm_config())
+    llm = (
+        _function_llm_config(config_obj, function_id)
+        if function_id
+        else config_obj.llm_config()
+    )
+    err = validate_llm_config(llm)
     if err:
         return config_obj, JSONResponse({"error": err}, status_code=500)
     return config_obj, None
@@ -1637,7 +1651,9 @@ Summarize this position's DPS: current state, trend, notable history, and likely
 
         cfg = Config()
         model = cfg.dps_insights_model
-        client = create_async_chat_client(model, cfg.llm_config())
+        client = create_async_chat_client(
+            model, _function_llm_config(cfg, "dps_insights")
+        )
         agent = Agent(
             client=client,
             name="DPSInsights",
@@ -2525,7 +2541,7 @@ async def symbol_report_api(request: Request, symbol: str):
         return JSONResponse({"error": f"Symbol {symbol} not found"},
                             status_code=404)
 
-    config_obj, err_resp = _llm_settings_response()
+    config_obj, err_resp = _llm_settings_response("report")
     if err_resp:
         return err_resp
 
@@ -2536,6 +2552,7 @@ async def symbol_report_api(request: Request, symbol: str):
         runner = AgentRunner(
             llm=config_obj.llm_config(),
             model=config_obj.model_deployment,
+            function_llms=config_obj.function_llm_configs(),
         )
 
         result = await run_report_analysis(
@@ -2578,7 +2595,7 @@ async def symbol_technical_analysis_api(request: Request, symbol: str):
         return JSONResponse({"error": f"Symbol {symbol} not found"},
                             status_code=404)
 
-    config_obj, err_resp = _llm_settings_response()
+    config_obj, err_resp = _llm_settings_response("technical_analysis")
     if err_resp:
         return err_resp
 
@@ -2589,6 +2606,7 @@ async def symbol_technical_analysis_api(request: Request, symbol: str):
         runner = AgentRunner(
             llm=config_obj.llm_config(),
             model=config_obj.model_deployment,
+            function_llms=config_obj.function_llm_configs(),
         )
 
         result = await run_technical_analysis(
@@ -3256,7 +3274,11 @@ async def api_activity_chat(request: Request, activity_id: str):
                 # No persisted doc — generate fresh (best-effort)
                 logger.info("No persisted technical analysis for %s; generating fresh", symbol)
                 cfg = Config()
-                runner = AgentRunner(llm=cfg.llm_config(), model=cfg.model_deployment)
+                runner = AgentRunner(
+                    llm=cfg.llm_config(),
+                    model=cfg.model_deployment,
+                    function_llms=cfg.function_llm_configs(),
+                )
                 result = await run_technical_analysis(cfg, runner, cosmos, symbol)
                 if "analysis" in result:
                     technical_data = f"[Generated fresh]\n\n{result['analysis']}"
@@ -3303,7 +3325,9 @@ Technical Analysis:
 
         cfg = Config()
         model = cfg.activity_chat_model
-        client = create_async_chat_client(model, cfg.llm_config())
+        client = create_async_chat_client(
+            model, _function_llm_config(cfg, "activity_chat")
+        )
         agent = Agent(
             client=client,
             name="ActivityChat",
@@ -4044,6 +4068,9 @@ async def api_settings_config_save(request: Request):
         body = {}
 
     class _JsonForm:
+        def __contains__(self, key):
+            return key in body
+
         def get(self, key, default=""):
             if key not in body:
                 return default
@@ -4052,8 +4079,226 @@ async def api_settings_config_save(request: Request):
                 return "true" if v else "false"
             return str(v)
 
-    saved = _apply_settings_config(request, cosmos, _JsonForm())
+    try:
+        saved = _apply_settings_config(request, cosmos, _JsonForm())
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     return JSONResponse({"success": True, "saved": saved})
+
+
+def _config_with_persisted_ai_overrides(cosmos):
+    from src.config import Config
+
+    config_obj = Config()
+    settings = _load_settings_from_cosmos(cosmos) or {}
+    for key in (
+        "ai_function_overrides",
+        "scheduler",
+        "summary_agent",
+        "banner_agent",
+        "plan_monitor",
+    ):
+        if key in settings:
+            config_obj.config[key] = copy.deepcopy(settings[key])
+    return config_obj
+
+
+def _build_ai_providers_context(cosmos) -> dict:
+    from src.ai_functions import AI_FUNCTIONS, SUPPORTED_AI_PROVIDERS
+    from src.config import Config
+
+    config_obj = _config_with_persisted_ai_overrides(cosmos)
+    functions = []
+    for function_id, metadata in AI_FUNCTIONS.items():
+        override = dict(
+            config_obj.config.get("ai_function_overrides", {}).get(function_id)
+            or {}
+        )
+        legacy_task = metadata.get("legacy_task")
+        legacy_cfg = config_obj.config.get(legacy_task, {}) if legacy_task else {}
+        legacy_provider = str(legacy_cfg.get("provider") or "").strip().lower()
+        legacy_model = (
+            str(legacy_cfg.get("model") or "").strip()
+            if function_id != "plan_monitor"
+            else ""
+        )
+        provider_value = str(override.get("provider") or "").strip().lower()
+        model_value = str(override.get("model") or "").strip()
+        if not provider_value and legacy_provider in SUPPORTED_AI_PROVIDERS:
+            provider_value = legacy_provider
+        if not model_value and legacy_model:
+            model_value = legacy_model
+
+        inherited_config = Config.__new__(Config)
+        inherited_config.config = copy.deepcopy(config_obj.config)
+        inherited_config.config.setdefault("ai_function_overrides", {}).pop(
+            function_id, None
+        )
+        if legacy_task:
+            inherited_config.config.setdefault(legacy_task, {}).pop(
+                "provider", None
+            )
+            if function_id != "plan_monitor":
+                inherited_config.config.setdefault(legacy_task, {}).pop(
+                    "model", None
+                )
+
+        functions.append({
+            "id": function_id,
+            "label": metadata["label"],
+            "group": metadata["group"],
+            "description": metadata["description"],
+            "provider": provider_value,
+            "model": model_value,
+            "effective_provider": config_obj.provider_for(function_id),
+            "effective_model": config_obj.model_for(function_id),
+            "inherited_provider": inherited_config.provider_for(function_id),
+            "inherited_model": inherited_config.model_for(function_id),
+            "provider_source": (
+                "override" if override.get("provider")
+                else "legacy" if legacy_provider in SUPPORTED_AI_PROVIDERS
+                else "inherited"
+            ),
+            "model_source": (
+                "override" if override.get("model")
+                else "legacy" if legacy_model
+                else "inherited"
+            ),
+        })
+    return {
+        "providers": list(SUPPORTED_AI_PROVIDERS),
+        "functions": functions,
+    }
+
+
+def _save_ai_provider_overrides(request: Request, cosmos, submitted: dict) -> None:
+    from src.ai_functions import AI_FUNCTIONS, SUPPORTED_AI_PROVIDERS
+
+    unknown = sorted(set(submitted) - set(AI_FUNCTIONS))
+    if unknown:
+        raise ValueError(f"Unknown AI function: {', '.join(unknown)}")
+
+    normalized = {}
+    for function_id, values in submitted.items():
+        if not isinstance(values, dict):
+            raise ValueError(f"Invalid settings for {function_id}")
+        provider = str(values.get("provider") or "").strip().lower()
+        model = str(values.get("model") or "").strip()
+        if provider and provider not in SUPPORTED_AI_PROVIDERS:
+            raise ValueError(
+                f"Unsupported provider for {function_id}: {provider}"
+            )
+        if model and not _MODEL_NAME_RE.fullmatch(model):
+            raise ValueError(
+                f"Invalid model for {function_id}. Use a deployment/model "
+                "name containing letters, numbers, '.', '_', ':', '/', or '-'."
+            )
+        normalized[function_id] = {
+            key: value
+            for key, value in (("provider", provider), ("model", model))
+            if value
+        }
+
+    config_obj = _config_with_persisted_ai_overrides(cosmos)
+    candidate_overrides = copy.deepcopy(
+        config_obj.config.get("ai_function_overrides", {})
+    )
+    for function_id, values in normalized.items():
+        if values:
+            candidate_overrides[function_id] = values
+        else:
+            candidate_overrides.pop(function_id, None)
+    config_obj.config["ai_function_overrides"] = candidate_overrides
+    from src.llm import validate_llm_config
+    for function_id, values in normalized.items():
+        if not values.get("provider"):
+            continue
+        error = validate_llm_config(
+            config_obj.llm_config_for_function(function_id)
+        )
+        if error:
+            raise ValueError(f"{function_id}: {error}")
+
+    def apply(config: dict) -> None:
+        overrides = config.setdefault("ai_function_overrides", {})
+        for function_id, values in normalized.items():
+            if values:
+                overrides[function_id] = values
+            else:
+                overrides.pop(function_id, None)
+
+        roles_by_task = defaultdict(set)
+        for function_id, metadata in AI_FUNCTIONS.items():
+            if metadata.get("legacy_task"):
+                roles_by_task[metadata["legacy_task"]].add(function_id)
+        submitted_ids = set(normalized)
+        for task_key, function_ids in roles_by_task.items():
+            if not function_ids.intersection(submitted_ids):
+                continue
+            section = config.setdefault(task_key, {})
+            legacy_provider = str(section.get("provider") or "").strip().lower()
+            legacy_model = str(section.get("model") or "").strip()
+            for function_id in function_ids - submitted_ids:
+                sibling = overrides.setdefault(function_id, {})
+                if legacy_provider and not sibling.get("provider"):
+                    sibling["provider"] = legacy_provider
+                if (
+                    task_key != "plan_monitor"
+                    and legacy_model
+                    and not sibling.get("model")
+                ):
+                    sibling["model"] = legacy_model
+            section.pop("provider", None)
+            if task_key != "plan_monitor":
+                section.pop("model", None)
+        if not overrides:
+            config.pop("ai_function_overrides", None)
+
+    config = _load_config()
+    apply(config)
+
+    if cosmos:
+        settings = _load_settings_from_cosmos(cosmos) or {}
+        apply(settings)
+        cosmos.save_settings(settings)
+
+    _write_config(config)
+
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is not None and getattr(scheduler, "config", None) is not None:
+        apply(scheduler.config.config)
+        scheduler.runner.set_function_llms(
+            scheduler.config.function_llm_configs()
+        )
+
+
+@app.get("/api/settings/ai-providers")
+async def api_settings_ai_providers(request: Request):
+    cosmos = getattr(request.app.state, "cosmos", None)
+    return JSONResponse(_build_ai_providers_context(cosmos))
+
+
+@app.post("/api/settings/ai-providers")
+async def api_settings_ai_providers_save(request: Request):
+    cosmos = getattr(request.app.state, "cosmos", None)
+    try:
+        body = await request.json()
+        submitted = body.get("functions", {}) if isinstance(body, dict) else {}
+        if not isinstance(submitted, dict):
+            raise ValueError("'functions' must be an object")
+        _save_ai_provider_overrides(request, cosmos, submitted)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception:
+        logger.exception("Failed to save AI provider settings")
+        return JSONResponse(
+            {"error": "Failed to persist AI provider settings"},
+            status_code=500,
+        )
+    return JSONResponse({
+        "success": True,
+        **_build_ai_providers_context(cosmos),
+    })
 
 
 
@@ -5277,7 +5522,7 @@ async def chat_api(request: Request):
             status_code=400
         )
 
-    config_obj, err_resp = _llm_settings_response()
+    config_obj, err_resp = _llm_settings_response("chat")
     if err_resp:
         return err_resp
 
@@ -5286,7 +5531,9 @@ async def chat_api(request: Request):
     try:
         from src.llm import create_sync_chat_client, chat_completion
 
-        client = create_sync_chat_client(config_obj.llm_config())
+        client = create_sync_chat_client(
+            _function_llm_config(config_obj, "chat")
+        )
         api_messages = [{"role": "system", "content": system_prompt}]
         for m in messages:
             api_messages.append({"role": m["role"], "content": m["content"]})
@@ -5503,7 +5750,7 @@ async def symbol_chat_api(request: Request, symbol: str):
 
     system_prompt = _build_symbol_system_prompt(symbol, exchange, context_text)
 
-    config_obj, err_resp = _llm_settings_response()
+    config_obj, err_resp = _llm_settings_response("symbol_chat")
     if err_resp:
         return err_resp
 
@@ -5512,7 +5759,9 @@ async def symbol_chat_api(request: Request, symbol: str):
     try:
         from src.llm import create_sync_chat_client, chat_completion
 
-        client = create_sync_chat_client(config_obj.llm_config())
+        client = create_sync_chat_client(
+            _function_llm_config(config_obj, "symbol_chat")
+        )
         api_messages = [{"role": "system", "content": system_prompt}]
         for m in messages:
             api_messages.append({"role": m["role"], "content": m["content"]})

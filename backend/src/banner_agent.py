@@ -251,7 +251,9 @@ Source data:
 
     agent = Agent(
         name="DashboardBannerAgent",
-        client=create_async_chat_client(model, config.llm_config()),
+        client=create_async_chat_client(
+            model, config.llm_config_for_function("banner")
+        ),
         instructions=DASHBOARD_BANNER_INSTRUCTIONS,
     )
     response = await agent.run(prompt)

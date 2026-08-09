@@ -1,4 +1,4 @@
-"""Centralized options chain cache with TTL.
+"""Centralized options chain cache with stale-while-revalidate semantics.
 
 Single source of truth for options chain data across the application.
 All consumers (agents, DPS, web endpoints) go through this cache.
@@ -6,10 +6,21 @@ All consumers (agents, DPS, web endpoints) go through this cache.
 Load procedure on miss or refresh:
   1. Fetch from yfinance (all expirations)
   2. Fetch from TradingView (overlay: overwrites matching strikes, adds missing ones)
-  3. Store merged result in cache with 30-min TTL
+  3. Merge the two fresh sources using explicit, field-level precedence
+  4. Merge the result against the previously cached ("last known good") chain so
+     that a freshly fetched zero/null/NaN quote field never clobbers a previously
+     stored valid non-zero value for the same contract (same expiration + strike
+     + option type)
+  5. Drop any expiration whose actual contract expiration date has passed
+  6. Store the merged result in cache
 
-This eliminates the need for market-open detection — data is always
-the best available merge of both sources.
+TTL controls *freshness* (whether a background refetch is warranted), not
+*availability* — cached entries are never deleted purely because they aged
+past the TTL. Last-known-good data stays readable indefinitely so consumers
+never regress to zeros just because a refresh cycle was missed or a source
+temporarily returned bad data. This eliminates the need for market-open
+detection — data is always the best available merge of both sources plus
+prior history.
 """
 
 import asyncio
@@ -17,6 +28,7 @@ import copy
 import concurrent.futures
 import json
 import logging
+import math
 import time
 import threading
 from datetime import datetime, timezone
@@ -26,11 +38,91 @@ from src.options_math import robust_mid
 
 logger = logging.getLogger(__name__)
 
-# Default TTL: 30 minutes
+# Default TTL: 30 minutes. Controls staleness/refetch decisions only —
+# an expired entry is NOT evicted, it just becomes eligible for background
+# refresh on next access (stale-while-revalidate).
 _DEFAULT_TTL_SECONDS = 1800
 
 # Per-symbol refresh timeout to prevent hung jobs from blocking the queue
 _REFRESH_SYMBOL_TIMEOUT = 90
+
+# Contract fields treated as "quote/market" data: a freshly fetched value of
+# zero/None/NaN for one of these fields is considered missing/invalid and
+# must NOT overwrite a previously stored valid (non-zero) value for the same
+# contract. Fields intentionally excluded from this list (volume,
+# openInterest, lastTradeDate, inTheMoney, contractSymbol, strike,
+# expiration, option_type) legitimately change from fetch to fetch and zero
+# is a semantically valid value for them (e.g. zero volume on a quiet day),
+# so they always take the freshest fetched value.
+_QUOTE_FIELDS = (
+    "bid", "ask", "mid", "iv",
+    "delta", "gamma", "theta", "vega", "rho",
+    "lastPrice",
+)
+
+
+def _is_invalid_quote_value(value: Any) -> bool:
+    """True if `value` is missing/invalid for a quote/market field.
+
+    Missing/invalid means: None, NaN, non-numeric, or exactly zero. Zero is
+    treated as invalid for these particular fields because the observed bug
+    is exactly "bid/ask/iv/greeks show up as 0" whenever a source fails to
+    return real data — it is not a legitimate steady-state value for these
+    fields the way it is for e.g. volume or openInterest.
+    """
+    if value is None:
+        return True
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return True
+    if math.isnan(f):
+        return True
+    return f == 0.0
+
+
+def _merge_contract_fields(old: Optional[dict], new: dict) -> dict:
+    """Field-level last-known-good merge of a single contract.
+
+    Non-quote fields always come from `new` (the freshest fetch). For each
+    field in `_QUOTE_FIELDS`, keep `old`'s value when `new`'s value is
+    invalid (zero/None/NaN) AND `old` has a valid value for that field.
+    If `old` is None (no prior contract at this expiration+strike), `new`
+    is returned unchanged — first-fetch zeros are not fabricated.
+    """
+    if old is None:
+        return new
+
+    merged = dict(new)
+    for field in _QUOTE_FIELDS:
+        new_val = new.get(field)
+        if _is_invalid_quote_value(new_val):
+            old_val = old.get(field)
+            if not _is_invalid_quote_value(old_val):
+                merged[field] = old_val
+    return merged
+
+
+def _prune_expired_expirations(chain: dict, symbol: str) -> dict:
+    """Drop expiration buckets whose actual contract expiration date has
+    already passed. This is a business-logic filter (option contracts that
+    are no longer tradable), distinct from cache TTL/staleness — it applies
+    regardless of how the entry got here (fresh fetch or carried forward
+    from last-known-good merge).
+    """
+    today_key = datetime.now(timezone.utc).strftime("%Y%m%d")
+    dropped = 0
+    for side in ("calls", "puts"):
+        bucket = chain.get(side, {})
+        for exp_key in list(bucket.keys()):
+            # exp_key is expected to be YYYYMMDD; only prune keys we can
+            # confidently parse as dates, leave anything unexpected alone.
+            if len(exp_key) == 8 and exp_key.isdigit() and exp_key < today_key:
+                del bucket[exp_key]
+                dropped += 1
+    if dropped:
+        logger.debug("%s: pruned %d expired expiration bucket(s) from chain", symbol, dropped)
+    return chain
 
 
 class OptionsChainCache:
@@ -42,6 +134,9 @@ class OptionsChainCache:
         self._lock = threading.Lock()
         # Reference to GreeksCalculator for yfinance processing
         self._greeks = None
+        # Symbols with a background stale-while-revalidate refresh in flight,
+        # to avoid piling up duplicate concurrent refreshes for one symbol.
+        self._refresh_in_progress: set = set()
 
     def _get_greeks(self):
         if self._greeks is None:
@@ -49,26 +144,44 @@ class OptionsChainCache:
             self._greeks = GreeksCalculator()
         return self._greeks
 
+    def _is_stale(self, entry: Dict[str, Any]) -> bool:
+        age = time.monotonic() - entry["cached_at"]
+        return age >= self._ttl
+
     def get(self, symbol: str) -> Optional[str]:
         """Get cached options chain JSON string for a symbol.
 
-        Returns None on cache miss or expired entry.
+        Returns None only on a true cache miss (never fetched before).
+        Entries are never evicted purely due to TTL expiry — last-known-good
+        data remains readable indefinitely. Use `is_stale()` to check
+        whether a background refresh is warranted.
         """
         with self._lock:
             entry = self._store.get(symbol)
             if entry is None:
                 return None
-            age = time.monotonic() - entry["cached_at"]
-            if age >= self._ttl:
-                logger.debug("%s: options chain cache expired (%.0fs old)", symbol, age)
-                del self._store[symbol]
-                return None
-            logger.debug("%s: options chain cache hit (%.0fs old)", symbol, age)
+            if self._is_stale(entry):
+                age = time.monotonic() - entry["cached_at"]
+                logger.debug(
+                    "%s: options chain cache stale (%.0fs old) — serving last-known-good",
+                    symbol, age,
+                )
             return entry["chain_json"]
+
+    def is_stale(self, symbol: str) -> bool:
+        """True if the cached entry is missing or past its freshness TTL."""
+        with self._lock:
+            entry = self._store.get(symbol)
+            if entry is None:
+                return True
+            return self._is_stale(entry)
 
     def get_or_load(self, symbol: str) -> str:
         """Get from cache or load synchronously on miss.
 
+        On a true cache miss, blocks and fetches. On a stale-but-present
+        entry, returns the last-known-good data immediately (stale data
+        stays readable; refetching is driven by the scheduled refresh job).
         Safe to call from sync contexts. If an event loop is already
         running (e.g. inside an async framework), uses a thread to avoid
         'Cannot run the event loop while another loop is running'.
@@ -103,13 +216,45 @@ class OptionsChainCache:
             loop.close()
 
     async def get_or_load_async(self, symbol: str) -> str:
-        """Async version of get_or_load."""
+        """Async version of get_or_load.
+
+        Stale-while-revalidate: a true cache miss blocks and fetches. A
+        stale-but-present entry is returned immediately, with a background
+        refresh kicked off (at most one in flight per symbol) so future
+        calls see fresher data without making this call pay the latency.
+        """
         cached = self.get(symbol)
         if cached is not None:
+            if self.is_stale(symbol):
+                self._schedule_background_refresh(symbol)
             return cached
 
         logger.info("%s: options chain cache miss — loading from sources", symbol)
         return await self.refresh(symbol)
+
+    def _schedule_background_refresh(self, symbol: str) -> None:
+        """Fire-and-forget refresh for stale entries, deduped per symbol."""
+        with self._lock:
+            if symbol in self._refresh_in_progress:
+                return
+            self._refresh_in_progress.add(symbol)
+
+        async def _run():
+            try:
+                await self.refresh(symbol)
+            except Exception as exc:
+                logger.warning("%s: background stale-while-revalidate refresh failed: %s", symbol, exc)
+            finally:
+                with self._lock:
+                    self._refresh_in_progress.discard(symbol)
+
+        try:
+            asyncio.create_task(_run())
+        except RuntimeError:
+            # No running loop to schedule on (shouldn't happen when called
+            # from get_or_load_async, but fail safe rather than crash).
+            with self._lock:
+                self._refresh_in_progress.discard(symbol)
 
     async def refresh(self, symbol: str) -> str:
         """Force-refresh the cache for a symbol.
@@ -117,7 +262,12 @@ class OptionsChainCache:
         Procedure:
           1. Fetch from yfinance (base layer — all expirations)
           2. Fetch from TradingView (overlay — overwrites/adds strikes)
-          3. Merge and cache
+          3. Merge the two fresh sources (explicit source precedence)
+          4. Merge against the previously cached chain (last-known-good):
+             a freshly fetched zero/null/NaN quote field never overwrites a
+             previously stored valid non-zero value for the same contract
+          5. Drop expiration buckets whose actual contract date has passed
+          6. Cache the result
 
         Returns the merged options chain as a JSON string.
         """
@@ -127,8 +277,20 @@ class OptionsChainCache:
         # Step 2: TradingView overlay
         tv_chain = await self._fetch_tradingview(symbol)
 
-        # Step 3: Merge — TV overwrites matching strikes, adds new ones
+        # Step 3: Merge — explicit source precedence (TV overlay preferred,
+        # field-level, over yfinance base) between the two fresh fetches.
         merged = self._merge_chains(yf_chain, tv_chain, symbol)
+
+        # Step 4: Last-known-good merge against whatever was previously
+        # cached, so a bad/empty fetch this cycle can't regress good data
+        # from a prior cycle.
+        previous_chain = self._load_previous_chain(symbol)
+        if previous_chain is not None:
+            merged = self._merge_last_known_good(merged, previous_chain, symbol)
+
+        # Step 5: drop expirations that have actually passed (contract
+        # expiry, distinct from cache TTL/staleness).
+        merged = _prune_expired_expirations(merged, symbol)
 
         chain_json = json.dumps(merged, default=str)
 
@@ -205,7 +367,11 @@ class OptionsChainCache:
             self._store.clear()
 
     def stats(self) -> dict:
-        """Return cache statistics."""
+        """Return cache statistics.
+
+        Note: entries are never evicted for being past the TTL — `expired`
+        here means "stale" (eligible for a background refetch), not "gone".
+        """
         with self._lock:
             now = time.monotonic()
             entries = {}
@@ -220,6 +386,60 @@ class OptionsChainCache:
                 "entries_count": len(self._store),
                 "entries": entries,
             }
+
+    # ------------------------------------------------------------------
+    # Internal: last-known-good merge against previously cached chain
+    # ------------------------------------------------------------------
+
+    def _load_previous_chain(self, symbol: str) -> Optional[dict]:
+        """Return the previously cached chain (parsed dict), if any."""
+        with self._lock:
+            entry = self._store.get(symbol)
+        if entry is None:
+            return None
+        try:
+            return json.loads(entry["chain_json"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            logger.warning("%s: failed to parse previously cached chain — ignoring", symbol)
+            return None
+
+    def _merge_last_known_good(self, fresh: dict, previous: dict, symbol: str) -> dict:
+        """Merge a freshly fetched+source-merged chain against the last
+        cached chain so invalid/zero fields in `fresh` fall back to
+        `previous`'s valid values, contract by contract (matched on
+        expiration + strike + option side — the dict nesting already keys
+        on exactly that).
+        """
+        preserved = 0
+
+        for side in ("calls", "puts"):
+            fresh_bucket = fresh.setdefault(side, {})
+            prev_bucket = previous.get(side, {})
+
+            for exp_key, prev_strikes in prev_bucket.items():
+                fresh_strikes = fresh_bucket.setdefault(exp_key, {})
+                for strike_key, prev_contract in prev_strikes.items():
+                    fresh_contract = fresh_strikes.get(strike_key)
+                    if fresh_contract is None:
+                        # Fresh fetch has no data at all for this contract
+                        # this cycle (e.g. source omitted it) — carry the
+                        # last-known-good contract forward as-is.
+                        fresh_strikes[strike_key] = prev_contract
+                        preserved += 1
+                        continue
+                    merged_contract = _merge_contract_fields(prev_contract, fresh_contract)
+                    if merged_contract is not fresh_contract:
+                        preserved += 1
+                    fresh_strikes[strike_key] = merged_contract
+
+        if preserved:
+            logger.info(
+                "%s: last-known-good merge preserved/backfilled %d contract(s) "
+                "from previous cache where fresh fetch was zero/missing",
+                symbol, preserved,
+            )
+
+        return fresh
 
     # ------------------------------------------------------------------
     # Internal: yfinance fetch
@@ -344,10 +564,16 @@ class OptionsChainCache:
     # ------------------------------------------------------------------
 
     def _merge_chains(self, base: dict, overlay: dict, symbol: str) -> dict:
-        """Merge two chains: overlay overwrites matching strikes, adds new ones.
+        """Merge two freshly fetched chains with explicit, deterministic
+        source precedence: TradingView (`overlay`) is preferred over
+        yfinance (`base`) field-by-field, but an invalid/zero overlay field
+        never overwrites a valid non-zero base field, and vice versa when
+        adding brand-new contracts the overlay provides that base doesn't
+        have.
 
         base = yfinance data (comprehensive expirations)
-        overlay = TradingView data (may have strikes yfinance is missing)
+        overlay = TradingView data (may have strikes yfinance is missing,
+                  but typically only for a handful of near-term expirations)
         """
         merged = {
             "symbol": symbol,
@@ -360,48 +586,30 @@ class OptionsChainCache:
         overlay_puts = overlay.get("puts", {})
 
         added_strikes = 0
-        overwritten_strikes = 0
-        skipped_strikes = 0
+        merged_strikes = 0
 
-        # Merge calls
-        for exp_key, strikes in overlay_calls.items():
-            if exp_key not in merged["calls"]:
-                merged["calls"][exp_key] = {}
-            for strike_key, contract in strikes.items():
-                existing = merged["calls"][exp_key].get(strike_key)
-                if existing is not None:
-                    # Only overwrite if overlay has non-zero bid or ask
-                    if contract.get("bid", 0) > 0 or contract.get("ask", 0) > 0:
-                        overwritten_strikes += 1
-                        merged["calls"][exp_key][strike_key] = contract
+        for side, overlay_bucket in (("calls", overlay_calls), ("puts", overlay_puts)):
+            merged_bucket = merged[side]
+            for exp_key, strikes in overlay_bucket.items():
+                if exp_key not in merged_bucket:
+                    merged_bucket[exp_key] = {}
+                for strike_key, contract in strikes.items():
+                    existing = merged_bucket[exp_key].get(strike_key)
+                    if existing is not None:
+                        # Field-level precedence: TV (contract) preferred,
+                        # falling back to yfinance (existing) per-field only
+                        # where TV's value is invalid/zero.
+                        merged_bucket[exp_key][strike_key] = _merge_contract_fields(existing, contract)
+                        merged_strikes += 1
                     else:
-                        skipped_strikes += 1
-                else:
-                    added_strikes += 1
-                    merged["calls"][exp_key][strike_key] = contract
+                        added_strikes += 1
+                        merged_bucket[exp_key][strike_key] = contract
 
-        # Merge puts
-        for exp_key, strikes in overlay_puts.items():
-            if exp_key not in merged["puts"]:
-                merged["puts"][exp_key] = {}
-            for strike_key, contract in strikes.items():
-                existing = merged["puts"][exp_key].get(strike_key)
-                if existing is not None:
-                    # Only overwrite if overlay has non-zero bid or ask
-                    if contract.get("bid", 0) > 0 or contract.get("ask", 0) > 0:
-                        overwritten_strikes += 1
-                        merged["puts"][exp_key][strike_key] = contract
-                    else:
-                        skipped_strikes += 1
-                else:
-                    added_strikes += 1
-                    merged["puts"][exp_key][strike_key] = contract
-
-        if added_strikes > 0 or overwritten_strikes > 0 or skipped_strikes > 0:
+        if added_strikes > 0 or merged_strikes > 0:
             logger.info(
-                "%s: merge complete — %d strikes added from TradingView, "
-                "%d strikes overwritten, %d strikes skipped (overlay had zero bid/ask)",
-                symbol, added_strikes, overwritten_strikes, skipped_strikes,
+                "%s: source merge complete — %d strikes added from TradingView, "
+                "%d strikes field-merged (TV preferred, yfinance fallback for zero/missing fields)",
+                symbol, added_strikes, merged_strikes,
             )
 
         return merged

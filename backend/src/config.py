@@ -5,6 +5,7 @@ from datetime import datetime
 import yaml
 from typing import Any, Dict
 
+from .ai_functions import AI_FUNCTIONS, SUPPORTED_AI_PROVIDERS
 from .llm import LlmConfig
 
 
@@ -69,7 +70,7 @@ class Config:
             )
 
         provider = self._resolve_ai_provider(self.config.get('ai') or {})
-        if provider not in ('azure', 'gemini'):
+        if provider not in SUPPORTED_AI_PROVIDERS:
             raise ValueError(
                 f"Invalid ai.provider: {provider!r} (use azure or gemini)"
             )
@@ -84,10 +85,10 @@ class Config:
     def _resolve_ai_provider(ai: Dict[str, Any]) -> str:
         """Resolve ai.provider from config value or AI_PROVIDER env (default: azure)."""
         raw = (ai.get('provider') or '').strip().lower()
-        if raw in ('azure', 'gemini'):
+        if raw in SUPPORTED_AI_PROVIDERS:
             return raw
         env = (os.environ.get('AI_PROVIDER') or '').strip().lower()
-        if env in ('azure', 'gemini'):
+        if env in SUPPORTED_AI_PROVIDERS:
             return env
         return 'azure'
 
@@ -122,16 +123,101 @@ class Config:
             return self.config.get('gemini', {}).get('api_key', '')
         return self.config.get('azure', {}).get('api_key', '')
 
-    def model_for(self, role: str) -> str:
-        """Return model for a specific role, falling back to model_deployment."""
+    def model_for(
+        self,
+        role: str,
+        config_key: str | None = None,
+        default: str | None = None,
+    ) -> str:
+        """Resolve function override with backward-compatible legacy fallbacks."""
+        override = self._function_override(role).get('model')
+        if override:
+            return str(override).strip()
+        metadata = AI_FUNCTIONS.get(role, {})
+        legacy_task = config_key or metadata.get('legacy_task')
+        if legacy_task and role != 'plan_monitor':
+            legacy_model = str(
+                self.config.get(legacy_task, {}).get('model') or ''
+            ).strip()
+            if legacy_model:
+                return legacy_model
+        legacy_section = metadata.get('legacy_model_section')
+        if legacy_section:
+            legacy_model = str(
+                self.config.get(legacy_section, {}).get('model') or ''
+            ).strip()
+            if legacy_model:
+                return legacy_model
         models = self._ai_section().get('models', {})
-        return models.get(role) or self.model_deployment
+        return (
+            models.get(role)
+            or default
+            or metadata.get('default_model')
+            or self.model_deployment
+        )
 
     def llm_config(self) -> LlmConfig:
+        return self._llm_config_for_provider(self.ai_provider)
+
+    def llm_config_for(self, config_key: str | None = None) -> LlmConfig:
+        """Backward-compatible task provider resolver."""
+        provider = self.ai_provider
+        if config_key:
+            raw = str(
+                self.config.get(config_key, {}).get('provider') or ''
+            ).strip().lower()
+            if raw:
+                if raw not in SUPPORTED_AI_PROVIDERS:
+                    raise ValueError(
+                        f"Invalid {config_key}.provider: {raw!r} "
+                        "(use azure or gemini)"
+                    )
+                provider = raw
+        return self._llm_config_for_provider(provider)
+
+    def provider_for(self, role: str) -> str:
+        """Resolve function override → legacy task override → global provider."""
+        override = str(
+            self._function_override(role).get('provider') or ''
+        ).strip().lower()
+        if override:
+            if override not in SUPPORTED_AI_PROVIDERS:
+                raise ValueError(
+                    f"Invalid ai_function_overrides.{role}.provider: "
+                    f"{override!r}"
+                )
+            return override
+        legacy_task = AI_FUNCTIONS.get(role, {}).get('legacy_task')
+        legacy_provider = str(
+            self.config.get(legacy_task, {}).get('provider') or ''
+        ).strip().lower() if legacy_task else ''
+        if legacy_provider in SUPPORTED_AI_PROVIDERS:
+            return legacy_provider
+        return self.ai_provider
+
+    def llm_config_for_function(self, role: str) -> LlmConfig:
+        return self._llm_config_for_provider(self.provider_for(role))
+
+    def function_llm_configs(self) -> Dict[str, LlmConfig]:
+        return {
+            role: self.llm_config_for_function(role)
+            for role in AI_FUNCTIONS
+        }
+
+    def _function_override(self, role: str) -> Dict[str, Any]:
+        return dict(
+            self.config.get('ai_function_overrides', {}).get(role) or {}
+        )
+
+    def _llm_config_for_provider(self, provider: str) -> LlmConfig:
         return LlmConfig(
-            provider=self.ai_provider,
-            api_key=self.api_key,
-            endpoint=self.azure_endpoint if self.ai_provider == 'azure' else None,
+            provider=provider,
+            api_key=(
+                self.config.get('gemini', {}).get('api_key', '')
+                if provider == 'gemini'
+                else self.config.get('azure', {}).get('api_key', '')
+            ),
+            endpoint=self.azure_endpoint if provider == 'azure' else None,
         )
 
     # ── CosmosDB ───────────────────────────────────────────────────────
@@ -250,17 +336,17 @@ class Config:
     @property
     def plan_monitor_model(self) -> str:
         """Plan monitor model (default: 'gpt-5.4-mini')."""
-        return str(self.config.get('plan_monitor', {}).get('model', 'gpt-5.4-mini'))
+        return self.model_for('plan_monitor')
 
     @property
     def activity_chat_model(self) -> str:
         """Activity chat model (default: 'gpt-5.4-mini')."""
-        return str(self.config.get('activity_chat', {}).get('model', 'gpt-5.4-mini'))
+        return self.model_for('activity_chat')
 
     @property
     def dps_insights_model(self) -> str:
         """DPS insights model (default: 'gpt-5.4-mini')."""
-        return str(self.config.get('dps_insights', {}).get('model', 'gpt-5.4-mini'))
+        return self.model_for('dps_insights')
 
     # ── Options Chain Scheduler ────────────────────────────────────────
 

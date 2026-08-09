@@ -80,7 +80,7 @@ def _make_runner(monkeypatch):
         llm=LlmConfig(provider="azure", api_key="k", endpoint="https://e"),
         model="gpt-x",
     )
-    monkeypatch.setattr(runner, "_get_client", lambda model=None: object())
+    monkeypatch.setattr(runner, "_get_client", lambda model=None, function_id=None: object())
     return runner
 
 

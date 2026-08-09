@@ -5845,3 +5845,128 @@ The suitability categories are not derived from `watchlist.covered_call`, `watch
 #### Validation
 
 Final review passed 49 watchlist tests, 41 position financial tests, an 11/11 suitability runtime matrix, focused frontend lint, and TypeScript typecheck.
+
+---
+
+# Decision: Agent Provider/Model Configuration in Settings
+
+**Date:** 2026-08-09
+**Author:** Rusty (UI/Frontend)
+**Status:** Implemented ✅
+**Context:** Provider/model selection for Monitoring, Summary, Banner, Plan Monitor agents; precedence hierarchy and credential security
+
+## Summary
+
+Implemented end-to-end Settings UI for configuring provider and model overrides per agent (scheduler, summary_agent, banner_agent, plan_monitor) with secure credential handling and dynamic scheduler reload.
+
+## Decision
+
+**Settings Configuration Hierarchy:**
+1. Task override (agent-specific Settings value) — highest precedence
+2. Role/provider global model (`ai.models[role]` in config.yaml)
+3. Deployment/default (`ai.model_deployment` in config.yaml) — lowest precedence
+4. Plan Monitor legacy fallback: `gpt-5.4-mini`
+
+**Blank Settings Values:** Remove task override entirely; do not persist empty strings
+
+**Provider Support:** Only `azure` and `gemini` accepted via Settings UI (prevents typos, scope isolation)
+
+**Credential Handling:** Provider credentials remain in existing secret-backed configuration sections; no credential exposure through Settings UI
+
+## Implementation
+
+- `frontend/` — Settings form components for Monitoring, Summary, Banner, Plan Monitor agent configuration
+- `backend/` — Precedence resolver; Settings persistence to CosmosDB and config.yaml
+- `scheduler/` — Dynamic configuration reload on Settings changes
+- Runtime agents — consume Settings precedence on execution
+
+### Files Changed
+- Settings UI components (frontend)
+- Settings persistence layer (backend)
+- Precedence resolution logic (config handling)
+- config.yaml template updates
+- Scheduler configuration hot-reload
+
+### Technical Details
+
+**Provider/Model Fields:**
+- Optional `provider` override in agent section
+- Optional `model` override in agent section
+- Both default to null (fall through precedence chain)
+
+**Precedence Resolution Algorithm:**
+```
+resolve_provider(agent_name):
+  if task_override_provider exists: return task_override_provider
+  if global ai.provider exists: return ai.provider
+  return "azure"  # default
+
+resolve_model(agent_name, role):
+  if task_override_model exists: return task_override_model
+  if ai.models[role] exists: return ai.models[role]
+  if agent_name == "plan_monitor": return "gpt-5.4-mini"  # legacy
+  return ai.model_deployment
+```
+
+**Empty Settings Behavior:**
+- Form submission with blank field → DELETE override from config (not INSERT empty string)
+- Blank value in form triggers override removal
+- Subsequent resolution uses next precedence level
+
+**CosmosDB Persistence:**
+- Settings changes immediately persist to cloud configuration
+- Config.yaml updated synchronously for backup/audit
+- Scheduler receives reload signal on persistence commit
+
+**Scheduler Dynamic Reload:**
+- Listener on Settings change events
+- Hot-reload configuration without scheduler restart
+- Runtime execution immediately consumes updated precedence
+
+## Validation
+
+✅ Settings form displays effective (resolved) provider/model for each agent
+✅ Settings form edits provider/model overrides
+✅ Blank form field removes override
+✅ Precedence hierarchy correctly applied in all execution paths
+✅ Provider validation restricts to {azure, gemini}
+✅ Tests/checks passed
+✅ Scheduler dynamic reload confirmed
+✅ No credential exposure in Settings UI
+
+## Impact
+
+- Operators can override model/provider per agent without code changes
+- Precedence hierarchy maintains deployment defaults while allowing task-level override
+- Secure credential handling preserves existing secret management
+- Dynamic reload eliminates restart requirement for configuration changes
+- Plan Monitor backward compatibility maintained
+
+## Cross-Context
+
+**Related:** 2026-08-09 Session — Rusty completed implementation; Linus completed options-chain cache fix (separate work); Scribe merged decisions and created session/orchestration logs.
+
+## Follow-ups
+
+None currently identified; ready for deployment.
+
+---
+
+# Decision: AI Providers Replaces Model Controls in Cron Settings
+
+**Date:** 2026-08-09
+**Author:** Rusty (Agent Dev)
+**Status:** Implemented
+**Supersedes:** The per-agent cron Settings UI described immediately above
+
+Provider and model controls live exclusively under **Settings → AI Providers**.
+Cron settings contain scheduling fields only.
+
+The page configures 15 internal functions across Monitoring, Reporting, and
+Chat. Overrides are persisted in `ai_function_overrides`; clearing an override
+restores inheritance. Resolution order is function override, compatible legacy
+configuration, `ai.models`, then global or function-specific defaults.
+
+Only the supported `azure` and `gemini` providers are accepted. Credentials are
+never returned to the frontend. Scheduled runs, manual runs, reports, and chats
+all resolve provider and model through the same per-function runtime path.

@@ -151,3 +151,30 @@ The Portfolio Chat context contract now accepts `include_symbol_data` (default `
 - Linus replaced the temporary watchlist-flag filter pills with the documented suitability categories: Ideal Puts, Ideal Calls, No Puts, and No Calls.
 - Suitability is derived from normalized `entry_tag` plus momentum. Watchlist flags remain separate operational tracking controls, and option-chain type/delta filters are a different backend concern.
 - Basher's final current-state review approved the integrated implementation; earlier concurrent-snapshot findings are superseded.
+
+### 2026-08-09 — Add Symbol UI Consistency
+- `AddSymbolForm` now matches the established watchlist controls: Lucide icons, primary pill actions, card-style popover, standard text fields, and strategy toggle pills.
+- Added outside-click/Escape closing, explicit labels, dialog semantics, live status messages, and a non-dismissible loading state.
+- Validation: focused ESLint, `tsc --noEmit`, and `git diff --check` passed.
+
+### 2026-08-09 — Persistent Agent Provider/Model Settings
+- Settings now exposes effective and editable provider/model values for Monitoring, Summary, Dashboard Banner, and Plan Monitor.
+- Precedence is task override → existing role model/global provider → global deployment/default; blank UI values remove the override and restore inheritance.
+- Overrides persist in each task section in CosmosDB and `config.yaml`, hot-reload into scheduler config, and are selected by the actual Agent Framework client at execution time.
+- Supported providers remain `azure` and `gemini`; credentials stay environment/config managed and are never returned by the new API fields.
+- Validation: 8 focused tests, 25 related agent tests, 49 watchlist tests, frontend ESLint, `tsc --noEmit`, Python compile, and diff check passed.
+
+### 2026-08-09 — Watchlist and Options Chain Stability Checkpoint
+Parallel agent completion:
+- **Rusty (Self):** Unified Add Symbol watchlist styling. Styling updates are uncommitted.
+- **Linus (Quant Dev):** Fixed options chain cache with last-known-good merge and stale-while-revalidate pattern. This stabilizes the options chain data that feeds into watchlist option analysis and roll-table scenarios (forthcoming).
+
+Cross-agent note: The options chain fix directly supports future watchlist enhancements that depend on consistent quote data across all expirations. No frontend changes needed at this moment; monitoring for upstream improvements.
+
+### 2026-08-09 — Settings / AI Providers
+- Provider/model controls now live only in `Settings > AI Providers`; cron cards remain scheduling-only.
+- The canonical catalog has 15 runtime functions across Monitoring, Reporting, and Chat, each with independent effective values, source indicators, overrides, and reset-to-inherited behavior.
+- Precedence is function override → legacy task override → legacy function model → `ai.models` → global AI defaults. Saving migrates touched shared legacy task overrides to per-function entries without changing sibling behavior.
+- Runtime client selection is function-aware for scheduled/manual monitoring, summary, banner, plan monitor, reports, technical analysis, portfolio/symbol/activity chat, and DPS insights.
+- Persisted `ai_function_overrides` contain only provider/model deployment names; credentials stay in backend configuration and never enter the API response.
+- Validation: 41 focused backend tests passed; frontend focused ESLint and `tsc --noEmit` passed; Python compilation and scoped diff check passed.

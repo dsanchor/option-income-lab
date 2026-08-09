@@ -156,6 +156,7 @@ class OptionsAgentScheduler:
             model=self.config.model_deployment,
             telegram_notifier=telegram_notifier,
             plan_monitor_model=self.config.plan_monitor_model,
+            function_llms=self.config.function_llm_configs(),
         )
         
         print(f"Scheduler configured with cron: {self.config.cron_expression}")
@@ -319,7 +320,7 @@ class OptionsAgentScheduler:
         if not plan_monitor_config.get('enabled', True):
             print("⏭️  Plan monitor disabled in config")
             return
-        self.runner._plan_monitor_model = plan_monitor_config.get('model', 'gpt-5.4-mini')
+        self.runner._plan_monitor_model = self.config.model_for('plan_monitor')
 
         now_tz = _now_local()
         print(f"\n{'📝'*35}")
@@ -637,6 +638,13 @@ class OptionsAgentScheduler:
             
             # Reload all registered tasks via the registry
             self.registry.reload_from_cosmos(self.config, cosmos_settings)
+
+            self.config.config['ai_function_overrides'] = (
+                cosmos_settings.get('ai_function_overrides') or {}
+            )
+            self.runner.set_function_llms(
+                self.config.function_llm_configs()
+            )
                 
         except Exception as e:
             # Don't crash the scheduler on config reload errors

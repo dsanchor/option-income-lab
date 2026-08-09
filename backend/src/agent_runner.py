@@ -1,4 +1,5 @@
 import asyncio
+from contextvars import ContextVar
 import json
 import logging
 import os
@@ -73,7 +74,8 @@ class AgentRunner:
     
     def __init__(self, llm: LlmConfig, model: str, telegram_notifier=None,
                  project_endpoint: str = None, api_key: str = None,
-                 plan_monitor_model: str = None):
+                 plan_monitor_model: str = None,
+                 function_llms: Dict[str, LlmConfig] | None = None):
         """Initialize the agent runner.
 
         Args:
@@ -86,27 +88,53 @@ class AgentRunner:
         if project_endpoint is not None and api_key is not None:
             llm = LlmConfig(provider='azure', api_key=api_key, endpoint=project_endpoint)
         self._llm = llm
+        self._active_llm: ContextVar[LlmConfig | None] = ContextVar(
+            "agent_runner_llm", default=None
+        )
+        self._function_llms = dict(function_llms or {})
         self._default_model = model
         self._plan_monitor_model = plan_monitor_model or "gpt-5.4-mini"
-        self._clients: Dict[str, object] = {}
+        self._clients: Dict[tuple[str, str, str], object] = {}
         self.telegram_notifier = telegram_notifier
 
         # Native skills providers
         self._skills_providers: Dict[str, SkillsProvider] = {}
         self._skills_dir = Path(__file__).parent / "skills"
 
-    def _get_client(self, model: str = None) -> OpenAIChatCompletionClient:
+    def _get_client(
+        self,
+        model: str = None,
+        function_id: str | None = None,
+    ) -> OpenAIChatCompletionClient:
         """Return a cached chat client for the given model name."""
         deployment = model or self._default_model
-        if deployment not in self._clients:
+        llm = (
+            self._function_llms.get(function_id)
+            or self._active_llm.get()
+            or self._llm
+        )
+        cache_key = (
+            llm.provider,
+            llm.endpoint or '',
+            deployment,
+        )
+        if cache_key not in self._clients:
             logger.info(
                 "Creating OpenAIChatCompletionClient provider=%s model=%s",
-                self._llm.provider, deployment,
+                llm.provider, deployment,
             )
-            self._clients[deployment] = create_async_chat_client(
-                deployment, self._llm,
+            self._clients[cache_key] = create_async_chat_client(
+                deployment, llm,
             )
-        return self._clients[deployment]
+        return self._clients[cache_key]
+
+    def set_llm_config(self, llm: LlmConfig) -> None:
+        """Select the provider credentials used by subsequent agent calls."""
+        self._active_llm.set(llm)
+
+    def set_function_llms(self, values: Dict[str, LlmConfig]) -> None:
+        """Replace per-function provider configurations after a live reload."""
+        self._function_llms = dict(values)
 
     @property
     def client(self):
@@ -1059,7 +1087,7 @@ class AgentRunner:
 Provide your supervisor audit in the JSON format specified above."""
 
             agent = Agent(
-                client=self._get_client(model),
+                client=self._get_client(model, "supervisor"),
                 name=f"Supervisor_{agent_type}",
                 instructions=instructions,
             )
@@ -1189,7 +1217,7 @@ Provide your supervisor audit in the JSON format specified above."""
 Provide your alpha advisor analysis in the JSON format specified above."""
 
             agent = Agent(
-                client=self._get_client(model),
+                client=self._get_client(model, "alpha"),
                 name=f"Alpha_{agent_type}",
                 instructions=instructions,
             )
@@ -1517,8 +1545,9 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                 if _category_skill:
                     _skill_names.append(_category_skill)
             _skills = self._get_skills_provider(_skill_names)
+            function_id = "buy_tracker" if agent_type == "buy_tracker" else "analysis"
             agent = Agent(
-                client=self._get_client(model),
+                client=self._get_client(model, function_id),
                 name=name,
                 instructions=instructions,
                 context_providers=[_skills] if _skills else None,
@@ -1878,7 +1907,7 @@ Analyze the position risk and output your response in the required JSON format. 
 
         _skills = self._get_skills_provider(["earnings-gate-monitor", "data-source", "activity-log", "risk-flags"])
         agent = Agent(
-            client=self._get_client(model),
+            client=self._get_client(model, "monitor_assessment"),
             name=name,
             instructions=instructions,
             context_providers=[_skills] if _skills else None,
@@ -1958,7 +1987,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
 
         _skills = self._get_skills_provider(["roll-economics", "risk-flags"])
         agent = Agent(
-            client=self._get_client(model),
+            client=self._get_client(model, "monitor_roll"),
             name=f"{name}_roll",
             instructions=roll_instructions,
             context_providers=[_skills] if _skills else None,
@@ -2824,7 +2853,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
 Respond in the required JSON format only."""
 
         agent = Agent(
-            client=self._get_client(self._plan_monitor_model),
+            client=self._get_client(self._plan_monitor_model, "plan_monitor"),
             name="PlanMonitorAgent",
             instructions=get_plan_monitor_instructions(),
         )
@@ -3086,7 +3115,10 @@ Every symbol listed in the portfolio overview MUST appear in the corresponding s
 """
             
             # Run the agent
-            agent = Agent(name="SummaryAgent", client=self._get_client(model))
+            agent = Agent(
+                name="SummaryAgent",
+                client=self._get_client(model, "summary"),
+            )
             print("🤖 Running summary agent...")
             logger.info("Invoking Agent with %d symbols", len(activities_by_symbol))
             
@@ -3193,7 +3225,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
 
         _skills = self._get_skills_provider(["data-source"])
         agent = Agent(
-            client=self._get_client(model),
+            client=self._get_client(model, "report"),
             name="ReportAgent",
             instructions=TV_REPORT_INSTRUCTIONS,
             context_providers=[_skills] if _skills else None,
@@ -3276,7 +3308,7 @@ All market data has been pre-fetched above. Please analyze this data and generat
 
         _skills = self._get_skills_provider(["data-source"])
         agent = Agent(
-            client=self._get_client(model),
+            client=self._get_client(model, "technical_analysis"),
             name="TechnicalAnalysisAgent",
             instructions=TECHNICAL_ANALYSIS_INSTRUCTIONS,
             context_providers=[_skills] if _skills else None,

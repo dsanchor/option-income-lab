@@ -13,6 +13,7 @@ import {
   CalendarDays,
   ClipboardList,
   Settings,
+  Bot,
   ScrollText,
   Bug,
   Menu,
@@ -32,6 +33,7 @@ const DROPDOWNS: Record<string, Item[]> = {
   ],
   Settings: [
     { href: "/settings/config", label: "Configuration", icon: Settings },
+    { href: "/settings/ai-providers", label: "AI Providers", icon: Bot },
     { href: "/settings/logs", label: "Agent Logs", icon: ScrollText },
     { href: "/settings/debug", label: "Debug", icon: Bug },
   ],

@@ -185,7 +185,7 @@ class TaskRegistry:
                 config.config[task.config_key]['cron'] = new_cron
                 cron_changed = True
             
-            # Update other config keys (enabled, etc.)
+            # Update scheduling state.
             if task.config_key not in config.config:
                 config.config[task.config_key] = {}
             for key in ['enabled']:

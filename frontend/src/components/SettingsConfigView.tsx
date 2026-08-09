@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { LoaderCircle, Save } from "lucide-react";
 import type { SettingsConfig } from "@/types/settings";
 
 /** Relative-time formatter for last/next-run ISO strings. */
@@ -594,7 +595,7 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
             checked={cfg.plan_monitor_enabled}
             onChange={(v) => set("plan_monitor_enabled", v)}
             label="Enable plan monitor agent"
-            hint="Monitors action plans and adds agent notes based on current market data. Uses gpt-5.4-mini."
+            hint="Monitors action plans and adds agent notes based on current market data."
           />
           <label className={labelCls}>Cron Expression</label>
           <input
@@ -687,11 +688,16 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
       <div className="flex items-center gap-3">
         <button
           type="button"
-          className="rounded-[var(--radius-pill)] border border-accent-green/50 bg-accent-green/15 px-6 py-2 text-sm font-medium text-accent-green transition-colors hover:bg-accent-green/25 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border border-accent-green/50 bg-accent-green/15 px-6 py-2 text-sm font-medium text-accent-green transition-colors hover:bg-accent-green/25 disabled:cursor-not-allowed disabled:opacity-50"
           onClick={save}
           disabled={saving}
         >
-          {saving ? "Saving…" : "💾 Save"}
+          {saving ? (
+            <LoaderCircle size={15} className="animate-spin" aria-hidden />
+          ) : (
+            <Save size={15} aria-hidden />
+          )}
+          {saving ? "Saving…" : "Save"}
         </button>
         {saveMsg && (
           <span

@@ -3139,3 +3139,59 @@ The `option_type` field from the activity (`open_call_monitor` → `"call"`, `op
 - **No precompute/cache of roll table** — Chain cache is sufficient; derivation is fast
 - **No hard-coded expirations** — All expiration dates come from live chain
 
+
+---
+
+## Decision: Options chain cache now preserves last-known-good quote data and never expires by deletion
+
+**Author:** Linus (Quant Dev)
+**Date:** 2026-08-09
+
+### Context
+Users observed that beyond roughly 5 expirations, options chain bid/ask/IV/greeks
+often showed as zero. Root cause traced in `backend/src/options_chain_cache.py`:
+every cache `refresh()` discarded the previously cached chain entirely and
+rebuilt from two fresh fetches (yfinance base + TradingView overlay). yfinance
+frequently returns NaN/missing bid/ask for far-dated/illiquid expirations
+(coerced to 0.0 in `_process_option_df`), and TradingView's scanner-based
+fallback realistically only covers a handful of near-term expirations. With no
+merge against prior cache state, any previously observed valid quote for a far
+expiration was lost on the very next refresh cycle.
+
+### Decision
+1. `OptionsChainCache.refresh()` now merges the freshly source-merged chain
+   against the previously cached chain ("last-known-good" merge) before
+   storing. For a fixed set of quote/market fields (bid, ask, mid, iv, delta,
+   gamma, theta, vega, rho, lastPrice), a new value of zero/None/NaN falls
+   back to the previous valid non-zero value for the same contract
+   (expiration + strike + option type). Fields where zero is a legitimate,
+   naturally-changing value (volume, openInterest, lastTradeDate, inTheMoney)
+   always take the freshest fetched value and are never pinned to stale data.
+
+2. The yfinance/TradingView source merge (`_merge_chains`) uses the same
+   field-level helper (`_merge_contract_fields`) instead of an all-or-nothing
+   "overwrite only if bid>0 or ask>0" check, so partially-valid overlay data
+   no longer discards valid base fields.
+
+3. Cache TTL now controls *staleness* only, not availability: `get()` never
+   evicts an entry purely for being past its TTL. `get_or_load_async` returns
+   stale data immediately and kicks off a deduped background refresh
+   (stale-while-revalidate). A true cache miss (never fetched) still blocks.
+
+4. A new `_prune_expired_expirations` pass drops expiration buckets whose
+   actual contract expiration date (YYYYMMDD key) has passed, applied after
+   every merge — this is distinct from cache TTL and prevents stale contracts
+   whose real options have expired from being carried forward indefinitely.
+
+### Files changed
+- `backend/src/options_chain_cache.py` (core fix)
+- `backend/tests/test_options_chain_cache.py` (new, 28 tests)
+
+### Follow-ups / open questions for the team
+- Not fully provable from code alone: whether yfinance's zeros beyond ~5
+  expirations are genuine illiquidity or Yahoo-side rate limiting/throttling
+  during the tight per-expiration fetch loop — worth instrumenting if it
+  recurs. TradingView's real expiration coverage also isn't directly provable
+  from this codebase (Playwright-scraped, coverage depends on what TradingView's
+  UI loads) — assumed to be "near-term only" based on it being labeled a
+  fallback for when markets are closed.
