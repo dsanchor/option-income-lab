@@ -25,7 +25,52 @@ The result: a DGI portfolio that generates income from **dividends AND option pr
 
 ## Architecture
 
-Eight specialized AI agents power the platform:
+The platform runs as **two decoupled tiers** that ship as **two containers** in the same Azure
+Container Apps environment and share a single CosmosDB:
+
+```
+                 ┌──────────────────────────────────────────────────────────┐
+   Browser  ───► │  web  (frontend/)          Next.js 16 App Router          │  external ingress
+   (HTTPS)       │  ─────────────────────     React 19 · Tailwind v4         │  :3000
+                 │  Server-side BFF proxy      recharts · standalone build    │
+                 └───────────────┬──────────────────────────────────────────┘
+                                 │  internal DNS (API_BASE_URL)
+                                 │  browser NEVER calls the api directly
+                 ┌───────────────▼──────────────────────────────────────────┐
+   Scheduler ◄── │  api  (backend/)           FastAPI (JSON-only)            │  internal ingress
+   (in-proc)     │  ─────────────────────     APScheduler cron               │  :8000
+                 │  8 AI agents · forecast     Playwright/Chromium fallback   │
+                 └───────────────┬──────────────────────────────────────────┘
+                                 │
+                 ┌───────────────▼───────────┐   ┌──────────────────────────┐
+                 │  Azure CosmosDB (NoSQL)    │   │  Yahoo Finance (yfinance) │
+                 │  6 containers, /symbol PK  │   │  quotes · chains · Greeks │
+                 └────────────────────────────┘   └──────────────────────────┘
+```
+
+- **`web` (`frontend/`)** — Next.js 16 App Router (React 19, Tailwind v4, recharts), built as a
+  standalone Node server. It is the **public entrypoint** and acts as a **Backend-for-Frontend
+  (BFF)**: every browser request for data hits a Next.js route handler that proxies to the internal
+  `api` over the environment's private DNS (`API_BASE_URL`). The browser never talks to the API
+  directly; authentication is delegated to Container Apps ingress.
+- **`api` (`backend/`)** — FastAPI serving JSON-only `/api/*` endpoints plus an **in-process
+  APScheduler** that runs the agent cron jobs. **Internal ingress only** (not publicly reachable),
+  no app-level auth. Uses `yfinance` for market data and Playwright/Chromium only as a TradingView
+  fallback.
+
+### Tech stack
+
+| Tier | Stack |
+|------|-------|
+| **Frontend (`web`)** | Next.js 16 (App Router, Turbopack), React 19, TypeScript, Tailwind CSS v4. Data: TanStack Query (client cache/refresh); charts: recharts; motion (Framer Motion) for transitions; lucide-react icons; sonner toasts; countup.js number animation. `output: "standalone"`, Node 24 runtime, port **3000**. |
+| **Backend (`api`)** | Python 3.12, FastAPI + Uvicorn, APScheduler, `yfinance`, Playwright (Chromium), Azure Cosmos SDK. Port **8000**. |
+| **Data** | Azure CosmosDB (NoSQL, serverless) — 6 containers, symbol-centric partitioning. |
+| **AI** | Azure AI Foundry (default) **or** Google Gemini, selected via `AI_PROVIDER`. |
+| **CI/CD** | GitHub Actions matrix build → two GHCR images (`<repo>-api`, `<repo>-front`) → Azure Container Apps. |
+
+### AI agents
+
+Eight specialized AI agents power the backend:
 
 - **Covered Call & Cash-Secured Put Agents** — Analyze entry opportunities with category-specific parameters (Aristocrat, Compounder, Rising Star, High Yield, Balanced)
 - **Position Monitors** — Two-phase pipeline watches open positions for assignment risk, suggests rolls with full economics
@@ -35,11 +80,16 @@ Eight specialized AI agents power the platform:
 - **DGI Screener** — Ranks S&P 500 stocks by composite quality score (70% fundamental + 30% technical timing)
 - **Buy Tracker** — AI-powered DCA timing agent evaluating 5 dimensions for patient accumulation
 - **Portfolio Enrichment** — Background process updating watchlist with DGI scores, momentum signals, and categories. Also records a **daily tech-timing + momentum snapshot** per symbol (rolling 90-day history), shown as a chart in the symbol detail modal — the line is the tech-timing score (0–100) and the background band color reflects the momentum of each period.
-- **Price Forecast Engine** — Deterministic (no LLM) volatility-cone forecaster. A daily cron generates a probabilistic price *range* per symbol for four horizons (1d/1w/2w/4w) and, as each horizon resolves, records a self-calibrating band hit-rate and directional accuracy. New symbols get a 25-session backfill on creation. See `src/price_forecast.py` + `src/forecast_cron.py`.
+- **Price Forecast Engine** — Deterministic (no LLM) volatility-cone forecaster. A daily cron generates a probabilistic price *range* per symbol for four horizons (1d/1w/2w/4w) and, as each horizon resolves, records a self-calibrating band hit-rate and directional accuracy. New symbols get a 25-session backfill on creation. See `backend/src/price_forecast.py` + `backend/src/forecast_cron.py`.
 
 **Data source:** Yahoo Finance via `yfinance` Python library — zero auth, no browser, 23+ option expirations with computed Greeks.
 
 **Storage:** Azure CosmosDB with symbol-centric partitioning across 6 containers (symbols, telemetry, settings, dgi_screener, calendar, agent_traces).
+
+**CI/CD:** On every push, a GitHub Actions matrix build publishes two images to GHCR —
+`ghcr.io/<owner>/<repo>-api` (from `backend/`) and `ghcr.io/<owner>/<repo>-front` (from
+`frontend/`) — tagged with the branch, commit SHA, and `latest` on the default branch. See
+[Deployment](#deployment-azure-container-apps) below.
 
 → [Full architecture details](docs/architecture.md)
 
@@ -92,7 +142,7 @@ Deterministic, **no-LLM** price forecaster. For each symbol it projects a probab
 - **Bias** — a directional value in `[-1, +1]` reported *separately* and **never folded into the band centre**. Its **sign** comes from the momentum regime; its **magnitude is graded continuously** by trend strength (ADX) and price extension from SMA50. Non-directional states (Neutral, Unknown) are `0`; Weakening carries a mild bearish lean.
 - **Self-calibrating hit-rate** — as each horizon resolves, the engine records whether the close landed inside the 1σ/2σ band and whether the directional call was correct. The directional accuracy `dir NN% (c=N)` is a conditional rate over only the high-conviction claims (`|bias| ≥ 0.10`, trend-agreeing); range-bound forecasts are excluded, so `c` (claim count) may be lower than `n` (resolved endpoints). A trend-deviation metric shows how tightly price tracked the projected trend line.
 
-Forecasts are generated by a **daily cron**; new symbols receive a **25-session backfill on creation**, and historical rebuilds are available via `scripts/backfill_price_forecast.py`.
+Forecasts are generated by a **daily cron**; new symbols receive a **25-session backfill on creation**, and historical rebuilds are available via `backend/scripts/backfill_price_forecast.py`.
 → [Web Dashboard](docs/web-dashboard.md)
 
 ### 📅 Events Calendar
@@ -119,36 +169,117 @@ Full traceability of every agent execution under **Settings → Agent Logs**: sy
 
 ---
 
-## Quick Start
+## Quick Start (local)
+
+Run the two tiers in **two terminals**: the `api` (FastAPI, port 8000) and the `web`
+(Next.js BFF, port 3000). The browser only ever opens the `web` app.
+
+### 1. Backend — `api`
 
 ```bash
-# 1. Install dependencies
+cd backend
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+source venv/bin/activate            # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# 2. Set environment variables
+# CosmosDB
 export COSMOSDB_ENDPOINT="https://your-account.documents.azure.com:443/"
 export COSMOSDB_KEY="your-primary-key"
 
-# Azure OpenAI
+# LLM — Azure AI Foundry (default)
 export AI_PROVIDER=azure
 export AZURE_AI_PROJECT_ENDPOINT="https://your-project.services.ai.azure.com"
 export AZURE_OPENAI_API_KEY="your-api-key"
 export MODEL_DEPLOYMENT="gpt-5.1"
 
-# OR Google Gemini
-export AI_PROVIDER=gemini
-export GOOGLE_API_KEY="your-google-api-key"
-export MODEL_DEPLOYMENT="gemini-2.0-flash"
+# …OR Google Gemini
+# export AI_PROVIDER=gemini
+# export GOOGLE_API_KEY="your-google-api-key"
+# export MODEL_DEPLOYMENT="gemini-2.0-flash"
 
-# 3. Run
-python run.py  # Full app (web + scheduler)
+python run.py                       # FastAPI + in-process scheduler on :8000
+# python run.py --web-only          # JSON API without the scheduler
+# python run.py --scheduler-only    # scheduler only, no API server
 ```
 
-Access the dashboard at http://localhost:8000
+### 2. Frontend — `web`
 
-→ [Full setup guide](docs/local-setup.md) | [Azure deployment](docs/deployment.md)
+```bash
+cd frontend
+npm install
+export API_BASE_URL="http://localhost:8000"   # where the BFF proxies data requests
+npm run dev                                    # Next.js dev server on :3000
+```
+
+Open the app at **http://localhost:3000** (not 8000 — that's the internal API).
+
+> **Docker (either tier):** `docker build -t oil-api ./backend` and
+> `docker build -t oil-web ./frontend`, then run `oil-web` with `-e API_BASE_URL=...` pointing at
+> the `oil-api` container.
+
+→ [Full setup guide](docs/local-setup.md)
+
+---
+
+## Deployment (Azure Container Apps)
+
+The app deploys as **two container apps** in the same Container Apps environment, sharing one
+CosmosDB. CI (GitHub Actions) publishes both images to GHCR on every push:
+`ghcr.io/<owner>/<repo>-api` and `ghcr.io/<owner>/<repo>-front`.
+
+| App | Image | Ingress | Port | Auth |
+|-----|-------|---------|------|------|
+| **`api`** | `…/<repo>-api:latest` (from `backend/`) | **internal** | 8000 | none (private) |
+| **`web`** | `…/<repo>-front:latest` (from `frontend/`) | **external** | 3000 | Container Apps ingress (Entra ID) |
+
+The `web` app reaches the `api` over the environment's internal DNS via `API_BASE_URL`; the browser
+never hits the `api` directly. Concise flow:
+
+```bash
+# api — INTERNAL ingress, takes all backend env vars (CosmosDB + LLM)
+az containerapp create --name ca-oil-api --resource-group $RG --environment $ENV \
+  --image ghcr.io/<owner>/<repo>-api:latest \
+  --target-port 8000 --ingress internal --cpu 1 --memory 2Gi \
+  --env-vars COSMOSDB_ENDPOINT=... COSMOSDB_KEY=... AI_PROVIDER=azure \
+             MODEL_DEPLOYMENT=... AZURE_AI_PROJECT_ENDPOINT=... AZURE_OPENAI_API_KEY=...
+
+# grab the api's internal FQDN
+API_FQDN=$(az containerapp show --name ca-oil-api --resource-group $RG \
+  --query "properties.configuration.ingress.fqdn" -o tsv)
+
+# web — EXTERNAL ingress, only needs API_BASE_URL pointing at the api
+az containerapp create --name ca-oil-web --resource-group $RG --environment $ENV \
+  --image ghcr.io/<owner>/<repo>-front:latest \
+  --target-port 3000 --ingress external --cpu 0.5 --memory 1Gi \
+  --env-vars API_BASE_URL="https://$API_FQDN"
+```
+
+### Environment variables
+
+Env vars are **per component**. The `api` takes the backend vars; the `web` takes only
+`API_BASE_URL`.
+
+**`api` (`backend/`):**
+
+| Variable | Required when | Description |
+|---|---|---|
+| `COSMOSDB_ENDPOINT` | Always | CosmosDB account endpoint (`https://<account>.documents.azure.com:443/`) |
+| `COSMOSDB_KEY` | Always | CosmosDB primary key |
+| `AI_PROVIDER` | Optional | `azure` (default) or `gemini` |
+| `MODEL_DEPLOYMENT` | Always | Default model for all agents (Azure deployment name or Gemini model ID) |
+| `AZURE_AI_PROJECT_ENDPOINT` | `AI_PROVIDER=azure` | Azure AI Foundry project endpoint |
+| `AZURE_OPENAI_API_KEY` | `AI_PROVIDER=azure` | Azure OpenAI API key |
+| `GOOGLE_API_KEY` | `AI_PROVIDER=gemini` | Google AI Studio API key |
+| `TELEGRAM_BOT_TOKEN` | Optional | Telegram bot token (notifications) |
+| `TELEGRAM_CHAT_ID` | Optional | Telegram chat ID (notifications) |
+
+**`web` (`frontend/`):**
+
+| Variable | Required when | Description |
+|---|---|---|
+| `API_BASE_URL` | Always | Base URL of the internal `api` (e.g. `https://<api-app>.internal.<env>.<region>.azurecontainerapps.io`). Defaults to `http://localhost:8000` for local dev. |
+
+→ [Full deployment walkthrough (CosmosDB provisioning, scheduler notes, GHCR auth)](docs/deployment.md)
 
 ---
 

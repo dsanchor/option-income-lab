@@ -238,7 +238,97 @@ az containerapp update \
 ---
 
 
+## Two-Container Deployment (`api` + `web`)
+
+The app deploys as **two containers** in the same Container Apps environment, sharing the
+same CosmosDB (see [Architecture → Deployment topology](architecture.md#project-structure)):
+
+- **`api`** — image `ghcr.io/<owner>/<repo>-api:latest` (built from `backend/`). **Internal
+  ingress only** (not reachable from the public internet), **no app-level auth**. Serves the
+  JSON `/api/*` endpoints + runs the in-process scheduler.
+- **`web`** — image `ghcr.io/<owner>/<repo>-front:latest` (built from `frontend/`). **External
+  ingress** (this is the public entrypoint), auth delegated to Container Apps ingress. Acts as a
+  BFF and proxies to `api` over the environment's internal DNS.
+
+```bash
+API_APP="${API_APP:-ca-option-income-lab-api}"
+WEB_APP="${WEB_APP:-ca-option-income-lab-web}"
+API_IMAGE="${API_IMAGE:-ghcr.io/dsanchor/stock-options-manager-api:latest}"
+WEB_IMAGE="${WEB_IMAGE:-ghcr.io/dsanchor/stock-options-manager-front:latest}"
+
+# 1. Deploy the api — INTERNAL ingress on port 8000 (no public exposure, no auth)
+az containerapp create \
+  --name "$API_APP" \
+  --resource-group "$RESOURCE_GROUP" \
+  --environment "$CONTAINER_ENV" \
+  --image "$API_IMAGE" \
+  --target-port 8000 \
+  --ingress internal \
+  --min-replicas 1 --max-replicas 1 \
+  --cpu 1 --memory 2Gi \
+  --env-vars \
+    AI_PROVIDER="$AI_PROVIDER" \
+    MODEL_DEPLOYMENT="$MODEL_DEPLOYMENT" \
+    AZURE_AI_PROJECT_ENDPOINT="$AZURE_AI_PROJECT_ENDPOINT" \
+    AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" \
+    GOOGLE_API_KEY="$GOOGLE_API_KEY" \
+    COSMOSDB_ENDPOINT="$COSMOSDB_ENDPOINT" \
+    COSMOSDB_KEY="$COSMOSDB_KEY" \
+  -o none
+
+# Grab the api's internal FQDN — the web app talks to it over internal DNS
+API_FQDN=$(az containerapp show --name "$API_APP" --resource-group "$RESOURCE_GROUP" \
+  --query "properties.configuration.ingress.fqdn" -o tsv)
+
+# 2. Deploy the web — EXTERNAL ingress on port 3000, pointed at the api via API_BASE_URL
+az containerapp create \
+  --name "$WEB_APP" \
+  --resource-group "$RESOURCE_GROUP" \
+  --environment "$CONTAINER_ENV" \
+  --image "$WEB_IMAGE" \
+  --target-port 3000 \
+  --ingress external \
+  --min-replicas 1 --max-replicas 1 \
+  --cpu 0.5 --memory 1Gi \
+  --env-vars \
+    API_BASE_URL="https://$API_FQDN" \
+  -o none
+
+# Public URL of the web app
+az containerapp show --name "$WEB_APP" --resource-group "$RESOURCE_GROUP" \
+  --query "properties.configuration.ingress.fqdn" -o tsv
+```
+
+> **Note:** For private GHCR packages add `--registry-server ghcr.io --registry-username <user>
+> --registry-password <pat>` (PAT with `read:packages`) to each `create`.
+
+To update either component after a new image is pushed by CI:
+
+```bash
+az containerapp update --name "$API_APP" --resource-group "$RESOURCE_GROUP" --image "$API_IMAGE"
+az containerapp update --name "$WEB_APP" --resource-group "$RESOURCE_GROUP" --image "$WEB_IMAGE"
+```
+
+## Scheduler
+
+Both the `api` container and any additional instance you run include the **in-process
+scheduler** (APScheduler). To avoid duplicate cron runs (double agent executions /
+notifications), only **one** instance should run the scheduler at a time:
+
+- Run the primary `api` normally (`python run.py`) — API + scheduler.
+- Any extra API replica used purely to serve requests should start with `--web-only`
+  (JSON API, no scheduler). Keep `--min-replicas`/`--max-replicas` at `1` on the
+  scheduler-owning app so the cron never runs concurrently.
+
+---
+
+
 ## Environment Variables
+
+Env vars are **per component**. The `api` container takes the backend vars (CosmosDB, LLM,
+Telegram, scheduler); the `web` container takes only `API_BASE_URL`.
+
+**`api` (`backend/`):**
 
 | Variable | Required when | Description |
 |---|---|---|
@@ -251,3 +341,9 @@ az containerapp update \
 | `GOOGLE_API_KEY` | Gemini | Google AI API key from [AI Studio](https://aistudio.google.com/apikey) |
 | `TELEGRAM_BOT_TOKEN` | Optional | Telegram bot token (if notifications enabled) |
 | `TELEGRAM_CHAT_ID` | Optional | Telegram chat ID (if notifications enabled) |
+
+**`web` (`frontend/`):**
+
+| Variable | Required when | Description |
+|---|---|---|
+| `API_BASE_URL` | Always | Base URL of the internal `api` (e.g., `https://<api-app>.internal.<env>.<region>.azurecontainerapps.io`). The Next.js server proxies browser requests here; the browser never calls `api` directly. Defaults to `http://localhost:8000` for local dev. |

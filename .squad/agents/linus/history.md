@@ -9,6 +9,7 @@
 
 ## Learnings
 
+- 2026-08-08: The Symbols watchlist suitability pills are deterministic Entry + Momentum classifications, not watchlist tracking flags. `frontend/src/lib/symbolSuitability.ts` now owns normalized matching for Ideal Puts, Ideal Calls, No Puts, and No Calls; RSI modifiers independently route oversold to Ideal Puts and overextended to Ideal Calls, while No Puts/No Calls require pure unmodified Bearish/Bullish momentum.
 - 2026-07-23: Roll table test suite updated for new expiration column layout with `is_current` and `is_previous` flags; 51 tests passing. Current expiration now highlighted in UI with "● open" marker, previous expiration tagged "(prev)", and ATM row displays underlying price context (e.g., "ATM ($71.54)").
 - 2026-07-01: Roll candidate table now sorted by Ann.Ret% (was Net Credit) to favor shorter-DTE rolls aligned with the 21-35 DTE target; approved by dsanchor 2026-07-01.
 - 2026-07-01: Roll target is now 21-35 DTE primary with 45 DTE fallback cap, and post-earnings hard block is 0-7 days with 8-13 days as a caution zone; applied symmetrically across calls/puts after dsanchor approval.
@@ -2153,3 +2154,49 @@ Strike is now FIXED from the first expiration (with available strikes), not re-s
 ### Final counts
 - Before: 14 failing, 33 passing (46 total)
 - After:  51 passing (46 original + 5 new from TestColumnLayout), 0 failing
+
+## 2026-08-09: Options chain cache — root cause of zeros beyond ~5 expirations + last-known-good fix
+
+### Root cause traced (no assumptions)
+- `OptionsChainCache.refresh()` (backend/src/options_chain_cache.py) rebuilt the cache entry
+  from scratch on every call: fresh yfinance fetch + fresh TradingView fetch, merged, then
+  stored — the *previous* cached chain was never consulted or merged against. Any valid
+  quote observed on a prior cycle was discarded the moment the next cycle's fetch returned
+  zero/NaN for that contract.
+- `_process_option_df` coerces NaN/missing yfinance bid/ask/iv to `0.0` (`_is_nan` helper) —
+  so any transient Yahoo quirk (illiquidity or throttling from the tight per-expiration
+  `ticker.option_chain()` loop with no delay) becomes a literal stored zero.
+- TradingView overlay (Playwright-scraped `scanner.tradingview.com`) realistically only
+  covers near-term expirations (it's documented as a "market closed" fallback), so beyond
+  its coverage, yfinance zeros passed straight through unmodified.
+
+### Fix implemented
+- Added `_merge_contract_fields(old, new)`: per quote field (bid/ask/mid/iv/greeks/lastPrice),
+  keep `old`'s value when `new`'s is zero/None/NaN and `old`'s is valid. Non-quote fields
+  (volume, openInterest, lastTradeDate, inTheMoney) always take `new` — zero is legitimate
+  there and must not be pinned to stale values.
+- `refresh()` now does 3-layer merge: yfinance+TV source merge → last-known-good merge
+  against previously cached chain → prune expiration buckets whose actual contract date
+  (YYYYMMDD key) has passed. First-fetch-ever zeros are preserved as-is (no fabrication).
+- Cache TTL semantics changed to stale-while-revalidate: `get()`/`get_or_load*` never evict
+  or return None just because TTL expired — only a true miss (never fetched) blocks. Stale
+  entries are served immediately with `get_or_load_async` firing a deduped background
+  refresh (`_schedule_background_refresh`, tracked via `_refresh_in_progress` set).
+- Added `backend/tests/test_options_chain_cache.py` (28 tests, hermetic, no pytest-asyncio
+  dependency — uses `asyncio.new_event_loop()` per test like `test_summary_paused.py`, not
+  `asyncio.run()`, to avoid polluting the global event loop policy for other tests).
+
+### Notes for future work
+- `agent_framework` module is missing in this venv — pre-existing, unrelated to options
+  chain work; causes ~23 test errors in test_activity_chat.py/test_dps_insights.py on
+  the base branch too (verified via git stash).
+- `test_greeks_calculator.py` / parts of `test_yfinance_data_provider.py` (~15-16 tests)
+  fail on base branch even in isolation — pre-existing bug unrelated to this change,
+  verified via git stash before/after comparison (same failures both ways).
+
+### 2026-08-09 — Options Chain Cache Fix with Concurrent Frontend Work
+Parallel agent completion:
+- **Linus (Self):** Traced and fixed options chain cache. Root cause: every `refresh()` discarded the prior cache, losing valid far-expiration quotes when yfinance/TradingView returned zeros (illiquidity). Solution: three-layer merge (source merge → last-known-good vs prior cache → prune expired contracts) + stale-while-revalidate pattern. 28 new tests added.
+- **Rusty (UI/Frontend):** Unified Add Symbol watchlist styling. Styling changes are uncommitted.
+
+Cross-agent note: Options chain stability now enables higher-confidence analytics and future roll-table scenarios. Frontend will benefit from consistent quote preservation across refresh cycles.

@@ -1,0 +1,215 @@
+@import "tailwindcss";
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Option Income Lab — Revolut-inspired dark theme (see /DESIGN.md)
+   v2: richer surfaces, elevation, gradients, motion. Tokens stay backward
+   compatible with the previous flat theme so existing utilities keep working.
+   ────────────────────────────────────────────────────────────────────────── */
+:root {
+  --bg:            #16181c;
+  --bg-elevated:   #1c1f24;
+  --bg-card:       #212429;
+  --bg-card-2:     #262a30;
+  --bg-input:      #2b2f36;
+  --bg-hover:      #30343c;
+  --border:        #30343c;
+  --border-soft:   #2a2e34;
+  --text:          #ffffff;
+  --text-muted:    #8d969e;
+  --accent-blue:   #5b61ff;
+  --accent-green:  #00c493;
+  --accent-red:    #ff4d5e;
+  --accent-orange: #ff9416;
+  --accent-purple: #a78bfa;
+  --accent-cyan:   #22d3ee;
+
+  --radius:        12px;
+  --radius-card:   18px;
+  --radius-pill:   9999px;
+
+  /* elevation */
+  --shadow-sm:  0 1px 2px rgba(0,0,0,0.30);
+  --shadow-md:  0 6px 18px -6px rgba(0,0,0,0.45), 0 2px 6px -2px rgba(0,0,0,0.35);
+  --shadow-lg:  0 18px 40px -12px rgba(0,0,0,0.55), 0 6px 14px -6px rgba(0,0,0,0.40);
+  --shadow-glow-blue:  0 0 0 1px rgba(91,97,255,0.35), 0 8px 26px -8px rgba(91,97,255,0.45);
+
+  /* gradients */
+  --grad-blue:   linear-gradient(135deg, #5b61ff 0%, #7c4dff 100%);
+  --grad-green:  linear-gradient(135deg, #00c493 0%, #06b6d4 100%);
+  --grad-warm:   linear-gradient(135deg, #ff9416 0%, #ff4d5e 100%);
+  --grad-purple: linear-gradient(135deg, #a78bfa 0%, #5b61ff 100%);
+}
+
+/* Expose the tokens to Tailwind v4 utilities (bg-bg, text-text-muted, etc.) */
+@theme inline {
+  --color-bg:            var(--bg);
+  --color-bg-elevated:   var(--bg-elevated);
+  --color-bg-card:       var(--bg-card);
+  --color-bg-card-2:     var(--bg-card-2);
+  --color-bg-input:      var(--bg-input);
+  --color-bg-hover:      var(--bg-hover);
+  --color-border:        var(--border);
+  --color-border-soft:   var(--border-soft);
+  --color-text:          var(--text);
+  --color-text-muted:    var(--text-muted);
+  --color-accent-blue:   var(--accent-blue);
+  --color-accent-green:  var(--accent-green);
+  --color-accent-red:    var(--accent-red);
+  --color-accent-orange: var(--accent-orange);
+  --color-accent-purple: var(--accent-purple);
+  --color-accent-cyan:   var(--accent-cyan);
+
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", "Fira Code", "Consolas", monospace;
+
+  --radius-md:   var(--radius);
+  --radius-card: var(--radius-card);
+  --radius-pill: var(--radius-pill);
+
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: 15px; scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  letter-spacing: 0.01em;
+  min-height: 100vh;
+  /* subtle ambient depth */
+  background-image:
+    radial-gradient(1100px 600px at 12% -8%, rgba(91,97,255,0.10), transparent 60%),
+    radial-gradient(900px 520px at 100% 0%, rgba(0,196,147,0.07), transparent 55%);
+  background-attachment: fixed;
+}
+
+h1, h2, h3, h4, h5, h6 { font-weight: 600; letter-spacing: -0.02em; }
+
+a { color: var(--accent-blue); text-decoration: none; transition: color .15s ease; }
+a:hover { color: #8a8fff; text-decoration: none; }
+
+code {
+  font-family: var(--font-mono);
+  background: var(--bg-input);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+/* ── Custom scrollbar ─────────────────────────────────────────────── */
+* { scrollbar-width: thin; scrollbar-color: #3a3f47 transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: #3a3f47; border-radius: 9999px; border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: #4b515a; background-clip: content-box; }
+
+/* ── Focus ring ───────────────────────────────────────────────────── */
+:where(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ── Reusable surface classes ─────────────────────────────────────── */
+.surface {
+  background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-card-2) 100%);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-md);
+}
+.card-hover { transition: transform .18s cubic-bezier(.2,.7,.3,1), box-shadow .18s ease, border-color .18s ease; }
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+  border-color: #3a3f47;
+}
+
+/* gradient text */
+.text-gradient {
+  background: var(--grad-blue);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
+
+/* ── Entrance / motion helpers (CSS fallback) ─────────────────────── */
+@keyframes fadeUp   { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes fadeIn   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes shimmer  { 100% { transform: translateX(100%); } }
+@keyframes popIn    { 0% { opacity: 0; transform: scale(.96); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes marquee  { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+
+.animate-fade-up { animation: fadeUp .45s cubic-bezier(.2,.7,.3,1) both; }
+.animate-fade-in { animation: fadeIn .4s ease both; }
+.animate-pop     { animation: popIn .25s cubic-bezier(.2,.7,.3,1) both; }
+
+/* marquee banner (carousel of ticker items) */
+.marquee-track { display: inline-flex; animation: marquee 40s linear infinite; }
+.marquee-mask:hover .marquee-track { animation-play-state: paused; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+/* ── Skeleton shimmer ─────────────────────────────────────────────── */
+.skeleton {
+  position: relative; overflow: hidden;
+  background: var(--bg-input); border-radius: 8px;
+}
+.skeleton::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent);
+  animation: shimmer 1.4s infinite;
+}
+
+/* ── Table polish (applies to plain tables) ───────────────────────── */
+.table-modern tbody tr { transition: background .12s ease; }
+.table-modern tbody tr:hover { background: rgba(255,255,255,0.025); }
+
+/* ── Styled range slider (DGI filters etc.) ───────────────────────── */
+input[type="range"].range-accent {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"].range-accent::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid var(--accent-blue);
+  box-shadow: 0 1px 5px rgba(0,0,0,0.45);
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+input[type="range"].range-accent::-webkit-slider-thumb:hover {
+  transform: scale(1.18);
+  box-shadow: 0 0 0 4px rgba(91,97,255,0.18), 0 1px 5px rgba(0,0,0,0.45);
+}
+input[type="range"].range-accent::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid var(--accent-blue);
+  box-shadow: 0 1px 5px rgba(0,0,0,0.45);
+}
+input[type="range"].range-accent::-moz-range-track {
+  background: transparent;
+}

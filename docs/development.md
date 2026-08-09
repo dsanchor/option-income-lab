@@ -4,7 +4,7 @@
 
 ### Agent Skills Architecture
 
-Agent instructions use the **native agent-framework `SkillsProvider`** for shared knowledge blocks. Instead of duplicating common sections (earnings gates, roll economics, data format guides) across every instruction file, they are extracted into reusable `SKILL.md` files under `src/skills/`.
+Agent instructions use the **native agent-framework `SkillsProvider`** for shared knowledge blocks. Instead of duplicating common sections (earnings gates, roll economics, data format guides) across every instruction file, they are extracted into reusable `SKILL.md` files under `backend/src/skills/`.
 
 **How it works — Progressive Disclosure:**
 
@@ -75,7 +75,7 @@ Key components:
 - `agent_framework.Agent` — Agent runner class with `context_providers` support for native Skills
 - `agent_framework.SkillsProvider` — Discovers SKILL.md files and provides progressive disclosure via tools
 - `agent_framework.openai.OpenAIChatCompletionClient` — Chat client for Azure OpenAI and OpenAI-compatible APIs
-- `src/llm.py` — Provider factory (`azure` / `gemini`) shared by agents and web chat endpoints
+- `backend/src/llm.py` — Provider factory (`azure` / `gemini`) shared by agents and web chat endpoints
 
 Market data is fetched via `yfinance` Python library — overview, technicals, forecast, dividends, and options chains are all retrieved through Yahoo Finance's API. All fetching is driven from Python (`yfinance_data_provider.py`), not by the LLM. The LLM receives pre-fetched data as text and performs analysis only — no tools are given to the agent (except the skill-loading tools injected by SkillsProvider).
 

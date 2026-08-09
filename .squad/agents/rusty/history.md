@@ -45,7 +45,7 @@
 ## Recent Tasks
 
 ### July 2026 — Portfolio Chat Configuration Context (2026-07-14)
-**Status:** ✅ Completed  
+**Status:** ✅ Completed
 **Scope:** Intermediate configuration screen for Portfolio Chat with agent selection and activity limits
 
 **Changes:**
@@ -119,3 +119,100 @@ The Portfolio Chat context contract now accepts `include_symbol_data` (default `
 - `symbol_detail.html` addition: Roll table section inserted inside `{% if pos.status == 'active' %}` guard, after the `dps-analysis-section` div, inside `.position-snapshot-chart` wrapper. Triggers auto-on-expand via `window._loadRollTable(section)` hooked into both `tr.pos-row` click handler and the roll-button expand handler. Loads once per position (guarded by `dataset.rollLoaded`).
 - JS scoped in IIFE, exposes only `window._loadRollTable`. Reuses exact same cell styles, formatters, summary builder, and grid builder from the activity detail implementation.
 - Jinja balanced 81/81 for symbol_detail.html. `python3 -m pytest tests/test_roll_table.py -q` → 46 passed. `python3 -m py_compile web/app.py` → OK. `import web.app` → OK.
+
+
+### 2026-08-08 — Watchlist UI Fix (shares inline edit + add symbol + strategy filters)
+**Status:** ✅ Completed
+**Scope:** frontend symbols/watchlist — SymbolsTable, AddSymbolForm, types, backend overview
+
+**Changes:**
+- `backend/web/app.py` — `_compute_symbols_overview` añade campo `watchlist` (covered_call, cash_secured_put, buy_tracker) en cada fila del overview.
+- `frontend/src/types/symbols.ts` — Añadido `SymbolWatchlistFlags` + campo `watchlist?` en `SymbolRow`.
+- `frontend/src/components/SymbolsTable.tsx` — Edición inline de shares (input controlado, actualización optimista, PUT BFF, router.refresh). Filtros de estrategia (pills: All / Calls / Puts / Buy Tracker). Error banner descartable.
+- `frontend/src/components/AddSymbolForm.tsx` — Nuevo componente (botón colapsa/expande), campos: symbol, exchange, checkboxes de estrategia. Manejo 409, router.refresh en éxito.
+- `frontend/src/app/symbols/page.tsx` — Importa y renderiza AddSymbolForm sobre la tabla.
+
+**Key patterns:**
+- Optimistic `localShares` local → revert en error; la fuente de verdad regresa via `router.refresh()`.
+- `useCallback` en `saveShares`/`startEdit`/`cancelEdit` para estabilidad de deps.
+- `total_shares` requiere entero JSON no negativo; el BFF conserva errores/status del backend y la celda editable detiene propagación hacia el modal.
+- El alta dispara `backfill_symbol_forecasts` después de persistir; el fallo se registra pero nunca revierte la creación.
+- `forecast_cron` trata `get_price_forecasts` como capacidad opcional para conservar compatibilidad con adaptadores mínimos y tests.
+- Validación: `pytest tests/test_watchlist_symbols.py tests/test_forecast_cron.py -q` → 57 passed; ESLint focalizado + `tsc --noEmit` → OK.
+
+### 2026-08-08 — Position Premium and Buyback Editing
+- `PositionDetail` expone editores independientes para Premium y Buyback; Buyback se renderiza y puede editarse aunque el valor actual sea nulo.
+- Los guardados no son optimistas: mantienen el valor confirmado ante fallos, muestran estado/error y ejecutan `router.refresh()` solo tras éxito.
+- Los BFF PATCH de `premium` y `buyback_cost` replican el proxy de notas y conservan el status y cuerpo de error del backend.
+- Ambos endpoints backend exigen valores finitos y no negativos, rechazan booleanos, valores malformados, NaN/Infinity y negativos con 400, y conservan 404/503 para errores de Cosmos.
+- Validación: `test_position_financial_updates.py` → 30 passed; tests de posición relacionados → 3 passed; ESLint focalizado + `tsc --noEmit` → OK.
+
+### 2026-08-08 — Cross-Agent Suitability Correction
+- Linus replaced the temporary watchlist-flag filter pills with the documented suitability categories: Ideal Puts, Ideal Calls, No Puts, and No Calls.
+- Suitability is derived from normalized `entry_tag` plus momentum. Watchlist flags remain separate operational tracking controls, and option-chain type/delta filters are a different backend concern.
+- Basher's final current-state review approved the integrated implementation; earlier concurrent-snapshot findings are superseded.
+
+### 2026-08-09 — Add Symbol UI Consistency
+- `AddSymbolForm` now matches the established watchlist controls: Lucide icons, primary pill actions, card-style popover, standard text fields, and strategy toggle pills.
+- Added outside-click/Escape closing, explicit labels, dialog semantics, live status messages, and a non-dismissible loading state.
+- Validation: focused ESLint, `tsc --noEmit`, and `git diff --check` passed.
+
+### 2026-08-09 — Persistent Agent Provider/Model Settings
+- Settings now exposes effective and editable provider/model values for Monitoring, Summary, Dashboard Banner, and Plan Monitor.
+- Precedence is task override → existing role model/global provider → global deployment/default; blank UI values remove the override and restore inheritance.
+- Overrides persist in each task section in CosmosDB and `config.yaml`, hot-reload into scheduler config, and are selected by the actual Agent Framework client at execution time.
+- Supported providers remain `azure` and `gemini`; credentials stay environment/config managed and are never returned by the new API fields.
+- Validation: 8 focused tests, 25 related agent tests, 49 watchlist tests, frontend ESLint, `tsc --noEmit`, Python compile, and diff check passed.
+
+### 2026-08-09 — Watchlist and Options Chain Stability Checkpoint
+Parallel agent completion:
+- **Rusty (Self):** Unified Add Symbol watchlist styling. Styling updates are uncommitted.
+- **Linus (Quant Dev):** Fixed options chain cache with last-known-good merge and stale-while-revalidate pattern. This stabilizes the options chain data that feeds into watchlist option analysis and roll-table scenarios (forthcoming).
+
+Cross-agent note: The options chain fix directly supports future watchlist enhancements that depend on consistent quote data across all expirations. No frontend changes needed at this moment; monitoring for upstream improvements.
+
+### 2026-08-09 — Settings / AI Providers
+- Provider/model controls now live only in `Settings > AI Providers`; cron cards remain scheduling-only.
+- The canonical catalog has 15 runtime functions across Monitoring, Reporting, and Chat, each with independent effective values, source indicators, overrides, and reset-to-inherited behavior.
+- Precedence is function override → legacy task override → legacy function model → `ai.models` → global AI defaults. Saving migrates touched shared legacy task overrides to per-function entries without changing sibling behavior.
+- Runtime client selection is function-aware for scheduled/manual monitoring, summary, banner, plan monitor, reports, technical analysis, portfolio/symbol/activity chat, and DPS insights.
+- Persisted `ai_function_overrides` contain only provider/model deployment names; credentials stay in backend configuration and never enter the API response.
+- Validation: 41 focused backend tests passed; frontend focused ESLint and `tsc --noEmit` passed; Python compilation and scoped diff check passed.
+
+### 2026-08-10 — AI Providers Cosmos Persistence Fix
+**Status:** ✅ Completed
+**Scope:** Fix critical persistence bug in AI Provider settings endpoint
+
+**Root Cause:**
+The endpoint treated a missing `app.state.cosmos` as a valid YAML-only save and returned success; the Cosmos path also used an unverified whole-document upsert, so no durable-write guarantee existed.
+
+**Changes:**
+- `backend/src/settings.py` — Atomic read-merge-verify-update cycle using `/id` partition key with ETag-based optimistic concurrency
+- `backend/src/main.py` — Returns 503 when configured Cosmos unavailable; eliminated fallback to YAML
+- `config.yaml` — AI function overrides configuration template updates
+- `frontend/src/components/SettingsPage.tsx` — UI displays persistence target (Cosmos vs YAML only)
+
+**Contract:**
+- GET, POST, scheduler hot reload, and UI persistence labels all verify the same Cosmos source
+- `config.yaml` is authoritative only when CosmosDB is not configured
+- With Cosmos enabled, YAML is a best-effort compatibility mirror written after Cosmos succeeds
+- Configured-but-unavailable Cosmos returns 503 (no silent fallback)
+
+**Durability Pattern:**
+1. Read current `settings/app-config` document
+2. Merge only intended fields; preserve unrelated properties
+3. Replace conditionally using document ETag with retry on conflicts
+4. Read back and verify saved sections
+5. Update live scheduler only from verified Cosmos result
+
+**Validation:**
+- 49 related backend tests passed
+- Focused frontend ESLint and TypeScript compilation passed
+- Python compilation check passed
+- 51 total tests and checks passed
+
+**Decision Record:** `.squad/decisions/decisions.md` → "AI Provider Settings Cosmos Persistence Contract"
+
+**Orchestration Log:** `.squad/orchestration-log/2026-08-09T22:14:57Z-rusty-cosmos-fix.md`
+
+**Session Log:** `.squad/log/2026-08-09T22:14:57Z-cosmos-persistence-fix.md`

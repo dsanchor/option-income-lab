@@ -9,6 +9,23 @@
 
 ## Core Context
 
+### 2026-08-08 — Revisión watchlist: alta de símbolos y filtros de señal (rama uinext)
+
+**Archivos inspeccionados:** `SymbolsTable.tsx`, `types/symbols.ts`, `symbols/page.tsx`, `SymbolActions.tsx`, BFF routes `/api/symbols` y `/api/symbols/[symbol]`, `backend/web/app.py`, template legacy `symbols.html` (git history).
+
+**Hallazgos:**
+- Alta de símbolos se perdió al eliminar templates en commit `7637787`. BFF (`POST /api/symbols`) y backend OK; solo falta UI (`AddSymbolForm` client component).
+- Filtros Ideal Calls/Puts (pills) existían en legacy como client-side JS. No portados a `SymbolsTable.tsx`. Todos los campos necesarios (`entry_tag`, `momentum`) ya están en `SymbolRow`.
+- Lógica exacta de filtros documentada en `.squad/decisions/inbox/danny-watchlist-review.md`.
+- `total_shares` no es editable desde la tabla ni desde el formulario de alta en el nuevo frontend.
+- Contrato PUT `/api/symbols/{symbol}` es partial update; BFF ya implementado en `[symbol]/route.ts`.
+- Riesgo principal: 409 fallback (símbolo ya existente → activar watchlist) no implementado.
+
+**Patrones arquitectónicos observados:**
+- `symbols/page.tsx` es Server Component; formularios interactivos deben importarse como client components separados.
+- BFF routes son proxies puros al Python backend, sin lógica propia.
+- `SymbolActions.tsx` maneja los toggles CC/CSP/Buy en la detail page; la tabla no tiene acciones inline propias.
+
 ### DGI Screener & Timing Architecture (2026-05 to 2026-06)
 - **Scope:** Top 20 DGI candidates with technical timing indicators (RSI, SMA, Bollinger Bands) + manual "Quick Analysis" / "Add to Watchlist" buttons
 - **Infrastructure:** Daily scheduler, yfinance data source, CosmosDB storage, web dashboard UI, position snapshots container (180d TTL)
@@ -70,3 +87,8 @@
 - **Template**: Add JS async fetch + green/red table to `activity_detail.html`, visible only for `open_call_monitor` / `open_put_monitor` agent types.
 - **Scope boundary**: Linus owns `compute_roll_table()` math; Rusty owns endpoint + template rendering.
 - **Critical**: Debug endpoint (`/api/debug/agent-chain/{symbol}`) uses `provider.fetch_all` directly (bypasses cache). Roll table endpoint must use cache for latency + consistency.
+
+### 2026-08-08 — Watchlist Review Resolution
+- Rusty restored symbol creation and inline `total_shares` editing; successful creation triggers forecast backfill without coupling backfill failure to persistence.
+- Linus restored the documented suitability categories from `entry_tag` plus momentum. These categories are independent of watchlist tracking flags and option-chain delta filters.
+- Basher's final current-state review approved the integrated implementation; the earlier missing-feature findings and inbox review are superseded.

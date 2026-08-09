@@ -222,7 +222,7 @@ Sell-side agents (Covered Call and Cash-Secured Put) apply **category-specific p
 
 ### Parameter Summary
 
-**Covered Call skills** (`src/skills/cc-{category}/`):
+**Covered Call skills** (`backend/src/skills/cc-{category}/`):
 
 | Category | Delta Range | Min Premium (30-45 DTE) | IV Requirement | Key Behavior |
 |---|---|---|---|---|
@@ -232,7 +232,7 @@ Sell-side agents (Covered Call and Cash-Secured Put) apply **category-specific p
 | **High Yield** | 0.25–0.35 | ≥ 0.8% | IV Rank ≥ 30 | Aggressive income; critical ex-div awareness |
 | **Balanced** | 0.20–0.30 | ≥ 0.8% | IV Rank ≥ 35 | Standard defaults |
 
-**Cash-Secured Put skills** (`src/skills/csp-{category}/`):
+**Cash-Secured Put skills** (`backend/src/skills/csp-{category}/`):
 
 | Category | Delta Range | Min Premium (30-45 DTE) | IV Requirement | Key Behavior |
 |---|---|---|---|---|
