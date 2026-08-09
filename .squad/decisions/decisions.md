@@ -135,7 +135,7 @@ Enrich alerts at render time in `web/app.py` by matching each alert to the close
 
 ### Refactor TradingView Fetchers from Playwright to BeautifulSoup + Scanner API
 **Date:** 2026-07-14  
-**Author:** Rusty (Backend Dev)  
+**Author:** Rusty (Backend Dev)
 **Status:** Implemented  
 **Impact:** Performance, reliability, resource usage  
 
@@ -3195,3 +3195,42 @@ expiration was lost on the very next refresh cycle.
   from this codebase (Playwright-scraped, coverage depends on what TradingView's
   UI loads) — assumed to be "near-term only" based on it being labeled a
   fallback for when markets are closed.
+
+---
+
+## Decision: AI Provider Settings Cosmos Persistence Contract
+
+**Author:** Rusty (Backend Dev)
+**Date:** 2026-08-10
+
+### Context
+The AI Provider settings endpoint persisted successfully but did not durably save to CosmosDB in all cases. Root cause: when `app.state.cosmos` was unavailable or uninitialized, the endpoint returned `200 Success` after writing only to `config.yaml`, without verifying that Cosmos persistence succeeded. Additionally, the Cosmos path used an unverified whole-document upsert with no concurrency control or read-back validation, creating a race condition window where concurrent requests could overwrite each other.
+
+### Decision
+When CosmosDB is configured, `settings/app-config` (document id, `/id` partition key) is the authoritative and sole persistence target for AI provider/model overrides. Settings mutations must:
+
+1. **Read the current document** from Cosmos.
+2. **Merge only intended fields** while preserving unrelated properties (e.g., `legacy_migration`).
+3. **Replace conditionally** using the document ETag and retry on conflicts.
+4. **Read back and verify** the saved AI and legacy-migration sections to confirm durability.
+5. **Update the live scheduler** only from the verified Cosmos result.
+
+A Cosmos read/write failure returns a non-success API response (503, 409, etc.) and does not fall through to `config.yaml`. `config.yaml` is authoritative **only when CosmosDB is not configured**; with Cosmos enabled, it is a best-effort compatibility mirror written **after** the durable Cosmos update succeeds.
+
+**GET, POST, scheduler hot-reload, and UI persistence labels all use the same verified source.**
+
+### Files Changed
+- `backend/src/settings.py` — Atomic read-merge-verify-update cycle with ETag concurrency
+- `backend/src/main.py` — 503 when configured Cosmos unavailable; no fallback to YAML
+- `config.yaml` — Configuration template updates for AI function overrides
+- `frontend/src/components/SettingsPage.tsx` — UI now displays persistence target (Cosmos vs YAML)
+
+### Validation
+- 49 related backend tests passed (Cosmos persistence, ETag retry, unrelated field preservation)
+- Focused frontend ESLint and TypeScript compilation passed
+- Python compilation check passed
+- No commit requested (per user policy)
+
+### Follow-ups
+- Monitor Cosmos availability and latency in production
+- Assess if 503 errors warrant user-facing alerts or automatic fallback strategy (intentionally not implemented at this time)

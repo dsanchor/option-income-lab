@@ -18,4 +18,5 @@ export interface AiFunctionSetting {
 export interface AiProvidersConfig {
   providers: string[];
   functions: AiFunctionSetting[];
+  persistence: "cosmos" | "local";
 }

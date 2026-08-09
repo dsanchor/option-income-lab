@@ -45,7 +45,7 @@
 ## Recent Tasks
 
 ### July 2026 — Portfolio Chat Configuration Context (2026-07-14)
-**Status:** ✅ Completed  
+**Status:** ✅ Completed
 **Scope:** Intermediate configuration screen for Portfolio Chat with agent selection and activity limits
 
 **Changes:**
@@ -178,3 +178,41 @@ Cross-agent note: The options chain fix directly supports future watchlist enhan
 - Runtime client selection is function-aware for scheduled/manual monitoring, summary, banner, plan monitor, reports, technical analysis, portfolio/symbol/activity chat, and DPS insights.
 - Persisted `ai_function_overrides` contain only provider/model deployment names; credentials stay in backend configuration and never enter the API response.
 - Validation: 41 focused backend tests passed; frontend focused ESLint and `tsc --noEmit` passed; Python compilation and scoped diff check passed.
+
+### 2026-08-10 — AI Providers Cosmos Persistence Fix
+**Status:** ✅ Completed
+**Scope:** Fix critical persistence bug in AI Provider settings endpoint
+
+**Root Cause:**
+The endpoint treated a missing `app.state.cosmos` as a valid YAML-only save and returned success; the Cosmos path also used an unverified whole-document upsert, so no durable-write guarantee existed.
+
+**Changes:**
+- `backend/src/settings.py` — Atomic read-merge-verify-update cycle using `/id` partition key with ETag-based optimistic concurrency
+- `backend/src/main.py` — Returns 503 when configured Cosmos unavailable; eliminated fallback to YAML
+- `config.yaml` — AI function overrides configuration template updates
+- `frontend/src/components/SettingsPage.tsx` — UI displays persistence target (Cosmos vs YAML only)
+
+**Contract:**
+- GET, POST, scheduler hot reload, and UI persistence labels all verify the same Cosmos source
+- `config.yaml` is authoritative only when CosmosDB is not configured
+- With Cosmos enabled, YAML is a best-effort compatibility mirror written after Cosmos succeeds
+- Configured-but-unavailable Cosmos returns 503 (no silent fallback)
+
+**Durability Pattern:**
+1. Read current `settings/app-config` document
+2. Merge only intended fields; preserve unrelated properties
+3. Replace conditionally using document ETag with retry on conflicts
+4. Read back and verify saved sections
+5. Update live scheduler only from verified Cosmos result
+
+**Validation:**
+- 49 related backend tests passed
+- Focused frontend ESLint and TypeScript compilation passed
+- Python compilation check passed
+- 51 total tests and checks passed
+
+**Decision Record:** `.squad/decisions/decisions.md` → "AI Provider Settings Cosmos Persistence Contract"
+
+**Orchestration Log:** `.squad/orchestration-log/2026-08-09T22:14:57Z-rusty-cosmos-fix.md`
+
+**Session Log:** `.squad/log/2026-08-09T22:14:57Z-cosmos-persistence-fix.md`

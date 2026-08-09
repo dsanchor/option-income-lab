@@ -7,11 +7,16 @@ Uses a single container ("symbols") with partition key /symbol and a hybrid
 document model (symbol_config, activity, alert doc types).
 """
 
+from azure.core import MatchConditions
 from azure.cosmos import CosmosClient, PartitionKey
-from azure.cosmos.exceptions import CosmosResourceNotFoundError
-from typing import Optional
+from azure.cosmos.exceptions import (
+    CosmosHttpResponseError,
+    CosmosResourceNotFoundError,
+)
+from typing import Callable, Optional
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
+import copy
 import logging
 
 logger = logging.getLogger(__name__)
@@ -1802,41 +1807,97 @@ class CosmosDBService:
 
     # ── Settings Management ────────────────────────────────────────────
 
-    def get_settings(self) -> dict:
-        """Read the app settings document from CosmosDB.
-        
-        Returns empty dict if not found or if settings container is unavailable.
-        """
+    _SETTINGS_DOCUMENT_ID = "app-config"
+    _COSMOS_SYSTEM_KEYS = {
+        "_rid", "_self", "_etag", "_attachments", "_ts",
+    }
+
+    @classmethod
+    def _settings_payload(cls, doc: dict) -> dict:
+        return {
+            key: copy.deepcopy(value)
+            for key, value in doc.items()
+            if key != "id" and key not in cls._COSMOS_SYSTEM_KEYS
+        }
+
+    def get_settings_required(self) -> dict:
+        """Read settings/app-config, propagating connectivity failures."""
         if self.settings_container is None:
-            return {}
+            raise RuntimeError("Settings container not available")
         try:
             doc = self.settings_container.read_item(
-                item="app-config",
-                partition_key="app-config",
+                item=self._SETTINGS_DOCUMENT_ID,
+                partition_key=self._SETTINGS_DOCUMENT_ID,
             )
-            # Return copy without internal fields
-            result = {k: v for k, v in doc.items() if k not in ("id", "_rid", "_self", "_etag", "_attachments", "_ts")}
-            return result
         except CosmosResourceNotFoundError:
             return {}
+        return self._settings_payload(doc)
+
+    def get_settings(self) -> dict:
+        """Read the app settings document from CosmosDB.
+
+        Returns empty dict if not found or if settings container is unavailable.
+        """
+        try:
+            return self.get_settings_required()
         except Exception as exc:
             logger.warning("Failed to read settings from CosmosDB: %s", exc)
             return {}
 
-    def save_settings(self, settings: dict) -> dict:
-        """Write the full settings document to CosmosDB (upsert).
-        
-        Args:
-            settings: The settings dict to persist (should not contain 'id' key)
-        
-        Returns:
-            The saved document
-        """
+    def update_settings(
+        self,
+        mutate: Callable[[dict], None],
+        max_attempts: int = 4,
+    ) -> dict:
+        """Atomically mutate settings/app-config with optimistic concurrency."""
         if self.settings_container is None:
             raise RuntimeError("Settings container not available")
-        
-        doc = {"id": "app-config", **settings}
-        return self.settings_container.upsert_item(doc)
+
+        for attempt in range(max_attempts):
+            try:
+                stored = self.settings_container.read_item(
+                    item=self._SETTINGS_DOCUMENT_ID,
+                    partition_key=self._SETTINGS_DOCUMENT_ID,
+                )
+                exists = True
+            except CosmosResourceNotFoundError:
+                stored = {"id": self._SETTINGS_DOCUMENT_ID}
+                exists = False
+
+            settings = self._settings_payload(stored)
+            mutate(settings)
+            body = {"id": self._SETTINGS_DOCUMENT_ID, **settings}
+
+            try:
+                if exists:
+                    saved = self.settings_container.replace_item(
+                        item=self._SETTINGS_DOCUMENT_ID,
+                        body=body,
+                        etag=stored.get("_etag"),
+                        match_condition=MatchConditions.IfNotModified,
+                    )
+                else:
+                    saved = self.settings_container.create_item(body=body)
+                return self._settings_payload(saved)
+            except CosmosHttpResponseError as exc:
+                if exc.status_code not in (409, 412) or attempt + 1 >= max_attempts:
+                    raise
+
+        raise RuntimeError("Unable to update settings/app-config")
+
+    def save_settings(self, settings: dict) -> dict:
+        """Deep-merge settings into settings/app-config without dropping fields."""
+        def merge(current: dict) -> None:
+            def deep_merge(target: dict, updates: dict) -> None:
+                for key, value in updates.items():
+                    if isinstance(value, dict) and isinstance(target.get(key), dict):
+                        deep_merge(target[key], value)
+                    else:
+                        target[key] = copy.deepcopy(value)
+
+            deep_merge(current, settings)
+
+        return self.update_settings(merge)
 
     def merge_defaults(self, defaults: dict) -> dict:
         """Deep-merge: read current settings from CosmosDB.

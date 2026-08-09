@@ -148,7 +148,7 @@ All data is stored in Azure CosmosDB across four containers:
 
 | Document ID | Purpose | Persisted Sections |
 |---|---|---|
-| `app_config` | Application settings synchronized across all components | `context`, `scheduler`, `web`, `telegram` |
+| `app-config` | Application settings synchronized across all components | Scheduling, UI, notifications, and `ai_function_overrides` |
 
 **`dgi_screener` container** (partition key: `/symbol`) — DGI screening results:
 
@@ -157,7 +157,7 @@ All data is stored in Azure CosmosDB across four containers:
 | `dgi_top` | Current top DGI entries — composite score, category, metrics | Static (replaced each run) |
 | `dgi_snapshot` | Daily snapshots for historical tracking of screener results | ~1/day per symbol |
 
-On first run, configuration from `config.yaml` is seeded into the `settings` container (except `ai`, `azure`, `gemini`, and `cosmosdb` sections which remain file-only). On subsequent runs, new keys from `config.yaml` are added to CosmosDB, but existing values are never overwritten, allowing the Settings UI to persist changes. The Settings UI reads and writes directly to CosmosDB, making configuration changes immediately available to all components (scheduler, telegram notifier, web UI) without restart. If CosmosDB is unavailable, `config.yaml` serves as the fallback.
+On first run, configuration from `config.yaml` is seeded into the `settings` container (except `ai`, `azure`, `gemini`, and `cosmosdb` sections which remain file-only). On subsequent runs, new keys from `config.yaml` are added to CosmosDB, but existing values are never overwritten. When CosmosDB is configured, Settings UI writes must succeed against `settings/app-config`; a local YAML write is only a compatibility mirror and never masks a CosmosDB failure. `config.yaml` is the persistence source only when CosmosDB is not configured.
 
 Telemetry stats are displayed on the Settings page and auto-expire after 30 days.
 

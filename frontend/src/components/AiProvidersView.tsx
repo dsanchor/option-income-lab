@@ -19,6 +19,7 @@ function sourceLabel(source: AiSettingSource) {
 
 export default function AiProvidersView({ initial }: { initial: AiProvidersConfig }) {
   const [functions, setFunctions] = useState(initial.functions);
+  const [persistence, setPersistence] = useState(initial.persistence);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null);
 
@@ -72,7 +73,13 @@ export default function AiProvidersView({ initial }: { initial: AiProvidersConfi
         throw new Error(data.error || "Save failed");
       }
       setFunctions(data.functions);
-      setStatus({ ok: true, message: "AI provider settings saved." });
+      setPersistence(data.persistence);
+      setStatus({
+        ok: true,
+        message: data.persistence === "cosmos"
+          ? "Saved to Cosmos DB settings/app-config."
+          : "Saved to local config.yaml.",
+      });
     } catch (err) {
       setStatus({
         ok: false,
@@ -85,6 +92,14 @@ export default function AiProvidersView({ initial }: { initial: AiProvidersConfi
 
   return (
     <div className="space-y-6">
+      <p className="text-sm text-text-muted">
+        Persistence:{" "}
+        <strong className="text-text">
+          {persistence === "cosmos"
+            ? "Cosmos DB · settings/app-config"
+            : "Local config.yaml · Cosmos DB is not configured"}
+        </strong>
+      </p>
       {groups.map(([group, items]) => (
         <section key={group} className="rounded-[var(--radius)] border border-border bg-bg-card p-5">
           <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold">

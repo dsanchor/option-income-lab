@@ -104,6 +104,16 @@ def _load_settings_from_cosmos(cosmos) -> Optional[dict]:
         return None
 
 
+def _load_settings_from_cosmos_required(cosmos) -> dict:
+    """Load settings/app-config without hiding Cosmos failures."""
+    if cosmos is None:
+        raise RuntimeError("CosmosDB is not initialized")
+    loader = getattr(cosmos, "get_settings_required", None)
+    if loader is None:
+        loader = cosmos.get_settings
+    return loader()
+
+
 def _save_settings_to_cosmos(cosmos, settings: dict):
     """Save settings to CosmosDB. Best-effort."""
     if cosmos is None:
@@ -4086,11 +4096,18 @@ async def api_settings_config_save(request: Request):
     return JSONResponse({"success": True, "saved": saved})
 
 
-def _config_with_persisted_ai_overrides(cosmos):
+def _config_with_persisted_ai_overrides(
+    cosmos,
+    persisted_settings: Optional[dict] = None,
+):
     from src.config import Config
 
     config_obj = Config()
-    settings = _load_settings_from_cosmos(cosmos) or {}
+    settings = (
+        persisted_settings
+        if persisted_settings is not None
+        else (_load_settings_from_cosmos(cosmos) or {})
+    )
     for key in (
         "ai_function_overrides",
         "scheduler",
@@ -4100,14 +4117,26 @@ def _config_with_persisted_ai_overrides(cosmos):
     ):
         if key in settings:
             config_obj.config[key] = copy.deepcopy(settings[key])
+        elif persisted_settings is not None:
+            if key == "ai_function_overrides":
+                config_obj.config.pop(key, None)
+            else:
+                config_obj.config.setdefault(key, {}).pop("provider", None)
+                if key != "plan_monitor":
+                    config_obj.config.setdefault(key, {}).pop("model", None)
     return config_obj
 
 
-def _build_ai_providers_context(cosmos) -> dict:
+def _build_ai_providers_context(
+    cosmos,
+    persisted_settings: Optional[dict] = None,
+) -> dict:
     from src.ai_functions import AI_FUNCTIONS, SUPPORTED_AI_PROVIDERS
     from src.config import Config
 
-    config_obj = _config_with_persisted_ai_overrides(cosmos)
+    config_obj = _config_with_persisted_ai_overrides(
+        cosmos, persisted_settings
+    )
     functions = []
     for function_id, metadata in AI_FUNCTIONS.items():
         override = dict(
@@ -4171,7 +4200,20 @@ def _build_ai_providers_context(cosmos) -> dict:
     }
 
 
-def _save_ai_provider_overrides(request: Request, cosmos, submitted: dict) -> None:
+def _cosmos_persistence_configured() -> bool:
+    config = _load_config()
+    cosmos_cfg = config.get("cosmosdb", {})
+    return bool(
+        _resolve_env(str(cosmos_cfg.get("endpoint") or ""))
+        and _resolve_env(str(cosmos_cfg.get("key") or ""))
+    )
+
+
+def _save_ai_provider_overrides(
+    request: Request,
+    cosmos,
+    submitted: dict,
+) -> tuple[dict, str]:
     from src.ai_functions import AI_FUNCTIONS, SUPPORTED_AI_PROVIDERS
 
     unknown = sorted(set(submitted) - set(AI_FUNCTIONS))
@@ -4199,7 +4241,20 @@ def _save_ai_provider_overrides(request: Request, cosmos, submitted: dict) -> No
             if value
         }
 
-    config_obj = _config_with_persisted_ai_overrides(cosmos)
+    if cosmos is not None:
+        persisted_before = _load_settings_from_cosmos_required(cosmos)
+    elif _cosmos_persistence_configured():
+        detail = getattr(request.app.state, "cosmos_error", None)
+        raise RuntimeError(
+            "CosmosDB settings persistence is unavailable"
+            + (f": {detail}" if detail else "")
+        )
+    else:
+        persisted_before = None
+
+    config_obj = _config_with_persisted_ai_overrides(
+        cosmos, persisted_before
+    )
     candidate_overrides = copy.deepcopy(
         config_obj.config.get("ai_function_overrides", {})
     )
@@ -4254,28 +4309,103 @@ def _save_ai_provider_overrides(request: Request, cosmos, submitted: dict) -> No
         if not overrides:
             config.pop("ai_function_overrides", None)
 
-    config = _load_config()
-    apply(config)
+    if cosmos is not None:
+        updater = getattr(cosmos, "update_settings", None)
+        if updater is None:
+            raise RuntimeError(
+                "CosmosDB service does not support atomic settings updates"
+            )
+        saved_settings = updater(apply)
+        verified_settings = _load_settings_from_cosmos_required(cosmos)
+        if (
+            verified_settings.get("ai_function_overrides")
+            != saved_settings.get("ai_function_overrides")
+        ):
+            raise RuntimeError(
+                "CosmosDB settings verification failed for settings/app-config"
+            )
+        for task_key in ("scheduler", "summary_agent", "banner_agent", "plan_monitor"):
+            if verified_settings.get(task_key) != saved_settings.get(task_key):
+                raise RuntimeError(
+                    "CosmosDB settings verification failed for settings/app-config"
+                )
 
-    if cosmos:
-        settings = _load_settings_from_cosmos(cosmos) or {}
-        apply(settings)
-        cosmos.save_settings(settings)
-
-    _write_config(config)
+        config = _load_config()
+        apply(config)
+        try:
+            _write_config(config)
+        except Exception:
+            logger.warning(
+                "CosmosDB settings were saved, but local config.yaml sync failed",
+                exc_info=True,
+            )
+        effective_settings = verified_settings
+        persistence = "cosmos"
+    else:
+        config = _load_config()
+        apply(config)
+        _write_config(config)
+        effective_settings = config
+        persistence = "local"
 
     scheduler = getattr(request.app.state, "scheduler", None)
     if scheduler is not None and getattr(scheduler, "config", None) is not None:
-        apply(scheduler.config.config)
+        for key in (
+            "ai_function_overrides",
+            "scheduler",
+            "summary_agent",
+            "banner_agent",
+            "plan_monitor",
+        ):
+            if key in effective_settings:
+                scheduler.config.config[key] = copy.deepcopy(
+                    effective_settings[key]
+                )
+            elif key == "ai_function_overrides":
+                scheduler.config.config.pop(key, None)
+            else:
+                scheduler.config.config.setdefault(key, {}).pop(
+                    "provider", None
+                )
+                if key != "plan_monitor":
+                    scheduler.config.config.setdefault(key, {}).pop(
+                        "model", None
+                    )
         scheduler.runner.set_function_llms(
             scheduler.config.function_llm_configs()
         )
+    return effective_settings, persistence
 
 
 @app.get("/api/settings/ai-providers")
 async def api_settings_ai_providers(request: Request):
     cosmos = getattr(request.app.state, "cosmos", None)
-    return JSONResponse(_build_ai_providers_context(cosmos))
+    try:
+        if cosmos is not None:
+            settings = _load_settings_from_cosmos_required(cosmos)
+            persistence = "cosmos"
+        elif _cosmos_persistence_configured():
+            detail = getattr(request.app.state, "cosmos_error", None)
+            raise RuntimeError(
+                "CosmosDB settings persistence is unavailable"
+                + (f": {detail}" if detail else "")
+            )
+        else:
+            settings = None
+            persistence = "local"
+    except RuntimeError as exc:
+        logger.exception("Failed to load AI provider settings")
+        return JSONResponse({"error": str(exc)}, status_code=503)
+    except Exception:
+        logger.exception("Failed to load AI provider settings")
+        return JSONResponse(
+            {"error": "Failed to read settings/app-config from CosmosDB"},
+            status_code=503,
+        )
+    return JSONResponse({
+        **_build_ai_providers_context(cosmos, settings),
+        "persistence": persistence,
+    })
 
 
 @app.post("/api/settings/ai-providers")
@@ -4286,18 +4416,27 @@ async def api_settings_ai_providers_save(request: Request):
         submitted = body.get("functions", {}) if isinstance(body, dict) else {}
         if not isinstance(submitted, dict):
             raise ValueError("'functions' must be an object")
-        _save_ai_provider_overrides(request, cosmos, submitted)
+        settings, persistence = _save_ai_provider_overrides(
+            request, cosmos, submitted
+        )
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
+    except RuntimeError as exc:
+        logger.exception("Failed to save AI provider settings")
+        return JSONResponse(
+            {"error": str(exc) or "Failed to persist AI provider settings"},
+            status_code=503,
+        )
     except Exception:
         logger.exception("Failed to save AI provider settings")
         return JSONResponse(
-            {"error": "Failed to persist AI provider settings"},
-            status_code=500,
+            {"error": "Failed to persist settings/app-config in CosmosDB"},
+            status_code=503,
         )
     return JSONResponse({
         "success": True,
-        **_build_ai_providers_context(cosmos),
+        "persistence": persistence,
+        **_build_ai_providers_context(cosmos, settings),
     })
 
 

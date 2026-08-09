@@ -4,11 +4,13 @@ import copy
 from pathlib import Path
 
 import pytest
+from azure.cosmos.exceptions import CosmosHttpResponseError
 from starlette.testclient import TestClient
 
 from src.agent_runner import AgentRunner
 from src.ai_functions import AI_FUNCTIONS
 from src.config import Config
+from src.cosmos_db import CosmosDBService
 from src.llm import LlmConfig
 
 
@@ -117,15 +119,78 @@ def test_agent_runner_selects_provider_by_function(monkeypatch):
 
 
 class FakeCosmos:
-    def __init__(self, settings=None):
-        self.settings = copy.deepcopy(settings or {})
+    def __init__(self, settings=None, *, fail_update=False):
+        self.document = {
+            "id": "app-config",
+            **copy.deepcopy(settings or {}),
+        }
+        self.fail_update = fail_update
+        self.reads = []
+        self.writes = []
 
     def get_settings(self):
-        return copy.deepcopy(self.settings)
+        return self.get_settings_required()
 
-    def save_settings(self, settings):
-        self.settings = copy.deepcopy(settings)
-        return settings
+    def get_settings_required(self):
+        self.reads.append(("app-config", "app-config"))
+        return {
+            key: copy.deepcopy(value)
+            for key, value in self.document.items()
+            if key != "id" and not key.startswith("_")
+        }
+
+    def update_settings(self, mutate):
+        if self.fail_update:
+            raise RuntimeError("simulated Cosmos write failure")
+        settings = self.get_settings_required()
+        mutate(settings)
+        self.document = {"id": "app-config", **copy.deepcopy(settings)}
+        self.writes.append(("app-config", "app-config"))
+        return copy.deepcopy(settings)
+
+
+class FakeSettingsContainer:
+    def __init__(self, document):
+        self.document = copy.deepcopy(document)
+        self.reads = []
+        self.replaces = []
+
+    def read_item(self, *, item, partition_key):
+        self.reads.append((item, partition_key))
+        return copy.deepcopy(self.document)
+
+    def replace_item(
+        self,
+        *,
+        item,
+        body,
+        etag,
+        match_condition,
+    ):
+        self.replaces.append((item, body["id"], etag, match_condition))
+        self.document = {
+            **copy.deepcopy(body),
+            "_etag": "etag-2",
+        }
+        return copy.deepcopy(self.document)
+
+
+class ConflictSettingsContainer(FakeSettingsContainer):
+    def replace_item(self, **kwargs):
+        if not self.replaces:
+            self.replaces.append((
+                kwargs["item"],
+                kwargs["body"]["id"],
+                kwargs["etag"],
+                kwargs["match_condition"],
+            ))
+            self.document["concurrent"] = {"preserve": True}
+            self.document["_etag"] = "etag-concurrent"
+            raise CosmosHttpResponseError(
+                status_code=412,
+                message="precondition failed",
+            )
+        return super().replace_item(**kwargs)
 
 
 def install_fake_config(monkeypatch, config_store):
@@ -166,6 +231,72 @@ def base_config_store():
     }
 
 
+def test_cosmos_settings_update_targets_app_config_and_preserves_fields():
+    service = CosmosDBService.__new__(CosmosDBService)
+    service.settings_container = FakeSettingsContainer({
+        "id": "app-config",
+        "_etag": "etag-1",
+        "scheduler": {"cron": "0 9 * * 1-5"},
+        "unrelated": {"preserve": True},
+    })
+
+    saved = service.update_settings(
+        lambda settings: settings.update({
+            "ai_function_overrides": {
+                "summary": {"provider": "gemini", "model": "gemini-2.5-pro"},
+            },
+        })
+    )
+
+    assert service.settings_container.reads == [("app-config", "app-config")]
+    assert service.settings_container.replaces[0][:3] == (
+        "app-config", "app-config", "etag-1",
+    )
+    assert saved["unrelated"] == {"preserve": True}
+    assert service.settings_container.document["scheduler"] == {
+        "cron": "0 9 * * 1-5",
+    }
+    assert service.settings_container.document["ai_function_overrides"][
+        "summary"
+    ]["model"] == "gemini-2.5-pro"
+
+
+def test_cosmos_save_settings_deep_merges_partial_sections():
+    service = CosmosDBService.__new__(CosmosDBService)
+    service.settings_container = FakeSettingsContainer({
+        "id": "app-config",
+        "_etag": "etag-1",
+        "scheduler": {"cron": "old", "enabled": True},
+        "unrelated": {"preserve": True},
+    })
+
+    saved = service.save_settings({"scheduler": {"cron": "new"}})
+
+    assert saved["scheduler"] == {"cron": "new", "enabled": True}
+    assert saved["unrelated"] == {"preserve": True}
+
+
+def test_cosmos_settings_update_retries_etag_conflict_without_data_loss():
+    service = CosmosDBService.__new__(CosmosDBService)
+    service.settings_container = ConflictSettingsContainer({
+        "id": "app-config",
+        "_etag": "etag-1",
+        "unrelated": {"preserve": True},
+    })
+
+    saved = service.update_settings(
+        lambda settings: settings.update({
+            "ai_function_overrides": {
+                "summary": {"provider": "gemini", "model": "model"},
+            },
+        })
+    )
+
+    assert len(service.settings_container.reads) == 2
+    assert saved["concurrent"] == {"preserve": True}
+    assert saved["ai_function_overrides"]["summary"]["model"] == "model"
+
+
 def test_ai_providers_api_round_trip_migrates_legacy_and_resets(monkeypatch):
     store = base_config_store()
     store["scheduler"].update({"provider": "gemini", "model": "legacy-monitor"})
@@ -188,9 +319,16 @@ def test_ai_providers_api_round_trip_migrates_legacy_and_resets(monkeypatch):
     payload["summary"] = {"provider": "gemini", "model": "custom-summary"}
     response = client.post("/api/settings/ai-providers", json={"functions": payload})
     assert response.status_code == 200
+    assert response.json()["persistence"] == "cosmos"
     assert store["ai_function_overrides"]["summary"] == {
         "provider": "gemini", "model": "custom-summary",
     }
+    assert cosmos.document["id"] == "app-config"
+    assert cosmos.document["ai_function_overrides"]["summary"] == {
+        "provider": "gemini", "model": "custom-summary",
+    }
+    assert cosmos.document["cosmosdb"]["endpoint"] == "https://cosmos.test"
+    assert cosmos.writes == [("app-config", "app-config")]
     assert "provider" not in store["scheduler"]
     assert "model" not in store["scheduler"]
 
@@ -205,6 +343,92 @@ def test_ai_providers_api_round_trip_migrates_legacy_and_resets(monkeypatch):
     )
     assert summary["provider_source"] == "inherited"
     assert summary["model_source"] == "inherited"
+    assert cosmos.document.get("ai_function_overrides", {}).get("summary") is None
+
+
+def test_ai_providers_get_reads_app_config_not_local_yaml(monkeypatch):
+    store = base_config_store()
+    store["ai_function_overrides"] = {
+        "summary": {"provider": "azure", "model": "local-only"},
+    }
+    cosmos_settings = copy.deepcopy(store)
+    cosmos_settings["ai_function_overrides"]["summary"] = {
+        "provider": "gemini", "model": "cosmos-model",
+    }
+    web_app = install_fake_config(monkeypatch, store)
+    cosmos = FakeCosmos(cosmos_settings)
+    web_app.app.state.cosmos = cosmos
+    web_app.app.state.scheduler = None
+
+    response = TestClient(web_app.app).get("/api/settings/ai-providers")
+
+    assert response.status_code == 200
+    assert response.json()["persistence"] == "cosmos"
+    summary = next(
+        item for item in response.json()["functions"]
+        if item["id"] == "summary"
+    )
+    assert summary["provider"] == "gemini"
+    assert summary["model"] == "cosmos-model"
+    assert cosmos.reads[-1] == ("app-config", "app-config")
+
+
+def test_ai_providers_get_ignores_stale_local_override_when_cosmos_has_none(
+    monkeypatch,
+):
+    store = base_config_store()
+    store["ai_function_overrides"] = {
+        "summary": {"provider": "gemini", "model": "stale-local"},
+    }
+    cosmos_settings = base_config_store()
+    web_app = install_fake_config(monkeypatch, store)
+    web_app.app.state.cosmos = FakeCosmos(cosmos_settings)
+    web_app.app.state.scheduler = None
+
+    response = TestClient(web_app.app).get("/api/settings/ai-providers")
+
+    summary = next(
+        item for item in response.json()["functions"]
+        if item["id"] == "summary"
+    )
+    assert summary["provider"] == ""
+    assert summary["model"] == ""
+    assert summary["provider_source"] == "inherited"
+    assert summary["model_source"] == "inherited"
+
+
+def test_ai_provider_save_reloads_scheduler_from_verified_cosmos(monkeypatch):
+    store = base_config_store()
+    web_app = install_fake_config(monkeypatch, store)
+    cosmos = FakeCosmos(store)
+    scheduler_config = make_config()
+
+    class Runner:
+        function_llms = None
+
+        def set_function_llms(self, values):
+            self.function_llms = values
+
+    class Scheduler:
+        config = scheduler_config
+        runner = Runner()
+
+    scheduler = Scheduler()
+    web_app.app.state.cosmos = cosmos
+    web_app.app.state.scheduler = scheduler
+
+    response = TestClient(web_app.app).post(
+        "/api/settings/ai-providers",
+        json={"functions": {
+            "summary": {"provider": "gemini", "model": "cosmos-summary"},
+        }},
+    )
+
+    assert response.status_code == 200
+    assert scheduler.config.config["ai_function_overrides"]["summary"] == {
+        "provider": "gemini", "model": "cosmos-summary",
+    }
+    assert scheduler.runner.function_llms["summary"].provider == "gemini"
 
 
 def test_partial_reset_preserves_shared_legacy_values_for_sibling_functions(
@@ -270,6 +494,85 @@ def test_ai_providers_api_rejects_unconfigured_provider(monkeypatch):
     )
     assert response.status_code == 400
     assert "API key not configured" in response.json()["error"]
+
+
+def test_ai_providers_api_propagates_cosmos_write_failure(monkeypatch):
+    store = base_config_store()
+    original = copy.deepcopy(store)
+    web_app = install_fake_config(monkeypatch, store)
+    web_app.app.state.cosmos = FakeCosmos(store, fail_update=True)
+    web_app.app.state.scheduler = None
+
+    response = TestClient(web_app.app).post(
+        "/api/settings/ai-providers",
+        json={"functions": {
+            "summary": {"provider": "gemini", "model": "custom-summary"},
+        }},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"error": "simulated Cosmos write failure"}
+    assert store == original
+
+
+def test_ai_providers_api_uses_local_yaml_only_without_cosmos_config(
+    monkeypatch,
+):
+    store = base_config_store()
+    store.pop("cosmosdb")
+    web_app = install_fake_config(monkeypatch, store)
+    web_app.app.state.cosmos = None
+    web_app.app.state.cosmos_error = "COSMOSDB_ENDPOINT not set"
+    web_app.app.state.scheduler = None
+
+    response = TestClient(web_app.app).post(
+        "/api/settings/ai-providers",
+        json={"functions": {
+            "summary": {"provider": "gemini", "model": "local-summary"},
+        }},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["persistence"] == "local"
+    assert store["ai_function_overrides"]["summary"] == {
+        "provider": "gemini", "model": "local-summary",
+    }
+
+
+def test_ai_providers_api_rejects_local_fallback_when_cosmos_is_configured(
+    monkeypatch,
+):
+    store = base_config_store()
+    original = copy.deepcopy(store)
+    web_app = install_fake_config(monkeypatch, store)
+    web_app.app.state.cosmos = None
+    web_app.app.state.cosmos_error = "authentication failed"
+    web_app.app.state.scheduler = None
+
+    response = TestClient(web_app.app).post(
+        "/api/settings/ai-providers",
+        json={"functions": {
+            "summary": {"provider": "gemini", "model": "must-not-save-locally"},
+        }},
+    )
+
+    assert response.status_code == 503
+    assert "CosmosDB settings persistence is unavailable" in response.json()["error"]
+    assert store == original
+
+
+def test_ai_providers_get_fails_when_configured_cosmos_is_unavailable(
+    monkeypatch,
+):
+    store = base_config_store()
+    web_app = install_fake_config(monkeypatch, store)
+    web_app.app.state.cosmos = None
+    web_app.app.state.cosmos_error = "connection failed"
+
+    response = TestClient(web_app.app).get("/api/settings/ai-providers")
+
+    assert response.status_code == 503
+    assert "CosmosDB settings persistence is unavailable" in response.json()["error"]
 
 
 def test_cron_settings_ui_has_no_ai_provider_controls():
