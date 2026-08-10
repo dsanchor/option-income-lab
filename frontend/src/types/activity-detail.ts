@@ -1,3 +1,49 @@
+/**
+ * Backend rule_evaluation schema (backend/src/rule_evaluator.py, schema_version 1).
+ * Persisted verbatim on the activity document — never derived client-side.
+ * Financial-viability rules (cash/buying-power/collateral/margin) are excluded
+ * by the backend and must never be rendered even if present defensively.
+ */
+export type RuleStatus =
+  | "blocked"
+  | "fail"
+  | "warning"
+  | "unknown"
+  | "pass"
+  | "not_applicable"
+  | "informational";
+
+export interface RuleResult {
+  rule_id: string;
+  label: string;
+  group?: string;
+  status: RuleStatus;
+  blocking?: boolean;
+  expected?: string | null;
+  observed?: string | null;
+  source?: string;
+  detail?: string | null;
+  data_refs?: Record<string, unknown>;
+  [k: string]: unknown;
+}
+
+export interface RuleEvaluationPhase {
+  phase?: string | null;
+  rules: RuleResult[];
+}
+
+export interface RuleEvaluation {
+  schema_version?: number;
+  agent_type?: string;
+  phase?: string | null;
+  rules?: RuleResult[];
+  phases?: RuleEvaluationPhase[];
+  generated_at?: string;
+  first_blocker?: string | null;
+  summary_counts?: Partial<Record<RuleStatus, number>>;
+  [k: string]: unknown;
+}
+
 export interface CounterArgument {
   point?: string;
   data_support?: string;
@@ -67,6 +113,7 @@ export interface ActivityDoc {
   created_from?: CreatedFrom | null;
   supervisor_view?: SupervisorView | null;
   alpha_view?: AlphaView | null;
+  rule_evaluation?: RuleEvaluation | null;
   [k: string]: unknown;
 }
 

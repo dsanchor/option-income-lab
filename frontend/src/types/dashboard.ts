@@ -1,3 +1,5 @@
+import type { RuleEvaluation } from "@/types/activity-detail";
+
 export interface BannerItem {
   emoji?: string;
   symbol?: string;
@@ -85,6 +87,7 @@ export interface ActivityItem {
   data_error?: boolean;
   supervisor_view?: SupervisorView | null;
   alpha_view?: AlphaView | null;
+  rule_evaluation?: RuleEvaluation | null;
   timestamp?: string;
   created_at?: string;
   [k: string]: unknown;

@@ -37,6 +37,8 @@ export interface Position {
   [k: string]: unknown;
 }
 
+import type { RuleEvaluation } from "@/types/activity-detail";
+
 export interface Activity {
   activity_id?: string;
   id?: string;
@@ -62,6 +64,7 @@ export interface Activity {
   assignment_risk?: string | null;
   supervisor_view?: { challenge_strength?: string; one_liner?: string; [k: string]: unknown } | null;
   alpha_view?: { one_liner?: string; [k: string]: unknown } | null;
+  rule_evaluation?: RuleEvaluation | null;
   [k: string]: unknown;
 }
 

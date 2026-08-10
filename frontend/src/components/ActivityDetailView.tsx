@@ -1,6 +1,7 @@
 import Link from "next/link";
 import ActivityActions from "@/components/ActivityActions";
 import ApplyRecommendation from "@/components/ApplyRecommendation";
+import RuleEvaluationPanel from "@/components/RuleEvaluationPanel";
 import type { ActivityDetail, ActivityDoc } from "@/types/activity-detail";
 
 function activityClass(a: string | undefined): string {
@@ -268,6 +269,10 @@ export default function ActivityDetailView({ data }: { data: ActivityDetail }) {
           {a.position_id && <Field label="Position ID"><span className="font-mono">{a.position_id}</span></Field>}
         </div>
       </section>
+
+      {/* Rule Evaluation — only rendered when rule_evaluation was persisted on the activity.
+          Historic activities without it fall through untouched. */}
+      {a.rule_evaluation && <RuleEvaluationPanel evaluation={a.rule_evaluation} />}
 
       {a.supervisor_view && <SupervisorPanel sv={a.supervisor_view} activity={a} />}
       {a.alpha_view && <AlphaPanel av={a.alpha_view} activity={a} />}

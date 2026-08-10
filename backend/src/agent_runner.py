@@ -33,6 +33,7 @@ from .volatility import format_volatility_block
 from .yfinance_data_provider import YFinanceDataProvider, create_provider, get_shared_provider, OPTIONS_CHAIN_SCHEMA_DESCRIPTION
 from .supervisor_instructions import get_supervisor_instructions, SUPERVISOR_OUTPUT_SCHEMA
 from .alpha_instructions import get_alpha_instructions, ALPHA_OUTPUT_SCHEMA
+from .rule_evaluator import build_rule_evaluation, merge_phase_evaluations
 
 # Canonical timestamp format — used for ALL activity and alert log entries.
 # ISO 8601 with UTC indicator to avoid timezone ambiguity.
@@ -1597,6 +1598,17 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                 alert_enrichment = self._extract_alert_enrichment(json_data)
                 activity_payload.update(alert_enrichment)
 
+            # ── Structured rule evaluation (deterministic, post-corrections) ──
+            # No silent degradation: evaluator errors must propagate to the
+            # outer handler so no activity is ever persisted successfully
+            # without a rule_evaluation (unconditional persistence contract).
+            activity_payload["rule_evaluation"] = build_rule_evaluation(
+                agent_type,
+                activity_payload,
+                category=symbol_category,
+                enrichment_data=data if _is_buy_tracker else None,
+            )
+
             # Write activity to CosmosDB (unified write path)
             dec_doc = cosmos.write_activity(
                 symbol=symbol,
@@ -2275,6 +2287,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 )
                 print(f"↪ Phase 1 action: {handoff_json.get('action_needed')} — running roll management…")
 
+
                 # Apply direction-aware filtering so Phase 2 only sees
                 # strikes/expirations valid for the roll direction.
                 roll_type = handoff_json.get("action_needed", "")
@@ -2448,6 +2461,11 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 # Phase 1 returned WAIT — use directly
                 json_data = activity_json
 
+            # Capture the assessment-phase source data for rule evaluation
+            # (handoff_json when a roll was pursued, else the WAIT activity_json).
+            _rule_eval_assessment_data = handoff_json if handoff_json is not None else activity_json
+            _rule_eval_has_roll_phase = handoff_json is not None
+
             # ── Validate premiums against actual chain data ────────────
             if json_data is not None:
                 json_data = self._validate_premium_against_chain(
@@ -2519,6 +2537,32 @@ Output your activity in the required JSON format. Use the timestamp above in you
             if is_alert:
                 alert_enrichment = self._extract_alert_enrichment(json_data)
                 activity_payload.update(alert_enrichment)
+
+            # ── Structured rule evaluation (deterministic, post-corrections) ──
+            # Monitor activities always persist BOTH the assessment phase and,
+            # when a roll was pursued, the roll phase — via a `phases` array
+            # (see A1.3 in the accepted rule-evaluation design amendment).
+            # No silent degradation: evaluator errors must propagate to the
+            # outer handler so no activity is ever persisted successfully
+            # without a rule_evaluation (unconditional persistence contract).
+            assessment_eval = build_rule_evaluation(
+                agent_type,
+                _rule_eval_assessment_data or {},
+                phase="assessment",
+                category=symbol_category,
+            )
+            if _rule_eval_has_roll_phase:
+                roll_eval = build_rule_evaluation(
+                    agent_type,
+                    activity_payload,
+                    phase="roll",
+                    category=symbol_category,
+                )
+                activity_payload["rule_evaluation"] = merge_phase_evaluations(
+                    assessment_eval, roll_eval,
+                )
+            else:
+                activity_payload["rule_evaluation"] = assessment_eval
 
             # Write activity to CosmosDB (unified write path)
             dec_doc = cosmos.write_activity(

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Activity, AgentType } from "@/types/symbol-detail";
+import { RuleStatusBadges } from "@/components/RuleEvaluationPanel";
 
 const TIME_RANGES = [
   { label: "1d", days: 1 },
@@ -175,6 +176,7 @@ export default function RecentActivities({
                         <span title={`Alpha Advisor: ${d.alpha_view.one_liner ?? ""}`}>🧠</span>
                       )}
                       <Badge text={act ?? "—"} className={activityClass(act)} />
+                      {d.rule_evaluation && <RuleStatusBadges evaluation={d.rule_evaluation} />}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right font-mono">

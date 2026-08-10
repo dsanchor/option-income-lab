@@ -9,6 +9,7 @@ import {
   riskRatingStyle,
 } from "@/lib/badges";
 import type { ActivityItem } from "@/types/dashboard";
+import { RuleStatusBadges } from "@/components/RuleEvaluationPanel";
 
 const TIME_PILLS = [
   { label: "1d", days: 1 },
@@ -193,6 +194,7 @@ function ActivityRow({ item, onClick }: { item: ActivityItem; onClick: () => voi
           ⏳ {item.waiting_for}
         </Pill>
       )}
+      {item.rule_evaluation && <RuleStatusBadges evaluation={item.rule_evaluation} />}
     </div>
   );
 }

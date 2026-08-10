@@ -499,6 +499,12 @@ Load **risk-flags** for the canonical SELL/WAIT taxonomy and export only the fla
     "expiration_to_earnings_gap": 5,
     "earnings_gate_result": "OPEN_NORMALLY or ALLOWED or ALLOWED_WITH_CAUTION or BLOCKED or IDEAL or CONSERVATIVE_DTE",
     "earnings_risk_flag": "earnings_approaching or null"
+  },
+  "rule_checks": {
+    "csp_investment_worthiness": {"status": "pass|fail|warning|unknown", "detail": "brief"},
+    "csp_support_level": {"status": "pass|fail|warning|unknown", "detail": "brief"},
+    "csp_ex_div_check": {"status": "pass|fail|warning|unknown", "detail": "brief"},
+    "csp_catalyst_check": {"status": "pass|fail|warning|unknown", "detail": "brief"}
   }
 }
 ```
@@ -517,6 +523,7 @@ SUMMARY: TICKER | SELL/WAIT cash-secured put | Strike $X exp YYYY-MM-DD | IV X% 
 - `risk_flags`: array of flag names from Unified Risk Flag Taxonomy, or `[]` if none
 - `risk_rating`: integer 0-10, sum of 5 risk dimensions (see RISK RATING section). REQUIRED for every output
 - `risk_rating_breakdown`: object with keys `fundamental`, `technical`, `volatility`, `calendar`, `sentiment` — each 0-2
+- `rule_checks` (REQUIRED): structured verdicts for qualitative rules that cannot be derived from other fields. Include `csp_investment_worthiness` (would you buy this stock at the strike price today?), `csp_support_level` (is the strike at or below key technical support?), `csp_ex_div_check` (ex-dividend conflict, less critical for puts), and `csp_catalyst_check` (pending negative catalysts within DTE). Each value is an object with `status` (one of `pass`, `fail`, `warning`, `unknown`) and a brief `detail` string. This block is consumed by the deterministic rule evaluator downstream — it does not change your narrative `reason`.
 
 Strong SELL activity (all criteria met, no risk flags):
 ```json

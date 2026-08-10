@@ -346,6 +346,10 @@ Load **risk-flags** for the canonical earnings flag definitions.
     "sma_50_vs_price": "above or below",
     "macd_signal": "bullish or bearish or flat",
     "reasoning": "Brief 1-2 sentence technical summary"
+  },
+  "rule_checks": {
+    "opm_a_assignment_risk": {"status": "pass|fail|warning|unknown", "detail": "brief"},
+    "opm_a_fundamental_check": {"status": "pass|fail|warning|unknown", "detail": "brief"}
   }
 }
 ```
@@ -359,6 +363,7 @@ SUMMARY: TICKER | WAIT open put | Strike $X exp YYYY-MM-DD | Price $X | Delta X.
 - `confidence`: "high" (clear situation), "medium" (reasonable assessment), "low" (insufficient data)
 - `risk_flags`: array from Unified Risk Flag Taxonomy, or `[]` if none
 - `market_bias`: Always include. Extract direction from technicals: RSI(14) value, price vs SMA20/SMA50 position, MACD signal direction. Set direction to "bullish" (price above MAs, RSI > 55, bullish MACD), "bearish" (price below MAs, RSI < 45, bearish MACD), or "neutral" (mixed signals).
+- `rule_checks` (REQUIRED): structured verdicts for qualitative rules. Include `opm_a_assignment_risk` (is assignment rational/acceptable given moneyness and extrinsic value?) and `opm_a_fundamental_check` (still comfortable owning the stock if assigned?). Each value is an object with `status` (one of `pass`, `fail`, `warning`, `unknown`) and a brief `detail` string. This block is consumed by the deterministic rule evaluator downstream — it does not change your narrative `reason`.
 
 **WAIT Example:**
 ```json
@@ -446,6 +451,10 @@ When you determine the position needs action (ROLL), output a **handoff JSON** i
     "earnings_blocked_expirations": "0-7 days after earnings",
     "preferred_expiration": "pre-earnings ≥3 days before or ≥8 days after earnings",
     "target_dte": "21-35 DTE from today (up to 45 fallback)"
+  },
+  "rule_checks": {
+    "opm_a_assignment_risk": {"status": "pass|fail|warning|unknown", "detail": "brief"},
+    "opm_a_fundamental_check": {"status": "pass|fail|warning|unknown", "detail": "brief"}
   }
 }
 ```
@@ -461,4 +470,5 @@ When you determine the position needs action (ROLL), output a **handoff JSON** i
 - `roll_target_rules`: Summarize any earnings-driven constraints on roll targets so Agent 2 respects them.
 - Include ALL relevant risk flags — Agent 2 will carry them through to the final output.
 - The `reason` MUST be a user-facing explanation of WHY action is needed (e.g., "Stock approaching strike with bearish momentum, delta -0.55, support broken"). Do NOT include instructions or references to "Agent 2" — the reason field is displayed directly to the user. Put any roll-targeting guidance in `roll_target_rules` instead.
+- `rule_checks` (REQUIRED): structured verdicts for qualitative rules, carried through to Phase 2's final output so the assessment-phase judgment persists. Include `opm_a_assignment_risk` (is assignment rational/acceptable given moneyness and extrinsic value?) and `opm_a_fundamental_check` (still comfortable owning the stock if assigned?). Each value is an object with `status` (one of `pass`, `fail`, `warning`, `unknown`) and a brief `detail` string. This block is consumed by the deterministic rule evaluator downstream — it does not change your narrative `reason`.
 """

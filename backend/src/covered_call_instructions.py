@@ -412,6 +412,10 @@ Load **risk-flags** for the canonical SELL/WAIT taxonomy and export only the fla
     "expiration_to_earnings_gap": 5,
     "earnings_gate_result": "OPEN_NORMALLY or ALLOWED or ALLOWED_WITH_CAUTION or BLOCKED or IDEAL or CONSERVATIVE_DTE",
     "earnings_risk_flag": "earnings_approaching or null"
+  },
+  "rule_checks": {
+    "cc_ex_div_check": {"status": "pass|fail|warning|unknown", "detail": "brief"},
+    "cc_catalyst_check": {"status": "pass|fail|warning|unknown", "detail": "brief"}
   }
 }
 ```
@@ -426,6 +430,7 @@ SUMMARY: TICKER | SELL/WAIT covered call | Strike $X exp YYYY-MM-DD | IV X% (Ran
 - `risk_flags`: array of flag names from Unified Risk Flag Taxonomy, or `[]` if none
 - `risk_rating`: integer 0-10, sum of 5 risk dimensions (see RISK RATING section). REQUIRED for every output
 - `risk_rating_breakdown`: object with keys `volatility`, `assignment`, `technical`, `calendar`, `sentiment` — each 0-2
+- `rule_checks` (REQUIRED): structured verdicts for qualitative rules that cannot be derived from other fields. Include `cc_ex_div_check` (ex-dividend date vs strike proximity conflict) and `cc_catalyst_check` (pending catalysts, e.g. FDA/product launch, within DTE). Each value is an object with `status` (one of `pass`, `fail`, `warning`, `unknown`) and a brief `detail` string. This block is consumed by the deterministic rule evaluator downstream — it does not change your narrative `reason`.
 
 SELL activity:
 ```json
