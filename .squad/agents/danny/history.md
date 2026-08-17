@@ -92,3 +92,13 @@
 - Rusty restored symbol creation and inline `total_shares` editing; successful creation triggers forecast backfill without coupling backfill failure to persistence.
 - Linus restored the documented suitability categories from `entry_tag` plus momentum. These categories are independent of watchlist tracking flags and option-chain delta filters.
 - Basher's final current-state review approved the integrated implementation; the earlier missing-feature findings and inbox review are superseded.
+
+### 2026-08-17 — Buy Tracker Normalization Test Revision
+- Replaced fabricated provider fields with the actual yfinance output shape: indicator `signal` confirmations plus annual/latest/growth dividend evidence.
+- Added provider-shaped `STRONG_BUY` reachability and fail-closed missing dividend-state regressions, the negative payout `<=75%` boundary, and canonical hard-WAIT prompt-example checks.
+- Complete focused test files: 181 passed (one existing pandas-ta deprecation warning).
+
+### 2026-08-17 — Buy Tracker Provider-Proxy Contract Resolution
+- Amended the accepted contract so `MACD.macd` and `Stoch.K` Buy signals plus positive annual DPS, latest DPS, and dividend-growth years replace unavailable original confirmation fields.
+- Confirmed a missing explicit cut boolean does not block `STRONG_BUY`; an explicit cut or the exact canonical cut flag still forces `WAIT`, and every accepted proxy remains fail-closed.
+- Audited implementation and shared prompts; current behavior already matches the directive. Focused suites: 200 passed (one existing pandas-ta warning).

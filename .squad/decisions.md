@@ -5970,3 +5970,30 @@ configuration, `ai.models`, then global or function-specific defaults.
 Only the supported `azure` and `gemini` providers are accepted. Credentials are
 never returned to the frontend. Scheduled runs, manual runs, reports, and chats
 all resolve provider and model through the same per-function runtime path.
+
+---
+
+### 2026-08-17: Buy Tracker deterministic normalization and provider evidence (consolidated)
+**By:** dsanchor, Danny, Linus, Rusty
+
+**What:** Buy Tracker prompts score only the five binary dimensions
+`value_entry`, `trend`, `momentum`, `income`, and `calendar`. A pure normalizer
+recomputes the score, applies hard-WAIT rules, and exclusively determines the
+persisted activity before alerting, evaluation, persistence, and notification.
+Scores 0–2 map to `WAIT`, 3–4 to `BUY`, and 5 to `BUY` unless every exceptional
+promotion gate passes.
+
+`STRONG_BUY` requires the complete provider-available evidence set: qualifying
+52-week pullback and SMA relationships, RSI 25–45, provider `Buy` signals for
+`MACD.macd` and `Stoch.K`, positive annual DPS, latest DPS, and dividend-growth
+years, payout ratio <=75%, analyst upside >=5%, and earnings more than seven
+days away. Missing required evidence fails promotion closed to `BUY`. A missing
+explicit `dividend_cut_or_suspended` boolean alone does not block promotion;
+an explicit cut/suspension or exact canonical cut flag always forces `WAIT`.
+Hard-WAIT triggers preserve the recomputed score, raw evidence takes precedence
+over stale flags, and vague prose cannot create positive evidence.
+
+**Why:** Broad eligibility signals should make `BUY` the normal favorable DCA
+result, while maximum conviction remains rare, deterministic, reachable from
+production provider data, and evidence-based. One normalized object prevents
+prompt, evaluator, alert, and persistence drift.
