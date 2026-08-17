@@ -2,6 +2,7 @@ import asyncio
 from contextvars import ContextVar
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -29,11 +30,17 @@ from .options_chain_filters import (
     exclude_contract,
     get_contract,
 )
+from .options_math import executable_buyback_ask, robust_mid
 from .volatility import format_volatility_block
 from .yfinance_data_provider import YFinanceDataProvider, create_provider, get_shared_provider, OPTIONS_CHAIN_SCHEMA_DESCRIPTION
 from .supervisor_instructions import get_supervisor_instructions, SUPERVISOR_OUTPUT_SCHEMA
 from .alpha_instructions import get_alpha_instructions, ALPHA_OUTPUT_SCHEMA
-from .rule_evaluator import build_rule_evaluation, merge_phase_evaluations
+from .rule_evaluator import (
+    build_buy_tracker_evidence,
+    build_rule_evaluation,
+    merge_phase_evaluations,
+    normalize_buy_tracker_activity,
+)
 
 # Canonical timestamp format — used for ALL activity and alert log entries.
 # ISO 8601 with UTC indicator to avoid timezone ambiguity.
@@ -46,6 +53,26 @@ VALID_ROLL_ACTIONS = {
     "ROLL_UP_AND_OUT", "ROLL_DOWN_AND_OUT",
 }
 VALID_PHASE2_ACTIVITIES = VALID_ROLL_ACTIONS | {"WAIT", "CLOSE"}
+
+_PROFIT_ONLY_RISK_FLAGS = frozenset({
+    "profit_optimization",
+    "profit_optimization_no_roll",
+    "profit_target_reached",
+    "close_for_profit",
+    "incomplete_data",
+})
+_QUOTE_DEPENDENT_RISK_FLAGS = frozenset({
+    "profit_optimization",
+    "profit_optimization_no_roll",
+    "profit_target_reached",
+    "close_for_profit",
+    "no_viable_roll",
+})
+_FORCED_ROLL_EARNINGS_RESULTS = frozenset({
+    "ROLL_RECOMMENDED",
+    "ROLL_URGENTLY",
+    "CLOSE_OR_ROLL",
+})
 
 # ---------------------------------------------------------------------------
 # Debug logging setup – console only
@@ -295,21 +322,23 @@ class AgentRunner:
             structured = {"calls": {}, "puts": {}}
 
         bucket_key = "calls" if option_type == "call" else "puts"
-        bucket = structured.get(bucket_key, {})
-
-        # Normalise expiration to YYYYMMDD (the chain key format)
         exp_key = expiration.replace("-", "")
-        strike_key = str(current_strike)
-        # Try common float representations (72 → "72.0", 72.5 → "72.5")
-        contract = None
-        for sk in (strike_key, f"{current_strike:.1f}", f"{current_strike:.2f}"):
-            contract = bucket.get(exp_key, {}).get(sk)
-            if contract is not None:
-                strike_key = sk
-                break
+        contract = get_contract(
+            structured, current_strike, expiration, option_type,
+        )
+        buyback_ask = executable_buyback_ask(
+            contract.get("ask") if contract else None
+        )
+        buyback_available = buyback_ask is not None
 
-        if contract is None:
-            return f"(current contract {option_type} ${current_strike} exp {expiration} not found in chain)"
+        strike_key = str(current_strike)
+        contract_view = None
+        if contract is not None:
+            contract_view = dict(contract)
+            contract_view["ask"] = buyback_ask
+            contract_view["executable_buyback_ask"] = buyback_ask
+            contract_view["buyback_available"] = buyback_available
+            contract_view["incomplete_data"] = not buyback_available
 
         minimal_chain = {
             "symbol": structured.get("symbol", symbol),
@@ -318,17 +347,195 @@ class AgentRunner:
                 "strike": current_strike,
                 "expiration": expiration,
                 "type": option_type,
+                "buyback_cost": buyback_ask,
+                "buyback_available": buyback_available,
+                "incomplete_data": not buyback_available,
             },
-            bucket_key: {
-                exp_key: {
-                    strike_key: contract,
-                },
-            },
+            bucket_key: (
+                {exp_key: {strike_key: contract_view}}
+                if contract_view is not None
+                else {}
+            ),
         }
         return (
             OPTIONS_CHAIN_SCHEMA_DESCRIPTION + "\n"
             + json.dumps(minimal_chain, indent=2)
         )
+
+    @staticmethod
+    def _is_profit_only_handoff(data: Optional[Dict]) -> bool:
+        """Return True when a Phase 1 handoff exists only to optimize profit."""
+        if not isinstance(data, dict):
+            return False
+        if (
+            data.get("close_for_profit_recommended") is not True
+            or data.get("profit_optimization_gate") != "eligible"
+        ):
+            return False
+
+        earnings = data.get("earnings_analysis") or {}
+        earnings_result = str(
+            earnings.get("earnings_gate_result") or ""
+        ).upper()
+        if earnings_result in _FORCED_ROLL_EARNINGS_RESULTS:
+            return False
+
+        assignment_risk = str(data.get("assignment_risk") or "").lower()
+        if assignment_risk in {"high", "critical"}:
+            return False
+        if str(data.get("moneyness") or "").upper() == "ITM":
+            return False
+        try:
+            delta = abs(float(data.get("delta")))
+        except (TypeError, ValueError):
+            delta = None
+        if delta is not None and math.isfinite(delta) and delta > 0.50:
+            return False
+
+        raw_flags = data.get("risk_flags")
+        flags = {
+            str(flag)
+            for flag in raw_flags
+        } if isinstance(raw_flags, list) else set()
+        return flags.issubset(_PROFIT_ONLY_RISK_FLAGS)
+
+    @staticmethod
+    def _sanitize_quote_dependent_prose(reason) -> str:
+        """Replace stale quote-derived percentages while retaining risk prose."""
+        text = str(reason or "").strip()
+        if not text:
+            return ""
+        text = re.sub(
+            r"(?i)\b(P&L|profit(?:\s+level)?|captured)\s*"
+            r"(?:is|:|=|of)?\s*[+-]?\d+(?:\.\d+)?%",
+            lambda match: f"{match.group(1)} N/A",
+            text,
+        )
+        text = re.sub(
+            r"(?i)\bprofit target reached\s*(?:\([^)]*\))?\s*[.;:]?\s*",
+            "",
+            text,
+        )
+        text = re.sub(
+            r"(?i)\bbuyback cost(?:\s*\(ask\))?\s*(?::|is|=)?\s*"
+            r"\$?[+-]?\d+(?:\.\d+)?",
+            "Buyback cost N/A",
+            text,
+        )
+        text = re.sub(
+            r"(?i)\$?[+-]?\d+(?:\.\d+)?\s+buyback\b",
+            "buyback N/A",
+            text,
+        )
+        text = re.sub(
+            r"(?i)\b[+-]?\d+(?:\.\d+)?%\s+"
+            r"(?:profit(?:\s+captured)?|captured|fully\s+realized)\b",
+            "profit N/A",
+            text,
+        )
+        text = re.sub(
+            r"(?i)\bfully\s+realized\b",
+            "realization unconfirmed",
+            text,
+        )
+        return re.sub(r"\s{2,}", " ", text).strip(" ;")
+
+    @staticmethod
+    def _apply_buyback_quote_state(
+        data: Optional[Dict],
+        buyback_ask: float | None,
+        *,
+        force_wait: bool = False,
+        fallback_reason: str = "",
+    ) -> Optional[Dict]:
+        """Attach executable quote state and deterministically degrade if absent."""
+        if data is None:
+            return None
+        result = dict(data)
+        if buyback_ask is not None:
+            result["buyback_ask"] = buyback_ask
+            result["buyback_per_share"] = buyback_ask
+            result["buyback_available"] = True
+            result["incomplete_data"] = False
+            raw_flags = result.get("risk_flags")
+            if isinstance(raw_flags, list):
+                result["risk_flags"] = [
+                    str(flag)
+                    for flag in raw_flags
+                    if str(flag) != "incomplete_data"
+                ]
+            return result
+
+        raw_flags = result.get("risk_flags")
+        flags = [
+            str(flag)
+            for flag in raw_flags
+        ] if isinstance(raw_flags, list) else []
+        flags = [
+            flag for flag in flags
+            if flag not in _QUOTE_DEPENDENT_RISK_FLAGS
+        ]
+        if "incomplete_data" not in flags:
+            flags.append("incomplete_data")
+
+        quote_reason = (
+            "Executable buyback ask is unavailable; buyback cost, short-call "
+            "P&L, and CLOSE/ROLL economics are N/A. Waiting for a valid ask."
+        )
+        primary_reason = AgentRunner._sanitize_quote_dependent_prose(
+            result.get("reason")
+        ).replace(quote_reason, "").strip()
+        preserved_reason = AgentRunner._sanitize_quote_dependent_prose(
+            fallback_reason
+        ).replace(quote_reason, "").strip()
+        if preserved_reason and preserved_reason not in primary_reason:
+            primary_reason = (
+                f"{primary_reason} Risk assessment: {preserved_reason}"
+                if primary_reason
+                else preserved_reason
+            )
+
+        result.update({
+            "buyback_ask": None,
+            "buyback_cost": None,
+            "buyback_per_share": None,
+            "buyback_available": False,
+            "incomplete_data": True,
+            "close_for_profit": False,
+            "close_for_profit_recommended": False,
+            "profit_level_pct": None,
+            "profit_optimization_gate": None,
+            "profit_target_reached": False,
+            "pct_captured": None,
+            "pnl_pct": None,
+            "risk_flags": flags,
+            "reason": f"{primary_reason} {quote_reason}".strip(),
+        })
+
+        if force_wait:
+            symbol = result.get("symbol") or ""
+            result.update({
+                "activity": "WAIT",
+                "action_needed": None,
+                "new_strike": None,
+                "new_expiration": None,
+                "estimated_roll_cost": None,
+                "roll_economics": {
+                    "buyback_cost": None,
+                    "new_premium": None,
+                    "net_credit": None,
+                    "roll_tier": None,
+                    "buyback_available": False,
+                    "incomplete_data": True,
+                },
+                "is_alert": False,
+                "waiting_for": "a positive finite executable ask",
+                "summary": (
+                    f"SUMMARY: {symbol} | WAIT open call | "
+                    "Buyback N/A | P&L N/A | incomplete data"
+                ),
+            })
+        return result
 
     # ── JSON / SUMMARY extraction ──────────────────────────────────────
 
@@ -714,13 +921,14 @@ class AgentRunner:
         if contract is None:
             return json_data
 
-        actual_ask = contract.get("ask")
-        if actual_ask is None:
-            return json_data
+        actual = executable_buyback_ask(contract.get("ask"))
+        if actual is None:
+            return AgentRunner._apply_buyback_quote_state(
+                json_data, None,
+            ) or json_data
 
         try:
             reported = float(buyback_cost)
-            actual = float(actual_ask)
         except (TypeError, ValueError):
             return json_data
 
@@ -1404,20 +1612,24 @@ Provide your alpha advisor analysis in the JSON format specified above."""
             result_parts.append(OPTIONS_CHAIN_SCHEMA_DESCRIPTION + "\n" + json.dumps(structured, indent=2))
         # Append CURRENT POSITION reference block if available
         if current_contract is not None:
-            buyback_cost = current_contract.get("ask") or current_contract.get("mark") or current_contract.get("last")
+            buyback_cost = executable_buyback_ask(current_contract.get("ask"))
+            buyback_available = buyback_cost is not None
             ref_block = {
                 "strike": float(current_strike),
                 "expiration": current_expiration,
                 "bid": current_contract.get("bid"),
-                "ask": current_contract.get("ask"),
+                "ask": buyback_cost,
                 "buyback_cost": buyback_cost,
+                "buyback_available": buyback_available,
+                "incomplete_data": not buyback_available,
                 "delta": current_contract.get("delta"),
                 "last": current_contract.get("last"),
             }
             ref_text = (
                 "\n\n=== CURRENT POSITION (buyback-cost reference — NOT a roll candidate) ===\n"
                 + json.dumps(ref_block, indent=2)
-                + "\n\nNote: buyback_cost is the ask (cost to buy-to-close the current short contract). "
+                + "\n\nNote: buyback_cost is the positive finite ask (cost to buy-to-close the current short contract). "
+                + "If it is null, buyback/P&L/CLOSE economics are N/A; bid, last, mark, and mid cannot confirm CLOSE. "
                 + "Use it to compare closing vs rolling. Do NOT propose this exact strike+expiration as a roll/re-sell target."
             )
             result_parts.append(ref_text)
@@ -1589,13 +1801,44 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                     "timestamp": analysis_ts,
                 }
 
+            # Buy Tracker has one canonical post-LLM decision. Normalize it
+            # before alerting, evaluation, persistence, tracing, or notification.
+            buy_tracker_evidence = None
+            if _is_buy_tracker:
+                buy_tracker_evidence = build_buy_tracker_evidence(data)
+                activity_payload = normalize_buy_tracker_activity(
+                    activity_payload, buy_tracker_evidence,
+                )
+                price = activity_payload.get("underlying_price")
+                price_text = (
+                    f"${float(price):.2f}"
+                    if (
+                        isinstance(price, (int, float))
+                        and not isinstance(price, bool)
+                        and math.isfinite(float(price))
+                    )
+                    else "N/A"
+                )
+                reason_short = str(activity_payload.get("reason") or "")[:120]
+                entry_zone = activity_payload.get("entry_zone")
+                entry_text = (
+                    str(entry_zone).strip()
+                    if str(entry_zone or "").strip()
+                    else "N/A"
+                )
+                activity_payload["summary"] = (
+                    f"SUMMARY: {symbol} | {activity_payload['activity']} buy tracker | "
+                    f"Price {price_text} | Score {activity_payload['score']} | "
+                    f"Entry {entry_text} | {reason_short}"
+                )
+
             # Determine if this is an alert (anything NOT wait/hold/do_nothing)
-            is_alert = self._is_alert(response_text, json_data)
+            is_alert = self._is_alert(response_text, activity_payload)
             activity_payload["is_alert"] = is_alert
             
             # If alert, merge alert-enrichment fields into activity payload
             if is_alert:
-                alert_enrichment = self._extract_alert_enrichment(json_data)
+                alert_enrichment = self._extract_alert_enrichment(activity_payload)
                 activity_payload.update(alert_enrichment)
 
             # ── Structured rule evaluation (deterministic, post-corrections) ──
@@ -1606,7 +1849,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                 agent_type,
                 activity_payload,
                 category=symbol_category,
-                enrichment_data=data if _is_buy_tracker else None,
+                enrichment_data=buy_tracker_evidence,
             )
 
             # Write activity to CosmosDB (unified write path)
@@ -1627,7 +1870,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                 response_text=response_text,
                 model=model,
                 skills=_skill_names,
-                parsed=json_data,
+                parsed=activity_payload,
                 is_alert=is_alert,
                 phase="analysis",
                 duration_seconds=round(time.time() - run_start, 2),
@@ -1723,14 +1966,14 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                     "timestamp": analysis_ts,
                     "symbol": symbol,
                     "exchange": exchange,
-                    "activity": json_data.get("activity", "SELL") if json_data else "SELL",
-                    "strike": json_data.get("strike") if json_data else None,
-                    "expiration": json_data.get("expiration") if json_data else None,
-                    "underlying_price": json_data.get("underlying_price") if json_data else None,
-                    "confidence": json_data.get("confidence") if json_data else None,
-                    "risk_rating": json_data.get("risk_rating") if json_data else None,
-                    "risk_flags": json_data.get("risk_flags") if json_data else None,
-                    "premium": json_data.get("premium") if json_data else None,
+                    "activity": activity_payload.get("activity", "SELL"),
+                    "strike": activity_payload.get("strike"),
+                    "expiration": activity_payload.get("expiration"),
+                    "underlying_price": activity_payload.get("underlying_price"),
+                    "confidence": activity_payload.get("confidence"),
+                    "risk_rating": activity_payload.get("risk_rating"),
+                    "risk_flags": activity_payload.get("risk_flags"),
+                    "premium": activity_payload.get("premium"),
                 }
                 if supervisor_view is not None:
                     alert_data["supervisor_view"] = supervisor_view
@@ -1752,7 +1995,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                         supervisor_view=supervisor_view,
                         alpha_view=alpha_view,
                         consecutive_waits=self.PROLONGED_WAIT_THRESHOLD,
-                        underlying_price=json_data.get("underlying_price") if json_data else None,
+                        underlying_price=activity_payload.get("underlying_price"),
                     )
 
         except Exception as e:
@@ -2084,23 +2327,26 @@ Output your activity in the required JSON format. Use the timestamp above in you
         )
         gap_percent = (gap_absolute / strike_value * 100.0) if strike_value else None
 
-        # Extract midprice from options chain for P&L calculation
+        # Keep robust mid informational; short-call P&L requires executable ask.
         midprice = None
+        buyback_ask = None
         pnl_pct = None
         if expiration:
             from src.dps_scorer import extract_greeks_from_chain
             chain_json = data.get("options_chain", "{}")
             greeks = extract_greeks_from_chain(chain_json, strike_value, expiration, position_type)
+            if greeks:
+                buyback_ask = executable_buyback_ask(greeks.get("ask"))
             if greeks and greeks.get("mid") is not None:
                 midprice = _to_float(greeks["mid"])
             elif greeks:
                 bid = _to_float(greeks.get("bid"))
                 ask = _to_float(greeks.get("ask"))
-                if bid is not None and ask is not None:
-                    midprice = round((bid + ask) / 2, 4)
+                midprice = robust_mid(bid, ask)
 
-        if midprice is not None and premium_received is not None and premium_received > 0:
-            pnl_pct = round((premium_received - midprice) / premium_received * 100, 2)
+        pnl_mark = buyback_ask if position_type == "call" else midprice
+        if pnl_mark is not None and premium_received is not None and premium_received > 0:
+            pnl_pct = round((premium_received - pnl_mark) / premium_received * 100, 2)
 
         result = {
             "timestamp": timestamp,
@@ -2114,6 +2360,11 @@ Output your activity in the required JSON format. Use the timestamp above in you
         }
         if midprice is not None:
             result["midprice"] = round(midprice, 4)
+        if position_type == "call":
+            result["buyback_ask"] = buyback_ask
+            result["buyback_per_share"] = buyback_ask
+            result["buyback_available"] = buyback_ask is not None
+            result["incomplete_data"] = buyback_ask is None
         if premium_received is not None:
             result["premium_received"] = round(premium_received, 4)
         if pnl_pct is not None:
@@ -2208,15 +2459,23 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 structured_chain = json.loads(data.get('options_chain', '{}'))
             except (json.JSONDecodeError, TypeError):
                 structured_chain = {"calls": {}, "puts": {}}
-            _pre_delta_chain = structured_chain  # fallback if no filtering occurs
+            current_contract = get_contract(
+                structured_chain,
+                float(strike),
+                expiration,
+                position_type,
+            )
+            current_buyback_ask = executable_buyback_ask(
+                current_contract.get("ask") if current_contract else None
+            )
+            open_call_quote_incomplete = (
+                position_type == "call" and current_buyback_ask is None
+            )
             if structured_chain.get("calls") or structured_chain.get("puts"):
                 structured_chain = filter_options_chain_by_type(structured_chain, position_type)
                 structured_chain = filter_options_chain_for_position(
                     structured_chain, float(strike), position_type,
                 )
-                # Keep a copy BEFORE delta filtering for buyback cost lookup
-                # (the current contract may be deeply OTM and get delta-filtered out)
-                _pre_delta_chain = structured_chain
                 structured_chain = filter_options_chain_by_delta(structured_chain)
             filtered_chain_text = (
                 OPTIONS_CHAIN_SCHEMA_DESCRIPTION + "\n"
@@ -2241,7 +2500,10 @@ Output your activity in the required JSON format. Use the timestamp above in you
                     parts = []
                     # P&L
                     _snap_pnl = latest_snap.get("pnl_pct")
-                    if _snap_pnl is not None:
+                    if (
+                        _snap_pnl is not None
+                        and latest_snap.get("buyback_available") is not False
+                    ):
                         parts.append(f"P&L: {_snap_pnl:.1f}%")
                     # DPS scores
                     dps_scores = [s.get("dps_score") for s in recent_snaps if s.get("dps_score") is not None]
@@ -2279,6 +2541,30 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 agent_type=agent_type,
             )
 
+            if position_type == "call":
+                if handoff_json is not None:
+                    profit_only_handoff = self._is_profit_only_handoff(handoff_json)
+                    handoff_json = self._apply_buyback_quote_state(
+                        handoff_json, current_buyback_ask,
+                    )
+                    if open_call_quote_incomplete and profit_only_handoff:
+                        logger.info(
+                            "Skipping Phase 2 for %s: profit-only handoff has no executable buyback ask",
+                            symbol,
+                        )
+                        activity_json = self._apply_buyback_quote_state(
+                            handoff_json,
+                            None,
+                            force_wait=True,
+                        )
+                        handoff_json = None
+                elif activity_json is not None:
+                    activity_json = self._apply_buyback_quote_state(
+                        activity_json,
+                        current_buyback_ask,
+                        force_wait=open_call_quote_incomplete,
+                    )
+
             if handoff_json is not None:
                 # Phase 1 says action needed → run Phase 2
                 logger.info(
@@ -2300,23 +2586,8 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         roll_type=roll_type,
                         option_type=position_type,
                     )
-                    # Pre-compute candidates as a readable table.
-                    # Look up buyback cost from the pre-delta-filtered chain
-                    # because delta filtering usually excludes the current OTM contract.
-                    _bb_cost = None
-                    _bb_bucket_key = "calls" if position_type == "call" else "puts"
-                    _bb_bucket = _pre_delta_chain.get(_bb_bucket_key, {})
-                    _bb_exp_key = expiration.replace("-", "")
-                    _bb_strike_f = float(strike)
-                    # Try both key formats: str(float()) and f"{:.1f}"
-                    _bb_strike_key = str(_bb_strike_f)
-                    _bb_strike_key_alt = f"{_bb_strike_f:.1f}" if _bb_strike_f == int(_bb_strike_f) else _bb_strike_key
-                    _bb_exp_contracts = _bb_bucket.get(_bb_exp_key, {})
-                    _bb_contract = _bb_exp_contracts.get(_bb_strike_key) or _bb_exp_contracts.get(_bb_strike_key_alt)
-                    if _bb_contract:
-                        _bb_ask = _bb_contract.get("ask")
-                        if _bb_ask is not None:
-                            _bb_cost = float(_bb_ask)
+                    # Pre-compute candidates with the executable current ask.
+                    _bb_cost = current_buyback_ask
 
                     underlying_px = float(
                         handoff_json.get("underlying_price", 0) or 0
@@ -2493,6 +2764,19 @@ Output your activity in the required JSON format. Use the timestamp above in you
                             " strike/expiration — converted to CLOSE]"
                         )
 
+            # ── Final executable-quote safety contract for short calls ──
+            if json_data is not None and position_type == "call":
+                json_data = self._apply_buyback_quote_state(
+                    json_data,
+                    current_buyback_ask,
+                    force_wait=open_call_quote_incomplete,
+                    fallback_reason=(
+                        handoff_json.get("reason", "")
+                        if isinstance(handoff_json, dict)
+                        else ""
+                    ),
+                )
+
             # ── Persist activity (common path) ────────────────────────
             activity_line, json_data = self._extract_activity_line(symbol, response_text) if json_data is None else (
                 self._extract_summary_line(response_text) or "", json_data
@@ -2530,6 +2814,12 @@ Output your activity in the required JSON format. Use the timestamp above in you
 
             # Determine if this is an alert (anything NOT wait/hold/do_nothing)
             is_alert = self._is_alert(response_text, json_data)
+            incomplete_quote_wait = bool(
+                activity_payload.get("incomplete_data")
+                and activity_payload.get("buyback_available") is False
+            )
+            if incomplete_quote_wait:
+                is_alert = False
             activity_payload["is_alert"] = is_alert
 
             
@@ -2658,7 +2948,13 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 market_data = self._build_market_data_block(data, symbol, exchange)
                 alpha_chain_text = self._build_alpha_options_chain(data, agent_type)
                 alpha_market_data = self._build_market_data_block(data, symbol, exchange, options_chain_text=alpha_chain_text)
-                prolonged_wait = self._detect_prolonged_wait(cosmos, symbol, agent_type, position_id=position_id)
+                prolonged_wait = (
+                    False
+                    if incomplete_quote_wait
+                    else self._detect_prolonged_wait(
+                        cosmos, symbol, agent_type, position_id=position_id,
+                    )
+                )
 
                 if prolonged_wait:
                     print(f"⏳ Prolonged WAIT detected for {symbol} ${strike} — triggering supervisor + alpha review")

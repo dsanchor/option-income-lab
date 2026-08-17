@@ -4,6 +4,9 @@ Generates detailed technical analysis reports with accessible language
 and options strategy recommendations (Covered Calls & Cash Secured Puts).
 """
 
+from .buy_tracker_instructions import DGI_ENTRY_RULES
+
+
 TECHNICAL_ANALYSIS_INSTRUCTIONS = """
 # Technical Analysis & Options Strategy Report
 
@@ -136,48 +139,16 @@ Present 3 scenarios for the stock price in the coming weeks/months:
 
 This section evaluates whether the stock is a good **accumulation entry** for Dividend Growth Investors. The philosophy is: **accumulate on weakness, not strength.** Pullbacks in quality DGI names are opportunities, not dangers.
 
-### Scoring System (5 Dimensions, 0 or 1 each)
+""" + DGI_ENTRY_RULES + """
 
-Evaluate each dimension and assign 0 or 1:
-
-1. **Value Entry / Pullback** → Score 1 if ANY: price pulled back ≥5% from high, price within 3% of or below SMA50, price within 3% above a pivot support, RSI < 45, or dividend yield above typical range. Score 0 if: price >8% above SMA50 AND >12% above SMA200, or RSI > 70 at 52-week highs.
-
-2. **Trend Not Broken** → Score 1 if ANY: price > SMA200, SMA50 > SMA200, price < SMA200 but within 5% below it, or MA summary is not "Strong Sell". Score 0 only if ALL: price < SMA200 by >10%, SMA50 < SMA200, and MA summary is "Strong Sell".
-
-3. **Momentum Not Extreme** → Score 1 if ANY: RSI between 20-65, RSI < 30 (oversold = excellent DGI entry), MACD histogram improving, Stochastic %K < 50, or oscillator summary is "Sell"/"Neutral". Score 0 only if: RSI > 75 AND oscillator summary is "Strong Buy".
-
-4. **Income & Fundamentals** → Score 1 if ANY: dividend yield ≥ 2.0%, payout ratio < 75%, analyst consensus is Buy/Hold or better, target price ≥5% above current, or no earnings within 5 days. Score 0 if: analyst "Strong Sell" with target >15% below, earnings within 2 days, or dividend cut detected.
-
-5. **Calendar & Risk** → Score 1 if ANY: no earnings within 7 days, ex-div approaching (within 30 days), beta ≤ 1.5, orderly price action. Score 0 if: earnings within 2 days with beta > 1.3, or price gapping down on high volume with no stabilization.
-
-### Signal Determination
-
-| Score | Signal | Meaning |
-|-------|--------|---------|
-| 5/5   | `STRONG_BUY` | All dimensions confirm — high-conviction entry |
-| 4/5   | `STRONG_BUY` | Near-perfect setup — strong entry |
-| 3/5   | `BUY` | Good DCA accumulation setup |
-| 2/5   | `WAIT` | Mixed signals — wait for confirmation |
-| 1/5   | `WAIT` | Weak setup — do not accumulate |
-| 0/5   | `WAIT` | Bearish or deteriorating |
-
-### WAIT Overrides (force WAIT regardless of score)
-- Earnings within 2 days
-- RSI > 80
-- Price >10% above SMA50 AND >15% above SMA200
-- Dividend cut/suspension detected
-- All three bearish: Oscillator "Strong Sell" + MA "Strong Sell" + price >10% below SMA200
-
-### Output Format for This Section
+### Report Output for This Section
 
 Present:
-- The score breakdown: `Score X/5 (Value: _, Trend: _, Momentum: _, Income: _, Calendar: _)`
-- The signal: STRONG_BUY / BUY / WAIT
+- The canonical five-key score breakdown and exact arithmetic score
+- The final signal: STRONG_BUY / BUY / WAIT
 - A 2-3 sentence justification
 - If BUY or STRONG_BUY: suggested entry zone (price range)
 - If WAIT: what to watch for before the signal improves
-
-**Important:** A death cross alone is NOT bearish for DGI stocks. Quality dividend growers recover — a death cross is often an accumulation opportunity if fundamentals are intact. RSI < 30 is an excellent DGI entry signal, not a danger.
 
 ---
 
@@ -188,7 +159,9 @@ Present:
 - Keep tables compact with narrow columns
 - Be precise with numbers and dates
 - Use emojis sparingly for section headers only
-- If any data is not available, state it clearly and skip that section
+- For non-DGI sections, state unavailable data clearly and skip only the
+  unsupported subsection; for the DGI signal, apply the canonical missing-data
+  rules above
 - If the analysis is inconclusive on some point, say so honestly
 - Always include disclaimers about market uncertainty
 - Round prices to 2 decimal places, percentages to 1 decimal place

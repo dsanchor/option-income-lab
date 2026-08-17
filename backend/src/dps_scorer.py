@@ -9,6 +9,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
+from src.options_math import executable_buyback_ask
+
 logger = logging.getLogger(__name__)
 
 
@@ -799,10 +801,10 @@ def score_short_call(
 
     # #1 P&L factor: mark-to-market profitability
     pnl_pct = None
+    buyback_ask = executable_buyback_ask(greeks.get("ask"))
     if premium_received is not None and premium_received > 0:
-        contract_mid = abs(greeks.get("mid") or 0)
-        if contract_mid > 0:
-            pnl_pct = (premium_received - contract_mid) / premium_received * 100
+        if buyback_ask is not None:
+            pnl_pct = (premium_received - buyback_ask) / premium_received * 100
     if pnl_pct is not None:
         if pnl_pct >= 80:
             pnl_pts = 10
@@ -831,7 +833,11 @@ def score_short_call(
         if pnl_pts != 0:
             key_drivers.append(pnl_reason)
     else:
-        score_breakdown.append({"factor": "P&L", "points": 0, "reason": "P&L unavailable (no premium data)"})
+        score_breakdown.append({
+            "factor": "P&L",
+            "points": 0,
+            "reason": "P&L unavailable (no positive finite executable ask or premium data)",
+        })
 
     # #2 Combo P&L+DTE: near max profit + short DTE = close opportunity
     if pnl_pct is not None and pnl_pct >= 70 and dte <= 7:
@@ -963,6 +969,9 @@ def score_short_call(
             "gap_percent": round(otm_gap, 2),
             "underlying_price": underlying_price,
             "strike": strike,
+            "buyback_ask": buyback_ask,
+            "buyback_available": buyback_ask is not None,
+            "incomplete_data": buyback_ask is None,
         },
         "trend_analysis": {
             "rsi": rsi_trend_details,

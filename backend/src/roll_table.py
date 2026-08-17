@@ -4,7 +4,7 @@ Deterministic roll table calculator.
 Given a parsed options chain and the parameters of the current short option
 position, computes:
 
-  - Buy-back cost of the current short (robust_mid × 100 × contracts)
+  - Buy-back cost of the current short (executable ask × 100 × contracts)
   - Profit-capture percentage and 70% gate flag
   - Roll scenarios across the next N expirations (strictly after the current
     expiration) and up to 3 strike targets (ATM / +offset% / -offset%)
@@ -39,7 +39,7 @@ import logging
 from datetime import date
 from typing import Optional
 
-from src.options_math import robust_mid
+from src.options_math import executable_buyback_ask
 from src.options_chain_filters import get_contract
 
 logger = logging.getLogger(__name__)
@@ -175,10 +175,12 @@ def compute_roll_table(
     -------
     dict
         {
-          "buyback_cost":         float,   # total cost to close (per-contract × N)
-          "buyback_per_share":    float,   # robust_mid of current contract
-          "pct_captured":         float,   # (premium_received - buyback_per_share) / premium_received
+          "buyback_cost":         float | None, # total executable cost to close
+          "buyback_per_share":    float | None, # executable ask of current contract
+          "pct_captured":         float | None, # null when buyback ask is unavailable
           "profit_target_reached":bool,    # pct_captured >= 0.70
+          "buyback_available":    bool,
+          "incomplete_data":      bool,
           "underlying_price":     float,
           "chain_timestamp":      str | None,
           "current_position":     {strike, expiration, option_type, premium_received},
@@ -219,27 +221,35 @@ def compute_roll_table(
     # ── 1. Buy-back cost (current short position) ──────────────────────────
     current_contract = get_contract(chain, current_strike, current_expiration, option_type)
     if current_contract is not None:
-        cb_bid = float(current_contract.get("bid") or 0)
-        cb_ask = float(current_contract.get("ask") or 0)
-        buyback_per_share = robust_mid(cb_bid, cb_ask)
+        buyback_per_share = executable_buyback_ask(current_contract.get("ask"))
     else:
         logger.warning(
-            "roll_table: current contract not found (strike=%.2f, exp=%s) — buyback=0",
+            "roll_table: current contract not found (strike=%.2f, exp=%s) — buyback unavailable",
             current_strike,
             current_expiration,
         )
-        buyback_per_share = 0.0
+        buyback_per_share = None
 
-    buyback_cost = round(buyback_per_share * 100 * contracts, 2)
+    buyback_available = buyback_per_share is not None
+    incomplete_data = not buyback_available
+    buyback_cost = (
+        round(buyback_per_share * 100 * contracts, 2)
+        if buyback_per_share is not None
+        else None
+    )
 
     # ── 2. Profit-capture metrics ──────────────────────────────────────────
-    if premium_received and premium_received > 0:
+    if buyback_per_share is None:
+        pct_captured = None
+    elif premium_received and premium_received > 0:
         pct_captured = round(
             (premium_received - buyback_per_share) / premium_received, 4
         )
     else:
         pct_captured = 0.0
-    profit_target_reached: bool = pct_captured >= _PROFIT_TARGET_PCT
+    profit_target_reached: bool = (
+        pct_captured is not None and pct_captured >= _PROFIT_TARGET_PCT
+    )
 
     # ── 3. Select expirations: previous (optional) + current + next N ──────
     current_exp_key = _to_exp_key(current_expiration)
@@ -342,9 +352,13 @@ def compute_roll_table(
             )
 
             new_premium = round(new_bid * 100 * contracts, 2)
-            net_credit = round(new_premium - buyback_cost, 2)
+            net_credit = (
+                round(new_premium - buyback_cost, 2)
+                if buyback_cost is not None
+                else None
+            )
 
-            if new_bid == 0:
+            if new_bid == 0 or net_credit is None:
                 color = "gray"
             elif net_credit > 0:
                 color = "green"
@@ -376,9 +390,15 @@ def compute_roll_table(
     # ── 5. Assemble result ─────────────────────────────────────────────────
     return {
         "buyback_cost": buyback_cost,
-        "buyback_per_share": round(buyback_per_share, 4),
+        "buyback_per_share": (
+            round(buyback_per_share, 4)
+            if buyback_per_share is not None
+            else None
+        ),
         "pct_captured": pct_captured,
         "profit_target_reached": profit_target_reached,
+        "buyback_available": buyback_available,
+        "incomplete_data": incomplete_data,
         "underlying_price": underlying_price,
         "chain_timestamp": chain_timestamp,
         "current_position": {
@@ -386,6 +406,8 @@ def compute_roll_table(
             "expiration": _to_display_date(current_expiration),
             "option_type": option_type,
             "premium_received": premium_received,
+            "buyback_available": buyback_available,
+            "incomplete_data": incomplete_data,
         },
         "expirations": [
             {

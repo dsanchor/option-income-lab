@@ -8,7 +8,7 @@ Fixture chain:
   - current_exp_key = _future(3): NO previous (it is the nearest expiration).
     Columns = [current(_future3), exp_8, exp_15, exp_22, exp_29] = 5 total.
   - current_exp_key has a FULL strike ladder (395–445) with the current position
-    at $420 overridden to bid=1.40, ask=1.60 (buyback=1.50).
+    at $420 overridden to bid=1.40, ask=1.60 (executable buyback=1.60).
   - underlying_price=417.50:
       ATM  target=417.50   → selected strike = 415.0  (tie 415/420, min picks 415)
       +3%  target=430.025  → selected strike = 435.0  (430 < target; 435 ≥ target)
@@ -89,7 +89,7 @@ def chain(current_exp_key) -> dict:
 
     current_exp_key (_future(3)):
       Full strike ladder 395–445; position at 420 overridden to bid=1.40, ask=1.60
-      so buyback = robust_mid(1.40, 1.60) = 1.50 → buyback_cost = $150.
+      so executable buyback = ask 1.60 → buyback_cost = $160.
 
     Strike selection (from current_exp_key, the first expiration):
       ATM (+0%)  target=417.50   → 415.0  (|415-417.5|=2.5, tie w/ 420, min picks 415)
@@ -240,17 +240,16 @@ class TestRollTableCall:
         assert "rows" in result
 
     def test_buyback_cost(self, chain, underlying_price, current_exp_key):
-        # current contract: bid=1.40, ask=1.60 → robust_mid = (1.40+1.60)/2 = 1.50
+        # A short option is bought to close at the executable ask, not midpoint.
         result = self._run(chain, underlying_price, current_exp_key)
-        assert result["buyback_per_share"] == 1.50
-        assert result["buyback_cost"] == 150.0   # 1.50 × 100 × 1 contract
+        assert result["buyback_per_share"] == 1.60
+        assert result["buyback_cost"] == 160.0
 
     def test_pct_captured(self, chain, underlying_price, current_exp_key):
-        # premium_received=3.20, buyback_per_share=1.50
-        # pct_captured = (3.20 - 1.50) / 3.20 = 1.70/3.20 ≈ 0.5313
+        # premium_received=3.20, executable ask=1.60 → 50% captured.
         result = self._run(chain, underlying_price, current_exp_key)
-        assert abs(result["pct_captured"] - (1.70 / 3.20)) < 0.001
-        assert result["profit_target_reached"] is False   # 53% < 70%
+        assert result["pct_captured"] == pytest.approx(0.50)
+        assert result["profit_target_reached"] is False
 
     def test_four_expirations_returned(self, chain, underlying_price, current_exp_key):
         # Columns: [current] + [exp_8, exp_15, exp_22, exp_29] = 5 total (no previous)
@@ -387,10 +386,10 @@ class TestRollTableCall:
             underlying_price=underlying_price,
             premium_received=3.20,
         )
-        assert result["buyback_per_share"] == 1.50
+        assert result["buyback_per_share"] == 1.60
 
     def test_multi_contract(self, chain, underlying_price, current_exp_key):
-        # 3 contracts: buyback = 1.50 × 100 × 3 = 450
+        # 3 contracts: executable ask 1.60 × 100 × 3 = 480
         result = compute_roll_table(
             chain=chain,
             current_strike=420.0,
@@ -400,12 +399,11 @@ class TestRollTableCall:
             premium_received=3.20,
             contracts=3,
         )
-        assert result["buyback_cost"] == 450.0
-        # net_credit for a green cell = new_bid × 100 × 3 − 450
+        assert result["buyback_cost"] == 480.0
         for row in result["rows"]:
             for cell in row["cells"]:
                 if cell["color"] in ("green", "red") and cell["bid"] is not None:
-                    expected = round(cell["bid"] * 100 * 3 - 450.0, 2)
+                    expected = round(cell["bid"] * 100 * 3 - 480.0, 2)
                     assert cell["net_credit"] == expected
 
 
@@ -430,7 +428,7 @@ class TestRollTablePut:
 
     def test_reads_puts_bucket(self, chain, underlying_price, current_exp_key):
         result = self._run(chain, underlying_price, current_exp_key)
-        assert result["buyback_per_share"] == 1.50   # same mid from puts bucket
+        assert result["buyback_per_share"] == 1.60
 
     def test_four_expirations(self, chain, underlying_price, current_exp_key):
         # Same as call: [current] + 4 futures = 5 total (no previous in shared fixture)
@@ -455,7 +453,7 @@ class TestRollTablePut:
 
 class TestProfitTargetGate:
     def test_target_not_reached(self, chain, underlying_price, current_exp_key):
-        # premium=3.20, buyback=1.50 → pct = (3.20-1.50)/3.20 = 53.1%
+        # premium=3.20, executable ask=1.60 → 50% captured.
         result = compute_roll_table(
             chain=chain,
             current_strike=420.0,
@@ -468,28 +466,20 @@ class TestProfitTargetGate:
         assert result["pct_captured"] < 0.70
 
     def test_target_reached(self, chain, underlying_price, current_exp_key):
-        # premium=5.00, buyback=1.50 → pct = (5.00-1.50)/5.00 = 70.0% exactly
+        # premium=8.00, executable ask=1.60 → 80% captured.
         result = compute_roll_table(
             chain=chain,
             current_strike=420.0,
             current_expiration=current_exp_key,
             option_type="call",
             underlying_price=underlying_price,
-            premium_received=5.00,
+            premium_received=8.00,
         )
         assert result["profit_target_reached"] is True
         assert result["pct_captured"] >= 0.70
 
     def test_target_exceeded(self, chain, underlying_price, current_exp_key):
-        # premium=2.00, buyback=1.50 → pct = 0.50/2.00 = 25%  (below 70)
-        # Now use premium=1.55 → pct = (1.55-1.50)/1.55 ≈ 3.2%   (below 70)
-        # Use premium=1.60 → pct = 0.10/1.60 = 6.25%   (below 70)
-        # Use premium=1.52 to get just above 70%: (1.52-1.50)/1.52 = 0.02/1.52 = 1.3%
-        # Let's use premium=1.53 to get 98%+:  no, let's just use a small premium
-        # To reliably exceed 70%: premium=2.00, buyback=1.50 → 25% — nope.
-        # To get >= 70%: need premium_received - buyback >= 0.70 * premium_received
-        #                → 0.30 * premium_received >= buyback=1.50 → premium_received >= 5.0
-        # So premium=5.0 → pct=70% (boundary), premium=6.0 → pct=75%
+        # premium=6.00, executable ask=1.60 → 73.33% captured.
         result = compute_roll_table(
             chain=chain,
             current_strike=420.0,
@@ -512,6 +502,84 @@ class TestProfitTargetGate:
         )
         assert result["pct_captured"] == 0.0
         assert result["profit_target_reached"] is False
+
+
+# ---------------------------------------------------------------------------
+# Tests: executable current ask
+# ---------------------------------------------------------------------------
+
+class TestExecutableBuybackQuote:
+    _MISSING = object()
+
+    @classmethod
+    def _chain(cls, current_exp_key, *, bid=0.0, ask=_MISSING, last=0.0):
+        contract = {
+            "bid": bid,
+            "mid": 0.0,
+            "last": last,
+            "delta": 0.20,
+        }
+        if ask is not cls._MISSING:
+            contract["ask"] = ask
+        return {
+            "symbol": "MSFT",
+            "timestamp": "2026-08-17T14:00:00Z",
+            "calls": {current_exp_key: {"420.0": contract}},
+            "puts": {},
+        }
+
+    @pytest.mark.parametrize(
+        ("bid", "ask", "last"),
+        [
+            pytest.param(0.0, 0.0, 2.40, id="zero-market-positive-last"),
+            pytest.param(1.10, _MISSING, 2.40, id="missing-ask"),
+            pytest.param(0.80, 0.0, 2.40, id="positive-bid-zero-ask"),
+            pytest.param(0.80, -0.10, 2.40, id="negative-ask"),
+            pytest.param(0.80, float("nan"), 2.40, id="nan-ask"),
+            pytest.param(0.80, float("inf"), 2.40, id="infinite-ask"),
+            pytest.param(0.80, "1.20", 2.40, id="non-numeric-ask"),
+            pytest.param(0.80, True, 2.40, id="boolean-ask"),
+        ],
+    )
+    def test_invalid_ask_keeps_buyback_and_profit_unavailable(
+        self, current_exp_key, bid, ask, last
+    ):
+        result = compute_roll_table(
+            chain=self._chain(
+                current_exp_key, bid=bid, ask=ask, last=last
+            ),
+            current_strike=420.0,
+            current_expiration=current_exp_key,
+            option_type="open_call_monitor",
+            underlying_price=410.0,
+            premium_received=3.20,
+        )
+
+        assert result["buyback_per_share"] is None
+        assert result["buyback_cost"] is None
+        assert result["pct_captured"] is None
+        assert result["profit_target_reached"] is False
+        assert result["buyback_available"] is False
+        assert result["incomplete_data"] is True
+
+    def test_positive_ask_is_executable_even_when_bid_is_zero(self, current_exp_key):
+        result = compute_roll_table(
+            chain=self._chain(
+                current_exp_key, bid=0.0, ask=1.20, last=9.99
+            ),
+            current_strike=420.0,
+            current_expiration=current_exp_key,
+            option_type="open_call_monitor",
+            underlying_price=410.0,
+            premium_received=3.20,
+        )
+
+        assert result["buyback_per_share"] == pytest.approx(1.20)
+        assert result["buyback_cost"] == pytest.approx(120.0)
+        assert result["pct_captured"] == pytest.approx(0.625)
+        assert result["profit_target_reached"] is False
+        assert result["buyback_available"] is True
+        assert result["incomplete_data"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -653,8 +721,7 @@ class TestGrayCells:
             exp_fut_cell = _cell_for_date(row["cells"], _display_date(10))
             assert exp_fut_cell["color"] == "gray"
 
-    def test_current_contract_not_in_chain_sets_buyback_zero(self, current_exp_key):
-        # Current contract missing from chain → buyback=0, pct_captured=1.0 (all captured)
+    def test_current_contract_not_in_chain_leaves_buyback_unavailable(self, current_exp_key):
         exp_fut = _future(10)
         chain = {
             "symbol": "TEST",
@@ -674,11 +741,12 @@ class TestGrayCells:
             underlying_price=417.50,
             premium_received=3.20,
         )
-        assert result["buyback_per_share"] == 0.0
-        assert result["buyback_cost"] == 0.0
-        # All premium is captured when buyback=0
-        assert result["pct_captured"] == 1.0
-        assert result["profit_target_reached"] is True
+        assert result["buyback_per_share"] is None
+        assert result["buyback_cost"] is None
+        assert result["pct_captured"] is None
+        assert result["profit_target_reached"] is False
+        assert result["buyback_available"] is False
+        assert result["incomplete_data"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -762,7 +830,7 @@ class TestNetCreditArithmetic:
             premium_received=3.20,
             contracts=1,
         )
-        # buyback = robust_mid(1.40, 1.60) × 100 = 1.50 × 100 = 150.0
+        # Executable buyback ask is 1.60 × 100 = 160.0.
         # Strike from current_exp_key: only 420.0 → ATM=420.0 (fallback)
         # exp_fut has 420.0? No — exp_fut only has 415.0. Fixed strike=420.0 not in exp_fut → gray?
         # Wait: exp_fut has "415.0" only, and strike is fixed as 420.0 (from current).
@@ -772,9 +840,9 @@ class TestNetCreditArithmetic:
         # Current cell has bid=1.40
         current_cell = _cell_for_date(atm_row["cells"], _display_date(3))
         assert current_cell["bid"] == 1.40
-        expected_net = round(1.40 * 100 * 1 - 150.0, 2)
+        expected_net = round(1.40 * 100 * 1 - 160.0, 2)
         assert current_cell["net_credit"] == pytest.approx(expected_net)
-        assert current_cell["color"] == "red"  # net=-10 ≤ 0
+        assert current_cell["color"] == "red"
 
     def test_red_when_new_bid_below_buyback(self, current_exp_key):
         """net_credit negative → red."""
@@ -797,12 +865,11 @@ class TestNetCreditArithmetic:
             premium_received=5.00,
             contracts=1,
         )
-        # buyback = robust_mid(3.00, 3.20) × 100 = 3.10 × 100 = 310.0
-        assert result["buyback_cost"] == 310.0
+        assert result["buyback_cost"] == 320.0
         atm_row = next(r for r in result["rows"] if r["label"] == "ATM")
-        # exp_fut has 420.0 with bid=0.50; net = 0.50*100 - 310 = -260
+        # exp_fut has 420.0 with bid=0.50; net = 0.50*100 - 320 = -270
         exp_fut_cell = _cell_for_date(atm_row["cells"], _display_date(10))
-        assert exp_fut_cell["net_credit"] == -260.0
+        assert exp_fut_cell["net_credit"] == -270.0
         assert exp_fut_cell["color"] == "red"
 
 

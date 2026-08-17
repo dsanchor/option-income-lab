@@ -18,6 +18,9 @@ coverage areas called out in the task brief:
   - malformed/missing optional fields handled explicitly (no broad-success fallback)
   - backward compatibility: activities without rule_evaluation are untouched by this
     module (there is nothing to merge/inject after the fact)
+  - Buy Tracker normalization score mapping, exceptional gate, hard-WAIT precedence,
+    malformed inputs, coherent output, and purity from the accepted normalization
+    contract
 
 All assertions target structured fields (status, blocking, group, data_refs, counts)
 rather than parsing narrative/prose strings, per the design's "no prose parsing"
@@ -28,6 +31,9 @@ from __future__ import annotations
 
 import copy
 import importlib
+import json
+import re
+from datetime import date
 
 import pytest
 
@@ -59,6 +65,14 @@ def merge_phase_evaluations(*args, **kwargs):
     return rule_evaluator.merge_phase_evaluations(*args, **kwargs)
 
 
+def normalize_buy_tracker_activity(*args, **kwargs):
+    return rule_evaluator.normalize_buy_tracker_activity(*args, **kwargs)
+
+
+def build_buy_tracker_evidence(*args, **kwargs):
+    return rule_evaluator.build_buy_tracker_evidence(*args, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers / fixtures
 # ---------------------------------------------------------------------------
@@ -82,6 +96,14 @@ SUMMARY_KEYS = {
     "not_applicable",
     "informational",
 }
+
+BUY_TRACKER_SCORE_KEYS = (
+    "value_entry",
+    "trend",
+    "momentum",
+    "income",
+    "calendar",
+)
 
 
 def _rules_of(evaluation: dict) -> list:
@@ -196,6 +218,8 @@ def _buy_tracker_activity(**overrides) -> dict:
     activity = {
         "agent_type": "buy_tracker",
         "activity": "BUY",
+        "confidence": "medium",
+        "score": "5/5",
         "score_breakdown": {
             "value_entry": 1,
             "trend": 1,
@@ -203,12 +227,237 @@ def _buy_tracker_activity(**overrides) -> dict:
             "income": 1,
             "calendar": 1,
         },
-        "waiting_for": None,
+        "waiting_for": "",
         "risk_flags": [],
+        "technical_triggers": ["stale_model_trigger"],
         "reason": "All scoring dimensions favorable.",
     }
     activity.update(overrides)
     return activity
+
+
+def _score_breakdown(score: int) -> dict:
+    return {
+        key: int(index < score)
+        for index, key in enumerate(BUY_TRACKER_SCORE_KEYS)
+    }
+
+
+def _buy_tracker_for_score(score: int, **overrides) -> dict:
+    activity = _buy_tracker_activity(
+        activity="STRONG_BUY",
+        confidence="high",
+        score="99/5",
+        score_breakdown=_score_breakdown(score),
+        waiting_for="Stale model waiting text.",
+        risk_flags=["stale_model_risk"],
+        technical_triggers=["stale_model_trigger"],
+        reason="Stale model reason claiming a different activity and score.",
+    )
+    activity.update(overrides)
+    return activity
+
+
+def _exceptional_evidence(**overrides) -> dict:
+    evidence = {
+        "current_price": 90.0,
+        "high_52w": 100.0,
+        "sma50": 90.0,
+        "sma200": 85.0,
+        "rsi_14": 35.0,
+        "macd_confirmation": "BUY",
+        "stochastic_confirmation": "BUY",
+        "annual_dividend_rate": 4.0,
+        "latest_dividend": 1.0,
+        "dividend_growth_years": 5.0,
+        "payout_ratio_pct": 60.0,
+        "analyst_target_price": 100.0,
+        "days_to_earnings": 10.0,
+        "ma_summary": "BUY",
+        "oscillator_summary": "BUY",
+    }
+    evidence.update(overrides)
+    return evidence
+
+
+def _provider_shaped_exceptional_fetch_data(
+    *,
+    include_dividend_state_evidence: bool = True,
+    payout_ratio_pct: float = 60.0,
+) -> dict:
+    dividend_fields = {
+        "dividends_yield": {
+            "label": "Dividend Yield (%)",
+            "value": 3.0,
+            "formatted": "3.00%",
+        },
+        "dps_common_stock_prim_issue_fy": {
+            "label": "Dividends Per Share (FY)",
+            "value": 4.0,
+            "formatted": "$4.00",
+        },
+        "dps_common_stock_prim_issue_fq": {
+            "label": "Dividends Per Share (FQ)",
+            "value": 1.0,
+            "formatted": "$1.00",
+        },
+        "dividend_payout_ratio_ttm": {
+            "label": "Payout Ratio (TTM %)",
+            "value": payout_ratio_pct,
+            "formatted": f"{payout_ratio_pct:.2f}%",
+        },
+        "ex_dividend_date_recent": {
+            "label": "Ex-Dividend Date (Recent)",
+            "value": 1788220800,
+            "formatted": "2026-09-01",
+        },
+    }
+    if include_dividend_state_evidence:
+        dividend_fields["continuous_dividend_growth"] = {
+            "label": "Consecutive Years Growing",
+            "value": 5,
+            "formatted": "5 years",
+        }
+
+    return {
+        "overview": json.dumps(
+            {
+                "name": "Example Corp.",
+                "ticker": "EXM",
+                "exchange": "NMS",
+                "fundamentals": {
+                    "current_price": {
+                        "label": "Current Price",
+                        "value": 90.0,
+                        "formatted": "$90.00",
+                    },
+                    "52w_high": {
+                        "label": "52-Week High",
+                        "value": 100.0,
+                        "formatted": "$100.00",
+                    },
+                    "earnings_release_next_date_fq": {
+                        "label": "Next Earnings Date",
+                        "value": 1790035200,
+                        "formatted": "2026-09-22",
+                    },
+                },
+            }
+        ),
+        "technicals": json.dumps(
+            {
+                "price": 90.0,
+                "oscillators": {
+                    "recommendation": {"value": 0.3, "label": "Buy"},
+                    "buy": 5,
+                    "sell": 2,
+                    "neutral": 3,
+                    "indicators": {
+                        "RSI": {
+                            "label": "RSI (14)",
+                            "value": 35.0,
+                            "formatted": "35.00",
+                            "signal": "Neutral",
+                        },
+                        "MACD.macd": {
+                            "label": "MACD Level (12,26)",
+                            "value": 2.0,
+                            "formatted": "2.0000",
+                            "signal": "Buy",
+                        },
+                        "Stoch.K": {
+                            "label": "Stochastic %K (14,3,3)",
+                            "value": 30.0,
+                            "formatted": "30.00",
+                            "signal": "Buy",
+                        },
+                    },
+                },
+                "moving_averages": {
+                    "recommendation": {"value": 0.5, "label": "Strong Buy"},
+                    "buy": 12,
+                    "sell": 2,
+                    "neutral": 1,
+                    "indicators": {
+                        "SMA50": {
+                            "label": "SMA (50)",
+                            "value": 90.0,
+                            "formatted": "$90.00",
+                            "signal": "Buy",
+                        },
+                        "SMA200": {
+                            "label": "SMA (200)",
+                            "value": 85.0,
+                            "formatted": "$85.00",
+                            "signal": "Buy",
+                        },
+                    },
+                },
+            }
+        ),
+        "forecast": json.dumps(
+            {
+                "name": "Example Corp.",
+                "ticker": "EXM",
+                "exchange": "NMS",
+                "current_price": 90.0,
+                "price_target": {
+                    "price_target_average": {
+                        "label": "Average Price Target",
+                        "value": 100.0,
+                        "formatted": "$100.00",
+                    },
+                    "upside_pct": 11.11,
+                    "upside_direction": "Upside",
+                },
+            }
+        ),
+        "dividends": json.dumps(
+            {
+                "name": "Example Corp.",
+                "ticker": "EXM",
+                "exchange": "NMS",
+                "dividends": dividend_fields,
+            }
+        ),
+        "options_chain": "",
+    }
+
+
+def _nonexceptional_safe_evidence(**overrides) -> dict:
+    evidence = _exceptional_evidence(rsi_14=50.0)
+    evidence.update(overrides)
+    return evidence
+
+
+def _gate_price_evidence(
+    *,
+    current_price: float,
+    high_52w: float,
+    sma50: float,
+    sma200: float,
+    analyst_target_price: float | None = None,
+) -> dict:
+    return _exceptional_evidence(
+        current_price=current_price,
+        high_52w=high_52w,
+        sma50=sma50,
+        sma200=sma200,
+        analyst_target_price=(
+            analyst_target_price
+            if analyst_target_price is not None
+            else current_price * 1.10
+        ),
+    )
+
+
+def _assert_reason_prefix_matches_breakdown(normalized: dict) -> None:
+    score = sum(normalized["score_breakdown"].values())
+    reason = normalized["reason"]
+    assert reason.startswith(f"Score {score}/5")
+    prefix = reason.split(").", 1)[0]
+    for key, value in normalized["score_breakdown"].items():
+        assert re.search(rf"\b{re.escape(key)}\s*:\s*{value}\b", prefix)
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +780,7 @@ class TestWaitNotApplicable:
         gate = _find_rule(evaluation, "cc_earnings_gate")
         assert gate["status"] != "not_applicable"
 
-    def test_buy_tracker_wait_trigger_inactive_is_not_applicable(self):
+    def test_buy_tracker_wait_trigger_without_raw_evidence_is_unknown(self):
         activity = _buy_tracker_activity(waiting_for=None, risk_flags=[])
         evaluation = build_rule_evaluation("buy_tracker", activity)
         for trigger_id in (
@@ -542,7 +791,7 @@ class TestWaitNotApplicable:
             "bt_wait_triple_bear",
         ):
             rule = _find_rule(evaluation, trigger_id)
-            assert rule["status"] == "not_applicable"
+            assert rule["status"] == "unknown"
             assert rule["blocking"] is False
 
 
@@ -561,6 +810,26 @@ class TestMonitorPhases:
         assert len(evaluation["phases"]) == 1
         assert evaluation["phases"][0]["phase"] == "assessment"
         assert "rules" not in evaluation or evaluation.get("rules") in (None, [])
+
+    def test_invalid_buyback_quote_never_passes_profit_target_rule(self):
+        activity = _assessment_wait_activity(
+            close_for_profit_recommended=True,
+            profit_level_pct=100,
+            buyback_per_share=None,
+            buyback_available=False,
+            incomplete_data=True,
+            risk_flags=["incomplete_data"],
+            reason="Buyback quote unavailable; P&L not calculated; profit gate skipped.",
+        )
+
+        evaluation = build_rule_evaluation(
+            "open_call_monitor", activity, phase="assessment", category="balanced"
+        )
+        rule = _find_rule(evaluation, "ocm_a_profit_target")
+
+        assert rule["status"] in {"unknown", "not_applicable"}
+        assert rule["blocking"] is False
+        assert rule["data_refs"].get("pnl_pct") is None
 
     def test_monitor_assessment_plus_roll(self):
         """A1.9: roll activity produces a two-phase array with correct rules per phase."""
@@ -687,10 +956,10 @@ class TestBuyTracker:
         assert _find_rule(evaluation, "bt_calendar")["status"] == "pass"
 
     def test_bt_wait_earnings_deterministic(self):
-        """A1.9: enrichment_data with next_earnings_date 1 day away -> blocked
+        """A1.9: canonical evidence with earnings 1 day away -> blocked
         regardless of LLM output."""
         activity = _buy_tracker_activity(activity="BUY", waiting_for=None)  # LLM says all clear
-        enrichment_data = {"next_earnings_date_days_away": 1}
+        enrichment_data = {"days_to_earnings": 1}
         evaluation = build_rule_evaluation(
             "buy_tracker", activity, enrichment_data=enrichment_data
         )
@@ -727,7 +996,7 @@ class TestBuyTracker:
     def test_bt_wait_earnings_overrides_llm_disagreement(self):
         """Deterministic recalculation wins even when LLM explicitly said no WAIT."""
         activity = _buy_tracker_activity(activity="BUY", waiting_for=None, risk_flags=[])
-        enrichment_data = {"next_earnings_date_days_away": 0}
+        enrichment_data = {"days_to_earnings": 0}
         evaluation = build_rule_evaluation(
             "buy_tracker", activity, enrichment_data=enrichment_data
         )
@@ -857,7 +1126,12 @@ class TestAllAgentTypesProduceValidCatalog:
             assert rule["rule_id"].startswith(expected_prefix)
             for field in ("rule_id", "label", "group", "status", "source", "blocking"):
                 assert field in rule
-            assert rule["source"] in {"deterministic", "llm", "hybrid"}
+            assert rule["source"] in {
+                "deterministic",
+                "llm",
+                "hybrid",
+                "unavailable",
+            }
 
     def test_ocm_roll_phase_rules_present(self):
         evaluation = build_rule_evaluation(
@@ -913,3 +1187,964 @@ class TestBackwardCompatibility:
         assert evaluation is not activity
         for key in activity:
             assert key not in evaluation or key in {"agent_type"}
+
+
+# ---------------------------------------------------------------------------
+# Buy Tracker normalization contract
+# ---------------------------------------------------------------------------
+
+class TestBuyTrackerNormalizationScoreMapping:
+    @pytest.mark.parametrize(
+        "score,expected_activity,expected_confidence",
+        [
+            (0, "WAIT", "low"),
+            (1, "WAIT", "low"),
+            (2, "WAIT", "medium"),
+            (3, "BUY", "medium"),
+            (4, "BUY", "medium"),
+            (5, "BUY", "medium"),
+        ],
+    )
+    def test_base_score_mapping_without_exceptional_enrichment(
+        self, score, expected_activity, expected_confidence
+    ):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(score),
+            None,
+        )
+
+        assert normalized["score"] == f"{score}/5"
+        assert normalized["activity"] == expected_activity
+        assert normalized["confidence"] == expected_confidence
+        assert normalized["waiting_for"] == ("" if score >= 3 else normalized["waiting_for"])
+        if score < 3:
+            assert normalized["waiting_for"]
+        _assert_reason_prefix_matches_breakdown(normalized)
+
+    def test_score_five_is_strong_buy_only_when_full_exceptional_gate_passes(self):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(5),
+            _exceptional_evidence(),
+        )
+
+        assert normalized["score"] == "5/5"
+        assert normalized["activity"] == "STRONG_BUY"
+        assert normalized["confidence"] == "high"
+        assert normalized["waiting_for"] == ""
+        _assert_reason_prefix_matches_breakdown(normalized)
+
+    def test_provider_shaped_objective_evidence_can_reach_strong_buy(self):
+        fetch_data = _provider_shaped_exceptional_fetch_data()
+        technicals = json.loads(fetch_data["technicals"])
+        dividends = json.loads(fetch_data["dividends"])["dividends"]
+
+        assert "MACD.signal" not in technicals["oscillators"]["indicators"]
+        assert "Stoch.D" not in technicals["oscillators"]["indicators"]
+        assert "dividend_current" not in dividends
+        assert "dividend_cut_or_suspended" not in dividends
+
+        evidence = build_buy_tracker_evidence(
+            fetch_data,
+            now=date(2026, 8, 17),
+        )
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(5),
+            evidence,
+        )
+
+        assert normalized["activity"] == "STRONG_BUY"
+        assert normalized["score"] == "5/5"
+
+    def test_explicit_dividend_cut_survives_adaptation_and_forces_wait(self):
+        fetch_data = _provider_shaped_exceptional_fetch_data()
+        fetch_data["buy_tracker"] = {"dividend_cut_or_suspended": True}
+
+        evidence = build_buy_tracker_evidence(
+            fetch_data,
+            now=date(2026, 8, 17),
+        )
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(5),
+            evidence,
+        )
+
+        assert evidence["dividend_cut_or_suspended"] is True
+        assert normalized["activity"] == "WAIT"
+        assert normalized["score"] == "5/5"
+        assert "dividend_cut_or_suspended" in normalized["risk_flags"]
+
+    def test_missing_provider_dividend_state_evidence_fails_closed(self):
+        fetch_data = _provider_shaped_exceptional_fetch_data(
+            include_dividend_state_evidence=False,
+        )
+
+        evidence = build_buy_tracker_evidence(
+            fetch_data,
+            now=date(2026, 8, 17),
+        )
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(5),
+            evidence,
+        )
+
+        assert evidence["annual_dividend_rate"] == 4.0
+        assert evidence["latest_dividend"] == 1.0
+        assert evidence["dividend_growth_years"] is None
+        assert normalized["activity"] == "BUY"
+        assert normalized["score"] == "5/5"
+
+
+class TestBuyTrackerExceptionalGate:
+    @pytest.mark.parametrize(
+        "case,evidence,passes",
+        [
+            (
+                "pullback_min_inclusive",
+                _gate_price_evidence(
+                    current_price=92.0, high_52w=100.0, sma50=92.0, sma200=90.0
+                ),
+                True,
+            ),
+            (
+                "pullback_max_inclusive",
+                _gate_price_evidence(
+                    current_price=80.0, high_52w=100.0, sma50=80.0, sma200=75.0
+                ),
+                True,
+            ),
+            (
+                "pullback_below_min",
+                _gate_price_evidence(
+                    current_price=92.1, high_52w=100.0, sma50=92.1, sma200=90.0
+                ),
+                False,
+            ),
+            (
+                "pullback_above_max",
+                _gate_price_evidence(
+                    current_price=79.9, high_52w=100.0, sma50=79.9, sma200=75.0
+                ),
+                False,
+            ),
+            (
+                "sma50_min_inclusive",
+                _gate_price_evidence(
+                    current_price=95.0,
+                    high_52w=95.0 / 0.9,
+                    sma50=100.0,
+                    sma200=90.0,
+                ),
+                True,
+            ),
+            (
+                "sma50_max_inclusive",
+                _gate_price_evidence(
+                    current_price=102.0,
+                    high_52w=102.0 / 0.9,
+                    sma50=100.0,
+                    sma200=95.0,
+                ),
+                True,
+            ),
+            (
+                "sma50_below_min",
+                _gate_price_evidence(
+                    current_price=94.9,
+                    high_52w=94.9 / 0.9,
+                    sma50=100.0,
+                    sma200=90.0,
+                ),
+                False,
+            ),
+            (
+                "sma50_above_max",
+                _gate_price_evidence(
+                    current_price=102.1,
+                    high_52w=102.1 / 0.9,
+                    sma50=100.0,
+                    sma200=95.0,
+                ),
+                False,
+            ),
+            (
+                "price_equals_sma200",
+                _gate_price_evidence(
+                    current_price=90.0, high_52w=100.0, sma50=90.0, sma200=90.0
+                ),
+                True,
+            ),
+            (
+                "price_below_sma200",
+                _gate_price_evidence(
+                    current_price=90.0, high_52w=100.0, sma50=90.1, sma200=90.1
+                ),
+                False,
+            ),
+            (
+                "sma50_equals_sma200",
+                _gate_price_evidence(
+                    current_price=90.0, high_52w=100.0, sma50=90.0, sma200=90.0
+                ),
+                True,
+            ),
+            (
+                "sma50_below_sma200",
+                _gate_price_evidence(
+                    current_price=90.0, high_52w=100.0, sma50=89.9, sma200=90.0
+                ),
+                False,
+            ),
+            ("rsi_min_inclusive", _exceptional_evidence(rsi_14=25.0), True),
+            ("rsi_max_inclusive", _exceptional_evidence(rsi_14=45.0), True),
+            ("rsi_below_min", _exceptional_evidence(rsi_14=24.9), False),
+            ("rsi_above_max", _exceptional_evidence(rsi_14=45.1), False),
+            (
+                "macd_buy_confirmation",
+                _exceptional_evidence(macd_confirmation="BUY"),
+                True,
+            ),
+            (
+                "macd_neutral_not_confirmation",
+                _exceptional_evidence(macd_confirmation="NEUTRAL"),
+                False,
+            ),
+            (
+                "stochastic_buy_confirmation",
+                _exceptional_evidence(stochastic_confirmation="BUY"),
+                True,
+            ),
+            (
+                "stochastic_sell_not_confirmation",
+                _exceptional_evidence(stochastic_confirmation="SELL"),
+                False,
+            ),
+            (
+                "positive_annual_dividend",
+                _exceptional_evidence(annual_dividend_rate=4.0),
+                True,
+            ),
+            (
+                "zero_annual_dividend",
+                _exceptional_evidence(annual_dividend_rate=0.0),
+                False,
+            ),
+            (
+                "positive_latest_dividend",
+                _exceptional_evidence(latest_dividend=1.0),
+                True,
+            ),
+            (
+                "zero_latest_dividend",
+                _exceptional_evidence(latest_dividend=0.0),
+                False,
+            ),
+            (
+                "positive_dividend_growth_history",
+                _exceptional_evidence(dividend_growth_years=1.0),
+                True,
+            ),
+            (
+                "zero_dividend_growth_history",
+                _exceptional_evidence(dividend_growth_years=0.0),
+                False,
+            ),
+            ("payout_max_inclusive", _exceptional_evidence(payout_ratio_pct=75.0), True),
+            ("payout_above_max", _exceptional_evidence(payout_ratio_pct=75.1), False),
+            ("payout_negative_allowed", _exceptional_evidence(payout_ratio_pct=-0.1), True),
+            (
+                "target_upside_min_inclusive",
+                _exceptional_evidence(analyst_target_price=94.5),
+                True,
+            ),
+            (
+                "target_upside_below_min",
+                _exceptional_evidence(analyst_target_price=94.4),
+                False,
+            ),
+            ("earnings_exactly_seven", _exceptional_evidence(days_to_earnings=7.0), False),
+            (
+                "earnings_more_than_seven",
+                _exceptional_evidence(days_to_earnings=7.01),
+                True,
+            ),
+        ],
+        ids=lambda value: value if isinstance(value, str) else None,
+    )
+    def test_each_exceptional_gate_boundary(self, case, evidence, passes):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(5),
+            evidence,
+        )
+
+        assert normalized["score"] == "5/5", case
+        if passes:
+            assert normalized["activity"] == "STRONG_BUY", case
+        else:
+            assert normalized["activity"] != "STRONG_BUY", case
+
+    @pytest.mark.parametrize(
+        "missing_key",
+        [
+            "current_price",
+            "high_52w",
+            "sma50",
+            "sma200",
+            "rsi_14",
+            "macd_confirmation",
+            "stochastic_confirmation",
+            "annual_dividend_rate",
+            "latest_dividend",
+            "dividend_growth_years",
+            "payout_ratio_pct",
+            "analyst_target_price",
+            "days_to_earnings",
+        ],
+    )
+    def test_missing_required_exceptional_datum_never_passes(self, missing_key):
+        evidence = _exceptional_evidence()
+        evidence.pop(missing_key)
+
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(5),
+            evidence,
+        )
+
+        assert normalized["activity"] != "STRONG_BUY"
+        assert normalized["score"] == "5/5"
+
+    @pytest.mark.parametrize(
+        "field,invalid_value",
+        [
+            ("current_price", float("nan")),
+            ("high_52w", float("inf")),
+            ("sma50", float("-inf")),
+            ("sma200", "85"),
+            ("rsi_14", True),
+            ("macd_confirmation", "bullish"),
+            ("stochastic_confirmation", {}),
+            ("annual_dividend_rate", "4.0"),
+            ("latest_dividend", []),
+            ("dividend_growth_years", float("nan")),
+            ("payout_ratio_pct", float("nan")),
+            ("analyst_target_price", float("inf")),
+            ("days_to_earnings", "not-a-date"),
+        ],
+    )
+    def test_invalid_required_exceptional_datum_never_passes(
+        self, field, invalid_value
+    ):
+        evidence = _exceptional_evidence(**{field: invalid_value})
+
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(5),
+            evidence,
+        )
+
+        assert normalized["activity"] != "STRONG_BUY"
+        assert normalized["score"] == "5/5"
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"current_price": 0},
+            {"current_price": -1},
+            {"high_52w": 0},
+            {"high_52w": -1},
+            {"sma50": 0},
+            {"sma50": -1},
+            {"sma200": 0},
+            {"sma200": -1},
+        ],
+    )
+    def test_non_positive_prices_and_denominators_are_unavailable(self, overrides):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(5),
+            _exceptional_evidence(**overrides),
+        )
+
+        assert normalized["activity"] != "STRONG_BUY"
+
+    @pytest.mark.parametrize("evidence", [None, {}, [], "malformed-json", 42])
+    def test_non_dict_or_unavailable_enrichment_never_produces_strong_buy(
+        self, evidence
+    ):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(5),
+            evidence,
+        )
+
+        assert normalized["activity"] == "BUY"
+        assert normalized["score"] == "5/5"
+
+
+class TestBuyTrackerHardWaitOverrides:
+    @pytest.mark.parametrize(
+        "case,evidence,expected_activity",
+        [
+            ("earnings_at_two", _nonexceptional_safe_evidence(days_to_earnings=2.0), "WAIT"),
+            (
+                "earnings_above_two",
+                _nonexceptional_safe_evidence(days_to_earnings=2.01),
+                "BUY",
+            ),
+            ("rsi_at_eighty", _nonexceptional_safe_evidence(rsi_14=80.0), "BUY"),
+            ("rsi_above_eighty", _nonexceptional_safe_evidence(rsi_14=80.01), "WAIT"),
+            (
+                "extended_both_thresholds",
+                _nonexceptional_safe_evidence(
+                    current_price=116.0,
+                    high_52w=130.0,
+                    sma50=105.0,
+                    sma200=100.0,
+                    analyst_target_price=125.0,
+                ),
+                "WAIT",
+            ),
+            (
+                "extended_sma50_boundary",
+                _nonexceptional_safe_evidence(
+                    current_price=110.0,
+                    high_52w=125.0,
+                    sma50=100.0,
+                    sma200=95.0,
+                    analyst_target_price=120.0,
+                ),
+                "BUY",
+            ),
+            (
+                "extended_sma200_boundary",
+                _nonexceptional_safe_evidence(
+                    current_price=115.0,
+                    high_52w=130.0,
+                    sma50=104.0,
+                    sma200=100.0,
+                    analyst_target_price=125.0,
+                ),
+                "BUY",
+            ),
+            (
+                "extended_only_sma50",
+                _nonexceptional_safe_evidence(
+                    current_price=111.0,
+                    high_52w=125.0,
+                    sma50=100.0,
+                    sma200=100.0,
+                    analyst_target_price=120.0,
+                ),
+                "BUY",
+            ),
+            (
+                "extended_only_sma200",
+                _nonexceptional_safe_evidence(
+                    current_price=116.0,
+                    high_52w=130.0,
+                    sma50=106.0,
+                    sma200=100.0,
+                    analyst_target_price=125.0,
+                ),
+                "BUY",
+            ),
+            (
+                "zero_dividend_without_explicit_cut",
+                _nonexceptional_safe_evidence(annual_dividend_rate=0.0),
+                "BUY",
+            ),
+            (
+                "explicit_dividend_cut",
+                _nonexceptional_safe_evidence(
+                    dividend_cut_or_suspended=True,
+                ),
+                "WAIT",
+            ),
+            (
+                "dividend_not_cut",
+                _nonexceptional_safe_evidence(
+                    annual_dividend_rate=4.0,
+                    dividend_cut_or_suspended=False,
+                ),
+                "BUY",
+            ),
+            (
+                "triple_bear_more_than_ten_below",
+                _nonexceptional_safe_evidence(
+                    current_price=89.9,
+                    high_52w=100.0,
+                    sma50=90.0,
+                    sma200=100.0,
+                    analyst_target_price=100.0,
+                    oscillator_summary="STRONG_SELL",
+                    ma_summary="STRONG_SELL",
+                ),
+                "WAIT",
+            ),
+            (
+                "triple_bear_exactly_ten_below",
+                _nonexceptional_safe_evidence(
+                    current_price=90.0,
+                    high_52w=100.0,
+                    sma50=90.0,
+                    sma200=100.0,
+                    analyst_target_price=100.0,
+                    oscillator_summary="STRONG_SELL",
+                    ma_summary="STRONG_SELL",
+                ),
+                "BUY",
+            ),
+            (
+                "triple_bear_missing_oscillator_confirmation",
+                _nonexceptional_safe_evidence(
+                    current_price=89.9,
+                    high_52w=100.0,
+                    sma50=90.0,
+                    sma200=100.0,
+                    analyst_target_price=100.0,
+                    oscillator_summary="SELL",
+                    ma_summary="STRONG_SELL",
+                ),
+                "BUY",
+            ),
+            (
+                "triple_bear_missing_ma_confirmation",
+                _nonexceptional_safe_evidence(
+                    current_price=89.9,
+                    high_52w=100.0,
+                    sma50=90.0,
+                    sma200=100.0,
+                    analyst_target_price=100.0,
+                    oscillator_summary="STRONG_SELL",
+                    ma_summary="SELL",
+                ),
+                "BUY",
+            ),
+        ],
+        ids=lambda value: value if isinstance(value, str) else None,
+    )
+    def test_hard_wait_precedence_and_boundaries(
+        self, case, evidence, expected_activity
+    ):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(5),
+            evidence,
+        )
+
+        assert normalized["activity"] == expected_activity, case
+        assert normalized["score"] == "5/5", case
+        assert normalized["confidence"] == "medium", case
+        if expected_activity == "WAIT":
+            assert normalized["waiting_for"], case
+        else:
+            assert normalized["waiting_for"] == "", case
+
+    @pytest.mark.parametrize(
+        "trigger_evidence",
+        [
+            _nonexceptional_safe_evidence(days_to_earnings=2.0),
+            _nonexceptional_safe_evidence(rsi_14=81.0),
+            _nonexceptional_safe_evidence(
+                current_price=116.0,
+                high_52w=130.0,
+                sma50=105.0,
+                sma200=100.0,
+                analyst_target_price=125.0,
+            ),
+            _nonexceptional_safe_evidence(dividend_cut_or_suspended=True),
+            _nonexceptional_safe_evidence(
+                current_price=89.0,
+                high_52w=100.0,
+                sma50=90.0,
+                sma200=100.0,
+                analyst_target_price=100.0,
+                oscillator_summary="STRONG_SELL",
+                ma_summary="STRONG_SELL",
+            ),
+        ],
+        ids=["earnings", "rsi", "extended", "dividend", "triple_bear"],
+    )
+    def test_canonical_hard_wait_flag_is_fallback_only_when_raw_is_unavailable(
+        self, trigger_evidence
+    ):
+        raw_triggered = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(5, risk_flags=[]),
+            trigger_evidence,
+        )
+        assert raw_triggered["activity"] == "WAIT"
+        emitted_flags = raw_triggered["risk_flags"]
+        assert emitted_flags
+
+        fallback_flags = []
+        for flag in emitted_flags:
+            fallback = normalize_buy_tracker_activity(
+                _buy_tracker_for_score(5, risk_flags=[flag]),
+                None,
+            )
+            if fallback["activity"] == "WAIT":
+                fallback_flags.append(flag)
+        assert fallback_flags, "raw hard-WAIT output must expose its canonical fallback flag"
+
+        for flag in fallback_flags:
+            safe_evidence = _nonexceptional_safe_evidence()
+            if flag == "dividend_cut_or_suspended":
+                safe_evidence["dividend_cut_or_suspended"] = False
+            raw_safe = normalize_buy_tracker_activity(
+                _buy_tracker_for_score(5, risk_flags=[flag]),
+                safe_evidence,
+            )
+            assert raw_safe["activity"] == "BUY", "available raw evidence must win"
+            assert raw_safe["score"] == "5/5"
+
+    def test_vague_prose_and_legacy_heuristics_cannot_force_wait(self):
+        activity = _buy_tracker_for_score(
+            5,
+            waiting_for="RSI looks high and earnings may be nearby; wait for a pullback.",
+            risk_flags=[
+                "calendar_risk_nearby",
+                "momentum_not_reset",
+                "entry_zone_not_reached",
+                "income_score_missing",
+            ],
+        )
+
+        normalized = normalize_buy_tracker_activity(activity, None)
+
+        assert normalized["activity"] == "BUY"
+        assert normalized["score"] == "5/5"
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("annual_dividend_rate", 0.0),
+            ("annual_dividend_rate", None),
+            ("latest_dividend", 0.0),
+            ("latest_dividend", None),
+        ],
+    )
+    def test_non_current_dividend_fails_gate_without_forcing_wait(
+        self, field, value
+    ):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(5),
+            _exceptional_evidence(
+                **{field: value},
+                dividend_cut_or_suspended=None,
+            ),
+        )
+
+        assert normalized["activity"] == "BUY"
+        assert normalized["score"] == "5/5"
+        assert "exceptional_gate_not_met" in normalized["risk_flags"]
+        assert "dividend_cut_or_suspended" not in normalized["risk_flags"]
+
+    def test_explicit_dividend_cut_forces_wait(self):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(5),
+            _exceptional_evidence(dividend_cut_or_suspended=True),
+        )
+
+        assert normalized["activity"] == "WAIT"
+        assert normalized["score"] == "5/5"
+        assert "dividend_cut_or_suspended" in normalized["risk_flags"]
+
+    def test_exact_dividend_cut_flag_is_used_only_when_explicit_state_missing(self):
+        flagged = _buy_tracker_for_score(
+            5,
+            risk_flags=["dividend_cut_or_suspended"],
+        )
+
+        unavailable = normalize_buy_tracker_activity(flagged, None)
+        explicit_safe = normalize_buy_tracker_activity(
+            flagged,
+            _nonexceptional_safe_evidence(dividend_cut_or_suspended=False),
+        )
+
+        assert unavailable["activity"] == "WAIT"
+        assert explicit_safe["activity"] == "BUY"
+
+
+class TestBuyTrackerPromptContract:
+    def test_shared_prompt_uses_provider_available_confirmation_semantics(self):
+        from src.buy_tracker_instructions import BUY_TRACKER_INSTRUCTIONS
+        from src.technical_analysis_instructions import (
+            TECHNICAL_ANALYSIS_INSTRUCTIONS,
+        )
+
+        prompts = (BUY_TRACKER_INSTRUCTIONS, TECHNICAL_ANALYSIS_INSTRUCTIONS)
+        required_provider_semantics = (
+            'indicators["MACD.macd"].signal == "Buy"',
+            'indicators["Stoch.K"].signal == "Buy"',
+            "dps_common_stock_prim_issue_fy.value > 0",
+            "dps_common_stock_prim_issue_fq.value > 0",
+            "continuous_dividend_growth.value > 0",
+            "explicitly supplied `dividend_cut_or_suspended = true`",
+        )
+        for prompt in prompts:
+            for requirement in required_provider_semantics:
+                assert requirement in prompt
+            assert "MACD.signal" not in prompt
+            assert "Stoch.D" not in prompt
+
+    def test_hard_wait_examples_use_only_canonical_flags(self):
+        from src.buy_tracker_instructions import BUY_TRACKER_INSTRUCTIONS
+
+        canonical_hard_wait_flags = {
+            "earnings_within_2_days",
+            "rsi_over_80",
+            "price_extended_above_mas",
+            "dividend_cut_or_suspended",
+            "triple_bearish_breakdown",
+        }
+        examples = [
+            json.loads(block)
+            for block in re.findall(
+                r"```json\s*(\{.*?\})\s*```",
+                BUY_TRACKER_INSTRUCTIONS,
+                flags=re.DOTALL,
+            )
+        ]
+        wait_examples = [
+            example for example in examples if example.get("activity") == "WAIT"
+        ]
+        assert wait_examples
+
+        example_flags = {
+            flag
+            for example in wait_examples
+            for flag in example.get("risk_flags", [])
+        }
+        assert example_flags <= canonical_hard_wait_flags
+        assert "earnings_within_2_days" in example_flags
+        assert "calendar_risk_nearby" not in example_flags
+
+
+class TestBuyTrackerMalformedBreakdown:
+    @pytest.mark.parametrize(
+        "breakdown,expected_values,expected_score,invalid_keys",
+        [
+            (None, [0, 0, 0, 0, 0], 0, BUY_TRACKER_SCORE_KEYS),
+            ([], [0, 0, 0, 0, 0], 0, BUY_TRACKER_SCORE_KEYS),
+            ("malformed-json", [0, 0, 0, 0, 0], 0, BUY_TRACKER_SCORE_KEYS),
+            (7, [0, 0, 0, 0, 0], 0, BUY_TRACKER_SCORE_KEYS),
+            (
+                {"value_entry": 1},
+                [1, 0, 0, 0, 0],
+                1,
+                ("trend", "momentum", "income", "calendar"),
+            ),
+            (
+                {
+                    "value_entry": 1,
+                    "trend": 2,
+                    "momentum": -1,
+                    "income": True,
+                    "calendar": "1",
+                    "extra_dimension": 1,
+                },
+                [1, 0, 0, 0, 0],
+                1,
+                ("trend", "momentum", "income", "calendar"),
+            ),
+            (
+                {
+                    "value_entry": 1.0,
+                    "trend": 0.0,
+                    "momentum": 1,
+                    "income": 0,
+                    "calendar": 1,
+                    "extra_dimension": 1,
+                },
+                [1, 0, 1, 0, 1],
+                3,
+                (),
+            ),
+            (
+                {
+                    "value_entry": float("nan"),
+                    "trend": float("inf"),
+                    "momentum": 1,
+                    "income": 1,
+                    "calendar": 1,
+                },
+                [0, 0, 1, 1, 1],
+                3,
+                ("value_entry", "trend"),
+            ),
+        ],
+    )
+    def test_breakdown_is_canonicalized_and_invalid_dimensions_are_flagged(
+        self, breakdown, expected_values, expected_score, invalid_keys
+    ):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_activity(score_breakdown=breakdown),
+            None,
+        )
+
+        assert set(normalized["score_breakdown"]) == set(BUY_TRACKER_SCORE_KEYS)
+        assert [
+            normalized["score_breakdown"][key]
+            for key in BUY_TRACKER_SCORE_KEYS
+        ] == expected_values
+        assert normalized["score"] == f"{expected_score}/5"
+        assert normalized["activity"] == ("BUY" if expected_score >= 3 else "WAIT")
+        flags_text = " ".join(map(str, normalized["risk_flags"])).lower()
+        for key in invalid_keys:
+            assert key in flags_text
+        assert "extra_dimension" not in normalized["score_breakdown"]
+        assert "extra_dimension" not in flags_text
+
+
+class TestBuyTrackerNormalizedOutputCoherence:
+    def test_canonical_price_replaces_stale_model_price_and_entry_zone(self):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(
+                4,
+                underlying_price=250.0,
+                entry_zone="$245.00-$255.00",
+            ),
+            _nonexceptional_safe_evidence(current_price=90.0),
+        )
+
+        assert normalized["activity"] == "BUY"
+        assert normalized["underlying_price"] == 90.0
+        assert normalized["entry_zone"] == "$88.20-$91.80"
+
+    def test_valid_entry_zone_containing_canonical_price_is_preserved(self):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(
+                4,
+                underlying_price=250.0,
+                entry_zone="$88.00-$92.00",
+            ),
+            _nonexceptional_safe_evidence(current_price=90.0),
+        )
+
+        assert normalized["underlying_price"] == 90.0
+        assert normalized["entry_zone"] == "$88.00-$92.00"
+
+    def test_missing_canonical_price_clears_apparently_valid_model_zone(self):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(
+                4,
+                underlying_price=90.0,
+                entry_zone="$88.00-$92.00",
+            ),
+            None,
+        )
+
+        assert normalized["activity"] == "BUY"
+        assert normalized["underlying_price"] == 90.0
+        assert "entry_zone" not in normalized
+
+    @pytest.mark.parametrize(
+        "entry_zone",
+        [None, "", "around $90", "$92.00-$88.00", "$89.00", "$0.00-$90.00"],
+    )
+    def test_malformed_entry_zone_is_regenerated_for_buy(self, entry_zone):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(
+                4,
+                underlying_price=250.0,
+                entry_zone=entry_zone,
+            ),
+            _nonexceptional_safe_evidence(current_price=90.0),
+        )
+
+        assert normalized["entry_zone"] == "$88.20-$91.80"
+
+    def test_wait_clears_stale_entry_zone_but_keeps_canonical_price(self):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(
+                1,
+                underlying_price=250.0,
+                entry_zone="$245.00-$255.00",
+            ),
+            _nonexceptional_safe_evidence(current_price=90.0),
+        )
+
+        assert normalized["activity"] == "WAIT"
+        assert normalized["underlying_price"] == 90.0
+        assert "entry_zone" not in normalized
+
+    @pytest.mark.parametrize(
+        "score,evidence,expected_activity,expected_confidence",
+        [
+            (0, None, "WAIT", "low"),
+            (1, None, "WAIT", "low"),
+            (2, None, "WAIT", "medium"),
+            (3, None, "BUY", "medium"),
+            (5, None, "BUY", "medium"),
+            (5, _exceptional_evidence(), "STRONG_BUY", "high"),
+            (
+                5,
+                _nonexceptional_safe_evidence(rsi_14=81.0),
+                "WAIT",
+                "medium",
+            ),
+        ],
+    )
+    def test_score_reason_confidence_and_waiting_for_are_coherent(
+        self, score, evidence, expected_activity, expected_confidence
+    ):
+        normalized = normalize_buy_tracker_activity(
+            _buy_tracker_for_score(score),
+            evidence,
+        )
+
+        assert normalized["score"] == f"{score}/5"
+        assert normalized["activity"] == expected_activity
+        assert normalized["confidence"] == expected_confidence
+        assert normalized["waiting_for"] == (
+            "" if expected_activity in {"BUY", "STRONG_BUY"} else normalized["waiting_for"]
+        )
+        if expected_activity == "WAIT":
+            assert normalized["waiting_for"]
+        assert isinstance(normalized["risk_flags"], list)
+        assert isinstance(normalized["technical_triggers"], list)
+        _assert_reason_prefix_matches_breakdown(normalized)
+
+    @pytest.mark.parametrize(
+        "score,evidence,stale_activity,stale_risk,stale_trigger",
+        [
+            (1, None, "STRONG_BUY", "buy_now_high_conviction", "optimal_buy_zone"),
+            (3, None, "WAIT", "wait_for_pullback", "avoid_entry"),
+            (
+                5,
+                _exceptional_evidence(),
+                "WAIT",
+                "wait_for_confirmation",
+                "no_entry",
+            ),
+        ],
+    )
+    def test_activity_change_rebuilds_stale_activity_dependent_fields(
+        self, score, evidence, stale_activity, stale_risk, stale_trigger
+    ):
+        activity = _buy_tracker_for_score(
+            score,
+            activity=stale_activity,
+            reason=f"Score 99/5. {stale_activity} because stale model prose says so.",
+            risk_flags=[stale_risk],
+            technical_triggers=[stale_trigger],
+        )
+
+        normalized = normalize_buy_tracker_activity(activity, evidence)
+
+        assert stale_risk not in normalized["risk_flags"]
+        assert stale_trigger not in normalized["technical_triggers"]
+        assert "Score 99/5" not in normalized["reason"]
+        _assert_reason_prefix_matches_breakdown(normalized)
+
+    def test_normalizer_is_pure_deterministic_and_does_not_alias_inputs(self):
+        activity = _buy_tracker_for_score(5)
+        evidence = _exceptional_evidence()
+        activity_snapshot = copy.deepcopy(activity)
+        evidence_snapshot = copy.deepcopy(evidence)
+
+        normalized_a = normalize_buy_tracker_activity(activity, evidence)
+        normalized_b = normalize_buy_tracker_activity(activity, evidence)
+
+        assert normalized_a == normalized_b
+        assert normalized_a is not activity
+        assert normalized_a["score_breakdown"] is not activity["score_breakdown"]
+        assert normalized_a["risk_flags"] is not activity["risk_flags"]
+        assert normalized_a["technical_triggers"] is not activity["technical_triggers"]
+        assert activity == activity_snapshot
+        assert evidence == evidence_snapshot

@@ -60,9 +60,27 @@ When provided, a `POSITION HEALTH METRICS` block will appear in your input data.
 
 Use these as **supplementary context only** — they do NOT override your independent analysis. They help confirm or flag divergence from your assessment. If DPS says ROLL but your analysis says WAIT, trust your analysis and note the divergence in your reason.
 
+## ⛔ EXECUTABLE BUYBACK QUOTE SAFETY — HARD PRECONDITION
+
+The deterministic application code is authoritative. These instructions reinforce its quote-safety policy:
+
+- The current option's **ask** is the only executable buy-to-close quote. It is valid only when it is numeric, finite, and strictly greater than `0`.
+- Never use the bid, midpoint, `lastPrice`, a model price, or an ask of `0` as the buyback cost. Do not infer a cheap or free close from an unavailable ask.
+- A current bid of `0` does **not** invalidate a positive ask. If bid is `0` and ask is valid, calculate P&L from the ask.
+- If ask is missing, null, non-numeric, non-finite, or `<= 0`, the buyback quote is unavailable. Treat P&L as unavailable even if a supplied metric claims a percentage.
+
+When the buyback quote is unavailable:
+1. Do not calculate or repeat a P&L percentage.
+2. Skip every profit target / winner-management / profit optimization gate. Set `close_for_profit_recommended: false`, `profit_level_pct: null`, and `profit_optimization_gate: null`; do not add profit-only risk flags.
+3. Do not hand off to Phase 2 solely for profit. If no independent assignment, earnings, ex-dividend, technical, or fundamental risk path requires action, output `WAIT` with `incomplete_data` in `risk_flags`.
+4. If an independent risk path does require action, the handoff may preserve that risk-driven action, but its reason must still state that buyback economics are unavailable.
+5. The user-facing reason must say: **"Buyback quote unavailable; P&L not calculated; profit gate skipped."** Never report `$0.00`, `100%`, "fully realized", or equivalent profit language from an unavailable quote.
+
 ## ⚠️ MANDATORY PROFIT TARGET GATE — Apply AFTER Earnings Gate, BEFORE Other Analysis
 
 **This is a HARD RULE that triggers a profit optimization handoff to Phase 2.**
+
+Evaluate this gate only after the executable buyback quote safety precondition passes and P&L has been calculated from the valid current ask.
 
 If BOTH conditions are met:
 1. **P&L % ≥ 70%** (position has captured 70% or more of maximum profit)
@@ -81,6 +99,7 @@ Then: **IMMEDIATELY hand off to Phase 2** with:
 **Why this is a hard rule:** With 70%+ profit captured and 10+ DTE remaining, the remaining 30% of profit will take disproportionately long to realize (theta decay is non-linear). Meanwhile, capital is tied up and exposed to adverse moves that could erase gains. Rolling to a new strike restarts the theta clock and generates fresh premium.
 
 **Exceptions (do NOT apply profit target gate):**
+- Current ask is invalid/unavailable: P&L is unavailable; skip the gate per quote-safety policy
 - DTE < 10: Let it expire naturally — the last few days of theta decay are fast and free
 - P&L < 70%: Not enough profit captured to justify early action
 - Earnings Gate already triggered a ROLL: proceed with the earnings-driven roll instead
@@ -97,6 +116,7 @@ Then: **IMMEDIATELY hand off to Phase 2** with:
 You will receive position details in your message:
 - **Current Strike**: The strike price of the sold call
 - **Current Expiration**: The expiration date of the sold call
+- **Current Ask**: The executable buy-to-close quote; apply the quote-safety precondition before using it
 - **Exchange**: The exchange the underlying trades on
 - **Current Delta**: The current delta of the sold call (from position data)
 - **Current IV**: The current implied volatility of the sold call (from position data)
@@ -117,7 +137,7 @@ Use:
 - **Price target changes**: Have analyst targets been lowered recently?
 - **Sector weakness**: Is the entire sector declining (systemic) or just this stock (idiosyncratic)?
 
-**If fundamentals have deteriorated significantly** (Sell consensus, recent miss, downgrade cluster) → Hand off to Phase 2 with the defensive roll type (ROLL_DOWN_AND_OUT) + `fundamental_deterioration` risk flag. Phase 2 will attempt to roll; if no viable roll exists → CLOSE.
+**If fundamentals have deteriorated significantly** (Sell consensus, recent miss, downgrade cluster) → Hand off to Phase 2 with the defensive roll type (ROLL_DOWN_AND_OUT) + `fundamental_deterioration` risk flag. Phase 2 will attempt a quote-valid roll; after a complete valid search, it may CLOSE if no viable roll exists. Invalid/incomplete quote data must not default to CLOSE.
 
 **If fundamentals intact** → Proceed with Greeks-based WAIT/ROLL activity.
 
@@ -168,9 +188,9 @@ Use:
 ### 6. Earnings & Catalyst Risk — ⚠️ Refer to the **MANDATORY EARNINGS GATE** above
 
 The gate has already determined the earnings-driven action for this position. Apply the gate result here:
-- **HOLD/FLAG (OTM spanning earnings)**: Earnings risk is flagged but position is well OTM. DO NOT force-roll. Include flag in risk assessment. Monitor delta — if it approaches 0.30+, upgrade to ROLL. If at 50%+ profit, hand off to Phase 2 with `close_for_profit_recommended` flag (TastyTrade winner management).
-- **ROLL recommended (near ATM spanning earnings)**: Strong signal to ROLL. If at 50%+ profit, hand off to Phase 2 with `close_for_profit_recommended` flag. Roll target MUST follow Roll Target Rules above — NEVER roll to 0-7 days after earnings.
-- **ROLL urgently (ATM/ITM, imminent earnings or chaos zone expiry)**: Hard override — hand off to Phase 2 for roll regardless. Roll target follows Roll Target Rules. If at 80%+ profit, set `close_for_profit_recommended: true` — Phase 2 will close for profit.
+- **HOLD/FLAG (OTM spanning earnings)**: Earnings risk is flagged but position is well OTM. DO NOT force-roll. Include flag in risk assessment. Monitor delta — if it approaches 0.30+, upgrade to ROLL. If quote-valid P&L calculated from the current ask is 50%+, hand off to Phase 2 with `close_for_profit_recommended` flag (TastyTrade winner management).
+- **ROLL recommended (near ATM spanning earnings)**: Strong signal to ROLL. If quote-valid P&L calculated from the current ask is 50%+, hand off to Phase 2 with `close_for_profit_recommended` flag. Roll target MUST follow Roll Target Rules above — NEVER roll to 0-7 days after earnings.
+- **ROLL urgently (ATM/ITM, imminent earnings or chaos zone expiry)**: Hard override — hand off to Phase 2 for roll regardless. Roll target follows Roll Target Rules. If quote-valid P&L calculated from the current ask is 80%+, set `close_for_profit_recommended: true` — Phase 2 will evaluate a profit close.
 
 **Catalyst Risk:**
 - Upcoming catalysts (product launches, FDA decisions, conferences) increase gap risk similar to earnings
@@ -267,6 +287,8 @@ Use plain `ROLL_UP` (same expiration) ONLY when there is significant DTE remaini
 
 When the current call is deep OTM and nearly worthless, you may recommend ROLL_DOWN to a lower strike to collect meaningful new premium — but ONLY when the mandatory conditions are met AND a super-majority of flexible conditions pass.
 
+**QUOTE-SAFETY PRECONDITION:** The current ask must be numeric, finite, and `> 0`. If it is invalid, skip this gate (`profit_optimization_gate: null`) and do not hand off to Phase 2 solely for premium capture.
+
 **MANDATORY CONDITIONS (all 3 must pass):**
 
 1. **Deep OTM**: Current price is at least 3.5% below the current strike (adequate safety buffer based on historical research)
@@ -285,7 +307,7 @@ When the current call is deep OTM and nearly worthless, you may recommend ROLL_D
 
 **Gate Logic: 3 mandatory + 3 of 5 stock-level flexible = ELIGIBLE**
 
-Report the gate result as `"profit_optimization_gate": "eligible"` or `"profit_optimization_gate": "failed"` in your handoff output. "eligible" means this agent's checks passed — Agent 2 will validate the remaining candidate-dependent conditions. If eligible, set the action to ROLL_DOWN with `"profit_optimization"` in risk_flags. Include `profit_optimization_constraints` in the handoff with `next_earnings_date` and `next_ex_div_date` so Agent 2 can validate against the chosen expiration.
+Report the gate result as `"profit_optimization_gate": "eligible"` or `"profit_optimization_gate": "failed"` only when the quote-safety precondition passed and the gate was evaluated. Use `null` when the gate was skipped because the current ask was unavailable. "eligible" means this agent's checks passed — Agent 2 will validate the remaining candidate-dependent conditions. If eligible, set the action to ROLL_DOWN with `"profit_optimization"` in risk_flags. Include `profit_optimization_constraints` in the handoff with `next_earnings_date` and `next_ex_div_date` so Agent 2 can validate against the chosen expiration.
 
 ## PREVIOUS ACTIVITY CONTEXT
 
@@ -308,6 +330,7 @@ Use consistent risk flag names. Key flags for open call monitors:
 - `breakout_momentum`, `resistance_level` (technical)
 - `fundamental_deterioration`, `analyst_downgrade` (fundamental)
 - `profit_optimization` (optimization rolls)
+- `incomplete_data` (current executable buyback ask unavailable or required analysis input incomplete)
 
 Load **risk-flags** for the canonical earnings flag definitions.
 
@@ -403,7 +426,7 @@ SUMMARY: MO | WAIT open call | Strike $72 exp 2026-04-24 | Price $69.50 | Delta 
 
 ### When activity ≠ WAIT → Produce a handoff JSON for Agent 2
 
-When you determine the position needs action (ROLL), output a **handoff JSON** inside a fenced code block. The Roll Management agent (Agent 2) will use this to find the best roll candidate and calculate economics. **Phase 1 never outputs CLOSE** — always pick the best ROLL type. Phase 2 will attempt the roll and fall back to CLOSE if no viable candidate exists.
+When you determine the position needs action (ROLL), output a **handoff JSON** inside a fenced code block. The Roll Management agent (Agent 2) will use this to find the best roll candidate and calculate economics. **Phase 1 never outputs CLOSE** — always pick the best ROLL type. Phase 2 may CLOSE after a complete, quote-valid search for an independently risk-driven action; missing/incomplete data or an invalid ask must not default to CLOSE.
 
 **Handoff JSON Schema:**
 ```json
@@ -462,9 +485,9 @@ When you determine the position needs action (ROLL), output a **handoff JSON** i
 ```
 
 **Handoff Rules:**
-- `action_needed` — MUST be one of: `ROLL_DOWN`, `ROLL_UP`, `ROLL_OUT`, `ROLL_UP_AND_OUT`, `ROLL_DOWN_AND_OUT`. Never use bare "ROLL". If you're unsure of direction, default to WAIT and explain why. Phase 1 never outputs CLOSE. Always pick the best ROLL type. Phase 2 will attempt the roll and fall back to CLOSE if no viable candidate exists. For profit optimization, use ROLL_DOWN. For deteriorated fundamentals, use the defensive roll type (e.g., ROLL_DOWN_AND_OUT).
-- `close_for_profit_recommended`: Set to `true` when the TastyTrade 50%+ profit rule applies — Phase 2 will evaluate whether to close for profit or attempt a roll. Default `false`.
-- `profit_level_pct`: Approximate profit percentage when `close_for_profit_recommended` is true (e.g., 55.0 for ~55% profit). Set to `null` otherwise.
+- `action_needed` — MUST be one of: `ROLL_DOWN`, `ROLL_UP`, `ROLL_OUT`, `ROLL_UP_AND_OUT`, `ROLL_DOWN_AND_OUT`. Never use bare "ROLL". If you're unsure of direction, default to WAIT and explain why. Phase 1 never outputs CLOSE. Always pick the best ROLL type. Phase 2 may CLOSE only after a complete, quote-valid search for an independently risk-driven action; incomplete data never defaults to CLOSE. For profit optimization, use ROLL_DOWN. For deteriorated fundamentals, use the defensive roll type (e.g., ROLL_DOWN_AND_OUT).
+- `close_for_profit_recommended`: Set to `true` only when the TastyTrade 50%+ profit rule is confirmed using P&L calculated from a valid current ask. Default `false`; invalid ask always means `false`.
+- `profit_level_pct`: Approximate quote-valid profit percentage when `close_for_profit_recommended` is true (e.g., 55.0 for ~55% profit). Set to `null` otherwise, including when the ask is invalid.
 - `pivot_points`: Extract the Classic pivot points from the technicals data (R1-R3, S1-S3). Agent 2 uses these for strike targeting.
 - `market_bias`: Summarize the current technical outlook so Agent 2 can assess whether a profit optimization roll is supported by market conditions. Extract RSI(14), price vs SMA20/SMA50, MACD signal direction, and the oscillator/MA summaries. Set `direction` to "bullish" (strong uptrend — risky for call ROLL_DOWN), "bearish" (downtrend — favorable for call ROLL_DOWN), or "neutral" (range-bound — acceptable). The `reasoning` field should be 1-2 sentences explaining the technical picture. **This is critical for profit optimization**: a bullish bias warns Agent 2 that rolling down closer to the money may face assignment risk.
 - `profit_optimization_gate`: Set to "eligible" if the profit optimization gate passed (ROLL_DOWN for premium capture), "failed" if evaluated but failed, or `null` if not applicable (defensive roll). Agent 2 will validate candidate-dependent conditions.

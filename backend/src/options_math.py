@@ -4,6 +4,17 @@ Options math utilities.
 Shared mathematical helpers for option pricing, P&L, and data quality.
 """
 
+import math
+from numbers import Real
+
+
+def executable_buyback_ask(ask) -> float | None:
+    """Return an executable buy-to-close ask, or None when unavailable."""
+    if isinstance(ask, bool) or not isinstance(ask, Real):
+        return None
+    value = float(ask)
+    return value if math.isfinite(value) and value > 0 else None
+
 
 def robust_mid(bid, ask, last=0.0):
     """Fair option mid that resists one-sided / stale-wide illiquid quotes.

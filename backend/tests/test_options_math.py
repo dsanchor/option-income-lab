@@ -1,7 +1,28 @@
 """Tests for options_math module."""
 
 import pytest
-from src.options_math import robust_mid
+from src.options_math import executable_buyback_ask, robust_mid
+
+
+class TestExecutableBuybackAsk:
+    @pytest.mark.parametrize(
+        "ask",
+        [
+            None,
+            0,
+            -0.01,
+            float("nan"),
+            float("inf"),
+            "1.20",
+            True,
+        ],
+    )
+    def test_rejects_non_numeric_non_finite_or_non_positive_asks(self, ask):
+        assert executable_buyback_ask(ask) is None
+
+    @pytest.mark.parametrize("ask", [0.01, 1, 1.20])
+    def test_accepts_positive_finite_numeric_asks(self, ask):
+        assert executable_buyback_ask(ask) == pytest.approx(float(ask))
 
 
 class TestRobustMid:

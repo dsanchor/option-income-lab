@@ -8,6 +8,8 @@ import datetime
 import logging
 from typing import Optional
 
+from src.options_math import executable_buyback_ask
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -450,9 +452,12 @@ def format_roll_candidates_table(
     if exp_key in bucket and strike_key in bucket[exp_key]:
         current_contract = bucket[exp_key][strike_key]
 
-    # Use explicitly-provided buyback_cost; fall back to chain lookup only if needed
-    if buyback_cost is None and current_contract and current_contract.get("ask") is not None:
-        buyback_cost = float(current_contract["ask"])
+    # Use only a positive finite ask for executable buyback economics.
+    buyback_cost = executable_buyback_ask(buyback_cost)
+    if buyback_cost is None and current_contract:
+        buyback_cost = executable_buyback_ask(current_contract.get("ask"))
+    buyback_available = buyback_cost is not None
+    incomplete_data = not buyback_available
 
     # --- Current position summary ---
     current_exp_display = _fmt_exp(exp_key)
@@ -469,14 +474,18 @@ def format_roll_candidates_table(
 
     if current_contract:
         bid_str = f"${current_contract.get('bid', 'N/A')}" if current_contract.get('bid') is not None else "N/A"
-        ask_str = f"${current_contract.get('ask', 'N/A')}" if current_contract.get('ask') is not None else "N/A"
+        ask_str = f"${buyback_cost:.2f}" if buyback_available else "N/A"
         delta_str = f"{current_contract.get('delta', 'N/A')}" if current_contract.get('delta') is not None else "N/A"
         theta_str = f"${current_contract.get('theta', 'N/A')}" if current_contract.get('theta') is not None else "N/A"
         lines.append(f"  Bid: {bid_str} | Ask: {ask_str} | Delta: {delta_str} | Theta: {theta_str}")
-    if buyback_cost is not None:
+    if buyback_available:
         lines.append(f"  Buyback cost (ask): ${buyback_cost:.2f} per share (${buyback_cost * 100:.2f} per contract)")
     else:
-        lines.append("  Buyback cost: NOT AVAILABLE — current contract not in chain data. Use the buyback cost from Phase 1 handoff if available.")
+        lines.append("  Buyback cost: N/A — no positive finite executable ask.")
+    lines.append(
+        f"  Buyback available: {str(buyback_available).lower()} | "
+        f"Incomplete data: {str(incomplete_data).lower()}"
+    )
 
     # --- Build candidate rows ---
     candidates = []
@@ -534,7 +543,13 @@ def format_roll_candidates_table(
 
     if not candidates:
         lines.append("")
-        lines.append(f"NO VALID CANDIDATES found for {roll_type}. Consider CLOSE.")
+        if incomplete_data:
+            lines.append(
+                f"NO EXECUTABLE BUYBACK QUOTE for {roll_type}. WAIT until a "
+                "positive finite ask is available; CLOSE/ROLL economics are N/A."
+            )
+        else:
+            lines.append(f"NO VALID CANDIDATES found for {roll_type}. Consider CLOSE.")
         return "\n".join(lines)
 
     # --- Format table ---
@@ -572,8 +587,10 @@ def format_roll_candidates_table(
     # --- Notes ---
     lines.append("")
     lines.append("NOTES:")
-    if buyback_cost is not None:
+    if buyback_available:
         lines.append(f"- Buyback cost is FIXED at ${buyback_cost:.2f} (current contract ask) for all candidates")
+    else:
+        lines.append("- Buyback/P&L/net-credit economics are N/A until a positive finite ask is available")
     lines.append("- Net Credit = New Premium (bid) - Buyback Cost (ask). Positive = you collect, negative = you pay")
     lines.append("- All prices are per share. Multiply by 100 for per-contract amounts")
     if option_type == "call":
