@@ -2800,8 +2800,9 @@ async def api_debug_agent_chain(request: Request, symbol: str,
         filter_options_chain_by_type,
         filter_options_chain_by_delta,
         filter_options_chain_for_position, filter_options_chain_by_roll_direction,
-        format_roll_candidates_table,
+        format_roll_candidates_table, get_contract,
     )
+    from src.options_math import executable_buyback_ask
     from src.yfinance_data_provider import OPTIONS_CHAIN_SCHEMA_DESCRIPTION
     import json as _json
 
@@ -2900,16 +2901,20 @@ async def api_debug_agent_chain(request: Request, symbol: str,
 
     # --- Stage 4: Pre-computed candidate table ---
     if direction_filtered is not None and position_filtered is not None:
-        # Get buyback cost from position-filtered chain (before direction filter)
+        # Get the current contract from the RAW (unfiltered) chain — not from
+        # position_filtered/delta_filtered. A held contract's own delta can
+        # legitimately fall outside the standard candidate band (e.g. a
+        # stale/degenerate IV yfinance returns while the market is closed),
+        # which means the delta filter drops it before any later stage ever
+        # sees it, even though it objectively exists in the chain data. This
+        # mirrors the "capture reference before filters" pattern used for the
+        # production monitor pipeline in agent_runner.py.
+        current_contract_ref = get_contract(
+            structured, float(strike), expiration, option_type,
+        )
         bb_cost = None
-        bb_bucket_key = "calls" if option_type == "call" else "puts"
-        bb_bucket = position_filtered.get(bb_bucket_key, {})
-        bb_exp_key = expiration.replace("-", "")
-        bb_strike_key = str(float(strike))
-        if bb_exp_key in bb_bucket and bb_strike_key in bb_bucket[bb_exp_key]:
-            bb_ask = bb_bucket[bb_exp_key][bb_strike_key].get("ask")
-            if bb_ask is not None:
-                bb_cost = float(bb_ask)
+        if current_contract_ref is not None:
+            bb_cost = executable_buyback_ask(current_contract_ref.get("ask"))
 
         candidate_table = format_roll_candidates_table(
             chain=direction_filtered,
@@ -2919,6 +2924,7 @@ async def api_debug_agent_chain(request: Request, symbol: str,
             underlying_price=underlying_price,
             roll_type=roll_type,
             buyback_cost=bb_cost,
+            current_contract=current_contract_ref,
         )
         pipeline["stage_4_candidate_table"] = {
             "text": candidate_table,

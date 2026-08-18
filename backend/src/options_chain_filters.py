@@ -410,6 +410,7 @@ def format_roll_candidates_table(
     underlying_price: float,
     roll_type: str,
     buyback_cost: float | None = None,
+    current_contract: Optional[dict] = None,
 ) -> str:
     """Build a flat markdown table of roll candidates with pre-computed economics.
 
@@ -430,8 +431,18 @@ def format_roll_candidates_table(
     buyback_cost : float | None
         Ask price of the current contract (cost to buy-to-close).  Pass this
         explicitly because the direction-filtered chain usually excludes the
-        current contract.  When *None*, the function attempts a fallback
-        lookup in ``chain`` but this will often miss.
+        current contract.  When *None*, falls back to ``current_contract``'s
+        ask, then to a lookup in ``chain`` (which will often miss).
+    current_contract : dict | None
+        The current contract's full data, looked up by the caller from the
+        chain BEFORE the delta/direction filters ran (mirrors the
+        "capture reference before filters" pattern used for the current
+        contract elsewhere). Required for the CURRENT POSITION bid/delta/theta
+        summary line and the ``buyback_cost`` fallback to work when the held
+        contract's own delta falls outside the standard candidate band (e.g.
+        a stale/degenerate IV computed while the market is closed) — such a
+        contract is always absent from ``chain`` even though it objectively
+        exists in the underlying chain data.
 
     Returns
     -------
@@ -448,8 +459,9 @@ def format_roll_candidates_table(
     strike_key = str(float(current_strike))
 
     # --- Find current position contract (may be absent after direction filter) ---
-    current_contract = None
-    if exp_key in bucket and strike_key in bucket[exp_key]:
+    # Prefer the caller-supplied pre-filter reference; fall back to a lookup
+    # in `chain` for backward compatibility with callers that don't pass one.
+    if current_contract is None and exp_key in bucket and strike_key in bucket[exp_key]:
         current_contract = bucket[exp_key][strike_key]
 
     # Use only a positive finite ask for executable buyback economics.

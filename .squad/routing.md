@@ -9,6 +9,7 @@ How to decide who handles what.
 | Architecture & design | Danny | System design, agent architecture, decisions |
 | Agent framework & scheduling | Rusty | Microsoft Agent Framework, periodic runners, config |
 | Options strategy & signals | Linus | Covered call logic, CSP logic, MCP data integration |
+| Persistence & integration | Livingston | Cosmos round-trips, cache/store seams, async concurrency |
 | Code review | Danny | Review PRs, check quality, suggest improvements |
 | Testing | Basher | Write tests, edge cases, signal validation |
 | Scope & priorities | Danny | What to build next, trade-offs, decisions |

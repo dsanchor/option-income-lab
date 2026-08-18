@@ -16,6 +16,7 @@
 | Rusty | Agent Dev | .squad/agents/rusty/charter.md | 🔧 Agent Dev |
 | Linus | Quant Dev | .squad/agents/linus/charter.md | 📊 Quant Dev |
 | Basher | Tester | .squad/agents/basher/charter.md | 🧪 Tester |
+| Livingston | Persistence & Integration Engineer | .squad/agents/livingston/charter.md | 🔧 Integration |
 | Scribe | Scribe | .squad/agents/scribe/charter.md | 📋 Scribe |
 | Ralph | Work Monitor | — | 🔄 Monitor |
 

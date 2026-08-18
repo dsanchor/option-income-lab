@@ -66,6 +66,16 @@ options_chain_scheduler:
   enabled: true
   cron: "0 * * * *"  # Every hour
 
+# Persistent options chain cache (accumulate-and-merge design, 2026-08-18).
+# See src/options_chain_cache.py and src/options_chain_store.py.
+options_chain_cache:
+  ttl_seconds: 1800              # Freshness only — never deletes contracts.
+  persistence_enabled: true      # false => today's pure memory-only behavior.
+  expired_shard_grace_days: 7    # Days past actual expiration (America/New_York)
+                                  # before a persisted shard is deleted.
+  max_shard_bytes: 1600000       # Escape valve, under Cosmos's 2MB item limit.
+  stale_quote_warn_seconds: 86400  # Age at which a quote_asof is flagged stale.
+
 portfolio_enrichment:
   enabled: true
   cron: "0 9-17 * * 1-5"  # Hourly 9-17 Mon-Fri (UTC)

@@ -132,20 +132,36 @@ def _parse_tv_to_yfinance_format(
             raw_exp = f[exp_idx]
             if raw_exp is None or option_type not in ("call", "put"):
                 continue
-            # Normalize expiration to YYYYMMDD to match yfinance keys
+            # Normalize expiration to YYYYMMDD to match yfinance keys. Rule S3
+            # (options_chain_merge.py): an expiration that doesn't resolve to
+            # a real YYYYMMDD calendar date is REJECTED here, not stored as a
+            # junk fallback key (e.g. `str(raw_exp)`) — a key that never
+            # matches a yfinance bucket and that the merger/pruner would
+            # never be able to clean up.
             try:
                 raw_exp_val = float(raw_exp)
-                if raw_exp_val > 1e9:
-                    # Unix timestamp — convert to YYYYMMDD
+            except (ValueError, TypeError):
+                continue
+            if raw_exp_val > 1e9:
+                # Unix timestamp — convert to YYYYMMDD
+                try:
                     expiration = datetime.fromtimestamp(raw_exp_val, tz=timezone.utc).strftime("%Y%m%d")
-                elif raw_exp_val > 19000000:
-                    # Already YYYYMMDD as a number
-                    expiration = str(int(raw_exp_val))
-                else:
-                    expiration = str(raw_exp)
-            except (ValueError, TypeError, OSError):
-                expiration = str(raw_exp)
-            if not expiration:
+                except (ValueError, OverflowError, OSError):
+                    continue
+            elif raw_exp_val > 19000000:
+                # Already YYYYMMDD as a number — still must be a real
+                # calendar date (e.g. reject month-13 or a Feb-30 that
+                # merely "looks like" a YYYYMMDD integer); strptime is the
+                # authoritative check, not just the digit-count/magnitude.
+                candidate = str(int(raw_exp_val))
+                try:
+                    datetime.strptime(candidate, "%Y%m%d")
+                except ValueError:
+                    continue
+                expiration = candidate
+            else:
+                # Not a recognizable timestamp or YYYYMMDD value — reject
+                # rather than fabricate a key that will never match.
                 continue
 
             def _get(key: str, _f=f, _idx_map=idx_map):
@@ -156,40 +172,56 @@ def _parse_tv_to_yfinance_format(
             if strike is None:
                 continue
 
-            bid = _get("bid") or 0.0
-            ask = _get("ask") or 0.0
-            iv = _get("iv") or 0.0
+            # Rule S1 (options_chain_merge.py): a provider MUST emit None/
+            # absent for a field it cannot observe, never a fabricated
+            # 0 / 0.0 / False / "". `_get()` already returns None for a
+            # field TradingView didn't supply — do NOT collapse that into a
+            # falsy default here, or a genuine "no data" becomes
+            # indistinguishable from a genuinely-observed zero (bid=0 is a
+            # real, valid quote state) and the merger's trust gate breaks.
+            bid_raw = _get("bid")
+            ask_raw = _get("ask")
+            iv_raw = _get("iv")
             delta = _get("delta") or 0.0
             gamma = _get("gamma") or 0.0
             theta = _get("theta") or 0.0
             vega = _get("vega") or 0.0
             rho = _get("rho") or 0.0
+            bid = bid_raw if bid_raw is not None else 0.0
+            ask = ask_raw if ask_raw is not None else 0.0
             mid = _get("mid") or (round((bid + ask) / 2, 4) if (bid + ask) > 0 else 0.0)
 
             strike_f = float(strike)
             strike_key = f"{strike_f:.1f}" if strike_f == int(strike_f) else str(strike_f)
 
-            # Build contract dict matching yfinance output format
+            # Build contract dict matching yfinance output format. Derived
+            # fields (mid/delta/gamma/theta/vega/rho) are surfaced
+            # best-effort for legacy direct consumers, but are never treated
+            # as authoritative observations by the merger — it always
+            # recomputes them (options_chain_merge.recompute_derived).
             contract = {
-                "contractSymbol": item.get("s", ""),
                 "strike": strike_f,
-                "bid": float(bid),
-                "ask": float(ask),
                 "mid": round(float(mid), 4),
-                "iv": round(float(iv), 6),
                 "delta": round(float(delta), 6),
                 "gamma": round(float(gamma), 6),
                 "theta": round(float(theta), 6),
                 "vega": round(float(vega), 6),
                 "rho": round(float(rho), 6),
-                "volume": 0,           # Not available from TradingView scanner
-                "openInterest": 0,     # Not available from TradingView scanner
-                "lastPrice": 0.0,      # Not available from TradingView scanner
-                "lastTradeDate": None,  # Not available from TradingView scanner
-                "inTheMoney": False,    # Cannot determine without current price
                 "expiration": expiration,
                 "option_type": option_type,
             }
+            if bid_raw is not None:
+                contract["bid"] = float(bid_raw)
+            if ask_raw is not None:
+                contract["ask"] = float(ask_raw)
+            if iv_raw is not None:
+                contract["iv"] = round(float(iv_raw), 6)
+            symbol_val = item.get("s")
+            if symbol_val:
+                contract["contractSymbol"] = symbol_val
+            # volume, openInterest, lastPrice, lastTradeDate, inTheMoney are
+            # never available from the TradingView scanner — omitted
+            # (absent), not fabricated as 0 / 0.0 / False.
 
             bucket = calls if option_type == "call" else puts
             bucket[expiration][strike_key] = contract

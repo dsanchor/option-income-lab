@@ -73,6 +73,128 @@
 - Oversold and overextended modifiers route to Ideal Puts/Calls; No Puts/Calls
   require unmodified bearish/bullish momentum.
 
+### 2026-08-18 — Debug Agent-Chain Pipeline: Current-Contract-Before-Delta-Filter
+- Root cause of "current contract not in chain data" for a real, cached
+  MSFT $525 call / 2026-09-04 position was NOT cache staleness or a
+  TradingView overwrite — that additive merge pipeline was already correct.
+- `filter_options_chain_by_delta` correctly drops candidates outside the
+  standard band, but yfinance can return degenerate near-zero IV for a
+  contract when bid/ask are both zero (market closed), which computes a
+  ~0.0 delta for the position's OWN held contract and silently removes it.
+- The 2026-07-09 "capture current contract before delta filter" pattern
+  (built for `agent_runner.py`'s production roll pipeline) had never been
+  propagated to the `/api/debug/agent-chain` endpoint or to the shared
+  `format_roll_candidates_table()` helper itself — that endpoint derived
+  buyback cost from an already delta-filtered chain.
+- Fix: `format_roll_candidates_table` now accepts an optional
+  `current_contract` override; both the debug endpoint and the production
+  call site pass a reference captured from the RAW chain. A genuinely zero
+  ask still correctly reports incomplete — the fix only stops losing a
+  valid one.
+- Pattern to reuse: any new consumer of the options-chain pipeline must
+  mirror the production capture point for "current contract," never derive
+  it from a chain that has already passed through delta/direction filters.
+- Basher independently reproduced and rejected the pre-fix behavior
+  (synthetic-ask proof ruling out the live illiquid-neighborhood confound),
+  confirming this exact root cause/fix, and flagged a coverage gap: zero
+  direct unit tests existed for `filter_options_chain_for_position` or
+  `filter_options_chain_by_roll_direction`. Added
+  `test_options_chain_position_and_direction_filters.py` (16 tests) to
+  close it. Also confirmed via full-suite before/after runs that a
+  pre-existing test-isolation issue in `test_yfinance_data_provider.py`
+  (20 failures full-suite vs. 1 in isolation) is unrelated to this change.
+
+### 2026-08-18 — Persistent Option Chain: Pure Merge Semantics (Danny's design)
+- Implemented Danny's frozen seven-function interface as a new,
+  dependency-free `backend/src/options_chain_merge.py`: `is_accepted`,
+  `gate_contract`, `gate_bucket`, `merge_sources`, `merge_prior`,
+  `recompute_derived`, `prune_by_expiration`. Absence is `None`/no-opinion
+  throughout; zero is a valid observation for bid/last/volume/OI but never
+  for ask/iv (must be finite and `>0`); derived fields (mid/greeks) are
+  never merged/carried, only ever recomputed fresh from current primitives.
+- Key interpretive call: the "trust gate" (bid/lastPrice must clear a
+  quote-group sanity threshold before being trusted) applies to the WHOLE
+  quote group (bid, ask, iv, lastPrice, lastTradeDate) per Danny's §2.4
+  intro paragraph, not just the two fields his per-field table calls out —
+  harmless for ask/iv since their own per-field acceptance already implies
+  the gate passes. volume/openInterest/inTheMoney/contractSymbol are NEVER
+  gated (independent observations per §2.4, verified with an explicit
+  Yahoo-all-zero-bucket test that these still pass through).
+- Fixed the two upstream TradingView normalizer bugs Danny flagged, at
+  their actual origin (`tv_options_chain_fetcher.py`, not
+  `options_chain_cache.py`): G2 — stopped fabricating
+  `volume:0, openInterest:0, lastPrice:0.0, inTheMoney:False,
+  contractSymbol:""` placeholders (now omitted so the merge gate can't
+  mistake "TV didn't observe this" for "TV observed zero" and clobber a
+  valid prior); G5 — malformed/unparseable expiration values are now
+  rejected at ingestion (`continue`) instead of falling back to a junk
+  `str(raw_exp)` key that could never merge with a real chain.
+- `GreeksCalculator` lazily fetches `^TNX` via yfinance unless
+  `risk_free_rate` is passed explicitly at construction — hardcoded the
+  existing 0.045 fallback via a module-level singleton so
+  `recompute_derived` stays genuinely pure/network-free. Reused
+  `options_math.robust_mid` unchanged (bid-less-but-positive-ask caps mid
+  at `min(ask, 0.10)`, not `ask/2` — mattered for test expectations).
+- Scope boundary: Danny's doc nominally assigns Linus the inline yfinance
+  normalizer in `OptionsChainCache._process_option_df`
+  (`options_chain_cache.py`), but my task authorization explicitly excluded
+  that file (persistence/threading, Rusty's charter). Followed the
+  narrower restriction; recorded as a decision. Rusty was independently,
+  concurrently rewriting that same file during this session (observed
+  live — briefly non-importable mid-edit), confirming this was the correct
+  boundary to hold.
+- Added 117 tests in `test_options_chain_merge.py` (T1-T12 from Danny's
+  doc plus every explicitly requested scenario: Yahoo all-zero bucket,
+  bid-less contract with positive ask, TV partial overlay, stale prior
+  fill, no-input-mutation across all four impure-looking functions,
+  malformed expiration, expiration pruning, monotonicity, schema
+  compatibility) and 11 tests in new
+  `test_tv_options_chain_fetcher_normalize.py` (direct fetcher-level Rule
+  S1/S3 coverage — placeholder fields absent not zero, unparseable
+  expirations dropped, real chains unaffected). All pass; also re-ran
+  `test_debug_agent_chain_pipeline.py` to confirm the already-applied
+  current-contract-before-delta-filter fix is untouched and still green.
+
+### 2026-08-18 — Basher review follow-up: fuzz testing found a real gate/associativity subtlety
+- A naive property/fuzz test for `merge_prior` monotonicity (T12), built by
+  feeding directly-fabricated random dicts as "live" payloads, found ~28%
+  of seeds violated `merge(merge(P,L1),L2) == merge(P, merge(L1,L2))`.
+  Root cause was the TEST, not the implementation: `merge_prior`'s "prior"
+  side is deliberately never re-gated (that's what lets a carried-forward
+  contract skip re-proving itself), so using a raw, never-vetted dict as
+  the "prior" half of `merge(L1, L2)` lets an internally-inconsistent quote
+  group leak through — a shape `merge_sources` (the only real producer of
+  a "live" payload) can never actually generate, because it always ties a
+  quote-group field's presence to that same source's own gate having
+  passed. Regenerating `L1`/`L2` via real `merge_sources(random_yf,
+  random_tv)` calls made the property hold cleanly across 500 seeds.
+  **Lesson: when fuzz-testing a function whose contract depends on an
+  upstream invariant, generate inputs through the real upstream producer,
+  not by sampling the target function's own field space directly** —
+  otherwise the fuzzer finds "bugs" that are actually just unreachable
+  input shapes, and burns review time chasing them.
+- Basher's "malformed YYYYMMDD calendar dates" prompt caught a genuine gap
+  I'd missed: `tv_options_chain_fetcher.py`'s own Rule S3 check only
+  validated the numeric *magnitude* of a YYYYMMDD-shaped expiration
+  (`> 19000000`), not that the digits formed a real calendar date — a
+  month-13 or Feb-30 value would slip past the fetcher and only get caught
+  later by `options_chain_merge`'s `strptime`-backed check. Fixed by adding
+  the same `strptime` validation at the fetcher's own ingestion point, so
+  it's genuinely the primary enforcement point I'd claimed it was, not just
+  nominally so. **Lesson: "defense in depth" claims need to be verified
+  field-by-field at each claimed layer, not asserted from the existence of
+  a downstream check that happens to catch the same class of bug.**
+- Added 21 new tests (TV-single-quote-field overlay, expanded
+  calendar-invalid YYYYMMDD matrix at both the merge and fetcher layers,
+  300-seed realistic fuzz test, carried-forward-contract downstream
+  `delta`/`executable_buyback_ask` consumption) plus a decision-log entry
+  documenting the T12 scope refinement. Also confirmed several of Basher's
+  requested edges (exact 3-contract degenerate-bucket boundary, mixed
+  2-failing+1-passing bucket) were already covered from the first pass.
+  Declined to action persistence/scheduler-layer items (hydration
+  singleton divergence, ETag 409/412 retry exhaustion, `schema_version`
+  migration, `refresh_all` watchdog) — outside charter, flagged for Rusty.
+
 ## Provider and Prompt Guardrails
 - Keep strategy logic and output schemas provider-independent.
 - Never infer positive evidence from prose or missing fields.

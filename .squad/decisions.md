@@ -5997,3 +5997,578 @@ over stale flags, and vague prose cannot create positive evidence.
 result, while maximum conviction remains rare, deterministic, reachable from
 production provider data, and evidence-based. One normalized object prevents
 prompt, evaluator, alert, and persistence drift.
+
+---
+
+# Decision: Debug Agent-Chain Pipeline Must Capture Current Contract Before Delta Filter
+
+**Author:** Linus (Quant Dev)
+**Date:** 2026-08-18
+**Status:** ✅ Implemented
+**Impact:** Debug > Agent Chain Pipeline View accuracy; brings it back in line with the production roll-management pipeline
+
+## Context
+
+User report: simulating a CURRENT POSITION MSFT call, strike 525, expiration
+2026-09-04 (17 DTE as of 2026-08-18) in Debug > Agent Chain Pipeline View
+produced "buyback cost unavailable because current contract is not in chain
+data" followed by "no valid ROLL_OUT candidates," even though the contract
+is genuinely present in the cached yfinance+TradingView-merged chain.
+
+## Root Cause
+
+This was **not** a cache-staleness or TradingView-overwrite bug. The
+`OptionsChainCache` merge pipeline (yfinance base + TradingView overlay +
+last-known-good) is additive/field-level and never drops or overwrites
+whole expiration buckets — it was working correctly.
+
+The actual defect: `filter_options_chain_by_delta` legitimately (and
+correctly, for candidate selection) drops any contract whose computed delta
+falls outside the standard band (calls: 0.15–0.90). MSFT's $525 call for
+2026-09-04 currently has a real, non-zero $3.20-equivalent ask in the raw
+chain, but yfinance was returning a degenerate/near-zero implied volatility
+for it (a known yfinance quirk when bid/ask are both zero because the
+market is closed) — Black-Scholes then computes a ~0.0 delta, which is
+outside the call band, so the delta filter silently removes the position's
+own held contract before any later stage ever sees it.
+
+On 2026-07-09 this exact class of bug was fixed for the production
+`_build_alpha_options_chain` / roll-management path in `agent_runner.py`
+via the pattern "capture the current-contract reference from the chain
+BEFORE the delta filter runs, and surface it independently of candidate
+filtering." That fix was never propagated to:
+1. The `/api/debug/agent-chain/{symbol}` endpoint (`web/app.py`), which
+   computed its buyback cost from `position_filtered` — a chain that had
+   already been through `filter_options_chain_by_delta` twice.
+2. The shared `format_roll_candidates_table()` helper itself, which had no
+   way to accept an externally-captured current-contract reference — only
+   an internal lookup inside the (already-filtered) `chain` argument, which
+   direction filters always exclude the exact held strike+expiration from
+   by design.
+
+## Fix
+
+- `src/options_chain_filters.py`: `format_roll_candidates_table()` gains an
+  optional `current_contract: dict | None` parameter. When supplied, it is
+  used for the CURRENT POSITION bid/delta/theta summary line and as the
+  buyback-cost fallback, independent of whatever filtering was applied to
+  the `chain` argument. Backward compatible — omitting it preserves the old
+  in-chain lookup behavior.
+- `web/app.py` (`api_debug_agent_chain`): now looks up the current contract
+  via `get_contract()` on the **raw, unfiltered** chain (mirroring the
+  production pattern) instead of deriving it from the delta-filtered
+  `position_filtered` chain, and passes it into
+  `format_roll_candidates_table(..., current_contract=...)`.
+- `src/agent_runner.py`: the production roll-management call site now also
+  passes its already pre-filter-captured `current_contract` into
+  `format_roll_candidates_table`, so the CURRENT POSITION bid/delta/theta
+  line is populated there too instead of silently omitted (strict
+  improvement, no behavior regression).
+
+A genuinely zero/missing ask (real market-closed state) still correctly
+reports "no positive finite executable ask" — the fix only stops losing a
+*valid* ask, it never fabricates one.
+
+## Key Pattern (reinforces 2026-07-09 decision)
+
+Any pipeline surface that needs a position's "current contract" reference
+(buyback cost, bid/delta/theta display) must capture it from the chain
+**before** delta/direction filtering runs, and pass it through explicitly.
+Do not rely on looking the current contract up inside a chain that has
+already been through candidate-selection filters — direction filters
+deliberately exclude the exact held strike+expiration, and the delta filter
+can drop it for data-quality reasons (e.g. degenerate IV while markets are
+closed) unrelated to whether the position is a legitimate roll/close
+candidate. When adding a new consumer of the options chain pipeline
+(dashboards, debug tools, new agents), mirror the production capture point,
+don't reinvent it.
+
+## Files Changed
+
+- `backend/src/options_chain_filters.py` — added `current_contract` param
+  to `format_roll_candidates_table`
+- `backend/web/app.py` — debug endpoint now sources current contract/ask
+  from the raw chain via `get_contract()`
+- `backend/src/agent_runner.py` — production call site now passes its
+  pre-filter `current_contract` through too
+- `backend/tests/test_format_roll_candidates_table.py` — new, 9 tests
+- `backend/tests/test_debug_agent_chain_pipeline.py` — new, 2 tests
+- `backend/tests/test_options_chain_position_and_direction_filters.py` — new,
+  16 direct unit tests for `filter_options_chain_for_position` and
+  `filter_options_chain_by_roll_direction` (previously zero coverage for
+  either function; added per Basher's review, see Update below)
+
+## Verification
+
+```
+python3 -m py_compile src/agent_runner.py src/options_chain_filters.py web/app.py → OK
+pytest tests/test_format_roll_candidates_table.py tests/test_debug_agent_chain_pipeline.py \
+       tests/test_options_chain_position_and_direction_filters.py \
+       tests/test_get_contract.py tests/test_exclude_contract.py tests/test_options_chain_cache.py \
+       tests/test_watchlist_symbols.py -q
+  → 118 passed
+```
+Confirmed new tests fail without the fix (regression-guarding) and pass
+with it restored. One pre-existing, unrelated failure
+(`test_greeks_populated_for_nonzero_iv`, documented mock-drift issue) is
+unaffected by this change.
+
+## Update 2026-08-18 (post-Basher review)
+
+Basher independently reproduced the same bug (proved with a synthetic
+$0.30-ask contract to rule out the live illiquid-neighborhood confound) and
+rejected the pre-fix behavior, confirming this exact root cause and fix
+approach as the acceptance criteria. Basher additionally flagged a coverage
+gap: `filter_options_chain_for_position` and
+`filter_options_chain_by_roll_direction` had zero direct unit tests anywhere
+in the suite (only exercised indirectly via pipeline tests). Added
+`test_options_chain_position_and_direction_filters.py` (16 tests) to close
+this gap — covers ROLL_DOWN/UP/OUT/UP_AND_OUT/DOWN_AND_OUT strike+expiration
+semantics, the "identical held contract is always excluded from ROLL_OUT
+candidacy by design" invariant, unknown-roll_type passthrough, and the
+per-expiration strike-window behavior of `filter_options_chain_for_position`.
+Also re-verified via a full-suite run (before and after restoring the fix)
+that a pre-existing, unrelated test-isolation issue in
+`test_yfinance_data_provider.py` (20 failures when run as part of the full
+`pytest tests/`, but only 1 documented failure when run in isolation) exists
+identically with or without this change — not caused by this fix, not
+addressed here (out of scope; a separate cross-file test-isolation problem,
+likely event-loop/mock leakage between test modules).
+
+# Decision: Pure Merge Module Ownership Boundary vs. Danny's Design Doc
+
+## Context
+Danny's `danny-persistent-option-chain-merge.md` design assigns Linus
+ownership of the "yfinance row normalizer currently inline in
+`OptionsChainCache._process_option_df`" (in `backend/src/options_chain_cache.py`)
+alongside the new pure `options_chain_merge.py` module. The task-level
+authorization I was given explicitly excluded `options_chain_cache.py`
+(persistence/threading plumbing owned by Rusty) from my writable artifacts.
+
+## Decision
+Followed the narrower, explicit task-level restriction: implemented all
+seven frozen functions (`is_accepted`, `gate_contract`, `gate_bucket`,
+`merge_sources`, `merge_prior`, `recompute_derived`, `prune_by_expiration`)
+as a standalone, dependency-free `backend/src/options_chain_merge.py`, and
+fixed the two upstream source-normalizer bugs Danny flagged (G2 fabricated
+TradingView placeholder zeros/False/empty-string; G5 malformed-expiration
+fallback key) at their actual origin, `backend/src/tv_options_chain_fetcher.py`
+(`_parse_tv_to_yfinance_format`) — NOT inside `options_chain_cache.py`. Wiring
+`options_chain_cache.py` to call the new pure module (replacing its inline
+`_merge_contract_fields` / `_is_invalid_quote_value` / `_merge_chains` /
+`_prune_expired_expirations` helpers) is left entirely to Rusty.
+
+## Rationale
+- Respects explicit charter boundaries ("Do not own persistence/threading
+  plumbing"); avoids a merge conflict with Rusty's concurrent, in-flight
+  rewrite of that same file (observed live during this session — the file
+  was mid-edit and briefly failed to import while I was validating).
+- The pure module is independently testable and import-safe without
+  `options_chain_cache.py` ever existing, which is a stronger isolation
+  property than Danny's doc strictly required.
+- No test in Danny's required set (T1-T12) or the task's explicit scenario
+  list exercises `options_chain_cache.py` directly, so this boundary choice
+  costs nothing in coverage: `options_chain_merge.py` and
+  `tv_options_chain_fetcher.py`'s normalizer are each covered by dedicated,
+  hermetic unit tests (`test_options_chain_merge.py`,
+  `test_tv_options_chain_fetcher_normalize.py`).
+
+## Impact
+Rusty's in-progress rewrite of `options_chain_cache.py` (observed as already
+underway) is expected to import and call `options_chain_merge`'s seven
+functions directly, replacing the superseded inline helpers. No action
+required from Linus beyond this note; flagging so Rusty/Danny can confirm
+the integration point matches this module's public signatures exactly as
+frozen.
+
+# Decision: T12 Monotonicity/Associativity Holds for Self-Consistent Live Payloads Only
+
+## Context
+Basher's review asked for a property/fuzz test of `merge_prior` monotonicity
+(design doc T12: `merge(merge(P,L1),L2) == merge(P, merge(L1,L2))`). A fuzz
+test generating `L1`/`L2` as directly-fabricated dicts with fully
+independently-random per-field values (bid/ask/iv/lastPrice/lastTradeDate/
+volume/openInterest each sampled without regard to the others) found ~28%
+of 200 random seeds violated the equality.
+
+## Root Cause (not an implementation bug)
+`merge_prior`'s "prior" argument is, by design, never re-gated — a prior is
+assumed already-vetted history (this is what lets a carried-forward
+contract avoid re-proving itself every cycle). `merge(L1, L2)` in the T12
+formula uses `L1` in the *prior* role. If `L1` is a raw dict whose quote-group
+fields were never actually vetted by any source's own `gate_contract` (e.g.
+it has a `bid` present with no source-side valid `ask`/`iv` anywhere), then
+treating it as an ungated "prior" lets that never-vetted value leak through
+`combined_live` — a shape the real pipeline can never produce, because
+`merge_sources` (the only real producer of a "live" payload) always ties a
+quote-group field's presence to the *same* source contract's own gate
+having passed. Regenerating the fuzz test so `L1`/`L2` are realistic
+`merge_sources(random_yf_chain, random_tv_chain)` outputs (self-consistent
+by construction) made the property hold cleanly across 500 random seeds.
+
+## Decision
+Documented the refined guarantee directly in the new fuzz test
+(`TestMonotonicityProperty.test_merge_prior_is_monotone_under_random_field_combinations`,
+`backend/tests/test_options_chain_merge.py`, 300 seeded cases): T12's
+associativity is guaranteed for any live payload the real pipeline can
+actually produce (i.e., anything `merge_sources` can emit), not for an
+arbitrary directly-constructed dict with an internally-inconsistent quote
+group. No source change was needed — `options_chain_merge.py`'s
+implementation was already correct; only the test's input generator was
+unrealistic. Flagging this so Rusty's ETag-retry code can rely on the
+guarantee as stated: safe as long as every write path always merges through
+`merge_sources` first (never hand-constructs a "live" chain).
+
+## Also fixed in this review pass (`tv_options_chain_fetcher.py`)
+Basher's "malformed YYYYMMDD calendar dates" prompt surfaced a real gap:
+the fetcher's own Rule S3 check for the "already YYYYMMDD as a number"
+branch (`raw_exp_val > 19000000`) only checked the magnitude, not that the
+digits formed a real calendar date — a TradingView payload with e.g.
+`expiration: 20261301` (month 13) or `20260230` (Feb 30) would pass the
+fetcher's check and only be caught later by `merge_sources`'s own
+`strptime`-backed validation. Added the same `strptime` check at the
+fetcher's ingestion point so it is genuinely the primary Rule S3 enforcement
+point, not just nominally so. Covered by new parametrized tests in
+`test_tv_options_chain_fetcher_normalize.py`.
+
+## Out of scope (Rusty's / scheduler charter, not actioned here)
+Basher's review also raised: (1) persistence-hydration divergence between a
+combined scheduler+API singleton process and a `--web-only` replica with a
+cold singleton, (2) Cosmos ETag 409/412 retry-exhaustion behaviour (log +
+skip, never raise), (3) `schema_version` absence/migration for legacy
+shards, (4) preserving the `refresh_all` watchdog. These are all
+persistence/threading/scheduler concerns explicitly outside Linus's charter
+(none of them touch `options_chain_merge.py`'s pure `{calls, puts}` chain
+shape — `schema_version` in particular is a shard-document-level field the
+store adds/strips before/after calling into the merge module, never seen by
+it). Not actioned; flagged for Rusty.
+
+---
+
+# Decision: User Directive — Persistent Option Chain (2026-08-18T09:09:45Z)
+
+**By:** Copilot (User)
+**Status:** ✅ Accepted
+**Context:** Platform requirement for option-chain durability and data quality.
+
+## Directive
+
+The persisted option chain must:
+- Preserve the last-known-good quotation for each contract.
+- Never allow invalid Yahoo Finance data (zeros, missing fields) to overwrite valid stored data.
+- Permit TradingView to enrich or overwrite only with valid quotations.
+- Expire contracts by real calendar date, never by cache TTL or staleness.
+
+## Rationale
+
+Users need reliable data when monitoring positions, especially when live provider feeds are intermittently down. The current cache loses all history on restart or TTL expiration, and both providers can emit zeros/missing data that wipe prior valid observations.
+
+---
+
+# Decision: Persistent Option Chain — Accumulate-and-Merge Design (2026-08-18)
+
+**Date:** 2026-08-18
+**Author:** Danny (Lead)
+**Status:** ✅ Accepted — ready for implementation
+**Directive:** User directive (2026-08-18T09:09:45Z)
+**Scope:** Complete option-chain persistence architecture covering merge logic, storage layout, concurrency, and retention policy.
+
+## Executive Summary
+
+The invariant the user asks for is **half-implemented**. `OptionsChainCache` already does field-level last-known-good merge, refuses to evict on TTL, and prunes by real expiration date. Three structural gaps break the invariant in production (G1-G3), plus two secondary defects (G4-G5).
+
+| Gap | Severity | Issue |
+|-----|----------|-------|
+| G1 — No persistence | **Blocker** | Process-local dict only; restart ⇒ total loss; scheduler + web diverge |
+| G2 — TradingView destroys valid Yahoo fields | **High** | Overlays hardcoded zeros (volume, openInterest, lastTradeDate, inTheMoney, contractSymbol) that are never fallback-merged |
+| G3 — Derived fields merged as if observed | **High** | Contract δ from cycle N-3, γ from cycle N → internally inconsistent; `filter_options_chain_by_delta` gate on inconsistent value |
+| G4 — `bid == 0` always invalid | **High** | Market reality: bid-less OTM contracts are real, not feed failure |
+| G5 — Unparseable expiration keys immortal | **High** | Non-YYYYMMDD keys become junk keys never pruned, unbounded leak |
+
+## Solution Overview
+
+Three-phase merge on each refresh cycle:
+
+1. **Live source merge** `L = merge_sources(yfinance, tradingview)` — applies trust gates (contract must have valid ask>0 or iv>0), then TradingView > yfinance field-by-field, only for fields TV supplies and that pass per-field acceptance predicates.
+
+2. **Accumulate prior** `A = merge_prior(prior_chain, L)` — contract-level union, field-level overwrite-if-accepted, carries forward absent contracts with fresh `_meta` markers.
+
+3. **Recompute derived** `A' = recompute_derived(A, underlying_price)` — always-fresh greeks from merged primitives + current time-to-expiry, fixing G3.
+
+Persist sharded by `(symbol, expiration)` with ETag CAS retry + monotone merge (safe for cross-process convergence). Read path: memory → hydrate from store → fetch.
+
+## Key Rules
+
+**Rule S1** — Providers emit `None` (or omit key) for unknowns; never fabricate `0`/`0.0`/`False`/`""`. Fixes G2.
+
+**Rule S2** — Absence is not zero; missing field = keep prior. Fixes G2 + G4.
+
+**Rule S3** — Reject unparseable expiration keys at ingestion. Fixes G5.
+
+**Trust gate** (fix for G4) — Contract's quote group (`bid`, `ask`, `iv`, `lastPrice`, `lastTradeDate`) is trusted **only if** the source supplies at least one of: `ask > 0` or `iv > 0`. Enables `bid == 0` to be accepted when the source quotes a valid ask/iv for that contract.
+
+**Degenerate bucket gate** — For each `(source, side, expiration)` bucket: if ≥3 contracts, all failing the trust gate, reject the entire bucket (this is the observed "all-zero chain" failure). Bucket < 3: per-contract gate decides.
+
+## Implementation Ownership
+
+| Module | Author | Scope |
+|--------|--------|-------|
+| `src/options_chain_merge.py` (new, 7 frozen functions) | Linus | Pure, dependency-free merge logic; source normalizers; T1-T12 tests |
+| `src/options_chain_store.py` (new) + `options_chain_cache.py` hydrate/lock | Rusty | Persistence lifecycle, concurrency, T13-T21 tests |
+| All other files (filters, web, scheduler) | — | Untouched |
+
+## Retention & Pruning
+
+- **Serving prune:** Drop expiration when `exp_date_ET < today_ET` (same-day ET boundary), keep full day so settlement contracts available.
+- **Persistence prune:** Delete shard only when `exp_date_ET < today_ET - 7_days_grace` (default grace for post-expiry reconciliation).
+- **Never prune on TTL, staleness, or absence** — TTL = freshness only.
+- **Size escape valve:** Log ERROR if shard would exceed 1.6 MB; evict oldest-unseen carried-zero-OI contracts first.
+
+## Concurrency & Failure
+
+- Per-symbol `threading.RLock`, one full refresh-merge-persist cycle at a time.
+- ETag CAS with 3-retry bound; shard conflicts abort, never lost update.
+- Persistence failures non-fatal; refresh returns merged chain regardless, error logged.
+- `invalidate()` drops memory only; `purge()` explicit destructive.
+
+## Tests (T1-T21)
+
+Linus: field-validity matrix (T1), trust gates (T2-T4), degenerate bucket (T4-T5), TV omits fields (T6), yfinance zero overwrites (T7), merged greeks consistency (T8), carried-forward decay (T9), expiration rejection (T10), pruning (T11), monotonicity property (T12).
+
+Rusty: cold-start hydrate (T13-T14), persistence failures (T15-T16), sharding/grace (T17), invalidate semantics (T18), concurrent refresh (T19), `refresh_all` watchdog (T20), persistence disabled (T21).
+
+## Risks & Mitigations
+
+| Risk | Mitigation | Residual |
+|------|-----------|----------|
+| Stale quotes presented as live | `_meta.quote_asof` + schema doc + logging | Accepted — user requested indefinite retention |
+| Greek-recompute cost | Benchmark before merge; optimize if needed | Low |
+| Cosmos RU / doc growth | Per-expiration sharding + change detection + size valve | Low |
+| Cross-process convergence lag | Inherent to SWR; bounded by TTL | Accepted |
+| Degenerate false positive | Outcome is "keep prior" (safe direction) | Accepted |
+| Unbounded accumulation | Real-expiration pruning + size guard | Low |
+| Scope creep into watchdog | `refresh_all` contract untouchable (2026-06-30 decision) | Low |
+
+---
+
+# Decision: Revision Directive — Persistent Option Chain Seam (Post-REJECT, D1-D5) (2026-08-18)
+
+**Date:** 2026-08-18
+**Author:** Danny (Lead)
+**Status:** ✅ Accepted — assigned to Livingston
+**Response to:** Initial store/cache integration rejection
+
+## Escalation Rationale
+
+Initial implementation by Linus (merge logic) and Rusty (persistence/lifecycle) was rejected due to five defects (D1-D5) at the *seam* between these modules — neither author owns end-to-end integration, and both are now locked out per rejection protocol. Basher is reviewer-only. Danny does not implement. A new specialist (Livingston, Persistence & Integration Engineer) is cast to repair the seam with authority over both domains.
+
+## D1-D5 Defects Identified by Basher
+
+| Defect | Location | Symptom | Root Cause |
+|--------|----------|---------|-----------|
+| **D1** | store.py write path | Hydrated contracts missing derived fields (mid, greeks) | `_write_shard` CAS reconciliation calls `merge_prior` on already-merged chain, not live observation |
+| **D2** | store.py write path | Provenance (`_meta`) corrupted on round-trip | Same caller misuse; `merge_prior` manufactures fresh `_meta` |
+| **D3** | cache.py hydrate path | Expired contracts served as candidates; missing `timestamp`/`underlying_price` | Hydrate never prunes; schema fields not restored |
+| **D4** | cache.py locking | Concurrent same-loop `await refresh(sym)` both run full cycle (lost update); event-loop freeze on cross-thread contention | `threading.RLock` reentrancy + blocking on event loop |
+| **D5** | store.py write guard | Unchanged market data rewrites shards (high RU cost) | Content hash includes volatile `_meta.last_seen`, never converges |
+
+## Bounded Revision Scope
+
+**Authorized artifacts (only these may change):**
+- `backend/src/options_chain_store.py` — full rewrite of write path, hydrate, retention.
+- `backend/src/options_chain_cache.py` — hydration/serving path and locking only.
+- `backend/tests/test_options_chain_store.py` — full.
+- `backend/tests/test_options_chain_cache.py` — additive only.
+- `backend/tests/test_options_chain_persistence_integration.py` — **new** file, real store + real merge, no fakes across seam.
+
+**Frozen (must NOT be reopened):**
+- `backend/src/options_chain_merge.py` — every function, validity predicate, trust gate, Rule S1/S2/S3, `_meta` shape.
+- `backend/tests/test_options_chain_merge.py` — frozen.
+- Provider normalizers (`tv_options_chain_fetcher.py`, yfinance side in `OptionsChainCache._process_option_df`).
+- `OPTIONS_CHAIN_SCHEMA_DESCRIPTION` (runtime must honour it, not edit it).
+- `refresh_all` watchdog (per-symbol timeout + `shutdown(wait=False)`, untouchable per 2026-06-30 decision).
+- Filters, roll table, agent runner, web app, config.
+
+## Required Fixes
+
+**D1/D2** — Persisted shards must be consumable as-is; `_meta` must survive round-trip verbatim. Acceptance: hydrated chain has `mid` + all 5 greeks after ≥2 persist cycles; carried TV-sourced contract hydrates with identical `_meta`.
+
+**D3** — Hydration must respect serving horizon (same-day ET pruning); carry top-level `symbol`/`timestamp`/`underlying_price`; mark entries immediately stale-eligible so next read schedules real refresh.
+
+**D4** — Concurrency must hold for coroutine-level execution on one loop + cross-thread contention (matching production shapes). Different symbols still parallel; `refresh_all` watchdog unchanged. Acceptance: two `await refresh(sym)` on one loop ⇒ exactly one fetch; cross-thread hold does not freeze loop.
+
+**D5** — Write-skip guard must actually work in production (change detection fires only on real market changes, not on volatile provenance). Acceptance: two cycles identical fetch ⇒ zero shard rewrite.
+
+## Gate Sequence
+
+1. Livingston implements within bounded scope.
+2. Basher reviews test depth (no fakes across store/merge seam).
+3. Danny re-reviews D1-D5 with reproduction scripts before approval.
+
+---
+
+# Decision: Livingston's D1-D5 Option Chain Persistence Seam Revision (2026-08-18)
+
+**Date:** 2026-08-18
+**Author:** Livingston (Persistence & Integration Engineer)
+**Status:** ✅ Ready for review — Basher (test depth), then Danny (D1-D5 re-review)
+**Cast date:** 2026-08-18 (escalation from D1-D5 rejection)
+**Supervisor:** Danny (approver); Basher (test reviewer)
+
+## Summary of Fixes
+
+### D1/D2 — Store composition bug (root cause identified)
+
+**Problem:** `OptionsChainStore._write_shard` was calling `options_chain_merge.merge_prior(prior_shard, want_shard)` to reconcile CAS conflicts. But `merge_prior`'s frozen semantics are **"apply live source observations onto a prior accumulated state"** — it manufactures fresh `_meta` via quote-acceptance gates and per-contract merge only copies enumerated quote/observed fields. It **never** touches derived fields (mid/delta/gamma/theta/vega/rho). The store was calling this on an already-fully-merged in-memory chain (every field already reconciled in-memory), treating it as if it were a fresh live observation. The composition was broken, not the function.
+
+**Fix:** Store no longer imports or calls `options_chain_merge` at all. CAS conflict reconciliation is now store-owned, purely verbatim contract-level union (`_reconcile_bucket`): if a contract appears on only one side (stored vs want), it is kept as-is; if on both, it is kept *wholesale* from whichever side has more-recent `_meta.last_seen`/`quote_asof` (never field-blended, never re-derived, never re-gating or touching `_meta`). This is monotone (never loses a contract) — safe under CAS retry.
+
+**Test validation:** Hydrated chain carries all derived fields after ≥2 persist cycles (R1 integration test). Carried TV-sourced contract survives 2 persists with identical `_meta` (R3). Old test suite runs against new store first — 32/33 unchanged (only hardcoded `schema_version: 2` literal needed updating), strong compatibility signal before new tests.
+
+### D3 — Hydration serving horizon
+
+**Problem:** `_hydrate_into_memory` was serving store output directly with zero pruning (so contracts up to the 7-day persistence grace window were served as roll candidates, violating same-day serving policy). Missing top-level `timestamp` and `underlying_price` documented in schema. Stamped entries as "fresh" (`cached_at = time.monotonic()`), so an old hydrate was treated fresh for full TTL and never triggered SWR.
+
+**Fix:** `_hydrate_into_memory` now applies the same `options_chain_merge.prune_by_expiration(chain, today_et=date.today(america/new_york))` that a live refresh applies. Captures `underlying_price` before pruning (since `prune_by_expiration` result schema is `{symbol, timestamp, calls, puts}` only, it does not carry this field), re-applies it after. Stamps entry immediately stale-eligible (`cached_at = now - ttl - 1`), so next `is_stale()` check schedules real background refresh via existing SWR path. No code duplication.
+
+**Test validation:** Hydrated entry excludes past expirations while shard still lives inside grace (R4). Hydrated payload carries `symbol`, non-null `timestamp`, and `underlying_price` (R5). Next read triggers real fetch (call counter proves it, not just flag flip).
+
+### D4 — Locking for coroutine + cross-thread concurrency
+
+**Problem:** Single `threading.RLock` per symbol:
+- Blocking on event loop thread: Held by scheduler-thread refresh ⇒ every FastAPI request on that loop froze for the full duration.
+- Reentrancy: Two `await refresh(sym)` calls on the same loop share one OS thread, so `RLock.acquire()` on the second call would NOT block (reentrant treat it as same-thread) — both ran full fetch cycles in parallel, lost update.
+
+**Fix:** Two independent mechanisms:
+1. **Same-loop task memoization** (`_inflight_refresh: Dict[str, asyncio.Task]`) — second concurrent same-loop caller for the same symbol reuses/awaits the exact same task via `asyncio.shield`, not starting a second fetch.
+2. **Per-symbol OS lock** (`_symbol_os_locks: Dict[str, threading.Lock]`, plain non-reentrant) whose blocking `acquire()` is always offloaded to executor via `loop.run_in_executor(None, lock.acquire)` inside new `_refresh_exclusive()` — so waiting on a cross-thread hold never blocks the calling loop.
+
+Non-blocking try-acquire for SWR path reuses same lock object to avoid redundant fetches.
+
+**`refresh_all` untouched:** Still funnels through `refresh()`, so new locking applies transitively. Per-symbol timeout + non-blocking `shutdown()` preserved (2026-06-30 decision frozen).
+
+**Test validation:** Two `await refresh(sym)` on one loop → exactly one fetch; both see identical result (R6 part A). Real OS thread holds lock, proves loop never blocks via heartbeat-tick count on concurrent loop (R6 part B).
+
+### D5 — Change-detection guard
+
+**Problem:** Old `_content_hash` hashed the entire `_meta` blob including `_meta.last_seen` and `_meta.quote_asof`, which `merge_prior` legitimately force-advances on every cycle a contract is listed — even if all market-observable fields (`bid`, `ask`, `iv`, `mid`, greeks, etc.) are unchanged, the hash changed. Could never converge in production. Was only ever passing under a fake.
+
+**Fix:** Hash a `_hashable_contract` view that:
+- **Excludes** volatile provenance (`last_seen`, `quote_asof`) — these do NOT indicate market change.
+- **Includes** all market-observable fields plus the new `underlying_price` — genuine changes trigger rewrites.
+- For greeks consistency: the frozen `options_chain_merge._time_to_expiry_years` truncates to whole *days* (`(exp_dt - now).days`), so recomputed greeks are bit-identical across same-day cycles with identical input data and input time — write-skip test now deterministic without mocking time.
+
+**Test validation:** Two refresh cycles with byte-identical fetch fixtures produce zero shard `_etag` change on cycle 2 (real change detection, not fake — R7).
+
+### Schema Changes
+
+Bumped `schema_version: 2 → 3` (pre-approved by Danny as the one shard-shape change allowed without escalation). Added `underlying_price` to shard body (needed for greek recomputation on hydrate). `hydrate()` reconstructs top-level `timestamp` and `underlying_price` from most-recently-`updated_at` shard. Legacy v2 shards hydrate fine without `underlying_price` (fall back to 0.0 until next live fetch).
+
+## Files Changed
+
+- `backend/src/options_chain_store.py` — write path, hydrate, reconciliation, schema (full rewrite of CAS/hash/reconcile logic).
+- `backend/src/options_chain_cache.py` — `_hydrate_into_memory` (D3), per-symbol locking (D4), merge-cycle logic in `_refresh_locked` byte-for-byte unchanged.
+- `backend/tests/test_options_chain_store.py` — removed fake merge fixture (no longer needed), added D1/D2/D5/schema tests.
+- `backend/tests/test_options_chain_cache.py` — **zero edits needed** — all 34 pre-existing tests pass unmodified against the new locking design, including `TestConcurrentRefreshNoLostUpdate` and `TestRefreshAllWatchdogRegression`.
+- `backend/tests/test_options_chain_persistence_integration.py` — **new**, R1-R7, composing real `OptionsChainStore` + real `options_chain_merge` module functions through real `OptionsChainCache`; only Cosmos container and network-facing fetch methods faked.
+
+## Test Evidence (R1-R7)
+
+All 8 integration tests in new file passing, composing real modules across seam:
+
+- **R1** (`TestR1DerivedFieldsSurviveMultiplePersistCycles`) — 3 real persist cycles; hydrated chain has `mid` + all 5 greeks for every contract; `_meta.greeks_valid` flag verified both True and False.
+- **R2** (`TestR2ColdReplicaFilterParity`) — empty-memory second instance hydrates and produces identical `filter_options_chain_by_delta` result as producer's in-memory chain; fetch methods raise if called (no provider hit).
+- **R3** (`TestR3ProvenanceSurvivesCarry`) — TV-sourced carried contract across 2 persists with `quote_asof`/`quote_source`/`carried`/`first_seen` all unchanged; hydrated `_meta` identical.
+- **R4** (`TestR4HydratePrunesPastExpirationsAndIsStaleEligible`) — yesterday-expiring shard excluded from served data; `is_stale()` immediately True; next read triggers real fetch.
+- **R5** (`TestR5HydratedPayloadTopLevelFields`) — carries `symbol`, non-null `timestamp`, exact persisted `underlying_price`.
+- **R6** (`TestR6ConcurrencyCorrectness`) — two `await cache.refresh(sym)` ⇒ exactly one fetch; cross-thread lock hold proven non-blocking via heartbeat.
+- **R7** (`TestR7WriteSkipGuardEffective`) — two cycles, byte-identical fetch ⇒ zero shard rewrite.
+
+Suite-wide validation:
+- Old test suite vs new store: 32/33 pre-existing passed unchanged.
+- Focused suite (merge/store/cache/integration/filters/tv-normalize): **546 tests passing**.
+- Full backend suite: **1244 tests passing**, 20 pre-existing unrelated failures in frozen `test_yfinance_data_provider.py` (order-dependent network flakiness, reproducible without any changes to this work, unfixed because file is frozen).
+
+## Residual Risk
+
+None identified within authorized scope. Pre-existing `test_yfinance_data_provider.py` flakiness should be escalated to its owner if it blocks CI.
+
+---
+
+## Addendum — P1 Follow-up: get_or_load Sync-in-Async Bridge Deadlock
+
+Danny approved D1-D5, then filed separate P1 before production:
+
+**Issue:** D4's per-symbol OS lock made `get_or_load`'s pre-existing sync-in-async bridge (used by `web/app.py:3249` inside async `api_activity_chat`, not awaited) able to self-deadlock under contention, especially on cold miss.
+
+**Root cause:** `get_or_load` did `ThreadPoolExecutor().submit(self._sync_refresh).result(timeout=120)` — a blocking wait on the calling loop's own OS thread. `_sync_refresh` spins up a new loop and eventually awaits `loop.run_in_executor` for this symbol's OS lock (D4). If the lock was held by a task needing the *original frozen loop* to run and release it (e.g., concurrent request's own `await cache.refresh(sym)` on that loop), self-deadlock for 120s.
+
+**Fix (entirely within `options_chain_cache.py`):**
+- On no-running-loop (genuine sync caller): unchanged, blocks that thread.
+- On running-loop: reuse non-blocking `_schedule_background_refresh` (SWR path) to kick off background refresh, immediately raise new `OptionsChainNotReadyError(RuntimeError)` — explicit fail-fast instead of blocking/deadlocking. Compatible with `web/app.py`'s existing (untouched) `except Exception` graceful degradation.
+
+**Tests:** 5 new additive tests in `test_options_chain_cache.py` (39/39 total, 3x re-run determinism). Focused suite 551/551; full backend 1250/1250 (except 20 pre-existing `test_yfinance_data_provider.py` failures).
+
+---
+
+# Decision: Linus Implementation Notes — Merge Module (2026-08-18)
+
+**Date:** 2026-08-18
+**Author:** Linus (Quant Dev)
+**Status:** ✅ Implemented — frozen, used by Livingston in final revision
+**Scope discipline:** Frozen interface only; no persistence/threading/cache lifecycle.
+
+## Implementation Summary
+
+**Seven-function interface** (`backend/src/options_chain_merge.py`):
+- Per-field validity predicates (`is_accepted`) — field-specific rules per Danny §2.3.
+- Trust gates (`gate_contract`, `gate_bucket`) — distinguish feed failure from market reality.
+- Source merge (`merge_sources`) — TradingView > yfinance, field-by-field.
+- Accumulation (`merge_prior`) — contract-level union, field-level overwrite-if-accepted.
+- Derivation (`recompute_derived`) — always-fresh greeks from merged primitives + current DTE.
+- Pruning (`prune_by_expiration`) — by real calendar date, never TTL.
+
+**Provider normalizers** (Rules S1-S3):
+- `tv_options_chain_fetcher.py::_parse_tv_to_yfinance_format()` — emit `None` not fabricated zeros; reject unparseable YYYYMMDD keys.
+- Mirrored in yfinance side (wired by Rusty later) — same discipline.
+
+**Tests:** `backend/tests/test_options_chain_merge.py`, 89 passing (T1-T12 spec coverage).
+
+**Monotonicity property (T12):** Holds for any realistic `merge_sources` output (self-consistent quote groups); fuzz test with 300 seeds confirmed. Refined guarantee: T12 associativity is guaranteed for live payloads the real pipeline produces, not for arbitrary hand-constructed dicts with inconsistent quote groups — documented explicitly so downstream (Rusty, Livingston) can rely on this guarantee safely.
+
+**Calendar-date validation:** Added `strptime` check to `_parse_tv_to_yfinance_format` (Rule S3 enforcement point) so expiration keys like `20261301` (month 13) or `20260230` (Feb 30) are caught at TradingView ingestion, not later in `merge_sources` — doubly validated, more robust.
+
+---
+
+# Decision: Rusty Implementation Notes — Store/Cache Integration (Initial, Later Revised by Livingston) (2026-08-18)
+
+**Date:** 2026-08-18
+**Author:** Rusty (Dev)
+**Status:** ⚠️ Initial implementation superseded by Livingston revision (D1-D5)
+**Scope:** Persistence layer (CosmosDB), cache integration (hydration, concurrency).
+
+## Initial Implementation (Rejected D1-D5)
+
+Authored `backend/src/options_chain_store.py` (Cosmos sharding per expiration, ETag CAS, 3-retry, size escape valve), extended `backend/src/options_chain_cache.py` (hydration, per-symbol `threading.RLock`), wired `merge_prior`/`recompute_derived`/`prune_by_expiration` calls, added T13-T21 tests.
+
+Strict charter discipline: did not touch `options_chain_merge.py`, provider normalizers, filters. Applied Linus's Rule S1/S3 (omit unknowns, never fabricate zeros; reject malformed expiration) to yfinance-side `_process_option_df`.
+
+Initial validation: 601 focused tests passing (before defects found).
+
+## Defect Escalation (D1-D5)
+
+Basher's architecture review identified five defects in store↔merge seam composition:
+- D1/D2: CAS reconciliation misusing `merge_prior`.
+- D3: Hydration not pruned, missing fields.
+- D4: Locking concurrency issues (freeze, reentrancy).
+- D5: Change-detection dead code.
+
+Per rejection protocol, Rusty locked out. Livingston cast as new specialist to repair seam with authority over both domains (frozen merge module, full authority over store/cache integration/concurrency).
+
+## Escalation Rationale
+
+Defects lived at the *seam* — neither Rusty's nor Linus's charter owned end-to-end integration. Basher reviewer-only. Danny lead, not implementer. New specialist required.
+
+---
+
+**Note:** This decision log now contains the definitive record of all decisions from inbox. See `.squad/orchestration-log/` for agent-level session details and `.squad/session-log/2026-08-18T11-32-00Z-session-log.md` for full timeline.

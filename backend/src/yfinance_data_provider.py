@@ -65,6 +65,22 @@ Contract fields:
   - inTheMoney: Boolean — whether the contract is currently in the money
   - expiration: Expiration date as YYYYMMDD string
   - option_type: "call" or "put"
+  - _meta: Provenance for this contract's quote. May be absent on very old data.
+      - quote_asof: ISO 8601 timestamp of the last time bid/ask/iv/lastPrice/
+        lastTradeDate were actually accepted from a live source. A contract
+        can be present with a quote_asof that is hours or days old — the
+        chain is retained indefinitely and never wiped by a bad refresh, so
+        a returned contract is NOT guaranteed to be a live/current-cycle
+        quote. ALWAYS check quote_asof before treating bid/ask as fresh for
+        a time-sensitive decision, and disclose staleness if quote_asof is
+        more than a few hours old.
+      - quote_source: "tradingview" or "yfinance" — which source last
+        supplied the accepted quote group.
+      - carried: true if no source listed this contract this refresh cycle
+        (its fields are all last-known-good, not from this cycle).
+      - greeks_valid: false if delta/gamma/theta/vega/rho could not be
+        computed from a valid implied volatility this cycle (values default
+        to 0 / intrinsic-only in that case — do not treat them as reliable).
 
 PREMIUM CALCULATION (CRITICAL — read carefully):
 All strategies in this application SELL (write) options. When SELLING an option:
@@ -106,6 +122,14 @@ LIQUIDITY GUIDANCE:
 STALENESS GUIDANCE:
   Skip contracts with lastTradeDate > 3 trading days ago — prices may not reflect
   current market conditions.
+  This chain is retained indefinitely (contracts never disappear merely because
+  a refresh missed them or a source returned bad data) — check each contract's
+  `_meta.quote_asof` and `_meta.carried` before relying on bid/ask/iv as live.
+  IMPORTANT: the quote fields (bid/ask/iv/lastPrice/lastTradeDate) themselves
+  may be last-known-good rather than from this refresh cycle — a contract's
+  presence in this chain is NOT evidence that its quote is current. Always
+  treat `_meta.carried == true` or an old `_meta.quote_asof` as "last-known-good,
+  confirm before acting," never as "verified live."
 """
 
 

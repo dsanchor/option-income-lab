@@ -2600,6 +2600,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         underlying_price=underlying_px,
                         roll_type=roll_type,
                         buyback_cost=_bb_cost,
+                        current_contract=current_contract,
                     )
 
                 try:
