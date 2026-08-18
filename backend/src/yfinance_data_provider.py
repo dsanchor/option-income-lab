@@ -163,6 +163,28 @@ def _forecast_recommendation_label(value) -> str:
     return "Strong Sell"
 
 
+def _drop_incomplete_trailing_bars(history: pd.DataFrame) -> pd.DataFrame:
+    """Trim trailing rows whose `Close` is NaN/missing.
+
+    yfinance's ``history()`` sometimes appends a final row for the current
+    session before that session's close has actually been recorded (data
+    lag, or the request lands mid-session). A NaN close in the last row
+    silently poisons the *last* value of any rolling-window indicator
+    (SMA, Stochastic) computed over it, while EMA/RSI/MACD-style recursive
+    indicators forward-fill through the same NaN and keep reporting the
+    prior day's value — an inconsistent mix of "falsely unavailable" and
+    "silently stale" signals from the same bad input row. Anchor every
+    indicator on the same, fully-observed last bar instead: never drop a
+    row with a real close, only the incomplete tail.
+    """
+    if history is None or history.empty or "Close" not in history.columns:
+        return history
+    trimmed = history
+    while not trimmed.empty and pd.isna(trimmed["Close"].iloc[-1]):
+        trimmed = trimmed.iloc[:-1]
+    return trimmed
+
+
 def _safe_timestamp(val) -> Optional[str]:
     """Convert a timestamp (int or datetime) to ISO 8601 string."""
     if val is None:
@@ -219,6 +241,7 @@ class YFinanceDataProvider:
         except Exception as exc:
             logger.error("%s: failed to fetch history: %s", symbol, exc)
             history = pd.DataFrame()
+        history = _drop_incomplete_trailing_bars(history)
 
         current_price = info.get("regularMarketPrice") or info.get("currentPrice") or (
             float(history["Close"].iloc[-1]) if not history.empty else None
@@ -517,6 +540,14 @@ class YFinanceDataProvider:
                 # Compute consecutive growth years from dividend history
                 annual = div_series.resample("YE").sum()
                 annual = annual[annual > 0]
+                # The current calendar year is still in progress: its
+                # running total only reflects dividends paid so far and
+                # will always look smaller than a completed prior year,
+                # which would otherwise break the streak comparison below
+                # even for an uninterrupted grower. Exclude it until the
+                # year actually completes.
+                if len(annual) and annual.index[-1].year >= datetime.now(timezone.utc).year:
+                    annual = annual.iloc[:-1]
                 if len(annual) >= 2:
                     growth_years = 0
                     for i in range(len(annual) - 1, 0, -1):

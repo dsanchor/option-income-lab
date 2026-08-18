@@ -495,3 +495,222 @@
   tests), does not touch `get_or_load_async`/`refresh_all`/watchdog/merge/
   store, and the activity-chat consumer's existing graceful-degradation
   contract is intact and re-verified.
+
+## 2026-08-18 — Buy Tracker: Root-Cause Diagnosis of "score_breakdown → canonical 0/5" (READ-ONLY)
+
+**Task:** Independently diagnose why Buy Tracker output shows missing
+`score_breakdown` collapsing to canonical 0/5 WAIT while SMA50/SMA200/
+Stochastic/dividend-growth-years are reported unavailable. Read-only;
+no production/test edits made.
+
+**Pipeline traced:** `buy_tracker_agent.py` (thin orchestrator, no
+data-shaping) → `AgentRunner.run_symbol_agent` (generic pass-through;
+grepped `agent_runner.py` for the field names in question —
+zero matches, confirming no intermediate transform there) → LLM call
+against `buy_tracker_instructions.py`'s documented field-mapping
+contract → `rule_evaluator.build_buy_tracker_evidence` (evidence
+adapter) → `rule_evaluator.normalize_buy_tracker_activity` /
+`_validate_buy_tracker_breakdown` (deterministic post-LLM validator).
+`dps_scorer.py` checked and confirmed **unrelated** — its
+`score_breakdown` is a distinct list-of-factors structure for a
+different (DPS/covered-call) scorer, not in the Buy Tracker path.
+
+**`rule_evaluator.py`'s evidence adapter (`build_buy_tracker_evidence`,
+~line 1316) and `_validate_buy_tracker_breakdown` (~line 1615) are
+both correct and NOT the bug.** The adapter's field mapping matches
+`buy_tracker_instructions.py`'s documented contract exactly (no
+alias/schema mismatch). `_validate_buy_tracker_breakdown` only zeroes
+out a dimension if the **LLM's own** JSON output for that key is
+missing/non-boolean-0-or-1 — it does not force 0/5 based on upstream
+evidence gaps directly; it is downstream of the LLM correctly reacting
+(per the prompt's own documented rule) to being fed too many `None`
+evidence fields to confidently populate its own breakdown.
+
+**Root cause (confirmed by direct reproduction against real production
+code and LIVE yfinance data, not synthetic fixtures) — TWO distinct
+provider-layer defects, both in `yfinance_data_provider.py` /
+`technicals_calculator.py`, upstream of `rule_evaluator.py` entirely:**
+
+1. **Technicals: trailing incomplete "today" OHLCV row silently nukes
+   rolling-window indicators.** `yfinance_data_provider.fetch_all` calls
+   `ticker.history(period="1y")` and passes it straight into
+   `TechnicalsCalculator.compute_all` with **no trimming/dropna of a
+   still-in-progress current session**. Live-reproduced against AAPL,
+   MSFT, KO, JNJ (all fetched live, same moment): every symbol's
+   `history()` call returned a **trailing row with `Close=NaN`**
+   (today's bar not yet settled by Yahoo). `_safe_val(series, offset=-1)`
+   is used unconditionally for every indicator — since SMA/Stoch rolling
+   windows ending on that NaN row require the full window to be non-null,
+   **SMA50, SMA200, and Stoch.K came back `None` for all 4 symbols**,
+   even though yesterday's values (`offset=-2`) were fully valid
+   (e.g. AAPL SMA200 @-1 = `None`, @-2 = `279.99`). RSI/MACD/ADX
+   happened to survive (pandas_ta's EWM-based smoothing tolerates the
+   trailing NaN differently) — this asymmetry (some indicators vanish,
+   others don't) is an exact match to the reported symptom
+   ("SMA50/SMA200/Stochastic unavailable" but not RSI/MACD). Confirmed
+   fix hypothesis: `history.dropna(subset=["Close"])` before
+   `compute_all()` restored all 4 indicators to their correct,
+   yesterday-based values for AAPL. `_compute_manual` (pandas_ta-absent
+   fallback) has the identical `_safe_val(..., -1)` pattern (56 call
+   sites) — same latent defect, currently dormant since pandas_ta 0.4.71b0
+   is installed in this environment.
+
+2. **Dividends: current partial calendar year corrupts the
+   consecutive-growth-years streak.** `_build_dividends`'s
+   `continuous_dividend_growth` computation (`yfinance_data_provider.py`
+   ~line 509) resamples `ticker.dividends` by calendar year (`"YE"`) and
+   walks backward counting `annual.iloc[i] > annual.iloc[i-1]`, **without
+   excluding the current, still-in-progress year**. Live-reproduced for
+   KO/JNJ/PG (all real Dividend Aristocrats/Kings with genuine decades-long
+   growth streaks): current logic returns **`growth_years = 0` for all
+   three**, every time, because the partial-current-year sum is always
+   less than the last full year's sum, breaking the streak at the very
+   first comparison. Since the field is only added `if growth_years > 0`,
+   `continuous_dividend_growth` is **silently omitted** from the JSON for
+   every real dividend payer tested. Confirmed fix hypothesis: excluding
+   `annual.index.year >= current_year` before the comparison loop yields
+   the correct streak (KO=23, JNJ=63, PG=22 years, bounded by available
+   yfinance dividend history depth).
+
+**Classification (per the task's requested categories):** This is
+**neither** a schema omission (the JSON shape/keys are exactly what
+`rule_evaluator.py` and the prompt expect), **nor** an alias/normalizer
+mismatch (the evidence-adapter mapping is faithful), **nor** a prompt
+inconsistency (the prompt's own missing-score_breakdown fallback rule is
+working as documented), **nor** genuinely-missing market data (the data
+one period back — yesterday's close, last year's full dividend total —
+is valid and available). It is a **provider-layer computation defect**:
+both bugs treat an **incomplete trailing period** (today's still-open
+session; this year's still-accruing dividends) as if it were a complete,
+comparable period, silently discarding perfectly good prior-period data.
+
+**Test-coverage gap confirmed:** `tests/test_technicals_calculator.py`
+(44 tests, all passing) builds 100% clean synthetic OHLCV via
+`_make_ohlcv`/`_uptrending_ohlcv` etc. — **zero** fixtures include a
+trailing NaN/incomplete row, so this defect class was structurally
+unreachable by the existing suite. `test_buy_tracker_normalization.py`
+(5 passing) and `test_rule_evaluator.py` (196 passing) are unaffected/
+irrelevant to this defect since it lives entirely upstream in the
+provider layer. Ran `pytest tests/test_yfinance_data_provider.py` — 3
+pre-existing, unrelated failures (Greeks/mid-price on options contracts,
+not technicals/dividends) — confirmed unrelated to this diagnosis.
+
+**Acceptance criteria for a fix (for the assigned production engineer,
+not implemented by me):**
+- AC1: `compute_all`/`_build_technicals` must exclude or repair any
+  trailing OHLCV row lacking a valid `Close` before computing indicators,
+  so SMA/EMA/Stoch/CCI/etc. reflect the last **complete** session.
+- AC2: The fix must apply uniformly to all indicators so RSI/MACD (which
+  currently "survive" only by accident of pandas_ta's internal NaN
+  handling) and SMA/Stoch (which currently vanish) are computed as of
+  the *same* reference date — no indicator should silently reflect a
+  different "as-of" day than another.
+- AC3: `continuous_dividend_growth`'s year-over-year comparison must
+  exclude the current, not-yet-complete calendar year (or handle it via
+  a TTM-vs-full-year comparison), so real multi-decade dividend-growth
+  streaks are no longer universally reported as 0/absent.
+- AC4: A regression test using a real-shaped fixture with (a) a trailing
+  NaN "today" OHLCV row and (b) dividend history including the current
+  partial year must assert SMA50/SMA200/Stoch.K and
+  `continuous_dividend_growth` remain correctly populated.
+- AC5: Re-verify against real, liquid, actively-covered dividend payers
+  that the `score_breakdown` 0/5 canonical fallback no longer triggers
+  purely as a downstream artifact of this provider-layer data loss.
+
+**Verdict: REJECT current behavior.** Two concrete, independently
+reproduced, high-confidence provider-layer defects (not edge cases —
+reproduced live across 4+ real symbols on the first live attempt) are
+the first point where valid upstream data disappears, well before
+`rule_evaluator.py` or the LLM prompt are ever involved. Recommend fix
+ownership at `yfinance_data_provider.py` / `technicals_calculator.py`.
+
+## 2026-08-18 — Buy Tracker: Final QA Gate on Rusty's Fix (READ-ONLY) — APPROVE
+
+**Task:** Final read-only reviewer gate on Rusty's revision closing my
+prior REJECT (trailing-NaN-bar technicals loss, partial-current-year
+dividend-streak loss). Scope: `backend/src/yfinance_data_provider.py`,
+`backend/src/buy_tracker_instructions.py`,
+`backend/tests/test_yfinance_technicals_dividend_availability.py`.
+
+**Diff reviewed (`git diff`, 38 lines across 2 files + new 266-line test
+file; `rule_evaluator.py` untouched):**
+- New `_drop_incomplete_trailing_bars(history)` in `yfinance_data_provider.py`
+  — while-loop pops trailing rows with NaN `Close`, called once in
+  `fetch_all()` right after `ticker.history()` and before both
+  `_build_technicals` and the `current_price` history-fallback (so both
+  consumers see the trimmed frame). Guards `None`/empty/no-`Close`-column
+  inputs by returning input unchanged.
+- `_build_dividends`'s `continuous_dividend_growth` block now drops the
+  last `annual` bin when `annual.index[-1].year >= datetime.now(timezone.utc).year`,
+  before the growth-streak comparison loop. Still inside the pre-existing
+  `try/except Exception` (any resample edge case fails safe, same as
+  before).
+- `buy_tracker_instructions.py`: added explicit prompt language that
+  `score_breakdown` must always be a real 5-key object, that a missing
+  dimension's data zeroes *only* that dimension, and that the
+  missing/malformed-object fallback is a last resort for genuine
+  malformation, not a shortcut for partial data unavailability.
+
+**Independent verification performed (not just trusting the diff/tests):**
+1. **Live re-verification** against `_drop_incomplete_trailing_bars` +
+   `_build_technicals` + `_build_dividends` for AAPL, MSFT, KO, JNJ, PG
+   (same live yfinance call showing the same trailing `Close=NaN` row as
+   my original REJECT repro): SMA50/SMA200/Stoch.K/RSI now all populate
+   with valid, non-`None` values, and `continuous_dividend_growth` =
+   14/20/23/63/22 respectively — KO/JNJ/PG exactly match my original
+   independent findings cited in the new test file's docstring.
+2. **Trimming cannot remove legitimate rows** — confirmed by direct
+   repro: the loop stops at the first row (from the tail) with a
+   non-NaN `Close`, so a row is only ever dropped if it carries zero
+   usable closing-price information; verified edge cases directly:
+   all-`NaN`-`Close` history trims to fully empty (falls through to
+   `compute_all`'s existing `<30 bars` → `_empty_technicals()` guard,
+   no crash), a frame missing the `Close` column is returned unchanged,
+   `None` input is returned unchanged. Also confirmed (via the test
+   file's `test_interior_nan_close_is_preserved_only_trailing_is_trimmed`
+   and my own read) that only a *trailing* run of NaNs is removed — an
+   interior historical gap survives untouched.
+3. **Current-year boundary logic** — read `annual.index[-1].year` (the
+   resample bin's calendar-year label, which reflects the *bin's* year
+   regardless of how partial its data is) compared against
+   `datetime.now(timezone.utc).year`; reasoned through DST/timezone-skew
+   edge cases at year boundaries (NY-vs-UTC offset is at most a few
+   hours, immaterial against quarterly dividend cadence) — no boundary
+   defect found. Confirmed the whole block remains inside the original
+   `try/except`, so a `resample` corner case (e.g. an unusual empty
+   series) fails safe rather than crashing `fetch_all`.
+4. **Prompt/schema/normalizer consistency** — `rule_evaluator.py` was
+   **not modified**; confirmed `_validate_buy_tracker_breakdown` already
+   validated each of `BUY_TRACKER_DIMENSIONS` independently (a missing/
+   invalid key only zeroes that key), so the new prompt language is
+   purely clarifying intent to the LLM and requires no normalizer change
+   to stay consistent — verified true by inspection, no drift found.
+
+**Test outcome (exact, run myself):**
+- `pytest tests/test_yfinance_technicals_dividend_availability.py
+  tests/test_technicals_calculator.py tests/test_buy_tracker_normalization.py
+  tests/test_rule_evaluator.py tests/test_yfinance_data_provider.py -q` →
+  **276 passed** (12 new tests all pass), 2-3 failures in the same
+  pre-existing, unrelated `TestOptionsChainStructure` Greeks/mid-price
+  class (confirmed flaky/randomized-fixture, count varies 2-3 across
+  3 repeated runs, unrelated to this diff — Rusty touched no options
+  code).
+- Full suite `pytest tests/ -q` → **1262 passed, 20 failed** (1250 + the
+  12 new tests). Diffed the exact 20 failure names against a `git
+  stash`-restored pre-fix baseline run on the same tree: **identical
+  set, same file (`test_yfinance_data_provider.py`), same full-suite-only
+  reproduction pattern** (these tests pass when the file is run alone;
+  they only fail when run after the rest of the suite — a pre-existing
+  cross-test-file mock-isolation artifact, not a regression from this
+  change). Confirmed byte-for-byte pre-existing baseline, not introduced
+  by Rusty's fix.
+
+**Verdict: APPROVE.** Both root causes from my REJECT are fixed at the
+correct layer (provider-level, not `rule_evaluator.py`/prompt-only),
+verified independently against live data with the exact symbols from my
+original diagnosis, trimming is provably conservative (never touches a
+row with real close data), the date-boundary logic is sound, and the
+prompt clarification is consistent with the already-correct normalizer
+contract. No regressions; new tests are rigorous and non-fake (real
+`YFinanceDataProvider`/`build_buy_tracker_evidence`, only network-facing
+`ticker` is stood in).

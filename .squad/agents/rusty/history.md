@@ -40,7 +40,65 @@
 
 ## Recent Learnings
 
-### 2026-08-18 — yfinance normalizer cleanup applied to `options_chain_cache.py` (per Linus's request)
+### 2026-08-18 — Buy Tracker "Score 0/5, canonical fields unavailable" bug
+- Unrelated new task (prior option-chain lockout explicitly lifted). Traced
+  the full reported symptom end-to-end: schema/prompt
+  (`buy_tracker_instructions.py`) → JSON extraction
+  (`agent_runner._try_extract_json`) → breakdown validation
+  (`rule_evaluator._validate_buy_tracker_breakdown`) → persistence
+  (`cosmos_db.write_activity`) → canonical evidence mapping
+  (`rule_evaluator.build_buy_tracker_evidence`). All confirmed correct and
+  untouched — the strict breakdown type-checking (reject bool/string, only
+  exact 0.0/1.0) is intentional and already tested; persistence does a full
+  dict spread with no key stripping; evidence field mappings already matched
+  `technicals_calculator`'s real output shape.
+- Root cause was upstream, in `yfinance_data_provider.py`, reproduced live
+  against real KO data: (1) `ticker.history(period="1y")` can return a
+  trailing row (today's session) with `Close=NaN`; rolling-window indicators
+  (`SMA*`, `Stoch.K`) correctly propagate that NaN into their last value
+  (key omitted per "absence is not zero"), while recursive indicators
+  (`EMA*`, `RSI`, `MACD`) silently forward-fill through it instead — an
+  inconsistent mix that looked like SMA50/SMA200/Stochastic were simply
+  "unavailable." (2) `_build_dividends`'s growth-streak loop compared the
+  *current, still-in-progress* calendar year's partial dividend total
+  against the prior complete year — always looks like a cut, breaking the
+  streak at 0 and omitting `continuous_dividend_growth` for virtually every
+  evaluation performed before year-end.
+- Fixed at the data boundary (`yfinance_data_provider.py`), not in the
+  shared `technicals_calculator.py` (garbage-in-garbage-out fix, keeps the
+  shared calculator untouched for all other agent types): new
+  `_drop_incomplete_trailing_bars()` trims trailing NaN-close rows before
+  any indicator is computed (interior gaps untouched); `_build_dividends`
+  now excludes the still-forming current year from the streak comparison
+  (a genuine cut in a *completed* year still correctly breaks the streak).
+  Added a defense-in-depth prompt clarification in
+  `buy_tracker_instructions.py`: `score_breakdown` must always be a real
+  5-key object; missing data for one dimension only zeroes that dimension,
+  never the whole object.
+- New `test_yfinance_technicals_dividend_availability.py` (11 tests, all
+  deterministic/offline, no network) locks in both fixes plus a genuine-cut
+  regression and an end-to-end `build_buy_tracker_evidence` integration
+  check. Full relevant suite (`test_rule_evaluator` +
+  `test_buy_tracker_normalization` + `test_agent_model_settings` + new
+  file): 234/234 passed. Relevant offline subset of
+  `test_yfinance_data_provider.py` (Technicals/Dividends/Overview): 5/5
+  passed, no regressions.
+- Decision recorded in
+  `.squad/decisions/inbox/rusty-buy-tracker-canonical-availability-fix.md`.
+
+### 2026-08-18 — Basher independent cross-check confirms the fix
+- Basher independently reproduced the same two root causes (trailing NaN
+  Close breaking rolling SMA/Stoch vs. surviving EWM indicators; partial
+  current-year dividend bucket zeroing the growth streak) and supplied
+  live expected values (KO≈23, JNJ≈63, PG≈22). Re-ran the already-applied
+  fix live against AAPL/MSFT/KO/JNJ/PG: SMA50/SMA200/Stoch.K present for
+  all five, `continuous_dividend_growth` == 23/63/22 for KO/JNJ/PG — exact
+  match, no code change required. Added one more synthetic 63-year-streak
+  deterministic test mirroring the JNJ magnitude for extra confidence.
+  Basher continues investigating `score_breakdown` normalization
+  separately — my fix explains the missing-evidence half, not necessarily
+  the missing-score_breakdown half, which was already flagged as an open
+  question in my decision doc.
 - Linus's `options_chain_merge.py` is done/frozen (449 tests). He confirmed
   `options_chain_cache.py` is outside his authorized artifacts and asked me
   to personally mirror, on the yfinance side, the same normalizer fix he'd

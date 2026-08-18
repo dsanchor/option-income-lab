@@ -3234,3 +3234,135 @@ A Cosmos read/write failure returns a non-success API response (503, 409, etc.) 
 ### Follow-ups
 - Monitor Cosmos availability and latency in production
 - Assess if 503 errors warrant user-facing alerts or automatic fallback strategy (intentionally not implemented at this time)
+# Decision: Buy Tracker Canonical Field Availability (SMA/Stochastic/Dividend Growth)
+
+**Author:** Rusty (Backend Dev)
+**Date:** 2026-08-18
+
+## Context
+Reported symptom: Buy Tracker output `Score 0/5 (value_entry:0, trend:0,
+momentum:0, income:0, calendar:0)` with reason "The required score_breakdown
+was missing, so all canonical dimensions were validated as 0. Canonical
+SMA50, SMA200, Stochastic confirmation, and dividend-growth-years data are
+also unavailable."
+
+Traced the full path: model schema/prompt (`buy_tracker_instructions.py`) →
+JSON extraction (`agent_runner.py::_try_extract_json`) → breakdown validation
+(`rule_evaluator.py::_validate_buy_tracker_breakdown`) → persistence
+(`cosmos_db.py::write_activity`) → canonical evidence mapping
+(`rule_evaluator.py::build_buy_tracker_evidence`/`_canonical_buy_tracker_evidence`).
+All of these were confirmed correct and untouched. The bug was upstream, in
+the market-data PRODUCER (`yfinance_data_provider.py`), which was genuinely
+starving the model of the canonical fields it needed — not a parsing,
+validation, or persistence defect.
+
+## Root causes (reproduced against real KO market data)
+
+1. **Trailing incomplete session blanks rolling-window indicators.**
+   `ticker.history(period="1y")` can return a final row (today's session)
+   whose `Close` is `NaN` (yfinance data lag). Rolling-window `pandas_ta`
+   indicators (`SMA*`, `Stoch.K`) correctly propagate that `NaN` into their
+   last value, so `technicals_calculator._safe_val` returns `None` and the
+   key is *omitted* (per the existing "absence is not zero" convention).
+   Recursive/Wilder-style indicators (`EMA*`, `RSI`, `MACD`) instead silently
+   forward-fill through the same `NaN`, reporting the prior day's value
+   unchanged — an inconsistent, confusing mix where some indicators go
+   silently stale and others correctly-but-confusingly vanish.
+
+2. **Partial current-year dividend bucket always looks like a cut.**
+   `_build_dividends`'s consecutive-growth-year loop resamples dividends to
+   annual totals and compares consecutive full years. The *current,
+   still-in-progress* calendar year (fewer payments made so far) always
+   compares as a decrease against the prior complete year, breaking the
+   streak at `growth_years = 0` for essentially every evaluation performed
+   before the current year finishes — `continuous_dividend_growth` was
+   therefore omitted (the code only writes it when `growth_years > 0`).
+
+## Decision
+Fix both at the data-boundary in `yfinance_data_provider.py` (the directly
+imported Buy Tracker module), not in the shared `technicals_calculator.py`
+(garbage-in-garbage-out fix at the input, keeping the shared calculator
+untouched for all other agent types):
+
+1. New `_drop_incomplete_trailing_bars(history)` helper trims trailing rows
+   whose `Close` is `NaN` before any indicator is computed, so SMA, EMA,
+   RSI, MACD, and Stochastic all consistently anchor on the same last
+   genuinely-completed session. Interior NaN gaps are left untouched — only
+   the trailing incomplete bar(s) are dropped. Wired into `fetch_all()`
+   immediately after `ticker.history(period="1y")`.
+2. `_build_dividends()` now excludes the still-forming current calendar
+   year's bucket from the growth-streak comparison
+   (`annual.index[-1].year >= datetime.now(timezone.utc).year`) before
+   counting consecutive growth years. A genuine cut in a *completed* year
+   still correctly breaks the streak (regression-tested).
+3. Defense-in-depth prompt clarification added to
+   `buy_tracker_instructions.py`: `score_breakdown` must always be emitted
+   as a real 5-key object; missing data for one dimension only zeroes that
+   dimension, never the whole object; the all-zero fallback is a
+   last-resort recovery for genuinely malformed output, not a shortcut for
+   merely-unavailable data.
+
+## Explicitly ruled out (confirmed correct, left untouched)
+- `_validate_buy_tracker_breakdown`'s strict type checking (reject bool,
+  reject non-int/float, reject values other than exactly `0.0`/`1.0`) is
+  intentional and already covered by
+  `test_rule_evaluator.py::TestBuyTrackerMalformedBreakdown` — not loosened.
+- JSON brace-counting extraction in `agent_runner.py::_try_extract_json` is
+  theoretically fragile to unbalanced literal braces inside string values,
+  but balanced pairs (the realistic case) don't break it — no reproducible
+  evidence found; not modified.
+- `cosmos_db.py::write_activity` performs a full dict spread with no key
+  stripping — ruled out as a persistence cause.
+- `build_buy_tracker_evidence`/`_canonical_buy_tracker_evidence` field
+  mappings were already correct against `technicals_calculator.py`'s actual
+  output shape.
+
+## Files changed
+- `backend/src/yfinance_data_provider.py` — `_drop_incomplete_trailing_bars`
+  helper (new), wired into `fetch_all()`; current-year exclusion guard in
+  `_build_dividends()`.
+- `backend/src/buy_tracker_instructions.py` — score_breakdown emission
+  clarification (prompt-only change, no schema change).
+- `backend/tests/test_yfinance_technicals_dividend_availability.py` (new,
+  11 tests): trailing-NaN trimming unit tests, SMA/Stochastic availability
+  with/without a trailing incomplete bar, dividend-growth-years availability
+  despite a partial current year, genuine-cut-still-breaks-streak
+  regression, and an end-to-end `build_buy_tracker_evidence` integration
+  test tying the fixed provider output to canonical evidence fields.
+
+## Validation
+- New test file: 12/12 passed (added a synthetic 63-year streak case
+  mirroring the JNJ cross-check below).
+- `test_rule_evaluator.py` + `test_buy_tracker_normalization.py` +
+  `test_agent_model_settings.py` + new file: 235/235 passed (no
+  regressions).
+- Relevant subset of `test_yfinance_data_provider.py` (Technicals/Dividends/
+  Overview, offline/deterministic): 5/5 passed (no regressions from the
+  provider change).
+- `python3 -m py_compile` clean on both modified source files.
+- **2026-08-18 — Basher independent cross-check.** Basher reproduced the
+  same two root causes independently (trailing NaN Close breaking rolling
+  SMA/Stoch while EWM indicators survive; current partial calendar year
+  zeroing the dividend growth streak) and supplied expected live values.
+  Re-ran the fixed provider live against AAPL/MSFT/KO/JNJ/PG: SMA50/SMA200/
+  Stoch.K all present for every symbol, and `continuous_dividend_growth` ==
+  23 (KO), 63 (JNJ), 22 (PG) — an exact match to Basher's expected values
+  with no further code change required. AAPL=14/MSFT=20 (not independently
+  specified by Basher) are consistent with each company's known dividend
+  history. Basher separately continues investigating `score_breakdown`
+  normalization on its own track — this decision only covers the canonical
+  evidence-availability fix, consistent with the "explains missing evidence,
+  not necessarily missing score_breakdown itself" scoping already noted
+  below.
+
+## Follow-ups / open questions for the team
+- KO's real dividend streak is dozens of years by reputation, but the fixed
+  calculation reports a smaller (still correct, non-zero) count — a
+  separate, pre-existing calendar-year-bucketing precision limitation in the
+  original streak algorithm, not introduced or fixed here; worth a future
+  look if precise streak length ever becomes score-relevant.
+- Could not invoke a live LLM to directly confirm the model's exact
+  behavior when `score_breakdown` is entirely missing from its own output
+  (no model credentials available in this sandbox); the prompt clarification
+  is reasonable defense-in-depth layered on top of the primary, fully
+  reproduced upstream data fix.

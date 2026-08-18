@@ -51,11 +51,18 @@ unavailable. Missing or malformed evidence is never inferred.
 
 - Use exactly these five `score_breakdown` keys: `value_entry`, `trend`,
   `momentum`, `income`, and `calendar`.
+- Always output `score_breakdown` as a real JSON object containing exactly
+  these five keys. Missing canonical data for one dimension only zeroes
+  *that* dimension — it never justifies omitting the object entirely or
+  zeroing dimensions whose own required data is present. Evaluate every
+  dimension independently from whatever evidence is available for it.
 - Every value must be numeric `0` or `1`. Treat a missing, non-numeric, or
   otherwise invalid value as `0`, and explicitly identify the invalid
   dimension. Ignore extra keys.
 - If `score_breakdown` is missing or is not an object, replace it with all five
   canonical keys set to `0`, report the validation problem, and use `WAIT`.
+  This is a last-resort recovery for a genuinely malformed output, never a
+  deliberate shortcut when some canonical data is merely unavailable.
 - A condition passes only when every datum needed to evaluate it is present and
   valid. Missing or malformed values never pass a condition.
 - Treat malformed JSON values, non-finite numbers, non-positive percentage
