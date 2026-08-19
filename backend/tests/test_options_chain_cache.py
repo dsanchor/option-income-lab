@@ -148,11 +148,14 @@ class TestSourceMergePrecedence:
 
 
 class TestBeyondFiveExpirations:
-    def test_yfinance_zero_beyond_tv_coverage_no_prior_data(self, cache, monkeypatch):
+    def test_yfinance_zero_beyond_tv_coverage_omitted_no_prior_data(self, cache, monkeypatch):
         """TV (near-term only) covers the first few expirations; yfinance
-        zeros for later expirations remain zero on a first fetch (no prior
-        good data exists to fall back to) — matches observed production
-        behavior beyond ~5 expirations before this fix."""
+        zeros for later expirations, with no prior good data to fall back
+        to, are now *omitted* (bid absent) rather than stored as a literal
+        0.0 — per the 2026-08-19 "Zero-never-overwrites-prior" invariant
+        (Z12, `options_chain_merge._select_quote_field`): an incoming
+        exact zero for bid is never meaningful, so with no valid prior
+        either it is not introduced into the accumulated chain at all."""
         near_exps = [_future_exp_key(d) for d in (5, 10, 15)]
         far_exps = [_future_exp_key(d) for d in (40, 70, 100)]
 
@@ -172,7 +175,7 @@ class TestBeyondFiveExpirations:
         for exp in near_exps:
             assert result["calls"][exp]["100.0"]["bid"] == 1.0
         for exp in far_exps:
-            assert result["calls"][exp]["100.0"]["bid"] == 0.0
+            assert result["calls"][exp]["100.0"].get("bid") is None
 
     def test_far_expiration_backfilled_from_last_known_good(self, cache, monkeypatch):
         """Once a valid value has been observed for a far expiration on a
@@ -202,19 +205,23 @@ class TestBeyondFiveExpirations:
 
 
 class TestLastKnownGoodMerge:
-    def test_first_fetch_zeros_preserved_as_is(self, cache, monkeypatch):
-        """No prior cache entry exists. A real bid=0 (valid on its own —
-        design §2.1) is kept as a genuine bid-less observation. `ask`,
-        which is only ever valid when >0 (design §2.1: ask==0 carries no
-        information), is correctly represented as *absent* rather than a
-        fabricated literal zero — "absence is not zero" (design §2.2)."""
+    def test_first_fetch_zero_bid_omitted_no_prior(self, cache, monkeypatch):
+        """No prior cache entry exists. Per the 2026-08-19
+        "Zero-never-overwrites-prior" invariant (Z12), an incoming exact
+        bid=0.0 is never a meaningful observation — with no valid prior to
+        fall back to either, it is *omitted* rather than stored as a
+        literal 0.0 (this supersedes the previous "zeros preserved as-is"
+        rule). `ask`, which was already only ever valid when >0 (design
+        §2.1: ask==0 carries no information), is likewise absent —
+        "absence is not zero" (design §2.2) now applies uniformly to both
+        fields."""
         exp = _future_exp_key(5)
         yf_chain = {"symbol": "TEST", "calls": {exp: {"100.0": _contract(bid=0.0, ask=0.0)}}, "puts": {}}
         tv_chain = {"symbol": "TEST", "calls": {}, "puts": {}}
         _patch_sources(monkeypatch, cache, yf_chain, tv_chain)
 
         result = json.loads(run_async(cache.refresh("TEST")))
-        assert result["calls"][exp]["100.0"]["bid"] == 0.0
+        assert result["calls"][exp]["100.0"].get("bid") is None
         assert result["calls"][exp]["100.0"].get("ask") is None
 
     def test_contract_missing_from_fresh_fetch_carried_forward(self, cache, monkeypatch):
@@ -235,9 +242,13 @@ class TestLastKnownGoodMerge:
 
         assert result["calls"][exp]["100.0"]["bid"] == 1.0
 
-    def test_volume_and_open_interest_not_preserved_when_zero(self, cache, monkeypatch):
-        """Volume/openInterest legitimately go to zero — they must always
-        reflect the freshest fetch, never be pinned to a stale prior value."""
+    def test_volume_and_open_interest_zero_never_overwrites_valid_prior(self, cache, monkeypatch):
+        """Per the 2026-08-19 "Zero-never-overwrites-prior" invariant
+        (Z12), volume/openInterest are `_ZERO_SENSITIVE_FIELDS`: a fresh
+        exact zero (provider glitch / thin snapshot) is never a meaningful
+        update — it must never overwrite a genuinely valid non-zero prior.
+        This reverses the previous rule (which always trusted the freshest
+        fetch verbatim for these two fields)."""
         exp = _future_exp_key(5)
         yf_chain_1 = {"symbol": "TEST", "calls": {exp: {"100.0": _contract(volume=500, openInterest=1000)}}, "puts": {}}
         tv_chain_1 = {"symbol": "TEST", "calls": {}, "puts": {}}
@@ -249,8 +260,23 @@ class TestLastKnownGoodMerge:
         _patch_sources(monkeypatch, cache, yf_chain_2, tv_chain_2)
         result = json.loads(run_async(cache.refresh("TEST")))
 
-        assert result["calls"][exp]["100.0"]["volume"] == 0
-        assert result["calls"][exp]["100.0"]["openInterest"] == 0
+        assert result["calls"][exp]["100.0"]["volume"] == 500
+        assert result["calls"][exp]["100.0"]["openInterest"] == 1000
+
+    def test_volume_and_open_interest_zero_omitted_no_prior(self, cache, monkeypatch):
+        """No prior cache entry exists. An incoming exact zero for
+        volume/openInterest has no valid prior to fall back to either, so
+        it is omitted (absent) rather than stored as a literal 0 — the
+        no-prior counterpart of the "never overwrites a valid prior" rule
+        above."""
+        exp = _future_exp_key(5)
+        yf_chain = {"symbol": "TEST", "calls": {exp: {"100.0": _contract(volume=0, openInterest=0)}}, "puts": {}}
+        tv_chain = {"symbol": "TEST", "calls": {}, "puts": {}}
+        _patch_sources(monkeypatch, cache, yf_chain, tv_chain)
+        result = json.loads(run_async(cache.refresh("TEST")))
+
+        assert result["calls"][exp]["100.0"].get("volume") is None
+        assert result["calls"][exp]["100.0"].get("openInterest") is None
 
 
 class TestActualExpirationPruning:

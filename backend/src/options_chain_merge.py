@@ -21,6 +21,19 @@ Field classes (design §2.1):
                      OCC-format symbol is never downgraded.
   * Observed      — bid, ask, iv, lastPrice, lastTradeDate, volume,
                      openInterest, inTheMoney: field-level merge per §2.3.
+                     Rule Z12 (copilot-directive-2026-08-19T17-41-19): for
+                     bid/lastPrice/volume/openInterest, an incoming exact
+                     zero is never a meaningful update during accumulation
+                     — it is treated as no opinion. It never overwrites a
+                     genuinely valid (accepted, non-zero) prior value, and
+                     if there is no such prior value either, it is not
+                     introduced into the accumulated chain at all (the
+                     field stays absent/None). This supersedes the raw
+                     layer's earlier "zero is a real market fact, store it
+                     verbatim" stance specifically for this overwrite/
+                     introduction question; ask/iv already require a
+                     strictly positive value, so they were already
+                     compliant and are unaffected.
   * Derived       — mid, delta, gamma, theta, vega, rho: never merged from
                      any source; always recomputed by ``recompute_derived``.
                      Rule Z3 (danny-zero-free-agent-option-chains.md): a
@@ -66,6 +79,19 @@ _QUOTE_GROUP_FIELDS: Tuple[str, ...] = ("bid", "ask", "iv", "lastPrice", "lastTr
 # Independent observations — never gated (bucket or per-contract), never
 # subject to the trust gate; contractSymbol gets its own OCC-aware rule.
 _OTHER_OBSERVED_FIELDS: Tuple[str, ...] = ("volume", "openInterest", "inTheMoney", "contractSymbol")
+
+# Rule Z12 (copilot-directive-2026-08-19T17-41-19): numeric fields for
+# which an incoming exact zero is never a meaningful update during
+# accumulation against prior. ``ask``/``iv`` already require a strictly
+# positive value in `is_accepted`, so they are structurally exempt already
+# and are intentionally not listed here. This set is consulted only by
+# `merge_prior`'s field selectors (Phase 2) — it does not change what
+# `is_accepted` itself considers a valid *observation*; a zero is still a
+# real, well-formed number in isolation (e.g. within one `merge_sources`
+# cycle). It changes only whether that zero is allowed to become part of
+# the *accumulated* chain: never overwriting a genuinely valid non-zero
+# prior, and never being introduced when there is no such prior either.
+_ZERO_SENSITIVE_FIELDS: Tuple[str, ...] = ("bid", "lastPrice", "volume", "openInterest")
 
 # Never accepted from any source — always recomputed in recompute_derived.
 _DERIVED_FIELDS: Tuple[str, ...] = ("mid", "delta", "gamma", "theta", "vega", "rho")
@@ -387,11 +413,31 @@ def merge_sources(yf_chain: dict, tv_chain: dict) -> dict:
 # 5. merge_prior — Phase 2: accumulate against prior (design §3.2)
 # ---------------------------------------------------------------------------
 
+def _is_meaningful_value(field: str, value: Any) -> bool:
+    """True if `value` is an accepted observation that is also a genuine
+    "opinion" for `field` — i.e. it's fit to be preserved as a
+    last-known-good prior. For zero-sensitive fields (`_ZERO_SENSITIVE_
+    FIELDS`) an exact zero is accepted-but-not-meaningful: it's a
+    well-formed number yet carries no information (Rule Z12). For every
+    other field this is identical to `is_accepted`."""
+    if not is_accepted(field, value):
+        return False
+    if field in _ZERO_SENSITIVE_FIELDS and _finite_number(value) and float(value) == 0:
+        return False
+    return True
+
+
 def _select_quote_field(field: str, live_contract: Mapping[str, Any], prior_value: Any) -> Tuple[Any, bool]:
     """Return (value, accepted) for one quote-group field: the live
     candidate if it's present, individually valid, and the whole quote
     group passes the trust gate for this live contract; otherwise the
-    prior value (with accepted=False)."""
+    prior value (with accepted=False).
+
+    Rule Z12: for bid/lastPrice, an incoming exact zero is never treated
+    as a meaningful update — it never overwrites a genuinely valid
+    (non-zero) prior, and if there is no such prior it is not introduced
+    at all (the caller omits a `None` result from the accumulated chain).
+    """
     if field not in live_contract:
         return prior_value, False
     candidate = live_contract[field]
@@ -401,16 +447,28 @@ def _select_quote_field(field: str, live_contract: Mapping[str, Any], prior_valu
         return prior_value, False
     if field == "lastTradeDate" and not _is_newer_timestamp(candidate, prior_value):
         return prior_value, False
+    if field in _ZERO_SENSITIVE_FIELDS and _finite_number(candidate) and float(candidate) == 0:
+        if _is_meaningful_value(field, prior_value):
+            return prior_value, False
+        return None, False
     return candidate, True
 
 
 def _select_observed_field(field: str, live_contract: Mapping[str, Any], prior_value: Any) -> Any:
     """Independent observations (volume/openInterest/inTheMoney): never
-    gated — take the live value whenever it's individually valid."""
+    gated — take the live value whenever it's individually valid.
+
+    Rule Z12: for volume/openInterest, an incoming exact zero is never a
+    meaningful update — it never overwrites a genuinely valid (non-zero)
+    prior, and if there is no such prior it is not introduced at all."""
     if field not in live_contract:
         return prior_value
     candidate = live_contract[field]
-    return candidate if is_accepted(field, candidate) else prior_value
+    if not is_accepted(field, candidate):
+        return prior_value
+    if field in _ZERO_SENSITIVE_FIELDS and _finite_number(candidate) and float(candidate) == 0:
+        return prior_value if _is_meaningful_value(field, prior_value) else None
+    return candidate
 
 
 def _merge_prior_contract(

@@ -287,10 +287,20 @@ class TestZI1NoNumericZeroAnywhereInAgentSurfaces:
         view = to_agent_view(recomputed, now=NOW, stale_after_seconds=86400)
         violations = _recursive_zero_violations(view)
         assert violations == [], f"Z-I1 violation(s) in to_agent_view output: {violations}"
-        # volume/openInterest must still be the real, faithful integer 0.
+        # Rule Z12 (copilot-directive-2026-08-19T17-41-19) supersedes the
+        # original Z2 "volume/openInterest keep the faithful integer 0"
+        # expectation for THIS exact scenario: a from-scratch fetch with no
+        # prior value to preserve. An incoming exact zero for
+        # volume/openInterest (like bid/lastPrice) is now "no opinion"
+        # during accumulation (merge_prior) — with nothing meaningful to
+        # fall back to, the field is omitted entirely rather than stored
+        # as a literal 0. Z2 is otherwise intact: a genuinely non-zero
+        # volume/openInterest is still passed through unmodified, and a
+        # zero that arrives after a real prior value is still carried
+        # forward as that prior value (see TestZI2), never nulled.
         contract = view["calls"]["20260901"]["100.0"]
-        assert contract["volume"] == 0
-        assert contract["openInterest"] == 0
+        assert "volume" not in contract and contract.get("volume") is None
+        assert "openInterest" not in contract and contract.get("openInterest") is None
 
     def test_apply_agent_view_serving_seam_recursive_walk_clean(self):
         """The exact helper Livingston's `web/app.py`/`agent_runner.py`
@@ -535,7 +545,29 @@ class TestZI4DpsEndToEndZeroedChainNoFalseConfidence:
 # ===========================================================================
 
 class TestZI5RawPersistedShardByteFaithfulRoundTrip:
-    def test_persisted_bid_zero_survives_hydrate_untouched_but_view_nulls_it(self):
+    def test_persisted_bid_zero_is_never_introduced_without_a_meaningful_prior(self):
+        """Z-I5, updated for Rule Z12 (copilot-directive-2026-08-19T17-41-19,
+        `.squad/decisions.md` "Zero-never-overwrites-prior invariant").
+
+        This test used to prove the opposite: that the raw/persisted layer
+        stores a real provider `bid=0.0` byte-faithfully, with only the
+        agent-view boundary nulling it (the original Zero-Free decision's
+        anti-corruption headline). That specific claim is now a
+        deliberate, ratified reversal for `bid`/`lastPrice`/`volume`/
+        `openInterest`: during accumulation (`merge_prior`) an incoming
+        exact zero is "no opinion", and with no prior value at all to fall
+        back to (first-ever fetch, as here), the field is omitted from the
+        accumulated/persisted chain entirely rather than stored as a
+        literal `0.0`/`0`.
+
+        The anti-corruption invariant that DOES still hold — and is
+        exercised elsewhere, not duplicated here — is that a *genuinely
+        meaningful* prior value is never destroyed by a later zero
+        (`TestZI2LastKnownGoodServedNotNulled`'s carried-forward
+        assertions). This test proves the from-scratch/no-prior half of
+        Rule Z12. `ask`/`iv` are unaffected (already required `> 0`) and
+        still survive persist/hydrate byte-faithfully, unchanged.
+        """
         container = FakeContainer()
         store = OptionsChainStore(container=container)
         cache = OptionsChainCache(ttl_seconds=1800, store=store)
@@ -559,18 +591,25 @@ class TestZI5RawPersistedShardByteFaithfulRoundTrip:
         # is simultaneously zero/absent is correctly treated by
         # `options_chain_merge.gate_contract` as a non-quoting, untrustworthy
         # payload (it requires a valid ask>0 or valid iv to accept ANY of the
-        # quote-group fields) -- such a contract's bid is legitimately never
-        # persisted at all (absent, not a stored 0.0). This fixture instead
-        # supplies a valid ask/iv alongside bid=0.0 so the trust gate accepts
-        # the quote group, faithfully exercising the real "provider genuinely
-        # reports no bid" anti-corruption path Z-I5/Z11 are about.
-        assert raw_contract["bid"] == 0.0, "Z11: a real provider bid=0.0 must survive persist/hydrate byte-faithfully"
-        assert raw_contract["volume"] == 0
-        assert raw_contract["openInterest"] == 0
+        # quote-group fields). This fixture instead supplies a valid ask/iv
+        # alongside bid=0.0/volume=0/openInterest=0 so the trust gate
+        # accepts the quote group, faithfully exercising the real "provider
+        # genuinely reports no bid/no volume, nothing to fall back to"
+        # case Rule Z12 targets.
+        assert "bid" not in raw_contract and raw_contract.get("bid") is None, (
+            "Z12: an incoming exact zero with no meaningful prior is never "
+            "introduced into the accumulated/persisted chain"
+        )
+        assert "volume" not in raw_contract and raw_contract.get("volume") is None
+        assert "openInterest" not in raw_contract and raw_contract.get("openInterest") is None
+        # ask/iv are unaffected by Z12 (already required > 0 pre-existing)
+        # and still survive persist/hydrate byte-faithfully.
+        assert raw_contract["ask"] == 1.2
+        assert raw_contract["iv"] == 0.30
 
         viewed = apply_agent_view(hydrated, now=NOW)
         viewed_contract = viewed["calls"][exp]["100.0"]
-        assert viewed_contract["bid"] is None, "only the agent-view boundary nulls the raw zero, never the raw layer"
+        assert viewed_contract["bid"] is None, "agent view still nulls a missing/unusable bid"
 
 
 # ===========================================================================

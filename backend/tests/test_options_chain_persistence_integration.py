@@ -631,18 +631,38 @@ class TestR7WriteSkipGuardEffective:
 
 
 # ===========================================================================
-# G3 — Danny's "Zero-Free Agent-Facing Option Chains" decision: the raw
-# persisted layer stays faithful (a genuine bid=0.0 quote survives storage
-# byte-for-byte) while the agent-facing view (`to_agent_view`, applied via
-# `options_chain_cache.apply_agent_view`) never shows a numeric zero for a
-# quote/derived field. Composes the real store + real cache exactly like
-# R1-R7 above; the only new ingredient is applying the real, frozen
-# `options_chain_view.to_agent_view` (via `apply_agent_view`) to what
-# `hydrate()` returns.
+# G3 — Danny's "Zero-Free Agent-Facing Option Chains" decision, as amended
+# by the 2026-08-19 "Zero-never-overwrites-prior" decision (Linus): the
+# original G3 headline test in this class asserted the raw persisted layer
+# stores an incoming provider zero *verbatim* (`bid: 0.0`) and only the
+# agent-facing view (`to_agent_view`, via `apply_agent_view`) nulls it.
+# That "raw layer stores 0.0 byte-for-byte" behavior is now explicitly
+# superseded: `options_chain_merge.merge_prior` (Linus, frozen) treats an
+# incoming exact zero for `bid`/`lastPrice`/`volume`/`openInterest` as "no
+# opinion" during accumulation -- it never overwrites a genuinely valid
+# non-zero prior, and when there is no such prior either the field is
+# omitted entirely (never introduced as a literal `0.0`/`0`). Since
+# `merge_prior` is the sole producer of the chain this store persists
+# (confirmed: `OptionsChainCache.refresh()` always calls
+# `merge_prior(prior_chain or {}, live, now=now)`), the *raw persisted
+# shard itself* now never contains a zero for those four fields either --
+# there is no longer a "raw zero survives, view nulls it" story to test;
+# instead the invariant to prove here is "zero is absorbed before it ever
+# reaches persistence, and a genuinely valid prior is never clobbered by a
+# later glitch/closed-market zero." `options_chain_view.py` needed no
+# change (it already required a positive/finite quote), so the
+# agent-facing layer keeps behaving identically -- it just never sees a
+# literal zero to null in the first place.
 # ===========================================================================
 
 class TestG3RawZeroSurvivesWhileAgentViewIsNull:
-    def test_raw_stored_bid_zero_survives_while_agent_view_nulls_it(self, store, monkeypatch):
+    def test_cold_start_bid_zero_is_never_persisted_as_zero(self, store, monkeypatch):
+        """No prior exists yet (cold start): an incoming exact bid=0.0 is
+        "no opinion" (Rule Z12 / 2026-08-19 decision) -- it must not be
+        introduced into the accumulated/persisted chain as a literal
+        `0.0`. The field is simply absent, and the agent-facing view
+        (which already required a positive/finite quote) still nulls it,
+        unchanged."""
         from src.options_chain_cache import apply_agent_view
 
         cache = OptionsChainCache(ttl_seconds=1800, store=store)
@@ -655,8 +675,9 @@ class TestG3RawZeroSurvivesWhileAgentViewIsNull:
                 "underlying_price": 150.0,
                 "calls": {
                     exp: {
-                        # A genuine "no bid quoted" observation -- raw
-                        # provider zero, not a sentinel/placeholder.
+                        # A genuine "no bid quoted" observation (closed
+                        # market / provider glitch) with no prior to fall
+                        # back to.
                         "100.0": _source_contract(expiration=exp, strike=100.0, bid=0.0),
                     }
                 },
@@ -669,28 +690,74 @@ class TestG3RawZeroSurvivesWhileAgentViewIsNull:
         for _ in range(2):
             run_async(cache.refresh(symbol))
 
-        # Raw/persisted layer: the observed zero is retained verbatim --
-        # this is the two-layer architecture's whole point (Z1/Z11): raw
-        # storage never lies about what was actually observed.
+        # Raw/persisted layer: a meaningless zero (no valid prior to
+        # protect) is never written as a literal 0.0 -- the field is
+        # simply absent from the accumulated/persisted contract.
         hydrated = store.hydrate(symbol)
         assert hydrated is not None
         raw_contract = hydrated["calls"][exp]["100.0"]
-        assert raw_contract["bid"] == 0.0, (
-            "the raw persisted layer must retain an observed bid=0.0 verbatim -- "
-            "it is a real market observation, not a data error"
+        assert raw_contract.get("bid") is None, (
+            "an incoming exact bid=0.0 with no genuinely valid prior must never be "
+            "persisted as a literal 0.0 (2026-08-19 zero-never-overwrites-prior decision)"
         )
+        assert "bid" not in raw_contract
 
-        # Agent-facing layer: the exact same hydrated chain, once passed
-        # through the serving seam (`apply_agent_view`), must show `null`
-        # for that same contract's bid -- never the raw numeric zero.
+        # Agent-facing layer: unchanged behavior -- still null, still the
+        # same field_status family, now simply because the field was
+        # never populated rather than because the view nulled a stored 0.0.
         agent_view = apply_agent_view(hydrated)
         view_contract = agent_view["calls"][exp]["100.0"]
         assert view_contract["bid"] is None, (
-            "the agent-facing view must never surface a raw quote zero as "
-            "a numeric 0 -- it must be null (Z1/§2.4)"
+            "the agent-facing view must never surface a numeric zero for bid (Z1/§2.4)"
         )
         assert view_contract["_meta"]["field_status"]["bid"] in (
             "no_market", "no_trades", "unavailable",
+        )
+
+    def test_genuinely_valid_prior_bid_survives_a_later_closed_market_zero(self, store, monkeypatch):
+        """The other half of the 2026-08-19 invariant, and the reason it
+        exists: a genuinely valid, previously-persisted bid must survive a
+        *later* cycle where the provider reports an exact zero (closed
+        market / transient glitch) -- the zero must never overwrite the
+        last-known-good value in the persisted chain. Composes the real
+        store + real merge_prior + real cache across two distinct
+        refresh cycles, proving the protection holds through an actual
+        persist/hydrate round trip, not just in `options_chain_merge.py`'s
+        own unit tests."""
+        cache = OptionsChainCache(ttl_seconds=1800, store=store)
+        symbol = "AAPL"
+        exp = _future_exp_key(10)
+
+        async def _valid_quote(sym):
+            return {
+                "symbol": symbol,
+                "underlying_price": 150.0,
+                "calls": {exp: {"100.0": _source_contract(expiration=exp, strike=100.0, bid=2.5)}},
+                "puts": {},
+            }
+
+        monkeypatch.setattr(cache, "_fetch_yfinance", _valid_quote)
+        monkeypatch.setattr(cache, "_fetch_tradingview", _empty_source)
+        run_async(cache.refresh(symbol))
+
+        hydrated_after_first = store.hydrate(symbol)
+        assert hydrated_after_first["calls"][exp]["100.0"]["bid"] == 2.5
+
+        async def _closed_market_zero(sym):
+            return {
+                "symbol": symbol,
+                "underlying_price": 150.0,
+                "calls": {exp: {"100.0": _source_contract(expiration=exp, strike=100.0, bid=0.0)}},
+                "puts": {},
+            }
+
+        monkeypatch.setattr(cache, "_fetch_yfinance", _closed_market_zero)
+        run_async(cache.refresh(symbol))
+
+        hydrated_after_second = store.hydrate(symbol)
+        assert hydrated_after_second["calls"][exp]["100.0"]["bid"] == 2.5, (
+            "a genuinely valid, already-persisted bid must survive a later "
+            "closed-market/glitch zero -- the zero is 'no opinion,' never an overwrite"
         )
 
     def test_legacy_shard_migration_composes_with_agent_view_on_cold_hydrate(self, store, container):

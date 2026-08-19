@@ -361,3 +361,47 @@ failures, same tests, same assertions) — none caused by this change:
     `test_yfinance_data_provider.py`'s isolation bug isn't part of this
     charter) and were pre-existing before this task. Recommend a
     dedicated owner/ticket for both, independent of G3.
+
+## 2026-08-19 (later) — updated own test for Linus's zero-never-overwrites-prior reversal
+
+Linus's `.squad/decisions.md` "2026-08-19: Zero-never-overwrites-prior" entry explicitly reversed the
+prior Zero-Free decision's "ruled out to change" stance on `is_accepted("bid"/"lastPrice", 0.0)` and
+`is_accepted("volume"/"openInterest", 0)`: `merge_prior` (frozen, Linus-owned) now treats an incoming
+exact zero for `bid`/`lastPrice`/`volume`/`openInterest` as "no opinion" during accumulation — it never
+overwrites a genuinely valid non-zero prior, and with no such prior the field is omitted entirely (never
+introduced as a literal `0.0`/`0`). Fix lives entirely inside `options_chain_merge.py`'s two field
+selectors; I made no code changes there (frozen/Linus's), only updated my own now-superseded test.
+
+**My one owned failing test:** `test_options_chain_persistence_integration.py::TestG3RawZeroSurvivesWhileAgentViewIsNull::test_raw_stored_bid_zero_survives_while_agent_view_nulls_it`
+asserted the exact superseded behavior — G3's own headline "raw layer stores an observed 0.0 verbatim,
+only the agent view nulls it." That story is no longer true: since `merge_prior` is the sole producer of
+the accumulated/persisted chain (`OptionsChainCache.refresh()` always calls `merge_prior(prior_chain or
+{}, live, now=now)`), the raw shard itself never contains a zero for those four fields anymore either.
+Replaced the single test with two, composing the same real store + real cache + real (unmodified)
+`merge_prior`:
+  - `test_cold_start_bid_zero_is_never_persisted_as_zero` — no prior exists; an incoming bid=0.0 across
+    two cycles is never written as a literal `0.0` (the field is absent from the raw persisted contract,
+    not `None`-valued — confirmed via both `.get("bid") is None` and `"bid" not in raw_contract`); the
+    agent-facing view still nulls it (unchanged behavior, `options_chain_view.py` needed no change).
+  - `test_genuinely_valid_prior_bid_survives_a_later_closed_market_zero` — new test proving the other,
+    more consequential half of the invariant end-to-end through an actual persist/hydrate round trip
+    (not just in `options_chain_merge.py`'s own unit tests): a valid bid=2.5 persisted in cycle 1 survives
+    byte-for-byte after a cycle-2 refresh reports bid=0.0 (closed-market/glitch simulation) — the zero
+    never overwrites the last-known-good persisted value.
+  - Left `test_legacy_shard_migration_composes_with_agent_view_on_cold_hydrate` untouched (unrelated —
+    about `normalize_persisted_v1_to_v2`'s Greek/mid migration of pre-existing legacy shards, a distinct
+    concern from this invariant; legacy shards written under the old rule may still legitimately contain
+    a stored `bid: 0.0`, and my migration function correctly leaves observed fields untouched — no
+    retroactive re-application of the new rule is needed or attempted there).
+
+**Test outcome:** `test_options_chain_persistence_integration.py` 11/11 (was 10/10 + 1 replaced-with-2).
+Focused suite (merge/cache/store/integration/repair-script/activity-chat/debug-agent-chain-pipeline):
+592 passed, 1 failed (the pre-existing DTE-drift test, confirmed unrelated). Full backend suite: 1419
+passed, 24 failed — all 24 pre-existing/not-mine: 2 DTE-drift (frozen `roll_table.py`), 20
+`test_yfinance_data_provider.py` order-dependent (pre-existing, unrelated file), 2
+`test_zero_free_agent_chain.py` (Basher-owned, out of my scope — left untouched per the lockout). The 3
+`test_options_chain_cache.py` tests Linus flagged as Rusty's to fix were already green by the time I
+verified (Rusty's own concurrent fix) — confirmed directly, no action needed from me there.
+
+**Residual risk:** none new. This was a pure test-alignment change to my one owned assertion; no
+production code in my files changed. `py_compile` clean.

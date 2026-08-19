@@ -40,6 +40,59 @@
 
 ## Recent Learnings
 
+### 2026-08-19 — Test update: "Zero-never-overwrites-prior" invariant (merge_prior reversal)
+- Not my code change: Linus implemented the fix entirely inside
+  `options_chain_merge.py`'s `merge_prior` selectors (`_select_quote_field`/
+  `_select_observed_field`, new `_ZERO_SENSITIVE_FIELDS = ("bid",
+  "lastPrice", "volume", "openInterest")` + `_is_meaningful_value()`) per
+  a new user directive (`copilot-directive-2026-08-19T17-41-19.md`) that
+  explicitly reversed the prior Zero-Free decision's "ruled out to
+  change" stance on `is_accepted("bid", 0.0)`. New invariant: an incoming
+  exact zero for those 4 fields during accumulation is never a meaningful
+  update — it never overwrites a genuinely valid non-zero prior, and with
+  no valid prior either the field is *omitted* (key absent) rather than
+  stored as literal `0.0`/`0`. `ask`/`iv` unchanged (already `>0`-only).
+  `is_accepted`/`gate_contract`/`gate_bucket`/`merge_sources` untouched;
+  `options_chain_cache.py` needed zero changes (confirmed `refresh()`'s
+  `merge_prior(prior_chain or {}, live, now=now)` call is the sole gate).
+- My part: this broke 3 tests I own in `test_options_chain_cache.py`
+  whose names/assertions encoded the now-superseded rule. Updated all
+  three to assert the new behavior and renamed to stop describing the old
+  rule: `test_yfinance_zero_beyond_tv_coverage_no_prior_data` →
+  `..._omitted_no_prior_data` (far-expiration yfinance zeros beyond TV
+  coverage, no prior, now assert `.get("bid") is None` instead of
+  `== 0.0`); `test_first_fetch_zeros_preserved_as_is` →
+  `test_first_fetch_zero_bid_omitted_no_prior` (bid now omitted like ask
+  always was — "absence is not zero" now applies uniformly);
+  `test_volume_and_open_interest_not_preserved_when_zero` →
+  `..._zero_never_overwrites_valid_prior` (inverted: volume/openInterest
+  now stay pinned at the valid prior, 500/1000, when the fresh fetch
+  returns zero — the literal opposite of the old assertion). Added one
+  new companion test, `test_volume_and_open_interest_zero_omitted_no_prior`,
+  for the no-prior counterpart (not previously covered at the cache
+  integration level; unit-level exhaustive coverage lives in Linus's own
+  `test_options_chain_merge.py::TestMergePriorZeroNeverOverwrites`).
+- Explicitly left alone (not my authorized artifacts): Basher's
+  `test_zero_free_agent_chain.py` (`TestZI1.../test_to_agent_view_recursive_walk_clean`,
+  `TestZI5.../test_persisted_bid_zero_survives_hydrate_untouched_but_view_nulls_it`
+  — still red, reviewer-owned, I may not modify per the earlier G3
+  revision instruction). Livingston had already fixed his own
+  `test_options_chain_persistence_integration.py::TestG3RawZeroSurvivesWhileAgentViewIsNull`
+  by the time I re-ran the suite — confirmed green, untouched by me.
+- Validated: `test_options_chain_cache.py` 48/48 (was 44/47 w/ 3 known
+  failures). Combined `test_options_chain_cache.py` +
+  `test_options_chain_store.py` + `test_options_chain_merge.py`: 554/554.
+  Full backend suite: confirmed via `git stash`/`git stash pop` A-B
+  comparison that the ~20 `test_yfinance_data_provider.py` failures plus
+  2 unrelated failures in `test_debug_agent_chain_pipeline.py`/
+  `test_format_roll_candidates_table.py` seen under a full-suite run
+  (`pytest tests/`) are **pre-existing test-order pollution**, present
+  identically with my change stashed out — not caused by this edit, and
+  outside my authorized artifacts to fix. `py_compile` clean. No
+  decision file needed — implementing an already-fully-documented
+  directive (`.squad/decisions.md` 2026-08-19 entry), no new ambiguity
+  encountered.
+
 ### 2026-08-19 — Frontend null-safety sweep (backend zero-free G5 follow-up)
 - Separate, frontend-only task: with backend now legitimately returning
   `null` for bid/ask/lastPrice/iv/mid/delta/gamma/theta/vega/rho (never a

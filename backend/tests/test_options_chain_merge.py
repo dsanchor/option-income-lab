@@ -442,27 +442,34 @@ class TestMergeSourcesMalformedExpiration:
 
 
 # ===========================================================================
-# merge_prior — Phase 2 (T7 observed-zero overwrite, T8 iv/greek consistency,
+# merge_prior — Phase 2 (Z12 zero-never-overwrites, T8 iv/greek consistency,
 # stale prior fill)
 # ===========================================================================
 
-class TestMergePriorObservedZeroOverwrite:
-    def test_yfinance_observed_volume_zero_overwrites_prior_500(self):
-        """T7: a genuinely observed zero (quiet trading day) legitimately
-        overwrites a prior non-zero value — unlike the quote group, volume
-        is never gated."""
+class TestMergePriorZeroNeverOverwrites:
+    """Rule Z12 (copilot-directive-2026-08-19T17-41-19): this class
+    supersedes the original T7/Z-M4 "zero legitimately overwrites" rules.
+    An incoming numeric zero for bid/lastPrice/volume/openInterest is now
+    always "no opinion" during accumulation — it never overwrites a
+    genuinely valid (accepted, non-zero) prior value."""
+
+    def test_yfinance_observed_volume_zero_never_overwrites_prior_500(self):
+        """Supersedes former T7: an incoming volume=0 is no longer treated
+        as a legitimate quiet-trading-day observation that overwrites a
+        prior non-zero value — it is "no opinion" and the prior 500 is
+        preserved verbatim."""
         prior = merge_prior({}, merge_sources(
             _chain(calls={"20260101": _bucket(_yf_contract(volume=500))}), _chain(),
         ), now=NOW)
         live = merge_sources(_chain(calls={"20260101": _bucket(_yf_contract(volume=0))}), _chain())
         accumulated = merge_prior(prior, live, now=NOW + timedelta(minutes=30))
-        assert accumulated["calls"]["20260101"]["100.0"]["volume"] == 0
+        assert accumulated["calls"]["20260101"]["100.0"]["volume"] == 500
 
-    def test_z_m4_live_bid_zero_passing_trust_gate_overwrites_and_is_stored_as_zero(self):
-        """Z-M4 (provenance regression guard): a live bid=0.0 that passes
-        the source's trust gate (bid is per-field-zero-valid) overwrites a
-        non-zero prior and is faithfully stored as 0.0 in the raw layer —
-        never coerced/nulled at the raw merge layer."""
+    def test_z12_live_bid_zero_passing_trust_gate_never_overwrites_prior(self):
+        """Supersedes former Z-M4: a live bid=0.0 that otherwise passes the
+        source's trust gate (valid ask) must NOT overwrite a genuinely
+        valid non-zero prior bid — the zero is "no opinion", not a real
+        observation, even though the contract as a whole is trusted."""
         prior = merge_prior({}, merge_sources(
             _chain(calls={"20260101": _bucket(_yf_contract(bid=3.0, ask=3.2))}), _chain(),
         ), now=NOW)
@@ -471,8 +478,193 @@ class TestMergePriorObservedZeroOverwrite:
         )
         accumulated = merge_prior(prior, live, now=NOW + timedelta(minutes=30))
         contract = accumulated["calls"]["20260101"]["100.0"]
-        assert contract["bid"] == 0.0
-        assert isinstance(contract["bid"], float)
+        assert contract["bid"] == 3.0
+        # ...but ask, a genuine update this cycle, still advances quote_asof.
+        assert contract["_meta"]["quote_asof"] == _iso(NOW + timedelta(minutes=30))
+
+    def test_z12_partial_zero_snapshot_does_not_cascade_a_wrong_mid(self):
+        """Basher review (defect confirmation): before this fix, a
+        partial-zero snapshot (valid ask/iv, but bid/lastPrice=0) that
+        passed the whole-contract trust gate would overwrite the prior
+        bid AND cascade into a wrong, bid-less `mid` on recompute. After
+        the fix, the preserved (not zeroed) bid drives a correct mid."""
+        prior = merge_prior({}, merge_sources(
+            _chain(calls={"20260101": _bucket(_yf_contract(bid=3.0, ask=3.2, iv=0.30, lastPrice=3.1))}),
+            _chain(),
+        ), now=NOW)
+        live = merge_sources(
+            _chain(calls={"20260101": _bucket(
+                _yf_contract(bid=0.0, ask=3.4, iv=0.31, lastPrice=0.0),
+            )}), _chain(),
+        )
+        accumulated = merge_prior(prior, live, now=NOW + timedelta(minutes=30))
+        derived = recompute_derived(accumulated, underlying_price=100.0, now=NOW + timedelta(minutes=30))
+        contract = derived["calls"]["20260101"]["100.0"]
+
+        assert contract["bid"] == 3.0          # preserved, not the incoming 0.0
+        assert contract["ask"] == 3.4          # genuine update
+        assert contract["lastPrice"] == 3.1    # preserved, not the incoming 0.0
+        # mid reflects the real bid/ask spread -- not a bid-less/degraded
+        # value computed off a spuriously-zeroed bid.
+        assert contract["mid"] == pytest.approx(robust_mid(3.0, 3.4))
+        assert contract["mid"] != pytest.approx(robust_mid(0.0, 3.4))
+
+    def test_initial_zero_only_contract_introduces_no_zero_market_fields(self):
+        """No prior at all: a fresh contract whose bid/volume/openInterest
+        arrive as exact zero must not introduce those zeros into the
+        accumulated chain — they stay absent — while a genuinely positive
+        field (ask) is introduced normally."""
+        live = merge_sources(_chain(calls={"20260101": _bucket(
+            _yf_contract(bid=0.0, ask=4.25, iv=0.40, volume=0, openInterest=0),
+        )}), _chain())
+        accumulated = merge_prior({}, live, now=NOW)
+        contract = accumulated["calls"]["20260101"]["100.0"]
+        assert "bid" not in contract
+        assert "volume" not in contract
+        assert "openInterest" not in contract
+        assert contract["ask"] == 4.25
+        assert contract["iv"] == 0.40
+
+    def test_mixed_snapshot_updates_positive_fields_preserves_zero_fields(self):
+        """A single cycle where some fields arrive positive (real updates)
+        and others arrive as zero (no opinion) against a fully-populated
+        prior: positive fields update, zero fields are preserved."""
+        prior = merge_prior({}, merge_sources(_chain(calls={"20260101": _bucket(
+            _yf_contract(bid=1.0, ask=1.2, iv=0.30, lastPrice=1.1, volume=500, openInterest=1200),
+        )}), _chain()), now=NOW)
+
+        live = merge_sources(_chain(calls={"20260101": _bucket(
+            _yf_contract(bid=0.0, ask=1.35, iv=0.32, lastPrice=0.0, volume=0, openInterest=1300),
+        )}), _chain())
+        accumulated = merge_prior(prior, live, now=NOW + timedelta(minutes=15))
+        contract = accumulated["calls"]["20260101"]["100.0"]
+
+        assert contract["ask"] == 1.35        # real update
+        assert contract["iv"] == 0.32          # real update
+        assert contract["openInterest"] == 1300  # real update
+        assert contract["bid"] == 1.0          # zero -> no opinion, preserved
+        assert contract["lastPrice"] == 1.1    # zero -> no opinion, preserved
+        assert contract["volume"] == 500       # zero -> no opinion, preserved
+
+    def test_tv_positive_overlay_still_wins_over_yahoo_zero(self):
+        """TradingView supplying a genuinely positive bid over a Yahoo
+        zero-bid snapshot still enriches/overrides normally — this
+        mechanism (source priority within merge_sources) is unaffected by
+        the Z12 no-overwrite rule, which only governs accumulation."""
+        prior = merge_prior({}, merge_sources(_chain(calls={"20260101": _bucket(
+            _yf_contract(bid=1.0, ask=1.2, iv=0.30),
+        )}), _chain()), now=NOW)
+
+        live = merge_sources(
+            _chain(calls={"20260101": _bucket(_yf_contract(bid=0.0, ask=0.0, iv=0.0))}),
+            _chain(calls={"20260101": _bucket(_tv_contract(bid=1.45, ask=1.55, iv=0.31))}),
+        )
+        accumulated = merge_prior(prior, live, now=NOW + timedelta(minutes=5))
+        contract = accumulated["calls"]["20260101"]["100.0"]
+        assert contract["bid"] == 1.45
+        assert contract["ask"] == 1.55
+        assert contract["iv"] == 0.31
+
+
+class TestMarketClosedMultiExpirationRegression:
+    """Task-required deterministic regression (copilot-directive-2026-08-
+    19T17-41-19): a realistic multi-expiration, multi-strike, calls+puts
+    chain accumulated over two cycles, where the second cycle is a
+    realistic Yahoo "market closed" snapshot — every market field zero,
+    for every contract, across the whole chain."""
+
+    def _positive_chain(self):
+        return _chain(calls={
+            "20260101": _bucket(
+                _yf_contract(strike=95.0, bid=2.0, ask=2.2, iv=0.28, lastPrice=2.1, volume=40, openInterest=300),
+                _yf_contract(strike=100.0, bid=1.0, ask=1.2, iv=0.30, lastPrice=1.1, volume=10, openInterest=100),
+                _yf_contract(strike=105.0, bid=0.4, ask=0.5, iv=0.33, lastPrice=0.45, volume=5, openInterest=60),
+            ),
+            "20260201": _bucket(
+                _yf_contract(expiration="20260201", strike=95.0, bid=3.0, ask=3.2, iv=0.27,
+                              lastPrice=3.1, volume=20, openInterest=150),
+                _yf_contract(expiration="20260201", strike=100.0, bid=1.8, ask=2.0, iv=0.29,
+                             lastPrice=1.9, volume=8, openInterest=90),
+            ),
+        }, puts={
+            "20260101": _bucket(
+                _yf_contract(strike=100.0, option_type="put", bid=1.1, ask=1.3, iv=0.31,
+                             lastPrice=1.2, volume=6, openInterest=70),
+            ),
+        })
+
+    @staticmethod
+    def _zeroed_market_fields(contract):
+        zeroed = dict(contract)
+        for field in ("bid", "ask", "iv", "lastPrice"):
+            zeroed[field] = 0.0
+        for field in ("volume", "openInterest"):
+            zeroed[field] = 0
+        return zeroed
+
+    def _closed_market_snapshot(self):
+        """Same shape, every market field zeroed — as a real Yahoo
+        closed-market payload looks (quote group AND volume/OI all 0)."""
+        positive = self._positive_chain()
+        return _chain(
+            calls={
+                exp_key: {k: self._zeroed_market_fields(c) for k, c in bucket.items()}
+                for exp_key, bucket in positive["calls"].items()
+            },
+            puts={
+                exp_key: {k: self._zeroed_market_fields(c) for k, c in bucket.items()}
+                for exp_key, bucket in positive["puts"].items()
+            },
+        )
+
+    def test_all_zero_snapshot_leaves_accumulated_chain_byte_identical(self):
+        prior = merge_prior({}, merge_sources(self._positive_chain(), _chain()), now=NOW)
+        live = merge_sources(self._closed_market_snapshot(), _chain())
+        accumulated = merge_prior(prior, live, now=NOW + timedelta(minutes=15))
+
+        assert _strip_meta(accumulated) == _strip_meta(prior)
+        # quote_asof must not advance either -- nothing trustworthy arrived
+        # this cycle, across every expiration/strike/side.
+        for side in ("calls", "puts"):
+            for exp_key, bucket in accumulated[side].items():
+                for strike_key, contract in bucket.items():
+                    prior_contract = prior[side][exp_key][strike_key]
+                    assert contract["_meta"]["quote_asof"] == prior_contract["_meta"]["quote_asof"]
+
+    def test_mixed_partial_zero_snapshot_updates_positive_preserves_zero_fields(self):
+        """One expiration/strike gets a real update this cycle (a fresh
+        positive ask/iv), the rest of the chain is a closed-market zero
+        snapshot -- only the genuinely-updated field changes, and every
+        other contract (other strikes, other expirations, puts) is left
+        byte-identical to the prior."""
+        prior = merge_prior({}, merge_sources(self._positive_chain(), _chain()), now=NOW)
+
+        live_chain = self._closed_market_snapshot()
+        live_chain["calls"]["20260101"]["100.0"]["ask"] = 1.35
+        live_chain["calls"]["20260101"]["100.0"]["iv"] = 0.31
+        live = merge_sources(live_chain, _chain())
+
+        accumulated = merge_prior(prior, live, now=NOW + timedelta(minutes=20))
+
+        updated = accumulated["calls"]["20260101"]["100.0"]
+        assert updated["ask"] == 1.35            # real update
+        assert updated["iv"] == 0.31              # real update
+        assert updated["bid"] == 1.0              # incoming zero -> preserved
+        assert updated["lastPrice"] == 1.1        # incoming zero -> preserved
+        assert updated["volume"] == 10             # incoming zero -> preserved
+        assert updated["openInterest"] == 100      # incoming zero -> preserved
+
+        def _no_meta(contract):
+            return {k: v for k, v in contract.items() if k != "_meta"}
+
+        # Every other contract in the chain (other strike, other
+        # expiration, and the puts side) is untouched by the zero snapshot.
+        assert _no_meta(accumulated["calls"]["20260101"]["95.0"]) == \
+            _no_meta(prior["calls"]["20260101"]["95.0"])
+        assert _no_meta(accumulated["calls"]["20260201"]["100.0"]) == \
+            _no_meta(prior["calls"]["20260201"]["100.0"])
+        assert _no_meta(accumulated["puts"]["20260101"]["100.0"]) == \
+            _no_meta(prior["puts"]["20260101"]["100.0"])
 
 
 class TestMergePriorStaleFill:
@@ -502,7 +694,8 @@ class TestMergePriorStaleFill:
 
         # This cycle: Yahoo returns a degenerate quote group for the SAME
         # contract (still present, still listed -- just untrustworthy),
-        # but a fresh, legitimately-zero volume.
+        # and an incoming zero volume, which is no opinion (Rule Z12), not
+        # a legitimate quiet-trading-day observation.
         live_raw = _yf_contract(bid=0.0, ask=0.0, iv=0.0, lastPrice=0.0, volume=0)
         live = merge_sources(_chain(calls={"20260101": _bucket(live_raw)}), _chain())
 
@@ -511,7 +704,7 @@ class TestMergePriorStaleFill:
         assert contract["bid"] == 1.0
         assert contract["ask"] == 1.2
         assert contract["iv"] == 0.30
-        assert contract["volume"] == 0  # independent observation, still fresh
+        assert contract["volume"] == 50  # incoming zero is no opinion, prior preserved
         assert contract["_meta"]["quote_asof"] == prior["calls"]["20260101"]["100.0"]["_meta"]["quote_asof"]
 
 

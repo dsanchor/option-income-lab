@@ -1032,3 +1032,391 @@ now matches the same `apply_agent_view`-before-filter pattern already
 used by the other 3 serialization seams, closing the last unguarded
 agent-facing surface. Schema description is now internally consistent
 with the null/status contract. Clear to proceed to G5 (Danny).
+
+## 2026-08-19 — Read-Only Reviewer Prep: Clarified "Zero Must Never Overwrite Prior Non-Zero" Invariant (copilot-directive-2026-08-19T17-41-19.md)
+
+Directive (translated): during option-chain regeneration, no numeric zero
+received from Yahoo/another provider may overwrite a prior non-zero value
+for the same contract+field; zero must be treated as "no update," last
+valid persisted value retained — especially when the market is closed.
+Explicitly: protection must live in the **persisted merge**
+(`options_chain_merge.py`'s `merge_prior`/`_select_quote_field`), not only
+the agent-facing view (`options_chain_view.py`, already correct/approved).
+No production files edited. Verdict deferred until Linus's diff lands.
+
+### Root cause / exact gap (confirmed live against real code)
+`_select_quote_field()` (options_chain_merge.py ~L390-403) accepts a live
+quote-group candidate (bid/ask/iv/lastPrice/lastTradeDate) whenever (a)
+`is_accepted(field, candidate)` passes **individually** for that field
+(and `is_accepted` explicitly treats bid=0/lastPrice=0 as valid on their
+own, by design) and (b) `gate_contract(live_contract)` passes for the
+**whole contract** (needs only *some* field — a valid ask>0 OR valid iv —
+to be quoting *something* this cycle). There is no field-level check of
+"is this specific candidate zero while the prior for this exact field was
+non-zero." So whenever a live contract has *any* one valid field this
+cycle (e.g. ask still quotes, iv still computes), gate_contract passes and
+**every individually-accepted field, including an unrelated field that
+came back exactly 0, freely overwrites its own prior non-zero value.**
+Volume/openInterest (`_select_observed_field`) have no gate at all — any
+live value, including 0, always overwrites, by explicit design (Z2, T7).
+
+### Reproduction matrix (executed directly against `merge_sources` →
+`merge_prior` → `recompute_derived`, no mocks)
+- **A — all-zero quote group, market genuinely closed** (bid=ask=iv=
+  lastPrice=0, prior bid=3.10/ask=3.30/iv=0.28/lastPrice=3.20):
+  `gate_contract` fails (no ask>0, no valid iv) → **prior fully retained**
+  (bid=3.10, mid=3.20 unchanged). **Already correct today — no bug here.**
+- **B — partial zero, THE CONFIRMED DEFECT** (bid=0, lastPrice=0, but
+  ask=3.30/iv=0.28 still valid this cycle, same prior as A):
+  `gate_contract` **passes** (valid ask/iv present) → bid and lastPrice
+  are individually `is_accepted` (0 is valid) → **both clobber prior: bid
+  3.10→0.0, lastPrice 3.20→0.0**, and this cascades into `recompute_derived`:
+  `mid` drops 3.20→0.10 via `robust_mid(bid=0, ask=3.30)`'s bid-less
+  convention — a real premium turns into a near-worthless mark from a
+  single stale-zero field, not from any genuine market move. This is a
+  common, realistic pattern (bid legitimately absent/closed while the
+  exchange still reports a stale-but-present ask/iv) and is exactly what
+  the directive targets.
+- **C — no prior, brand-new all-zero contract** (first-ever ingest,
+  bid=ask=iv=lastPrice=0, no prior document): `gate_contract` fails →
+  fields simply absent from the merged contract (not stored as 0).
+  **Unaffected by the bug and must remain unaffected by any fix** — a
+  contract's first-ever observation legitimately has nothing to protect.
+- **D — TradingView positive overlay** (YF: bid=0/ask=3.30/iv=0.28,
+  same prior; TV: bid=3.15/ask=3.35, no iv/lastPrice): `merge_sources`'
+  per-field TV>YF precedence picks TV's bid=3.15 over YF's 0 **before**
+  `merge_prior` ever runs — bid survives correctly. **But** `lastPrice`
+  (a field TV never supplies, confirmed via `_OTHER_OBSERVED_FIELDS`/
+  Rule-S1 comments) still comes from YF's 0.0 and still clobbers the
+  prior 3.20 lastPrice at the `merge_prior` stage — TV overlay is only a
+  partial, source-availability-dependent mitigation, not a systemic fix;
+  the `merge_prior`-level fix is required regardless of TV coverage.
+- **E — multiple contracts/expirations, same cycle**: ran a 3-contract,
+  2-expiration chain with one healthy live update (bid 1.20→1.25, correctly
+  updates) alongside two independent partial-zero contracts at *different*
+  expirations (20260901 and 20260918, same strike pattern as B) — **both
+  clobber identically and independently** (bid/lastPrice→0, mid→0.10),
+  confirming the defect is a pure per-field/per-contract function, occurs
+  uniformly chain-wide, and is not contingent on a specific
+  contract/expiration/cache-state; a fix in `_select_quote_field` alone
+  should therefore apply uniformly with no per-contract special-casing
+  needed.
+
+### Existing tests that currently *lock in* the pre-directive behavior
+(must be deliberately revised, not silently left failing, once Linus's
+fix lands — flagging now so the eventual diff review isn't surprised):
+- `test_options_chain_merge.py::TestMergePriorObservedZeroOverwrite::
+  test_z_m4_live_bid_zero_passing_trust_gate_overwrites_and_is_stored_as_zero`
+  — literally asserts "a live bid=0.0 that passes the trust gate
+  overwrites a non-zero prior... never coerced/nulled at the raw merge
+  layer," i.e., the exact opposite of the new directive. This was an
+  intentional regression guard for the *previous* accepted design and
+  must be consciously rewritten (not merely made to pass), with its
+  Z-M4 label re-evaluated since the rule it guards is being superseded.
+- `test_options_chain_merge.py::TestMergePriorObservedZeroOverwrite::
+  test_yfinance_observed_volume_zero_overwrites_prior_500` (T7) — asserts
+  volume=0 unconditionally overwrites prior volume=500. This test's
+  correctness now hinges entirely on the scope question below.
+
+### Open scope ambiguity Linus/Danny must resolve explicitly (not mine to decide)
+The directive's literal wording ("ningún valor numérico cero... del mismo
+contrato y campo") is field-agnostic and would, read literally, also cover
+`volume`/`openInterest`. But the already-approved
+`danny-zero-free-agent-option-chains.md` Rule Z2 explicitly states
+"volume and openInterest MAY legitimately be 0 — a real, trustworthy
+observation" and is unconditionally always-live by design (T7 above).
+Applying the new directive verbatim to volume/OI would **directly reverse
+an already-shipped, reviewed, agent-facing-documented rule** — this is a
+real, high-priority incompatibility to flag, not a hypothetical: the
+decision doc for this fix must explicitly state whether the new
+zero-protection rule is scoped to the **quote group only**
+(bid/ask/iv/lastPrice — the "market closed" symptom domain) or applies
+**chain-wide to every numeric field**. I recommend (as a reviewer
+observation, not a decision) scoping to the quote group only, since
+volume/OI zero has a distinct, well-established, independently-reviewed
+semantic (genuine "no trades today") that a blanket rule would corrupt.
+
+### Additional design questions to flag for the incoming diff
+- **Provenance granularity**: `_meta.quote_asof`/`quote_source` are
+  currently contract-level (one shared timestamp for the entire quote
+  group). Once bid is protected/retained from an older cycle while
+  ask/iv genuinely update this same cycle, what should `quote_asof`
+  represent? A consumer trusting "quote_asof recent -> bid is fresh" would
+  be misled if bid was actually silently carried from days ago while only
+  ask advanced. Needs an explicit answer: either move to per-field
+  provenance (larger change) or accept contract-level `quote_asof` now
+  represents "most recent field update, not necessarily this field" with
+  documentation updated accordingly.
+- **Scope confirmed contained to `options_chain_merge.py`**: traced
+  `options_chain_store.py`'s CAS-retry reconciliation (`_reconcile_bucket`)
+  — it performs a **whole-contract**, not field-by-field, verbatim union
+  between the currently-persisted shard and the caller's already-computed
+  `merge_prior` output, keyed by `_contract_last_touch` recency. It
+  contains no independent field-selection logic of its own, so it will
+  automatically inherit whatever `merge_prior` produces once fixed — no
+  second fix site, no risk of the CAS layer reintroducing the bug
+  independently.
+- **`lastTradeDate` interaction**: `_select_quote_field` additionally
+  requires `_is_newer_timestamp(candidate, prior_value)` for
+  `lastTradeDate` specifically — worth confirming the eventual fix doesn't
+  let a *newer* `lastTradeDate` accompanying a zero `lastPrice` slip
+  through as "this must be a genuine new zero-price trade" (it should
+  still be blocked per the same per-field zero-vs-prior-nonzero rule,
+  independent of timestamp recency).
+
+### Migration limitations for already-overwritten values (no backfill possible)
+Confirmed via `options_chain_store.py`: Cosmos storage is a single
+current-document-per-shard model (`_meta.quote_asof`/`last_seen` are the
+only temporal markers) — **no changefeed, audit log, or version history of
+individual field values exists.** The precedent set by
+`normalize_persisted_v1_to_v2`/the repair script (lazily nulling stale
+*derived* fields like mid/Greeks) works only because derived fields are
+recomputable from raw inputs at read-time; it does **not** extend to raw
+quote-group fields, since there is no formula to reconstruct a lost bid/
+lastPrice/iv from nothing. **Conclusion: any contract field already
+clobbered by this bug before the fix ships cannot be retroactively
+repaired by any migration/repair script** — the true prior value is
+permanently gone from the persisted store. The only path to recovery is a
+subsequent live cycle where the provider genuinely quotes a real non-zero
+value again (e.g., market reopens). Recommend the accepted decision
+explicitly document this as a known, accepted limitation (prevention
+going forward only, no retroactive repair) rather than something Linus is
+expected to solve; optionally, a `_meta` marker noting a field's current
+value may predate the fix (mirroring the existing `schema_version`
+precedent) would let a future consumer know a 0 might be a pre-fix
+artifact even though the true prior value can't be recovered.
+
+### Objective APPROVE criteria for the eventual diff (checklist for the
+next gate)
+1. A live candidate for a quote-group field that is exactly 0 must NOT
+   overwrite an existing non-zero prior for that same field, regardless
+   of `gate_contract`'s whole-contract trust determination (fixes B/E).
+2. A live candidate that is itself non-zero must continue to overwrite as
+   today (real updates unaffected) — verify with a mixed cycle (some
+   fields generically update, others are zero-protected) in the same
+   contract.
+3. A field with no prior (first observation) must still accept a live 0
+   verbatim (fixes nothing, must not regress C).
+4. Scope decision (quote-group-only vs. chain-wide) must be explicit in
+   the diff/decision text, and `test_yfinance_observed_volume_zero_
+   overwrites_prior_500` (T7) must be either left correctly-passing
+   (scoped) or deliberately revised with a documented rationale
+   (chain-wide) — not silently broken either way.
+5. `test_z_m4_live_bid_zero_passing_trust_gate_overwrites_and_is_stored_
+   as_zero` must be consciously rewritten to assert the new invariant,
+   with its docstring/label updated to reflect the superseded rule.
+6. `recompute_derived`'s mid/Greeks must reflect the *protected* (prior,
+   not clobbering-zero) field values once the fix lands — verify mid does
+   not still collapse to the bid-less convention when bid was correctly
+   protected.
+7. TradingView overlay behavior (already correct) must be unaffected;
+   verify no double-protection/regression where TV's own genuine update is
+   incorrectly treated as "the prior" and blocked.
+8. Multi-contract/expiration coverage in the new tests (not just a single
+   toy contract) to match the demonstrated systemic nature of the bug.
+9. `_meta.quote_asof`/`quote_source` semantics for a partially-protected
+   contract must be explicitly decided and documented (see provenance
+   granularity question above), not left ambiguous.
+10. No changes required/expected in `options_chain_store.py`'s CAS
+    reconciliation path (confirmed pass-through) — a diff that touches it
+    should be scrutinized for unnecessary scope creep or a misunderstanding
+    of the reconcile layer's contract.
+
+Verdict deferred — will independently review Linus's actual diff against
+this checklist and re-run the merge/persistence suites before issuing
+APPROVE/REJECT.
+
+## 2026-08-19 (later): Zero-never-overwrites-prior — final verdict on Linus's merge_prior diff, own test file reconciled
+
+**Scope:** independently reviewed Linus's landed diff to `options_chain_merge.py` (61 ins/3 del) and
+`test_options_chain_merge.py` (182 ins/16 del) against the 10-point checklist from my own prep entry above,
+then reconciled `test_zero_free_agent_chain.py`'s 2 tests he flagged as broken by the change (I own that
+file; he does not touch it per his charter).
+
+**Independent live reproduction (real, unmocked `merge_sources`/`merge_prior`/`recompute_derived`), not
+just reading the diff:**
+- **A** (all-zero quote group, market closed): prior fully retained, incl. volume/OI now too — correct.
+- **B** (my own prep-confirmed defect: partial zero — bid=0/lastPrice=0, ask/iv valid): bid 3.10 and
+  lastPrice 3.20 both now correctly **preserved** (previously clobbered to 0.0), `mid` stays 3.20 (was
+  cascading to 0.10 pre-fix). **Confirmed fixed.**
+- **C** (no prior, all-zero first-ever contract): all 4 zero-sensitive fields correctly **absent**, not `0`.
+- **D** (TV positive bid overlay over YF bid=0): TV's 3.15 still wins; `lastPrice` (a field TV doesn't
+  supply) is *also* now correctly preserved at 3.20 via the new rule rather than clobbered — the fix
+  protects fields TV can't reach, exactly per its purpose.
+- **New scenario I ran myself (not in Linus's tests) — genuine fresh volume=0 the next session, following
+  a real prior volume=500, with bid/ask/iv all genuinely fresh:** `volume` stays **500** (the stale prior),
+  not the true fresh `0`. This is **not a bug** — it's the literal, intended, and explicitly documented
+  consequence of extending `_ZERO_SENSITIVE_FIELDS` to `volume`/`openInterest` (confirmed via
+  `.squad/decisions.md`'s "Z2 partial supersession" clarification and Linus's own
+  `test_yfinance_observed_volume_zero_never_overwrites_prior_500`, which locks in exactly this). Flagging
+  it here anyway because it's a **material, disclosed scope decision, not a mechanical necessity of the
+  user's directive**: the directive's own rationale ("especially when the market is closed") targets the
+  bid/ask/lastPrice closed-market ambiguity specifically; a provider-reported daily `volume=0` is not
+  ambiguous in the same way (it's a real, common, meaningful "no trades this session" observation, exactly
+  the case Z2 was written to protect). Extending Z12 to volume/OI means a contract's daily volume can now
+  go permanently "sticky" at an old positive number for an indefinite number of sessions once it happens to
+  print a true zero, degrading a liquidity signal this app's candidate screening/DPS scoring actually
+  reads. This is disclosed and reasoned (not hidden), and a defensible reading of the literal directive
+  text, so I am **not** treating it as a blocking defect — but it is exactly the kind of "hidden
+  incompatibility" callout my charter exists for, and I recommend one explicit line of user/Danny
+  confirmation that volume/OI staleness is accepted, not just bid/lastPrice.
+
+**Checklist reconciliation (my own 10 points from the prep entry):** all 10 satisfied — (1) per-field zero
+protection confirmed live (B); (2) real updates still flow (ask/iv update every scenario); (3) no-prior case
+unaffected (C); (4) scope decision (volume/OI inclusion) is explicitly documented in decisions.md, not
+silent; (5) all 6 cross-team tests were consciously rewritten with reasoning, not silently deleted/skipped
+(confirmed by reading each rewritten test's docstring); (6) derived-field cascade confirmed correct (B: mid
+stays 3.20); (7) TV overlay unaffected, confirmed strengthened (D); (8) multi-contract/expiration coverage
+present (`TestMarketClosedMultiExpirationRegression`, 2 tests); (9) `_meta.quote_asof` provenance stays
+contract-level/OR-accumulated, explicitly asserted in `test_z12_live_bid_zero_passing_trust_gate_never_
+overwrites_prior` (still advances when only `ask` genuinely updates) — acceptable, matches pre-existing
+design, not something Linus was asked to change; (10) confirmed via `git diff --stat -- src/` only
+`options_chain_merge.py` touched — no unnecessary `options_chain_store.py`/`options_chain_cache.py` scope
+creep.
+
+**Own test file (`test_zero_free_agent_chain.py`) reconciliation:** both flagged tests
+(`TestZI1...test_to_agent_view_recursive_walk_clean`, `TestZI5...test_persisted_bid_zero_survives_hydrate_
+untouched_but_view_nulls_it` → renamed `..._is_never_introduced_without_a_meaningful_prior`) are now updated
+in the working tree consistent with Rule Z12: Z-I1's all-zero/no-prior scenario now asserts
+`volume`/`openInterest` are absent (`.get() is None`), not `== 0`, with a docstring explaining Z2 is
+otherwise intact (a genuinely non-zero volume, or a zero arriving after a real prior, is unaffected — see
+`TestZI2`). Z-I5 now asserts a first-ever `bid=0.0`/`volume=0`/`openInterest=0` (no prior) is **omitted**
+from the raw persisted/hydrated contract rather than stored as literal `0`, while `ask`/`iv` (unaffected by
+Z12) still survive byte-faithfully, and the agent view still nulls a missing bid. Ran the full file: 15/15
+passing.
+
+**Test evidence (exact commands/results, run independently, not taken from Linus's report):**
+- `pytest tests/test_options_chain_merge.py -q` → **440 passed** (my own run, matches Linus's claim).
+- `pytest tests/test_zero_free_agent_chain.py -v` → **15 passed** (both previously-flagged tests green).
+- `pytest tests/test_options_chain_merge.py tests/test_zero_free_agent_chain.py
+  tests/test_options_chain_cache.py tests/test_options_chain_persistence_integration.py
+  tests/test_options_chain_view.py tests/test_roll_table.py tests/test_dps_insights.py
+  tests/test_format_roll_candidates_table.py -q` → **667 passed** (Rusty's and Livingston's own 4
+  previously-flagged tests are also already green in the working tree — they updated their files
+  independently; not touched by me, confirmed read-only).
+- Full `pytest tests/ -q` → **20 failed / 1423 passed** — all 20 failures are the pre-existing
+  `test_yfinance_data_provider.py` order/environment-dependent tests (unrelated to this change, present on
+  a clean baseline); zero new regressions. (Note: the 2 hardcoded-date DTE-drift failures Linus/Rusty
+  mention are wall-clock-dependent and did not trigger in this run's calendar date — not a discrepancy.)
+
+**VERDICT: APPROVE** the "Zero-never-overwrites-prior" `merge_prior` fix. The core defect (partial-zero
+snapshot with valid ask/iv clobbering bid/lastPrice and cascading into a wrong `mid`) is fixed exactly as
+specified, scoped minimally and correctly to `merge_prior`'s field selectors, fully backward-compatible in
+schema (fields become absent, never a type/key change), and covered by conscious, well-reasoned test
+rewrites plus new regression coverage. One **non-blocking, disclosed** risk flagged for explicit user
+sign-off: extending zero-sensitivity to `volume`/`openInterest` means a genuinely fresh zero-volume session
+can be masked by a stale positive prior for an unbounded number of cycles — intended and documented, but a
+materially different risk class than the bid/ask ambiguity the directive's rationale describes, and worth
+one explicit confirmation line since it touches a liquidity signal this app's scoring reads.
+
+### 2026-08-19 (later still): Housekeeping fix — DTE-drift fragility in own test files + final cross-team confirmation
+
+**Scope:** unrelated to the zero-merge review above. The 2 previously-flagged wall-clock-dependent
+failures (`test_debug_agent_chain_pipeline.py::...::test_current_contract_surfaces_buyback_cost_despite_
+delta_filter`, `test_format_roll_candidates_table.py::...::test_buyback_cost_surfaces_via_current_contract_
+override`) both hardcoded `"17 DTE"` against a fixed `2026-09-04` expiration, computed against real
+`datetime.date.today()` inside `format_roll_candidates_table` — guaranteed to drift and fail again every
+day going forward. Both files are mine (authored during the earlier debug-pipeline task), so fixed as a
+hygiene item.
+
+**Fix:** replaced the hardcoded `"17 DTE"` string with `expected_dte = (datetime.date(2026, 9, 4) -
+datetime.date.today()).days` computed at test-run time, asserting `f"{expected_dte} DTE" in table`. Test
+intent unchanged (still proves the held contract's real DTE is surfaced from the raw chain, not silently
+dropped by the delta filter) — only the previously-brittle literal is now self-correcting.
+
+**Final cross-team confirmation (all 3 owners' fixes now present in the working tree):**
+- `pytest tests/test_zero_free_agent_chain.py tests/test_open_call_zero_quote.py tests/test_debug_agent_
+  chain_pipeline.py tests/test_format_roll_candidates_table.py tests/test_options_chain_position_and_
+  direction_filters.py -q` → **60 passed** (all of my owned files, DTE-drift fix confirmed).
+- `pytest tests/test_options_chain_cache.py tests/test_options_chain_persistence_integration.py -q` →
+  **59 passed** — Rusty's and Livingston's own updates (not touched by me) are independently confirmed
+  green.
+- Broad cross-team run (16 files: merge, zero-free, zero-quote, options_math, options_chain_view,
+  dps_insights, roll_table, format_roll_candidates_table, get_contract, exclude_contract, position/
+  direction filters, debug_agent_chain_pipeline, options_chain_cache, options_chain_persistence_
+  integration, yfinance_data_provider, watchlist_symbols) → **815 passed, 2 failed.** Both failures
+  (`test_yfinance_data_provider.py::TestOptionsChainStructure::test_mid_price_calculation` and
+  `::test_greeks_populated_for_nonzero_iv`) reproduced identically in isolation (`pytest tests/test_
+  yfinance_data_provider.py -q` alone → same 2/21 failed) **and** with `options_chain_merge.py` stashed out
+  entirely (`git stash push -- src/options_chain_merge.py` then re-run, then `git stash pop`) — confirmed
+  pre-existing, environment/mock-drift baseline noise unrelated to Linus's diff or my test-file
+  reconciliation, and not in a file I own (`yfinance_data_provider.py`'s test file is Livingston-owned
+  scope), so out of my charter to fix.
+
+**VERDICT unchanged: APPROVE** stands for the "Zero-never-overwrites-prior" `merge_prior` fix (see prior
+entry). All 6 originally-flagged tests across 3 owners are now confirmed green in the working tree, my own
+2 test files are updated correctly, and the 2 remaining failures anywhere in the broader regression net are
+confirmed pre-existing/unrelated via independent isolation testing (both wall-clock isolation for the DTE
+fix, and `git stash` isolation for the yfinance baseline failures) — zero new regressions introduced by any
+of the reviewed changes.
+
+## 2026-08-19 (later still): Zero-never-overwrites-prior — repeat gate against clarified diff, full matrix
+
+**Scope:** re-reviewed the actual current `git diff HEAD` for `options_chain_merge.py` (61 ins/3 del) and
+`test_options_chain_merge.py` (192 ins/16 del) — content is **byte-identical** to what I reviewed and
+APPROVEd in the immediately prior verdict; no further src change landed since then. Treated as an
+independent, from-scratch re-verification per the explicit ask, including two checks not previously run in
+isolation (ask/iv), plus a fresh full-suite run to confirm no stale assertions remain anywhere.
+
+**Empirical per-field verification (live, unmocked `merge_sources`→`merge_prior`→`recompute_derived`),
+with a real positive prior (bid=3.10, ask=3.30, iv=0.28, lastPrice=3.20, volume=120, openInterest=480):**
+- `bid=0` incoming (isolated): preserved at 3.10 — genuine `ask`/other-field updates still flow. ✔
+- `ask=0` incoming (isolated, not previously isolated in earlier review): preserved at 3.30 via the
+  pre-existing `is_accepted` positivity gate (not the new `_ZERO_SENSITIVE_FIELDS` path — `ask` was never
+  added to that set since it didn't need to be); genuine `bid`/`lastPrice` updates still flow. ✔
+- `iv=0` incoming (isolated): preserved at 0.28 via the same pre-existing `is_accepted` gate. ✔
+- `ask=0` **and** `iv=0` together (degenerate quote group): whole quote group correctly falls back to the
+  full prior snapshot via `gate_contract` (unchanged, pre-existing whole-contract trust gate) — not a Z12
+  concern, confirms no regression to that gate. ✔
+- `volume=0`/`openInterest=0` incoming against a positive prior: preserved (via new `_ZERO_SENSITIVE_
+  FIELDS` path). ✔
+- No-prior + all-zero first-ever contract: all 4 zero-sensitive fields correctly **absent**, not `0`;
+  `ask`/`iv` when genuinely positive are introduced normally. ✔
+- Partial-zero valid-contract (bid=0/lastPrice=0, ask/iv valid, passes whole-contract gate): bid/lastPrice
+  preserved, `mid` reflects the preserved bid (no cascade corruption). ✔
+- TV positive overlay over a Yahoo zero: TV's positive value still wins (source-priority mechanism in
+  `merge_sources`, unaffected by the Z12 accumulation-only rule). ✔
+- Multi-contract/expiration/side regression: confirmed via Linus's own
+  `TestMarketClosedMultiExpirationRegression` (all-zero snapshot byte-identical to prior across every
+  expiration/strike/side; mixed partial-zero snapshot updates only the genuinely-changed field, every other
+  contract untouched) — read and independently re-run, not just inspected.
+- Agent-view prior behavior: confirmed **zero** changes to `options_chain_view.py` (`git diff --stat --
+  backend/src/` shows only `options_chain_merge.py` touched) — `to_agent_view`/`apply_agent_view` logic is
+  unmodified; it simply now receives fewer literal zeros from the merge layer, consistent with the
+  decision doc's explicit "no code change needed" claim.
+
+**Stale-assertion sweep across all 3 previously-flagged owners — re-run today, not assumed from memory:**
+- `tests/test_options_chain_cache.py` (Rusty) — **0 failing**, all previously-flagged tests
+  (`test_yfinance_zero_beyond_tv_coverage_no_prior_data`, `test_first_fetch_zeros_preserved_as_is`,
+  `test_volume_and_open_interest_not_preserved_when_zero`) already updated by their owner; confirmed green.
+- `tests/test_options_chain_persistence_integration.py` (Livingston) — **0 failing**, the flagged G3
+  headline test already updated by its owner; confirmed green.
+- `tests/test_zero_free_agent_chain.py` (Basher/mine) — **0 failing**, both previously-flagged tests
+  already correctly updated for Rule Z12 in the working tree (Z-I1 asserts volume/openInterest absent with
+  no prior; Z-I5 renamed to `test_persisted_bid_zero_is_never_introduced_without_a_meaningful_prior`,
+  asserting bid/volume/openInterest omitted with no prior while ask/iv still survive byte-faithfully). No
+  edit was required this pass — file already reflects correct intent, re-verified, not modified again.
+
+**Test evidence (fresh run, this pass):**
+- `pytest tests/test_options_chain_merge.py tests/test_options_chain_view.py
+  tests/test_options_chain_persistence_integration.py tests/test_options_chain_cache.py
+  tests/test_zero_free_agent_chain.py tests/test_roll_table.py tests/test_dps_insights.py
+  tests/test_format_roll_candidates_table.py tests/test_options_math.py
+  tests/test_debug_agent_chain_pipeline.py -q` → **695 passed, 0 failed**.
+- `pytest tests/test_zero_free_agent_chain.py -q` → **15 passed** (standalone, isolated).
+- Full `pytest tests/ -q` → **20 failed / 1423 passed** — all 20 failures are the pre-existing
+  `test_yfinance_data_provider.py` order/environment-dependent tests (unrelated baseline, present without
+  this change); zero new regressions; the 2 hardcoded-date DTE-drift failures did not trigger under
+  today's calendar date in this run (wall-clock-dependent, not a discrepancy).
+
+**VERDICT: APPROVE.** Confirms the prior verdict stands under a fresh, independent, from-scratch
+re-verification: per-field zero-never-overwrites-prior holds for all 6 fields named in the task
+(bid/ask/lastPrice/iv/volume/openInterest — ask/iv via the pre-existing `is_accepted` positivity gate,
+the other 4 via the new `_ZERO_SENSITIVE_FIELDS` mechanism), no-prior zero fields are correctly omitted,
+partial-zero and all-zero bucket cases behave correctly, TV overlay and multi-contract/expiration coverage
+are unaffected/verified, recomputed `mid` uses the preserved value (no cascade corruption), and the
+agent-view boundary is provably unregressed (zero code touched there). No stale assertions remain in any
+owner's file. The previously flagged, non-blocking volume/OI staleness scope risk (a genuinely fresh
+volume=0 can be masked by a stale positive prior indefinitely) remains disclosed and unchanged in this
+pass — still not a blocker, still recommended for one explicit user/Danny sign-off line, unaffected by
+today's re-verification since no src content changed between reviews.

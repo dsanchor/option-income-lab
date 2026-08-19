@@ -22,6 +22,7 @@ Pattern mirrors test_watchlist_symbols.py / test_activity_chat.py:
 TestClient + FakeCosmos + a fake yf_provider injected into app.state.
 """
 
+import datetime
 import json
 
 import pytest
@@ -139,7 +140,11 @@ class TestAgentChainPipelineViewMsftRollOut:
         assert "Buyback cost (ask): $3.20" in table
         assert "Buyback available: true" in table
         assert "NO EXECUTABLE BUYBACK QUOTE" not in table
-        assert "17 DTE" in table
+        # DTE is computed from wall-clock "today" (datetime.date.today())
+        # against the fixed 2026-09-04 expiration -- recompute rather than
+        # hardcode so this assertion doesn't drift/fail as real time passes.
+        expected_dte = (datetime.date(2026, 9, 4) - datetime.date.today()).days
+        assert f"{expected_dte} DTE" in table
 
     def test_zero_ask_current_contract_reports_incomplete_not_missing(self):
         """When the ask is genuinely zero (market truly closed), the table

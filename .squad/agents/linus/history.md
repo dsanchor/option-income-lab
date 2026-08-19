@@ -279,3 +279,57 @@
   whole-suite runs confirm exactly the pre-existing 22 unrelated failures
   (20 yfinance network/env, 2 hardcoded-date drift) plus the 2 flagged
   Rusty/Livingston failures above — nothing else regressed.
+
+## 2026-08-19 (later): zero-never-overwrites-prior in the persisted merge (supersedes T7/Z-M4)
+
+- New user directive (`copilot-directive-2026-08-19T17-41-19.md`) explicitly reversed a rule the prior
+  Zero-Free decision had reaffirmed as "ruled out to change": `is_accepted("bid"/"lastPrice", 0.0)` and
+  `is_accepted("volume"/"openInterest", 0)` being `True`. Root cause of the reported "chains still show
+  zero bid" symptom: a contract that *passes* the per-contract trust gate (valid ask/iv present) could
+  still have one field (typically bid) glitched to exactly `0` by a provider, and that zero would overwrite
+  a genuinely good prior value inside `merge_prior` — a gap `gate_contract`/`gate_bucket` never covered
+  (they only protect the whole quote group when there's no valid ask/iv at all).
+- Deliberately minimal fix: left `is_accepted`, `gate_contract`, `gate_bucket`, and `merge_sources`
+  (Phase 1) completely untouched — a zero is still a well-formed number for a single fresh source cycle.
+  The new "no opinion" rule lives entirely inside `merge_prior`'s two field selectors
+  (`_select_quote_field`/`_select_observed_field`) via a new `_ZERO_SENSITIVE_FIELDS` set (`bid`,
+  `lastPrice`, `volume`, `openInterest` — `ask`/`iv` already required `>0` and needed no change) and an
+  `_is_meaningful_value()` helper: an incoming exact zero never overwrites a genuinely valid non-zero
+  prior, and if there's no such prior either, it's omitted (`None`) rather than introduced. Verified this
+  is fully sufficient by re-reading `options_chain_cache.py`'s `refresh()` — it always routes through
+  `merge_prior(prior_chain or {}, live, now=now)`, even cold-start, so `merge_prior` really is the sole
+  gate to the accumulated/persisted chain; `options_chain_cache.py`/`tv_options_chain_fetcher.py` needed
+  no changes at all.
+- Rewrote the two now-inverted tests (`test_yfinance_observed_volume_zero_overwrites_prior_500` →
+  `..._never_overwrites_prior_500`; `test_z_m4_live_bid_zero_..._overwrites_and_is_stored_as_zero` →
+  `..._never_overwrites_prior`) plus one stale-fill assertion (`test_invalid_live_quote_group_falls_back_
+  to_prior_field_by_field`'s volume expectation). Added `TestMergePriorZeroNeverOverwrites` (initial
+  zero-only contract introduces no zero fields, mixed snapshot preserves-vs-updates per field, TV positive
+  overlay still wins) and `TestMarketClosedMultiExpirationRegression` (multi-expiration/strike/side,
+  all-zero Yahoo snapshot → byte-identical accumulated chain; mixed partial-zero snapshot updates only
+  the genuinely-changed field, leaves every other contract untouched). Confirmed the existing 300-seed
+  `merge_prior` associativity/monotonicity fuzz test still passes unmodified under the new rule (reasoned
+  through why field-level associativity holds even with the new "omit if neither side is meaningful"
+  branch, then empirically verified all 300 seeds green).
+- Ran `test_options_chain_merge.py` (440/440) plus the broader focused suite (options_math, view,
+  dps_insights, roll_table, format_roll_candidates_table, get_contract, exclude_contract, position/
+  direction filters, debug_agent_chain_pipeline): only the 2 known pre-existing DTE-drift failures
+  remain (confirmed present on a clean `git stash`, unrelated to this change).
+- Flagged, not fixed (outside charter — Rusty/Livingston/Basher-owned test files, notified via
+  sibling message): six tests across `test_options_chain_cache.py`, `test_options_chain_persistence_
+  integration.py`, and `test_zero_free_agent_chain.py` assert the exact *superseded* "raw zero survives
+  verbatim" behavior (including the prior decision's own Z-I5/G3 anti-corruption headline test) and will
+  fail until their owners update them to match the new invariant.
+- Recorded the reversal in `.squad/decisions.md` (2026-08-19 entry) since it explicitly contradicts a
+  previously-accepted "explicitly ruled out" item and has cross-team test impact.
+
+- Basher's parallel prep independently confirmed the identical root cause (whole-contract gate in
+  `_select_quote_field` letting a partial-zero snapshot with valid ask/iv overwrite bid/lastPrice and
+  cascade into a wrong `mid`) — no code change needed beyond what's above, since the fix already lives at
+  the per-field level, not the whole-contract gate. Added one more explicit regression closing that loop:
+  `test_z12_partial_zero_snapshot_does_not_cascade_a_wrong_mid` (merge_prior + recompute_derived together,
+  asserts `mid` reflects the preserved real bid, not the spurious incoming zero). Folded two scoping
+  clarifications into the decision doc: Z2 (volume/openInterest keep literal `0`) is superseded only for
+  what the *persisted merge* accepts from a fresh fetch, not for the agent-view boundary or for values
+  already stored; and no migration/backfill is planned for already-clobbered Cosmos values — they self-heal
+  only on a future genuine positive quote. `test_options_chain_merge.py`: 441/441 passing.

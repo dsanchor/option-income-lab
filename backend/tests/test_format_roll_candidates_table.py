@@ -143,7 +143,11 @@ class TestFormatRollCandidatesTableCurrentContractParam:
         assert "Buyback cost (ask): $3.20" in table
         assert "Buyback available: true" in table
         assert "NO EXECUTABLE BUYBACK QUOTE" not in table
-        assert "17 DTE" in table  # 2026-09-04 minus "today" in the table's DTE calc
+        # DTE is computed from wall-clock "today" (datetime.date.today())
+        # against the fixed 2026-09-04 expiration -- recompute rather than
+        # hardcode so this assertion doesn't drift/fail as real time passes.
+        expected_dte = (datetime.date(2026, 9, 4) - datetime.date.today()).days
+        assert f"{expected_dte} DTE" in table
 
     def test_without_current_contract_param_reports_no_chain_data(self):
         """Documents the pre-fix symptom: a caller that only relies on the

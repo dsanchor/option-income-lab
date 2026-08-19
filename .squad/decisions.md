@@ -6682,3 +6682,79 @@ Rewriting/deleting provider zeros in raw/persisted data; changing `is_accepted("
 `volume`/`openInterest` zeros; carrying forward stale Greeks; making `score` nullable; filtering unquoted
 contracts out of display/reference views; hard-failing the app when persistence is down; changing
 `robust_mid()`'s return contract.
+
+## 2026-08-19: Zero-never-overwrites-prior invariant (supersedes the raw-layer "store 0.0 verbatim" rule)
+
+**Trigger:** User clarification (Copilot, 2026-08-19T17:41:19+02:00) — **"En la regeneracion de una cadena
+de opciones, ningun valor numerico cero recibido de Yahoo Finance u otro proveedor debe sobreescribir un
+valor previo distinto de cero del mismo contrato y campo. El cero debe tratarse como ausencia de
+actualizacion y conservarse el ultimo valor valido persistido, especialmente cuando el mercado esta cerrado."**
+Clarification: the protection must happen in the persisted merge, not only in the agent-facing view. Reports of
+option chains still showing zero bid/quote fields contaminating agent analysis, traced to the *persisted
+merge path itself* (not just the agent-view boundary already fixed by Z1-Z10).
+
+**Root cause:** `is_accepted("bid"/"lastPrice", 0.0)` and `is_accepted("volume"/"openInterest", 0)` were
+`True` (design §2.1/§2.3, explicitly reaffirmed as "ruled out to change" in the prior Zero-Free decision
+above). This let a provider-glitched or closed-market zero for a contract that otherwise *passes* the
+per-contract trust gate (valid ask/iv present) overwrite a genuinely valid prior value field-by-field in
+`merge_prior` — a narrower, previously-unfixed gap distinct from `gate_contract`/`gate_bucket` (which only
+protect the *whole* quote group when there is no valid ask/iv at all).
+
+**This session's explicit, deliberate reversal:** for `bid`, `lastPrice`, `volume`, `openInterest` — an
+incoming exact zero during accumulation (`merge_prior`) is now always "no opinion": it never overwrites a
+genuinely valid (accepted, non-zero) prior value, and if there is no such valid prior either, it is not
+introduced into the accumulated chain at all (the field stays absent/`None`). `ask`/`iv` were already
+structurally compliant (already required `> 0`) and are unchanged.
+
+**Scope of the fix — deliberately minimal:** `is_accepted()` itself, `gate_contract`, `gate_bucket`, and
+`merge_sources` (Phase 1) are all **unchanged** — a zero is still a well-formed, individually valid number
+for a single fresh source cycle. The new rule lives entirely inside `merge_prior`'s two field selectors
+(`_select_quote_field`, `_select_observed_field`) via a new `_ZERO_SENSITIVE_FIELDS` set and
+`_is_meaningful_value()` helper — since `merge_prior` (never `merge_sources`) is the sole producer of the
+accumulated/persisted chain (confirmed: `options_chain_cache.py`'s `refresh()` always calls
+`merge_prior(prior_chain or {}, live, now=now)`, even on cold start with an empty prior).
+
+**Compatibility impact — explicit supersession, cross-team:** this directly reverses the previous
+decision's "Explicitly ruled out: ... changing `is_accepted("bid", 0.0)`; nulling `volume`/`openInterest`
+zeros" and its G3/G4 headline ("raw shard still holds the provider's 0.0", Z-I5 anti-corruption test). Six
+tests outside Linus's ownership now assert the now-superseded behavior and fail as expected; they were not
+modified here (out of charter) and their owners were notified directly (Rusty, Livingston, Basher via
+sibling message):
+- `tests/test_options_chain_cache.py::TestBeyondFiveExpirations::test_yfinance_zero_beyond_tv_coverage_no_prior_data`
+- `tests/test_options_chain_cache.py::TestLastKnownGoodMerge::test_first_fetch_zeros_preserved_as_is`
+- `tests/test_options_chain_cache.py::TestLastKnownGoodMerge::test_volume_and_open_interest_not_preserved_when_zero`
+- `tests/test_options_chain_persistence_integration.py::TestG3RawZeroSurvivesWhileAgentViewIsNull::test_raw_stored_bid_zero_survives_while_agent_view_nulls_it`
+- `tests/test_zero_free_agent_chain.py::TestZI1NoNumericZeroAnywhereInAgentSurfaces::test_to_agent_view_recursive_walk_clean`
+- `tests/test_zero_free_agent_chain.py::TestZI5RawPersistedShardByteFaithfulRoundTrip::test_persisted_bid_zero_survives_hydrate_untouched_but_view_nulls_it`
+
+`options_chain_view.py` (agent-view boundary) needs **no code change** — it already nulls non-positive
+quote evidence; it now simply receives fewer literal zeros to begin with. Schema stays additive
+(fields become absent instead of `0.0`/`0`); no key renamed, no type change beyond a field sometimes not
+being present at all (already a legal, handled shape everywhere `.get()` is used).
+
+**Files touched:** `backend/src/options_chain_merge.py` (`_select_quote_field`, `_select_observed_field`,
+new `_ZERO_SENSITIVE_FIELDS` / `_is_meaningful_value`, module + field-class docstrings),
+`backend/tests/test_options_chain_merge.py` (rewrote the two now-inverted T7/Z-M4 tests, updated one
+stale-fill assertion, added `TestMergePriorZeroNeverOverwrites` and
+`TestMarketClosedMultiExpirationRegression`, 440/440 passing).
+
+**Basher confirmation addendum (same day):** Basher's independent review pinpointed the identical root
+cause — `_select_quote_field` previously used only the whole-contract gate (`gate_contract`), so a
+partial-zero snapshot (valid ask/iv, but `bid=0`/`lastPrice=0`) still overwrote a prior non-zero value and
+cascaded into a wrong recomputed `mid`; the all-zero-snapshot and no-prior cases already worked correctly
+via the existing gate. Confirms the fix above is exactly this: per-field protection added inside
+`merge_prior`'s selectors, not a change to the whole-contract gate itself. Two scoping clarifications
+folded in:
+- **Z2 partial supersession, not a repeal:** Z2 ("volume/openInterest keep integer 0 — count-type
+  evidence, not quotes") stays fully valid at the **agent-view boundary** (`options_chain_view.py`) —
+  unchanged, no code touched there. It is superseded **only** for what the **persisted merge**
+  (`merge_prior`) is allowed to accept from a fresh provider fetch: a *new* incoming volume/openInterest
+  zero no longer overwrites a valid prior and is never introduced with no prior. A legacy/already-stored
+  literal `0` (written before this fix, or a genuine Z2-compliant first-ever `0` predating this change)
+  is still displayed as `0` in the agent view, not nulled — Z2's agent-facing behavior for whatever value
+  *is* stored is unchanged.
+- **No fake migration:** contracts already clobbered to `0.0`/`0` in Cosmos before this fix are not
+  retroactively repaired — no migration/backfill script was written or is planned under this decision.
+  They self-heal only when a future cycle supplies a genuine positive quote for that field; until then the
+  stale zero remains (a pre-existing, now-frozen data quality issue, not something this merge-semantics fix
+  can or should paper over).
