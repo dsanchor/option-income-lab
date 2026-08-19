@@ -3,7 +3,7 @@ import { API_BASE_URL, apiFetch } from "@/lib/api";
 
 /**
  * BFF proxy for a single symbol: browser → this Next route → internal Python API.
- * Mirrors the backend's GET/PUT /api/symbols/{symbol} endpoints.
+ * Mirrors the backend's GET/PUT/DELETE /api/symbols/{symbol} endpoints.
  */
 export async function GET(
   _req: Request,
@@ -32,6 +32,27 @@ export async function PUT(
       method: "PUT",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body,
+    });
+    const data = await res.json().catch(() => ({}));
+    return NextResponse.json(data, { status: res.status });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Upstream API error" },
+      { status: 502 },
+    );
+  }
+}
+
+/** BFF proxy: delete a symbol (and its positions/history). Mirrors DELETE /api/symbols/{symbol}. */
+export async function DELETE(
+  _req: Request,
+  { params }: { params: Promise<{ symbol: string }> },
+) {
+  const { symbol } = await params;
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/symbols/${encodeURIComponent(symbol)}`, {
+      method: "DELETE",
+      headers: { Accept: "application/json" },
     });
     const data = await res.json().catch(() => ({}));
     return NextResponse.json(data, { status: res.status });

@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useMemo, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { Trash2 } from "lucide-react";
 import { usd } from "@/lib/format";
 import { categoryClass, entryClass } from "@/lib/badges";
 import {
@@ -67,6 +69,31 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
   const [sharesError, setSharesError] = useState<string | null>(null);
   const [localShares, setLocalShares] = useState<Record<string, number>>({});
 
+  // Delete symbol — tracked as a Set so a second, unrelated concurrent
+  // delete never re-enables (or duplicates the DELETE for) a symbol whose
+  // own request is still in flight.
+  const [deletingSymbols, setDeletingSymbols] = useState<Set<string>>(new Set());
+  const [removedSymbols, setRemovedSymbols] = useState<Set<string>>(new Set());
+
+  // Once `rows` (from router.refresh()) confirms a symbol is truly gone,
+  // drop it from the optimistic-hide set during render — otherwise
+  // re-adding the same ticker later (without a full page reload) would
+  // stay stuck hidden. This mirrors React's documented "adjust state when
+  // a prop changes" pattern (compare-in-render), not a useEffect, so it
+  // never triggers an extra render pass.
+  const [prevRows, setPrevRows] = useState(rows);
+  if (rows !== prevRows) {
+    setPrevRows(rows);
+    if (removedSymbols.size > 0) {
+      const stillPresent = new Set(
+        [...removedSymbols].filter((s) => rows.some((r) => r.symbol === s)),
+      );
+      if (stillPresent.size !== removedSymbols.size) {
+        setRemovedSymbols(stillPresent);
+      }
+    }
+  }
+
   const startEdit = useCallback((symbol: string, current: number) => {
     setEditingShares(symbol);
     setSharesInput(String(current || 0));
@@ -114,11 +141,46 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
     }
   }, [sharesInput, localShares, router]);
 
+  const deleteSymbol = useCallback(async (symbol: string) => {
+    if (deletingSymbols.has(symbol)) return; // already in flight — never duplicate the DELETE
+    const confirmed = window.confirm(
+      `Delete ${symbol} and all its data? This permanently removes ${symbol} and everything stored for it — positions, activity history, plans, forecasts, and analysis. This cannot be undone.`,
+    );
+    if (!confirmed) return;
+    setDeletingSymbols((prev) => new Set(prev).add(symbol));
+    try {
+      const res = await fetch(`/api/symbols/${encodeURIComponent(symbol)}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+      });
+      const data = await res.json().catch(() => ({})) as { error?: string };
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setRemovedSymbols((prev) => {
+        const next = new Set(prev);
+        next.add(symbol);
+        return next;
+      });
+      router.refresh();
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? `Could not delete ${symbol}: ${error.message}`
+          : `Could not delete ${symbol}`,
+      );
+    } finally {
+      setDeletingSymbols((prev) => {
+        const next = new Set(prev);
+        next.delete(symbol);
+        return next;
+      });
+    }
+  }, [deletingSymbols, router]);
+
   const filtered = useMemo(() => {
     const query = q.trim().toUpperCase();
-    let out = rows;
+    let out = rows.filter((r) => !removedSymbols.has(r.symbol));
     if (query) {
-      out = rows.filter(
+      out = out.filter(
         (r) =>
           r.symbol?.toUpperCase().includes(query) ||
           (r.category || "").toUpperCase().includes(query) ||
@@ -142,7 +204,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       return dir === "asc" ? cmp : -cmp;
     });
     return sorted;
-  }, [rows, q, sort, dir, suitabilityFilter]);
+  }, [rows, q, sort, dir, suitabilityFilter, removedSymbols]);
 
   function toggleSort(key: SortKey) {
     if (sort === key) setDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -201,12 +263,13 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
                   <span className="ml-1 text-[0.65rem]">{sort === c.key ? (dir === "asc" ? "▲" : "▼") : ""}</span>
                 </th>
               ))}
+              <th className="px-4 py-3 text-right font-medium">Actions</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={COLUMNS.length} className="px-4 py-8 text-center text-text-muted">
+                <td colSpan={COLUMNS.length + 1} className="px-4 py-8 text-center text-text-muted">
                   No symbols match.
                 </td>
               </tr>
@@ -280,6 +343,21 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right font-mono">{r.put_exposure > 0 ? `$${usd(r.put_exposure)}` : "—"}</td>
+                <td
+                  className="px-4 py-3 text-right"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    onClick={() => deleteSymbol(r.symbol)}
+                    disabled={deletingSymbols.has(r.symbol)}
+                    aria-label={`Delete ${r.symbol} and all its data`}
+                    title={`Delete ${r.symbol} and all its data`}
+                    className="inline-flex items-center justify-center rounded-[var(--radius-pill)] border border-accent-red/40 p-1.5 text-accent-red transition-colors hover:bg-accent-red/10 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-red/60"
+                  >
+                    <Trash2 size={14} className="shrink-0" aria-hidden />
+                  </button>
+                </td>
               </tr>
               );
             })}

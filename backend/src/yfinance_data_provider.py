@@ -79,8 +79,27 @@ Contract fields:
       - carried: true if no source listed this contract this refresh cycle
         (its fields are all last-known-good, not from this cycle).
       - greeks_valid: false if delta/gamma/theta/vega/rho could not be
-        computed from a valid implied volatility this cycle (values default
-        to 0 / intrinsic-only in that case — do not treat them as reliable).
+        computed from a valid implied volatility this cycle — in that case
+        the Greeks are null (never 0 or an intrinsic-only substitute); treat
+        them as absent, not as unreliable numbers.
+      - field_status: why a quote/derived field is null — one of
+        "live" (fresh this cycle), "last_known_good" (carried from a prior
+        cycle), "no_market" (no bid/ask quoted), "no_trades" (no recent
+        trade), or "unavailable" (never observed / not computable).
+      - stale: true if quote_asof is older than the configured staleness
+        threshold — treat quotes as last-known-good, confirm before acting.
+
+NULL vs ZERO (MANDATORY — read carefully):
+  Quote fields (bid, ask, mid, lastPrice, iv) and Greeks (delta, gamma, theta,
+  vega, rho) are either a usable positive number or null. null means "not
+  available" — it is NEVER zero, NEVER an estimate, and MUST NOT be
+  substituted with 0, an interpolation, or a neighbouring strike's value.
+  A numeric 0 will never appear in these fields; if you believe you see one,
+  treat it as a data error and report it.
+  volume and openInterest MAY legitimately be 0 — that means genuinely no
+  volume / no open interest, and is a real, trustworthy observation.
+  Consult _meta.field_status for *why* a value is null, and _meta.stale /
+  _meta.quote_asof before treating any quote as live.
 
 PREMIUM CALCULATION (CRITICAL — read carefully):
 All strategies in this application SELL (write) options. When SELLING an option:

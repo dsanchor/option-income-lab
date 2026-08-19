@@ -1,7 +1,7 @@
 """Tests for options_math module."""
 
 import pytest
-from src.options_math import executable_buyback_ask, robust_mid
+from src.options_math import executable_buyback_ask, robust_mid, robust_mid_optional
 
 
 class TestExecutableBuybackAsk:
@@ -100,3 +100,32 @@ class TestRobustMid:
         assert robust_mid(1.0, 1.1, last=0.9) == 1.05
         assert robust_mid(1.0, 1.1, last=1.2) == 1.05
         assert robust_mid(0, 3.9, last=1.5) == 0.10
+
+
+class TestRobustMidOptional:
+    """robust_mid_optional (Z3, danny-zero-free-agent-option-chains.md):
+    None instead of a fabricated 0.0 when neither side is usable; byte-
+    identical to robust_mid on every path that has a real usable side."""
+
+    def test_neither_bid_nor_ask_usable_returns_none(self):
+        assert robust_mid_optional(0, 0) is None
+        assert robust_mid_optional(None, None) is None
+        assert robust_mid_optional(0, None) is None
+        assert robust_mid_optional(None, 0) is None
+        assert robust_mid_optional(-1.0, -2.0) is None
+
+    def test_matches_robust_mid_when_bid_usable(self):
+        assert robust_mid_optional(1.0, 1.1) == robust_mid(1.0, 1.1) == 1.05
+        assert robust_mid_optional(1.5, 0) == robust_mid(1.5, 0) == 1.5
+
+    def test_matches_robust_mid_when_only_ask_usable(self):
+        assert robust_mid_optional(0, 3.9) == robust_mid(0, 3.9) == 0.10
+        assert robust_mid_optional(None, 0.05) == robust_mid(None, 0.05) == 0.05
+
+    def test_wide_spread_and_rounding_paths_unchanged(self):
+        assert robust_mid_optional(0.05, 3.9) == robust_mid(0.05, 3.9) == 0.05
+        assert robust_mid_optional(1.1111, 1.3333) == robust_mid(1.1111, 1.3333) == 1.2222
+
+    def test_last_price_parameter_ignored_like_robust_mid(self):
+        assert robust_mid_optional(1.0, 1.1, last=0.9) == 1.05
+        assert robust_mid_optional(0, 0, last=5.0) is None

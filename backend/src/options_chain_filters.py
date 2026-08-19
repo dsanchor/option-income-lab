@@ -9,6 +9,7 @@ import logging
 from typing import Optional
 
 from src.options_math import executable_buyback_ask
+from src.options_chain_view import is_candidate_eligible, usable_greek, usable_quote
 
 logger = logging.getLogger(__name__)
 
@@ -485,10 +486,13 @@ def format_roll_candidates_table(
     lines.append(f"  Strike: ${current_strike:.1f} | Expiration: {current_exp_display}{dte_str}")
 
     if current_contract:
-        bid_str = f"${current_contract.get('bid', 'N/A')}" if current_contract.get('bid') is not None else "N/A"
+        bid_val = usable_quote(current_contract, "bid")
+        bid_str = f"${bid_val:.2f}" if bid_val is not None else "N/A"
         ask_str = f"${buyback_cost:.2f}" if buyback_available else "N/A"
-        delta_str = f"{current_contract.get('delta', 'N/A')}" if current_contract.get('delta') is not None else "N/A"
-        theta_str = f"${current_contract.get('theta', 'N/A')}" if current_contract.get('theta') is not None else "N/A"
+        delta_val = usable_greek(current_contract, "delta")
+        delta_str = f"{delta_val}" if delta_val is not None else "N/A"
+        theta_val = usable_greek(current_contract, "theta")
+        theta_str = f"${theta_val}" if theta_val is not None else "N/A"
         lines.append(f"  Bid: {bid_str} | Ask: {ask_str} | Delta: {delta_str} | Theta: {theta_str}")
     if buyback_available:
         lines.append(f"  Buyback cost (ask): ${buyback_cost:.2f} per share (${buyback_cost * 100:.2f} per contract)")
@@ -501,19 +505,24 @@ def format_roll_candidates_table(
 
     # --- Build candidate rows ---
     candidates = []
+    hidden_count = 0
     for exp, strikes_dict in sorted(bucket.items()):
         for sk, contract in sorted(strikes_dict.items(), key=lambda kv: float(kv[0])):
             # Skip the current position itself
             if exp == exp_key and sk == strike_key:
                 continue
-            bid = contract.get("bid")
-            if bid is None or bid == 0:
+            # Rule Z10: exclusion is a roll/open *candidate* rule — a
+            # contract with no usable bid, no open interest, or invalid
+            # Greeks cannot be proposed as a roll, though it may still be
+            # visible elsewhere in reference/display-only chain views.
+            if not is_candidate_eligible(contract):
+                hidden_count += 1
                 continue
 
-            bid = float(bid)
-            ask_val = float(contract["ask"]) if contract.get("ask") is not None else None
-            delta = contract.get("delta")
-            theta = contract.get("theta")
+            bid = usable_quote(contract, "bid")
+            ask_val = usable_quote(contract, "ask")
+            delta = usable_greek(contract, "delta")
+            theta = usable_greek(contract, "theta")
             strike_val = float(sk)
             exp_display = _fmt_exp(exp)
 
@@ -553,6 +562,8 @@ def format_roll_candidates_table(
     else:
         candidates.sort(key=lambda c: c["ann_ret"] if c["ann_ret"] is not None else -9999, reverse=True)
 
+    hidden_footer = f"{hidden_count} contracts hidden: no usable bid / no open interest / greeks unavailable"
+
     if not candidates:
         lines.append("")
         if incomplete_data:
@@ -562,6 +573,7 @@ def format_roll_candidates_table(
             )
         else:
             lines.append(f"NO VALID CANDIDATES found for {roll_type}. Consider CLOSE.")
+        lines.append(hidden_footer)
         return "\n".join(lines)
 
     # --- Format table ---
@@ -610,5 +622,6 @@ def format_roll_candidates_table(
     else:
         lines.append("- Premium% for puts = bid / strike × 100")
     lines.append("- Ann.Ret% = Premium% × 365 / DTE")
+    lines.append(hidden_footer)
 
     return "\n".join(lines)

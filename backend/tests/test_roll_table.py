@@ -334,6 +334,12 @@ class TestRollTableCall:
         # Locate exp_8 cell by date, not index
         exp_8_cell = _cell_for_date(plus3_row["cells"], _display_date(8))
         assert exp_8_cell["color"] == "gray"
+        # Z-R1 (danny-zero-free-agent-option-chains.md): a genuine bid=0
+        # must never be fabricated into a numeric 0.0 cell value — it is
+        # nulled just like a missing quote, so downstream consumers cannot
+        # arithmetically treat "no market" as a real, tradeable $0.00 bid.
+        assert exp_8_cell["bid"] is None
+        assert exp_8_cell["net_credit"] is None
 
     def test_current_position_metadata(self, chain, underlying_price, current_exp_key):
         result = self._run(chain, underlying_price, current_exp_key)
@@ -693,6 +699,39 @@ class TestGrayCells:
             assert exp_fut_cell["color"] == "gray"
             assert exp_fut_cell["strike"] is None
 
+    def test_bid_absent_gives_gray_with_null_bid(self, current_exp_key):
+        """Z-R1: a contract present in the chain but with `bid` entirely
+        absent (never `0`) must behave identically to bid=0 — gray cell,
+        null bid/net_credit — never a fabricated `0.0` sneaking through a
+        raw `contract.get("bid") or 0` collapse."""
+        exp_fut = _future(10)
+        chain = {
+            "symbol": "TEST",
+            "timestamp": "2026-07-23T14:00:00Z",
+            "calls": {
+                current_exp_key: {"420.0": _make_contract(1.40, 1.60)},
+                exp_fut: {
+                    "420.0": {"ask": 0.05, "delta": 0.10},  # bid key omitted entirely
+                },
+            },
+            "puts": {},
+        }
+        result = compute_roll_table(
+            chain=chain,
+            current_strike=420.0,
+            current_expiration=current_exp_key,
+            option_type="call",
+            underlying_price=417.50,
+            premium_received=3.20,
+        )
+        for row in result["rows"]:
+            exp_fut_cell = _cell_for_date(row["cells"], _display_date(10))
+            assert exp_fut_cell["color"] == "gray"
+            assert exp_fut_cell["bid"] is None
+            assert exp_fut_cell["net_credit"] is None
+            # ask is a separately-usable field and must still surface.
+            assert exp_fut_cell["ask"] == 0.05
+
     def test_bid_zero_gives_gray(self, current_exp_key):
         exp_fut = _future(10)
         chain = {
@@ -720,6 +759,9 @@ class TestGrayCells:
         for row in result["rows"]:
             exp_fut_cell = _cell_for_date(row["cells"], _display_date(10))
             assert exp_fut_cell["color"] == "gray"
+            # Z-R1: bid=0 is nulled, never fabricated as a numeric 0.0.
+            assert exp_fut_cell["bid"] is None
+            assert exp_fut_cell["net_credit"] is None
 
     def test_current_contract_not_in_chain_leaves_buyback_unavailable(self, current_exp_key):
         exp_fut = _future(10)

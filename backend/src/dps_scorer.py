@@ -6,12 +6,20 @@ No LLM involved — uses fixed rules to output HOLD / WATCH / ROLL.
 
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from src.options_math import executable_buyback_ask
+from src.options_chain_view import contract_view
 
 logger = logging.getLogger(__name__)
+
+# Mirrors the documented default of `options_chain_cache.stale_quote_warn_seconds`
+# (danny-zero-free-agent-option-chains.md §4.3). dps_scorer.py has no access to
+# config.yaml (out of charter), so this constant is a local, intentionally
+# identical copy of that default, not a second source of truth to reconcile.
+_DEFAULT_STALE_AFTER_SECONDS = 86400
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -92,6 +100,41 @@ def _compute_dte(expiration: str) -> int:
     return (exp_date - today).days
 
 
+def _finite_or_none(value) -> Optional[float]:
+    """True numeric extraction for scoring inputs (Z5/Z6): returns a float
+    only for a real, finite number of either sign -- never coerces
+    None/NaN/bool into 0. Unlike `or 0`, a genuinely missing/invalid Greek
+    or IV is tracked as unavailable rather than silently becoming a
+    "deep OTM" / "very low IV" scoring signal."""
+    if value is None or isinstance(value, bool):
+        return None
+    if not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def _data_quality_block(missing_fields: List[str], greeks: Dict) -> Dict:
+    """Rule Z9: additive confidence reporting. `delta`/`iv` are the two
+    structural risk inputs -- either missing makes the whole assessment
+    `"insufficient"`. Never nulls `score` itself."""
+    meta = greeks.get("_meta") if isinstance(greeks, dict) else None
+    meta = meta if isinstance(meta, dict) else {}
+    if "delta" in missing_fields or "iv" in missing_fields:
+        confidence = "insufficient"
+    elif missing_fields:
+        confidence = "partial"
+    else:
+        confidence = "full"
+    return {
+        "missing_fields": missing_fields,
+        "confidence": confidence,
+        "quote_asof": meta.get("quote_asof"),
+        "stale": meta.get("stale"),
+    }
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Greeks extraction from options chain
 # ──────────────────────────────────────────────────────────────────────────────
@@ -111,7 +154,11 @@ def extract_greeks_from_chain(
         option_type: "call" or "put".
 
     Returns:
-        Dict with delta, gamma, theta, iv, or None if not found.
+        The normalized ``contract_view(...)`` output (bid/ask/mid/iv,
+        delta/gamma/theta/vega/rho, and `_meta` incl. `greeks_valid`),
+        or None if the contract is not found. All quote/Greek fields are
+        either a usable positive number or `None` -- never a fabricated
+        zero (Rule Z1/Z4/Z8).
     """
     if isinstance(chain_json, str):
         try:
@@ -161,15 +208,15 @@ def extract_greeks_from_chain(
     if contract is None:
         return None
 
-    return {
-        "delta": contract.get("delta"),
-        "gamma": contract.get("gamma"),
-        "theta": contract.get("theta"),
-        "iv": contract.get("iv"),
-        "bid": contract.get("bid"),
-        "ask": contract.get("ask"),
-        "mid": contract.get("mid"),
-    }
+    # Rule Z8: return the normalized contract_view(...) output (including
+    # `_meta`) rather than a hand-built flat dict that drops `greeks_valid`
+    # and silently launders invalid Greeks into "just a number". Safe to
+    # call even if the chain has already been viewed upstream (idempotent).
+    return contract_view(
+        contract,
+        now=datetime.now(timezone.utc),
+        stale_after_seconds=_DEFAULT_STALE_AFTER_SECONDS,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -223,10 +270,23 @@ def score_short_put(
 
     Returns the full analysis dict with score, status, drivers, etc.
     """
-    delta = abs(greeks.get("delta") or 0)
-    gamma = abs(greeks.get("gamma") or 0)
-    theta = abs(greeks.get("theta") or 0)
-    iv = greeks.get("iv") or 0
+    delta = _finite_or_none(greeks.get("delta"))
+    delta = abs(delta) if delta is not None else None
+    gamma = _finite_or_none(greeks.get("gamma"))
+    gamma = abs(gamma) if gamma is not None else None
+    theta = _finite_or_none(greeks.get("theta"))
+    theta = abs(theta) if theta is not None else None
+    iv = _finite_or_none(greeks.get("iv"))
+
+    missing_fields: List[str] = []
+    if delta is None:
+        missing_fields.append("delta")
+    if gamma is None:
+        missing_fields.append("gamma")
+    if theta is None:
+        missing_fields.append("theta")
+    if iv is None:
+        missing_fields.append("iv")
 
     dte = _compute_dte(expiration)
     series = extract_series_from_snapshots(snapshots)
@@ -247,8 +307,10 @@ def score_short_put(
     # For scoring: positive = OTM (same as CALL scorer approach)
     otm_gap = -gap_percent
 
-    # Risk zone
-    if delta < 0.30:
+    # Risk zone (Z6: no derived classification from a missing input)
+    if delta is None:
+        risk_zone = "UNKNOWN"
+    elif delta < 0.30:
         risk_zone = "SAFE"
     elif delta < 0.45:
         risk_zone = "MONITOR"
@@ -261,8 +323,10 @@ def score_short_put(
     rule_hits = []
     score_breakdown = [{"factor": "Base", "points": 50, "reason": "Starting score"}]
 
-    # Delta
-    if delta < 0.30:
+    # Delta (Z5: unavailable factor is skipped, not scored)
+    if delta is None:
+        score_breakdown.append({"factor": "Delta", "points": 0, "reason": "Delta unavailable — not scored"})
+    elif delta < 0.30:
         score += 13
         score_breakdown.append({"factor": "Delta", "points": 13, "reason": f"Δ {delta:.3f} < 0.30 (OTM)"})
         key_drivers.append(f"Delta {delta:.2f} favorable (OTM)")
@@ -360,6 +424,9 @@ def score_short_put(
     if dte > 21:
         dte_pts = 7
         dte_reason = f"DTE {dte} > 21 (time comfortable)"
+    elif delta is None:
+        dte_pts = 0
+        dte_reason = f"DTE {dte} ≤ 21 but moneyness context unavailable (delta unknown) — not scored"
     elif delta < 0.30:
         dte_pts = 8
         dte_reason = f"DTE {dte} short BUT OTM (Δ {delta:.2f}) — near expiry profit"
@@ -377,8 +444,13 @@ def score_short_put(
     score += dte_pts
     score_breakdown.append({"factor": "DTE", "points": dte_pts, "reason": dte_reason})
 
-    # Gamma penalty
-    if gamma > 0.05 and delta >= 0.45:
+    # Gamma penalty (Z5/Z6: unavailable factor skipped, no derived
+    # classification when the paired input is missing)
+    if gamma is None:
+        score_breakdown.append({"factor": "Gamma", "points": 0, "reason": "Gamma unavailable — not scored"})
+    elif delta is None:
+        score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (delta unavailable — cannot assess ATM combo)"})
+    elif gamma > 0.05 and delta >= 0.45:
         score -= 8
         score_breakdown.append({"factor": "Gamma", "points": -8, "reason": f"Γ {gamma:.3f} high + ATM"})
         rule_hits.append("high_gamma_atm")
@@ -386,10 +458,17 @@ def score_short_put(
         score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (no penalty)"})
 
     # Theta (informational — replaced by P&L which is theta materialized)
-    score_breakdown.append({"factor": "Theta", "points": 0, "reason": f"Θ {theta:.4f} (informational, not scored)"})
+    if theta is None:
+        score_breakdown.append({"factor": "Theta", "points": 0, "reason": "Theta unavailable — not scored"})
+    else:
+        score_breakdown.append({"factor": "Theta", "points": 0, "reason": f"Θ {theta:.4f} (informational, not scored)"})
 
-    # IV level (single value — no trend available)
-    if iv > 0.50:
+    # IV level (single value — no trend available; Z6: unavailable IV
+    # scores no points in either direction)
+    if iv is None:
+        iv_pts = 0
+        iv_reason = "IV unavailable — not scored"
+    elif iv > 0.50:
         iv_pts = 7
         iv_reason = f"IV {iv*100:.0f}% > 50% (high — favorable for short)"
     elif iv > 0.35:
@@ -409,12 +488,14 @@ def score_short_put(
 
     # ── Combo Modifiers (cross-factor interactions) ──
 
-    # #1 P&L factor: mark-to-market profitability
+    # #1 P&L factor: mark-to-market profitability. Rule Z7 — aligned to
+    # score_short_call: the executable buy-to-close ask, never a raw/
+    # unexecutable `mid` fallback.
     pnl_pct = None
+    buyback_ask = executable_buyback_ask(greeks.get("ask"))
     if premium_received is not None and premium_received > 0:
-        contract_mid = abs(greeks.get("mid") or 0)
-        if contract_mid > 0:
-            pnl_pct = (premium_received - contract_mid) / premium_received * 100
+        if buyback_ask is not None:
+            pnl_pct = (premium_received - buyback_ask) / premium_received * 100
     if pnl_pct is not None:
         if pnl_pct >= 80:
             pnl_pts = 10
@@ -443,7 +524,11 @@ def score_short_put(
         if pnl_pts != 0:
             key_drivers.append(pnl_reason)
     else:
-        score_breakdown.append({"factor": "P&L", "points": 0, "reason": "P&L unavailable (no premium data)"})
+        score_breakdown.append({
+            "factor": "P&L",
+            "points": 0,
+            "reason": "P&L unavailable (no positive finite executable ask or premium data)",
+        })
 
     # #2 Combo P&L+DTE: near max profit + short DTE = close opportunity
     if pnl_pct is not None and pnl_pct >= 70 and dte <= 7:
@@ -463,8 +548,10 @@ def score_short_put(
         score_breakdown.append({"factor": "Combo: P&L+DTE", "points": 0,
                                 "reason": "Not triggered"})
 
-    # #3 IV + DTE: High IV + short DTE = accelerated decay (exponential theta)
-    if iv > 0.35 and dte <= 14 and delta < 0.45:
+    # #3 IV + DTE: High IV + short DTE = accelerated decay (exponential
+    # theta). Z6: combo modifiers fire only when every input they read is
+    # available.
+    if iv is not None and delta is not None and iv > 0.35 and dte <= 14 and delta < 0.45:
         combo_pts = 6
         score += combo_pts
         score_breakdown.append({"factor": "Combo: IV+DTE", "points": combo_pts,
@@ -497,8 +584,9 @@ def score_short_put(
         score_breakdown.append({"factor": "Combo: MACD+RSI", "points": 0,
                                 "reason": "Not triggered"})
 
-    # #5 Delta + ADX unfavorable: Compound assignment risk
-    if delta >= 0.45 and adx > 25 and adx_trend == "improving" and not trend_favorable:
+    # #5 Delta + ADX unfavorable: Compound assignment risk. Z6: fires only
+    # when delta is available.
+    if delta is not None and delta >= 0.45 and adx > 25 and adx_trend == "improving" and not trend_favorable:
         combo_pts = -5
         score += combo_pts
         score_breakdown.append({"factor": "Combo: Delta+ADX", "points": combo_pts,
@@ -512,16 +600,16 @@ def score_short_put(
     # Clamp
     score = max(0, min(100, score))
 
-    # ── Overrides ──
+    # ── Overrides ── (Z6: only fire when delta is available)
     forced = None
 
     # Force ROLL: Delta ≥ 0.55 AND ADX > 25 rising AND MACD worsening
-    if delta >= 0.55 and adx > 25 and adx_trend == "improving" and macd_trend == "worsening":
+    if delta is not None and delta >= 0.55 and adx > 25 and adx_trend == "improving" and macd_trend == "worsening":
         forced = "ROLL"
         rule_hits.append("override_force_roll")
 
     # Allow HOLD: Delta ≥ 0.45 BUT RSI < 35 improving AND MACD improving AND ADX falling
-    if (delta >= 0.45 and rsi < 35 and rsi_trend == "improving"
+    if (delta is not None and delta >= 0.45 and rsi < 35 and rsi_trend == "improving"
             and macd_trend == "improving" and adx_trend == "worsening"):
         forced = "HOLD"
         rule_hits.append("override_allow_hold")
@@ -535,6 +623,17 @@ def score_short_put(
         status = "WATCH"
     else:
         status = "ROLL"
+
+    # Rule Z9: confidence / data_quality. `delta`/`iv` are the two
+    # structural risk inputs; if either is missing, force NO_DATA, limit
+    # key_drivers to a single explanatory driver, and neutralize
+    # next_focus — but never null `score` itself.
+    data_quality = _data_quality_block(missing_fields, greeks)
+    next_focus = _next_focus_put(delta, dte, adx, adx_trend, rsi_trend)
+    if data_quality["confidence"] == "insufficient":
+        status = "NO_DATA"
+        key_drivers = [f"Insufficient data: missing {', '.join(missing_fields)}"]
+        next_focus = "Confirm data before acting — key risk inputs unavailable."
 
     # Summary
     summary_parts = []
@@ -559,12 +658,13 @@ def score_short_put(
         "summary": ", ".join(summary_parts),
         "key_drivers": key_drivers[:5],
         "rule_hits": rule_hits,
-        "next_focus": _next_focus_put(delta, dte, adx, adx_trend, rsi_trend),
+        "next_focus": next_focus,
+        "data_quality": data_quality,
         "inputs": {
-            "delta": round(delta, 4),
-            "gamma": round(gamma, 4),
-            "theta": round(theta, 4),
-            "iv": round(iv, 4),
+            "delta": round(delta, 4) if delta is not None else None,
+            "gamma": round(gamma, 4) if gamma is not None else None,
+            "theta": round(theta, 4) if theta is not None else None,
+            "iv": round(iv, 4) if iv is not None else None,
             "dte": dte,
             "rsi": round(rsi, 2),
             "rsi_trend": rsi_trend,
@@ -575,6 +675,9 @@ def score_short_put(
             "gap_percent": round(gap_percent, 2),
             "underlying_price": underlying_price,
             "strike": strike,
+            "buyback_ask": buyback_ask,
+            "buyback_available": buyback_ask is not None,
+            "incomplete_data": buyback_ask is None,
         },
         "trend_analysis": {
             "rsi": rsi_trend_details,
@@ -586,7 +689,7 @@ def score_short_put(
 
 
 def _next_focus_put(delta, dte, adx, adx_trend, rsi_trend) -> str:
-    if delta >= 0.45:
+    if delta is not None and delta >= 0.45:
         return "Watch delta closely — near ATM"
     if dte <= 14:
         return "DTE very short — monitor time decay"
@@ -613,10 +716,23 @@ def score_short_call(
 
     Returns the full analysis dict with score, status, drivers, etc.
     """
-    delta = abs(greeks.get("delta") or 0)
-    gamma = abs(greeks.get("gamma") or 0)
-    theta = abs(greeks.get("theta") or 0)
-    iv = greeks.get("iv") or 0
+    delta = _finite_or_none(greeks.get("delta"))
+    delta = abs(delta) if delta is not None else None
+    gamma = _finite_or_none(greeks.get("gamma"))
+    gamma = abs(gamma) if gamma is not None else None
+    theta = _finite_or_none(greeks.get("theta"))
+    theta = abs(theta) if theta is not None else None
+    iv = _finite_or_none(greeks.get("iv"))
+
+    missing_fields: List[str] = []
+    if delta is None:
+        missing_fields.append("delta")
+    if gamma is None:
+        missing_fields.append("gamma")
+    if theta is None:
+        missing_fields.append("theta")
+    if iv is None:
+        missing_fields.append("iv")
 
     dte = _compute_dte(expiration)
     series = extract_series_from_snapshots(snapshots)
@@ -637,8 +753,10 @@ def score_short_call(
     # Invert: positive gap_percent means ITM for calls
     otm_gap = -gap_percent
 
-    # Risk zone
-    if delta < 0.30:
+    # Risk zone (Z6: no derived classification from a missing input)
+    if delta is None:
+        risk_zone = "UNKNOWN"
+    elif delta < 0.30:
         risk_zone = "SAFE"
     elif delta < 0.45:
         risk_zone = "MONITOR"
@@ -651,8 +769,10 @@ def score_short_call(
     rule_hits = []
     score_breakdown = [{"factor": "Base", "points": 50, "reason": "Starting score"}]
 
-    # Delta
-    if delta < 0.30:
+    # Delta (Z5: unavailable factor is skipped, not scored)
+    if delta is None:
+        score_breakdown.append({"factor": "Delta", "points": 0, "reason": "Delta unavailable — not scored"})
+    elif delta < 0.30:
         score += 13
         score_breakdown.append({"factor": "Delta", "points": 13, "reason": f"Δ {delta:.3f} < 0.30 (OTM)"})
         key_drivers.append(f"Delta {delta:.2f} favorable (OTM)")
@@ -750,6 +870,9 @@ def score_short_call(
     if dte > 21:
         dte_pts = 7
         dte_reason = f"DTE {dte} > 21 (time comfortable)"
+    elif delta is None:
+        dte_pts = 0
+        dte_reason = f"DTE {dte} ≤ 21 but moneyness context unavailable (delta unknown) — not scored"
     elif delta < 0.30:
         dte_pts = 8
         dte_reason = f"DTE {dte} short BUT OTM (Δ {delta:.2f}) — near expiry profit"
@@ -767,8 +890,13 @@ def score_short_call(
     score += dte_pts
     score_breakdown.append({"factor": "DTE", "points": dte_pts, "reason": dte_reason})
 
-    # Gamma penalty
-    if gamma > 0.05 and delta >= 0.45:
+    # Gamma penalty (Z5/Z6: unavailable factor skipped, no derived
+    # classification when the paired input is missing)
+    if gamma is None:
+        score_breakdown.append({"factor": "Gamma", "points": 0, "reason": "Gamma unavailable — not scored"})
+    elif delta is None:
+        score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (delta unavailable — cannot assess ATM combo)"})
+    elif gamma > 0.05 and delta >= 0.45:
         score -= 8
         score_breakdown.append({"factor": "Gamma", "points": -8, "reason": f"Γ {gamma:.3f} high + ATM"})
         rule_hits.append("high_gamma_atm")
@@ -776,10 +904,18 @@ def score_short_call(
         score_breakdown.append({"factor": "Gamma", "points": 0, "reason": f"Γ {gamma:.3f} (no penalty)"})
 
     # Theta (informational — replaced by P&L which is theta materialized)
-    score_breakdown.append({"factor": "Theta", "points": 0, "reason": f"Θ {theta:.4f} (informational, not scored)"})
+    if theta is None:
+        score_breakdown.append({"factor": "Theta", "points": 0, "reason": "Theta unavailable — not scored"})
+    else:
+        score_breakdown.append({"factor": "Theta", "points": 0, "reason": f"Θ {theta:.4f} (informational, not scored)"})
 
-    # IV level (single value — no trend available)
-    if iv > 0.50:
+
+    # IV level (single value — no trend available; Z6: unavailable IV
+    # scores no points in either direction)
+    if iv is None:
+        iv_pts = 0
+        iv_reason = "IV unavailable — not scored"
+    elif iv > 0.50:
         iv_pts = 7
         iv_reason = f"IV {iv*100:.0f}% > 50% (high — favorable for short)"
     elif iv > 0.35:
@@ -857,8 +993,10 @@ def score_short_call(
         score_breakdown.append({"factor": "Combo: P&L+DTE", "points": 0,
                                 "reason": "Not triggered"})
 
-    # #3 IV + DTE: High IV + short DTE = accelerated decay (exponential theta)
-    if iv > 0.35 and dte <= 14 and delta < 0.45:
+    # #3 IV + DTE: High IV + short DTE = accelerated decay (exponential
+    # theta). Z6: combo modifiers fire only when every input they read is
+    # available.
+    if iv is not None and delta is not None and iv > 0.35 and dte <= 14 and delta < 0.45:
         combo_pts = 6
         score += combo_pts
         score_breakdown.append({"factor": "Combo: IV+DTE", "points": combo_pts,
@@ -891,8 +1029,9 @@ def score_short_call(
         score_breakdown.append({"factor": "Combo: MACD+RSI", "points": 0,
                                 "reason": "Not triggered"})
 
-    # #5 Delta + ADX unfavorable: Compound assignment risk
-    if delta >= 0.45 and adx > 25 and adx_trend == "improving" and not trend_favorable:
+    # #5 Delta + ADX unfavorable: Compound assignment risk. Z6: fires only
+    # when delta is available.
+    if delta is not None and delta >= 0.45 and adx > 25 and adx_trend == "improving" and not trend_favorable:
         combo_pts = -5
         score += combo_pts
         score_breakdown.append({"factor": "Combo: Delta+ADX", "points": combo_pts,
@@ -906,16 +1045,16 @@ def score_short_call(
     # Clamp
     score = max(0, min(100, score))
 
-    # ── Overrides ──
+    # ── Overrides ── (Z6: only fire when delta is available)
     forced = None
 
     # Force ROLL: Delta ≥ 0.55 AND ADX > 25 rising AND MACD improving
-    if delta >= 0.55 and adx > 25 and adx_trend == "improving" and macd_trend == "improving":
+    if delta is not None and delta >= 0.55 and adx > 25 and adx_trend == "improving" and macd_trend == "improving":
         forced = "ROLL"
         rule_hits.append("override_force_roll")
 
     # Allow HOLD: Delta ≥ 0.45 BUT RSI > 65 turning down AND MACD weakening AND ADX falling
-    if (delta >= 0.45 and rsi > 65 and rsi_trend == "worsening"
+    if (delta is not None and delta >= 0.45 and rsi > 65 and rsi_trend == "worsening"
             and macd_trend == "worsening" and adx_trend == "worsening"):
         forced = "HOLD"
         rule_hits.append("override_allow_hold")
@@ -929,6 +1068,17 @@ def score_short_call(
         status = "WATCH"
     else:
         status = "ROLL"
+
+    # Rule Z9: confidence / data_quality. `delta`/`iv` are the two
+    # structural risk inputs; if either is missing, force NO_DATA, limit
+    # key_drivers to a single explanatory driver, and neutralize
+    # next_focus — but never null `score` itself.
+    data_quality = _data_quality_block(missing_fields, greeks)
+    next_focus = _next_focus_call(delta, dte, adx, adx_trend, rsi_trend)
+    if data_quality["confidence"] == "insufficient":
+        status = "NO_DATA"
+        key_drivers = [f"Insufficient data: missing {', '.join(missing_fields)}"]
+        next_focus = "Confirm data before acting — key risk inputs unavailable."
 
     # Summary
     summary_parts = []
@@ -953,12 +1103,13 @@ def score_short_call(
         "summary": ", ".join(summary_parts),
         "key_drivers": key_drivers[:5],
         "rule_hits": rule_hits,
-        "next_focus": _next_focus_call(delta, dte, adx, adx_trend, rsi_trend),
+        "next_focus": next_focus,
+        "data_quality": data_quality,
         "inputs": {
-            "delta": round(delta, 4),
-            "gamma": round(gamma, 4),
-            "theta": round(theta, 4),
-            "iv": round(iv, 4),
+            "delta": round(delta, 4) if delta is not None else None,
+            "gamma": round(gamma, 4) if gamma is not None else None,
+            "theta": round(theta, 4) if theta is not None else None,
+            "iv": round(iv, 4) if iv is not None else None,
             "dte": dte,
             "rsi": round(rsi, 2),
             "rsi_trend": rsi_trend,
@@ -983,7 +1134,7 @@ def score_short_call(
 
 
 def _next_focus_call(delta, dte, adx, adx_trend, rsi_trend) -> str:
-    if delta >= 0.45:
+    if delta is not None and delta >= 0.45:
         return "Watch delta closely — near ATM"
     if dte <= 14:
         return "DTE very short — monitor time decay"

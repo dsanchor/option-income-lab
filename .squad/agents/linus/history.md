@@ -201,3 +201,81 @@
 - Use canonical raw paths and validate finite numeric values.
 - Preserve explicit risk precedence over favorable scoring.
 - Document provider limitations instead of fabricating unavailable metrics.
+
+## G1 — Zero-Free Agent-Facing Option Chains (Z1-Z10)
+- Implemented Danny's accepted `danny-zero-free-agent-option-chains.md`
+  design under exclusive ownership of `options_math.py`,
+  `options_chain_merge.py` (Z3/Z4 only), **new** `options_chain_view.py`
+  (the five frozen accessor/view functions), `options_chain_filters.py`
+  (Z10), `roll_table.py` (Z1), and `dps_scorer.py` (Z5-Z9). No mutation of
+  raw-layer semantics from the prior persistent-chain-merge task.
+- `robust_mid_optional` delegates to the unchanged `robust_mid` whenever a
+  side is usable, returning `None` only on the "nothing usable" path —
+  byte-identical numerics everywhere except the fabricated-0.0 fallback.
+- `_recompute_contract`/`recompute_derived` now null all five Greeks
+  together (never partially) when `greeks_valid` is False, and stamp
+  `_meta.greeks_asof` only when Greeks were actually recomputed that cycle
+  — mirrors `quote_asof`'s provenance model instead of inventing a new one.
+- **Idempotence bug + fix in `options_chain_view.py`**: a first pass nulls
+  a genuine `bid=0.0` and an absent `bid` to the same `None`, so a second
+  pass can no longer tell `no_market` from `unavailable` by re-deriving
+  from the (now ambiguous) value alone. Fixed by having `contract_view`
+  reuse an existing `_meta.field_status` verbatim whenever the input has
+  already been through this boundary, rather than re-deriving it. **Lesson:
+  any idempotent normalization that also *narrows* information (multiple
+  raw states collapsing to one view state) must persist its own
+  classification decision as data, not attempt to reconstruct it from the
+  now-lossy output on a later pass.**
+- **Deliberate interpretation, not a deviation — `greeks_valid` binding
+  rule**: read literally, "an explicit `greeks_valid == False` nulls the
+  Greeks" (Z4) is narrower than "only `greeks_valid is True` counts as
+  valid." Chose the literal/narrower reading (`is False` blocks;
+  absence trusts the raw numeric value) after the strict reading broke
+  pre-existing hand-built test fixtures across the codebase that never
+  modeled `_meta` at all — those aren't the contamination Z4 targets, and
+  punishing them would have meant editing tests outside this task's
+  charter. Documented in the module docstring itself so the choice is
+  discoverable without archaeology.
+- **Additive, not a deviation — `is_candidate_eligible`'s
+  `min_open_interest` kwarg**: the decision doc's own open-question #1
+  explicitly deferred this exact parameter to Linus at G1 with a
+  documented default of `> 0`; adding it as a keyword-only default-1 param
+  is executing an invited decision, not diverging from the frozen
+  signature.
+- Rewrote `score_short_put`/`score_short_call` end-to-end: null-safe
+  extraction (`_finite_or_none`, never `or 0`), `risk_zone == "UNKNOWN"`
+  when delta is absent, every scoring factor and combo-modifier skipped
+  (0 points, explicit "unavailable — not scored" reason, tracked in
+  `missing_fields`) rather than silently reading a missing input as its
+  worst/best-case numeric extreme, put's P&L aligned to call's
+  `executable_buyback_ask`-only rule (no more raw-`mid` fallback), and an
+  additive `data_quality` block (Z9) that forces `status = "NO_DATA"` when
+  `delta` or `iv` is missing without ever nulling the numeric `score` the
+  UI depends on.
+- Confirmed via a git-HEAD-vs-working-tree A/B harness (exec the
+  pre-session `dps_scorer.py` from `git show HEAD:...` as an isolated
+  module, run both against identical inputs) that the happy-path score and
+  full `score_breakdown` are byte-identical to pre-Z1-Z10 behavior once
+  the fixture is chosen so `mid` and `executable_buyback_ask(ask)` agree
+  (isolating the golden-regression check from the *intentional* Z7 put
+  P&L divergence) — locked in as `TestZS5HappyPathGoldenRegression`.
+- Flagged, not fixed (outside charter — Rusty/Livingston-owned test
+  files): `test_options_chain_cache.py::TestCarriedForwardContractShape::
+  test_carried_contract_keeps_executable_ask_and_gets_fresh_delta` and
+  `test_options_chain_persistence_integration.py::
+  TestR1DerivedFieldsSurviveMultiplePersistCycles::
+  test_mid_and_all_five_greeks_present_after_three_cycles` both assert the
+  *old* behavior Z3/Z4 was written to eliminate (numeric Greeks fabricated
+  even when the test's own fixture sets `iv=0.0`, i.e. `greeks_valid ==
+  False`) — need a one-line "contaminated-by-zero expectation, corrected
+  by Z3/Z4" update from their owner, per the decision's regression-baseline
+  rule.
+- Added 200+ new/updated assertions: `test_options_math.py`
+  (`robust_mid_optional`), `test_options_chain_merge.py` (Z-M1-M4), **new**
+  `test_options_chain_view.py` (Z-V1-V6 plus direct accessor/eligibility
+  coverage, 59 tests), `test_roll_table.py` (Z-R1), `test_dps_insights.py`
+  (Z-S1-S5, direct `score_short_put`/`score_short_call` unit tests),
+  `test_format_roll_candidates_table.py` (Z-F1/Z-F2). Full targeted +
+  whole-suite runs confirm exactly the pre-existing 22 unrelated failures
+  (20 yfinance network/env, 2 hardcoded-date drift) plus the 2 flagged
+  Rusty/Livingston failures above — nothing else regressed.

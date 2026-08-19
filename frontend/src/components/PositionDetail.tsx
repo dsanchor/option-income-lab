@@ -186,6 +186,12 @@ function SnapshotChart({ snapshots }: { snapshots: Snapshot[] }) {
 }
 
 // ── DPS analysis ──────────────────────────────────────────────────────────
+// `status`/`risk_zone` may now legitimately be "NO_DATA"/"UNKNOWN" (the
+// STATUS_COLORS/RISK_COLORS maps below already fall back to gray for any
+// key they don't recognize, so those two need no code change). `inputs`'
+// Greek/IV entries (delta/gamma/theta/iv) can now genuinely be `null` when
+// the option chain has no usable quote for this contract this cycle — the
+// backend never fabricates a 0/intrinsic-only substitute for them.
 interface DpsResult {
   error?: string;
   status?: string;
@@ -194,13 +200,24 @@ interface DpsResult {
   summary?: string;
   key_drivers?: string[];
   next_focus?: string;
-  inputs?: Record<string, number | string>;
+  inputs?: Record<string, number | string | null>;
   score_breakdown?: { factor: string; points: number; reason: string }[];
   trend_analysis?: Record<string, unknown>;
+  data_quality?: {
+    missing_fields?: string[];
+    confidence?: "full" | "partial" | "insufficient";
+    quote_asof?: string | null;
+    stale?: boolean | null;
+  };
+}
+
+function fmtNullable(v: number | string | null | undefined): string {
+  return v === null || v === undefined ? "N/A" : String(v);
 }
 
 const STATUS_COLORS: Record<string, string> = { HOLD: "#3fb950", WATCH: "#f0883e", ROLL: "#bc8cff" };
 const RISK_COLORS: Record<string, string> = { SAFE: "#3fb950", MONITOR: "#f0883e", ATM_CRITICAL: "#f85149" };
+const DATA_QUALITY_LABEL: Record<string, string> = { partial: "◐ Partial data", insufficient: "⚠ Insufficient data" };
 
 function DpsAnalysis({ symbol, positionId }: { symbol: string; positionId: string }) {
   const [busy, setBusy] = useState(false);
@@ -248,6 +265,22 @@ function DpsAnalysis({ symbol, positionId }: { symbol: string; positionId: strin
             <span className="rounded border px-1.5 py-0.5 text-xs" style={{ color: riskColor, borderColor: `${riskColor}66`, background: `${riskColor}22` }}>
               {result.risk_zone}
             </span>
+            {result.data_quality?.confidence && result.data_quality.confidence !== "full" && (
+              <span
+                className="rounded border px-1.5 py-0.5 text-xs text-text-muted"
+                style={{ borderColor: "#8d969e66", background: "#8d969e22" }}
+                title={
+                  result.data_quality.missing_fields?.length
+                    ? `Missing: ${result.data_quality.missing_fields.join(", ")}`
+                    : undefined
+                }
+              >
+                {DATA_QUALITY_LABEL[result.data_quality.confidence] ?? result.data_quality.confidence}
+                {result.data_quality.missing_fields?.length
+                  ? ` (${result.data_quality.missing_fields.join(", ")})`
+                  : ""}
+              </span>
+            )}
           </div>
           {result.summary && <p className="text-xs italic text-text-muted">{result.summary}</p>}
           {result.key_drivers && result.key_drivers.length > 0 && (
@@ -263,10 +296,10 @@ function DpsAnalysis({ symbol, positionId }: { symbol: string; positionId: strin
             <details className="text-xs">
               <summary className="cursor-pointer text-text-muted">Input parameters</summary>
               <div className="mt-1 grid grid-cols-2 gap-1 text-text-muted sm:grid-cols-3">
-                <span>Δ {inp.delta}</span>
-                <span>Γ {inp.gamma}</span>
-                <span>Θ {inp.theta}</span>
-                <span>IV {typeof inp.iv === "number" ? (inp.iv * 100).toFixed(1) : inp.iv}%</span>
+                <span>Δ {fmtNullable(inp.delta)}</span>
+                <span>Γ {fmtNullable(inp.gamma)}</span>
+                <span>Θ {fmtNullable(inp.theta)}</span>
+                <span>IV {typeof inp.iv === "number" ? `${(inp.iv * 100).toFixed(1)}%` : "N/A"}</span>
                 <span>DTE {inp.dte}</span>
                 <span>RSI {inp.rsi} ({inp.rsi_trend})</span>
                 <span>MACD {inp.macd} ({inp.macd_trend})</span>
@@ -351,18 +384,23 @@ function DpsInsights({ symbol, positionId }: { symbol: string; positionId: strin
 }
 
 // ── Roll table ────────────────────────────────────────────────────────────
+// bid/ask/delta/net_credit are `null` (never a fabricated 0/negative value)
+// when the candidate's quote is unusable this cycle (Z-R1); the render
+// below already treats a "gray" cell (color === "gray") as unavailable and
+// falls through to `fmt2`'s "—" for every numeric field, so widening these
+// to accept `null` is a type-accuracy fix, not a behavior change.
 interface RollCell {
   expiration?: string;
-  strike?: number;
-  bid?: number;
-  ask?: number;
-  delta?: number;
-  net_credit?: number;
+  strike?: number | null;
+  bid?: number | null;
+  ask?: number | null;
+  delta?: number | null;
+  net_credit?: number | null;
   color?: string;
 }
 interface RollRow {
   label?: string;
-  strike?: number;
+  strike?: number | null;
   offset?: number;
   cells?: RollCell[];
 }
@@ -374,11 +412,11 @@ interface RollExp {
 }
 interface RollTable {
   error?: string;
-  current_position?: { strike?: number; expiration?: string; premium_received?: number; option_type?: string };
+  current_position?: { strike?: number | null; expiration?: string; premium_received?: number | null; option_type?: string };
   underlying_price?: number;
-  pct_captured?: number;
-  buyback_cost?: number;
-  buyback_per_share?: number;
+  pct_captured?: number | null;
+  buyback_cost?: number | null;
+  buyback_per_share?: number | null;
   profit_target_reached?: boolean;
   chain_timestamp?: string;
   expirations?: RollExp[];
@@ -440,14 +478,14 @@ function RollTableView({ symbol, positionId }: { symbol: string; positionId: str
   const pct = typeof data.pct_captured === "number" ? (data.pct_captured * 100).toFixed(1) : null;
   const isPut = /put/i.test(cp.option_type ?? "call");
 
-  const appliedPct = (strike?: number): string => {
+  const appliedPct = (strike?: number | null): string => {
     if (!underlying || strike == null) return "";
     const p = ((strike - underlying) / underlying) * 100;
     return `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`;
   };
 
   // Moneyness of the current position's strike vs. the underlying price.
-  const moneyness = (strike?: number): { label: string; pct: string; color: string } | null => {
+  const moneyness = (strike?: number | null): { label: string; pct: string; color: string } | null => {
     if (!underlying || strike == null) return null;
     const diff = ((strike - underlying) / underlying) * 100;
     const pctLabel = `${diff >= 0 ? "+" : ""}${diff.toFixed(1)}%`;
@@ -514,7 +552,7 @@ function RollTableView({ symbol, positionId }: { symbol: string; positionId: str
           <tbody>
             {(() => {
               const curStrike = cp.strike != null ? Number(cp.strike) : null;
-              const eqStrike = (a?: number, b: number | null = curStrike) =>
+              const eqStrike = (a?: number | null, b: number | null = curStrike) =>
                 a != null && b != null && Math.abs(Number(a) - b) < 1e-6;
               const refRow =
                 curStrike != null ? (

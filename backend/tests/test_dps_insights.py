@@ -382,3 +382,172 @@ def test_symbol_case_insensitive(test_app):
     # Verify cosmos was queried with uppercase
     call = cosmos.get_position_snapshots_calls[0]
     assert call["symbol"] == "AAPL"
+
+
+# ===========================================================================
+# score_short_put / score_short_call — direct unit tests (Z5-Z9,
+# .squad/decisions/inbox/danny-zero-free-agent-option-chains.md, §6.1
+# Z-S1 through Z-S5)
+#
+# These exercise the deterministic scorer functions directly (no HTTP
+# layer), independent of the endpoint tests above.
+# ===========================================================================
+
+import re
+
+from src.dps_scorer import score_short_put, score_short_call
+
+_SNAPSHOTS = [
+    {"timestamp": "2026-01-05 10:00:00", "rsi_14": 45.0, "macd_level": 0.1,
+     "adx": 18.0, "gap_percent": -2.0, "underlying_price": 98.0},
+    {"timestamp": "2026-01-06 10:00:00", "rsi_14": 42.0, "macd_level": 0.05,
+     "adx": 19.0, "gap_percent": -2.5, "underlying_price": 97.5},
+    {"timestamp": "2026-01-07 10:00:00", "rsi_14": 38.0, "macd_level": -0.02,
+     "adx": 21.0, "gap_percent": -3.0, "underlying_price": 97.0},
+]
+
+
+def _full_greeks(**overrides):
+    base = {"delta": 0.28, "gamma": 0.015, "theta": -0.04, "iv": 0.32,
+            "mid": 1.6, "ask": 1.6, "bid": 1.5}
+    base.update(overrides)
+    return base
+
+
+class TestZS1DeltaNoneNoRiskZoneContamination:
+    """Z-S1: delta=None -> risk_zone UNKNOWN, Delta factor 0 points,
+    "delta" in data_quality.missing_fields, confidence insufficient,
+    status NO_DATA, and never the old delta=0-coerced +13/"SAFE"."""
+
+    def test_put_delta_none(self):
+        greeks = _full_greeks()
+        del greeks["delta"]
+        result = score_short_put(greeks, _SNAPSHOTS, 100.0, "20260601", 97.0, premium_received=2.0)
+        assert result["risk_zone"] == "UNKNOWN"
+        delta_entry = next(e for e in result["score_breakdown"] if e["factor"] == "Delta")
+        assert delta_entry["points"] == 0
+        assert delta_entry["points"] != 13
+        assert "delta" in result["data_quality"]["missing_fields"]
+        assert result["data_quality"]["confidence"] == "insufficient"
+        assert result["status"] == "NO_DATA"
+
+    def test_call_delta_none(self):
+        greeks = _full_greeks()
+        del greeks["delta"]
+        result = score_short_call(greeks, _SNAPSHOTS, 100.0, "20260601", 103.0, premium_received=2.0)
+        assert result["risk_zone"] == "UNKNOWN"
+        delta_entry = next(e for e in result["score_breakdown"] if e["factor"] == "Delta")
+        assert delta_entry["points"] == 0
+        assert "delta" in result["data_quality"]["missing_fields"]
+        assert result["data_quality"]["confidence"] == "insufficient"
+        assert result["status"] == "NO_DATA"
+
+
+class TestZS2IVNoneNoPointsEitherDirection:
+    """Z-S2: iv=None -> no IV points (neither +7 nor -7)."""
+
+    def test_put_iv_none(self):
+        greeks = _full_greeks()
+        del greeks["iv"]
+        result = score_short_put(greeks, _SNAPSHOTS, 100.0, "20260601", 97.0, premium_received=2.0)
+        iv_entry = next(e for e in result["score_breakdown"] if e["factor"] == "IV level")
+        assert iv_entry["points"] == 0
+        assert "unavailable" in iv_entry["reason"].lower()
+        assert "iv" in result["data_quality"]["missing_fields"]
+
+    def test_call_iv_none(self):
+        greeks = _full_greeks()
+        del greeks["iv"]
+        result = score_short_call(greeks, _SNAPSHOTS, 100.0, "20260601", 103.0, premium_received=2.0)
+        iv_entry = next(e for e in result["score_breakdown"] if e["factor"] == "IV level")
+        assert iv_entry["points"] == 0
+        assert "unavailable" in iv_entry["reason"].lower()
+
+
+class TestZS3GammaThetaNoneNoPenaltyNoFabricatedString:
+    """Z-S3: gamma/theta None -> no penalty, and never a "Γ 0.000" /
+    "Θ 0.0000" fabricated-zero string in any breakdown reason."""
+
+    def test_put_gamma_theta_none(self):
+        greeks = _full_greeks()
+        del greeks["gamma"]
+        del greeks["theta"]
+        result = score_short_put(greeks, _SNAPSHOTS, 100.0, "20260601", 97.0, premium_received=2.0)
+        gamma_entry = next(e for e in result["score_breakdown"] if e["factor"] == "Gamma")
+        theta_entry = next(e for e in result["score_breakdown"] if e["factor"] == "Theta")
+        assert gamma_entry["points"] == 0
+        assert theta_entry["points"] == 0
+        assert "unavailable" in gamma_entry["reason"].lower()
+        assert "unavailable" in theta_entry["reason"].lower()
+        all_reasons = " ".join(e["reason"] for e in result["score_breakdown"])
+        assert not re.search(r"Γ\s*0\.000", all_reasons)
+        assert not re.search(r"Θ\s*0\.0000", all_reasons)
+        assert "gamma" in result["data_quality"]["missing_fields"]
+        assert "theta" in result["data_quality"]["missing_fields"]
+
+    def test_call_gamma_theta_none(self):
+        greeks = _full_greeks()
+        del greeks["gamma"]
+        del greeks["theta"]
+        result = score_short_call(greeks, _SNAPSHOTS, 100.0, "20260601", 103.0, premium_received=2.0)
+        gamma_entry = next(e for e in result["score_breakdown"] if e["factor"] == "Gamma")
+        theta_entry = next(e for e in result["score_breakdown"] if e["factor"] == "Theta")
+        assert gamma_entry["points"] == 0
+        assert theta_entry["points"] == 0
+        all_reasons = " ".join(e["reason"] for e in result["score_breakdown"])
+        assert not re.search(r"Γ\s*0\.000", all_reasons)
+        assert not re.search(r"Θ\s*0\.0000", all_reasons)
+
+
+class TestZS4PutPnlUsesExecutableBuybackAsk:
+    """Z-S4: put P&L uses executable_buyback_ask; ask unusable ->
+    pnl_pct None even when mid is present and positive (Z7)."""
+
+    def test_zero_ask_positive_mid_yields_no_pnl_points(self):
+        greeks = _full_greeks(mid=1.5, ask=0.0)
+        result = score_short_put(greeks, _SNAPSHOTS, 100.0, "20260601", 97.0, premium_received=2.0)
+        pnl_entry = next(e for e in result["score_breakdown"] if e["factor"] == "P&L")
+        assert pnl_entry["points"] == 0
+        assert pnl_entry["reason"] == "P&L unavailable (no positive finite executable ask or premium data)"
+        assert result["inputs"]["buyback_ask"] is None
+        assert result["inputs"]["buyback_available"] is False
+        assert result["inputs"]["incomplete_data"] is True
+
+    def test_usable_ask_yields_pnl_points(self):
+        greeks = _full_greeks(mid=1.5, ask=1.6)
+        result = score_short_put(greeks, _SNAPSHOTS, 100.0, "20260601", 97.0, premium_received=2.0)
+        pnl_entry = next(e for e in result["score_breakdown"] if e["factor"] == "P&L")
+        assert pnl_entry["reason"] != "P&L unavailable (no positive finite executable ask or premium data)"
+        assert result["inputs"]["buyback_ask"] == 1.6
+
+
+class TestZS5HappyPathGoldenRegression:
+    """Z-S5: all-available happy path -> identical score and breakdown to
+    the pre-Z1-Z10 baseline (git HEAD, commit c7313e9) for a fixture where
+    `mid` and `executable_buyback_ask(ask)` coincide (isolating the golden
+    check from the *intentional* Z7 put P&L divergence, which is exercised
+    separately in TestZS4)."""
+
+    def test_put_golden_score_and_breakdown(self):
+        result = score_short_put(_full_greeks(), _SNAPSHOTS, 100.0, "20260601", 97.0, premium_received=2.0)
+        assert result["score"] == 47
+        assert result["status"] == "ROLL"
+        assert result["risk_zone"] == "SAFE"
+        assert result["data_quality"]["confidence"] == "full"
+        assert result["data_quality"]["missing_fields"] == []
+        points_by_factor = {e["factor"]: e["points"] for e in result["score_breakdown"]}
+        assert points_by_factor == {
+            "Base": 50, "Delta": 13, "GAP": 0, "RSI level": 4, "RSI trend": -10,
+            "MACD trend": -13, "ADX": 4, "DTE": 8, "Gamma": 0, "Theta": 0,
+            "IV level": 0, "P&L": 0, "Combo: P&L+DTE": 0, "Combo: IV+DTE": 0,
+            "Combo: MACD+RSI": -9, "Combo: Delta+ADX": 0,
+        }
+
+    def test_call_golden_score_and_breakdown(self):
+        greeks = {"delta": 0.22, "gamma": 0.012, "theta": -0.035, "iv": 0.29,
+                  "mid": 1.35, "ask": 1.4, "bid": 1.3}
+        result = score_short_call(greeks, _SNAPSHOTS, 100.0, "20260601", 103.0, premium_received=2.0)
+        assert result["score"] == 100
+        assert result["status"] == "HOLD"
+        assert result["data_quality"]["confidence"] == "full"
+        assert result["data_quality"]["missing_fields"] == []

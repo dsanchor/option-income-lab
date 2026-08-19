@@ -6572,3 +6572,113 @@ Defects lived at the *seam* — neither Rusty's nor Linus's charter owned end-to
 ---
 
 **Note:** This decision log now contains the definitive record of all decisions from inbox. See `.squad/orchestration-log/` for agent-level session details and `.squad/session-log/2026-08-18T11-32-00Z-session-log.md` for full timeline.
+
+---
+
+# Decision: Zero-Free Agent-Facing Option Chains (Raw Fidelity + Analytical Safety) (2026-08-19)
+
+**Date:** 2026-08-19
+**Author:** Danny (Lead)
+**Status:** ✅ ACCEPTED — design frozen, implementation pending (G1)
+**Full document:** `.squad/decisions/inbox/danny-zero-free-agent-option-chains.md`
+**Directive:** `.squad/decisions/inbox/copilot-directive-2026-08-19T12-53-05.md` (Copilot, 2026-08-19T12:53:05+02:00)
+**Supersedes:** the prior agent-facing treatment of quote zeros (raw zeros flowing unchanged into agents,
+scorers, roll tables and API responses). The `options_chain_merge.py` acceptance predicates are NOT
+superseded — the raw layer stays faithful.
+
+## Verdict
+
+Two layers, two policies. The **raw/persisted layer stays faithful** (a provider `bid = 0.0` is a real
+market fact and is stored verbatim; `volume`/`openInterest` zeros are real liquidity evidence). The
+**agent-facing/scoring layer never presents numeric zero as a usable quote or as evidence** — a single
+normalization boundary converts unusable zeros to `null` + status metadata, after `merge_prior`'s
+last-known-good retention has already had its chance. Where the user's absolute "no zero" meets a genuine
+market zero, analytical safety wins at the agent boundary: `bid: null` **with**
+`_meta.field_status.bid = "no_market"` — the zero moves from the value channel to the status channel, and
+provenance is preserved in the shard.
+
+**Derived fields are exempt from provenance protection** and are nulled in BOTH layers: a fabricated
+`mid = 0.0` and intrinsic-only Greeks from `sigma = 0` are our own artifacts, not observations.
+
+## Rules (Z1–Z11)
+
+- **Z1** Zero is never a usable quote at the agent boundary: `bid`/`ask`/`lastPrice`/`iv`/`mid` are a
+  positive number or `null`. Retain-LKG first (merge), represent-unavailable second (view).
+- **Z2** Scope carve-out: `volume`/`openInterest` keep integer `0` — count-type evidence, not quotes.
+- **Z3** A derived field is `null` whenever its inputs were invalid — `mid` via new
+  `robust_mid_optional()`; all five Greeks `null` when `greeks_valid` would be `False`.
+- **Z4** `greeks_valid == False` is binding, not advisory — consumers must treat the Greek as absent even
+  on legacy shards carrying numbers.
+- **Z5** Unavailable scoring factor → 0 points + explicit "unavailable — not scored" reason + entry in
+  `data_quality.missing_fields`; never a `key_driver`, never a `rule_hit`.
+- **Z6** No derived classification from a missing input: `delta` unavailable → `risk_zone = "UNKNOWN"`
+  (today `delta = 0` → `"SAFE"` + `+13`, the worst contamination in the codebase); `iv` unavailable → no
+  IV points either direction; combos fire only when every input is available.
+- **Z7** P&L uses `executable_buyback_ask` on both sides — `score_short_put` drops its raw-`mid` mark and
+  aligns with `score_short_call`.
+- **Z8** `extract_greeks_from_chain` stops laundering `_meta`; returns the normalized contract view.
+- **Z9** `score` stays numeric (UI contract); confidence is additive: `data_quality.{missing_fields,
+  confidence, quote_asof, stale}`, `status = "NO_DATA"` when `delta` or `iv` is unavailable.
+- **Z10** Exclusion is a *candidate* rule, never a *visibility* rule: candidate tables exclude
+  no-usable-bid / `openInterest == 0` / `greeks_valid == false` with a disclosed hidden-count footer; the
+  **current held position is always retained** with nulls + `buyback_available: false`; roll-table cells
+  and reference/display views retain contracts with nulls.
+- **Z11** No destructive migration — repair only nulls derived fields and adds `_meta`; observed fields
+  are byte-for-byte untouched.
+
+## Key mechanism
+
+New pure module `backend/src/options_chain_view.py` (`to_agent_view`, `contract_view`, `usable_quote`,
+`usable_greek`, `is_candidate_eligible`) — the single, idempotent, non-mutating, total normalization
+boundary. Additive `_meta`: `field_status` (closed vocab `live|last_known_good|no_market|no_trades|
+unavailable`), `stale`, `tradable`, `greeks_asof`. Direct `contract.get("bid")` in a consumer is a
+review-blocking defect from this decision forward.
+
+## Persistence (Livingston findings resolved)
+
+- **P0:** `get_options_chain_store()` no longer memoizes failures — only a successful store is cached;
+  failures record `(last_error, last_failure_at, failure_count)` and retry with capped exponential backoff
+  (`options_chain_cache.persistence_retry_seconds`, default 300). Explicit `persistence_enabled: false`
+  stays terminal + INFO-once.
+- Eager startup probe in web lifespan and scheduler bootstrap; **ERROR** (not WARNING) on failure.
+- `GET /api/health/options-chain` + extended `stats()`: `enabled/last_error/last_success_at/failure_count/
+  retry_in_seconds` plus per-symbol `contracts_no_usable_bid / greeks_invalid / stale`.
+- Dead config `stale_quote_warn_seconds` wired as the sole input to `_meta.stale`.
+- Migration: `_schema_version` on shards, mandatory **lazy on-read v1→v2 normalization** (no un-normalized
+  shard is ever served) plus idempotent `backend/scripts/repair_options_chain_shards.py` (`--dry-run`
+  default, ETag CAS writes, per-symbol counts).
+
+## Ownership (exclusive, no overlapping writes)
+
+- **Linus:** `options_math.py`, `options_chain_merge.py`, NEW `options_chain_view.py`,
+  `options_chain_filters.py`, `roll_table.py`, `dps_scorer.py` + their tests.
+- **Livingston:** `options_chain_store.py`, `options_chain_cache.py`, `web/app.py`, `agent_runner.py`
+  (serialization seam only), `yfinance_data_provider.py` (schema prompt text only), `config.yaml`, NEW
+  `scripts/repair_options_chain_shards.py` + their tests. Forbidden: any scoring/market semantics.
+- **Basher:** review + NEW `tests/test_zero_free_agent_chain.py` and `test_open_call_zero_quote.py`
+  extensions. **No production-code writes.**
+- **Danny:** decision, history, gate arbitration. Seam contract frozen at G0; changes escalate, never
+  patched locally.
+
+## Gate order
+
+**G0** Contract freeze (Danny, complete) → **G1** Linus market semantics & scoring → **G2** Basher
+blocking review of G1 (raw provenance intact, no `or 0` survives, view purity, golden scores unchanged) →
+**G3** Livingston persistence & serving (must not start before G2 passes) → **G4** Basher cross-layer
+integration & adversarial (`Z-I1` headline: no numeric zero in any agent-facing surface; `Z-I5`
+anti-corruption: raw shard still holds the provider's `0.0`) → **G5** Danny final acceptance.
+Basher may author G4 tests in parallel during G1/G3; nothing else parallelizes.
+
+## Backward compatibility
+
+Additive only — no key renamed or removed; value types widen `float` → `float | null`;
+`robust_mid()`'s contract is untouched (new `robust_mid_optional()` sibling instead); v2 shards remain
+readable by v1 code, so a code rollback needs no data rollback. Frontend null-safety sweep is a hard
+prerequisite for G5 and is routed outside this roster.
+
+## Explicitly ruled out
+
+Rewriting/deleting provider zeros in raw/persisted data; changing `is_accepted("bid", 0.0)`; nulling
+`volume`/`openInterest` zeros; carrying forward stale Greeks; making `score` nullable; filtering unquoted
+contracts out of display/reference views; hard-failing the app when persistence is down; changing
+`robust_mid()`'s return contract.

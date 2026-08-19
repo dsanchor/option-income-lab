@@ -48,6 +48,7 @@ class FakeCosmos:
     def __init__(self, initial_docs: dict | None = None):
         self._docs: dict[str, dict] = dict(initial_docs or {})
         self.replaced: list[dict] = []
+        self.deleted: list[str] = []
 
     def get_symbol(self, symbol: str) -> dict | None:
         return self._docs.get(symbol.upper())
@@ -74,6 +75,10 @@ class FakeCosmos:
         self._docs[sym] = doc
         self.replaced.append(doc)
         return doc
+
+    def delete_symbol(self, symbol: str) -> None:
+        self.deleted.append(symbol.upper())
+        self._docs.pop(symbol.upper(), None)
 
     def get_settings(self) -> dict:
         return {}
@@ -377,6 +382,86 @@ class TestUpdateTotalShares:
         # The doc in the fake store was mutated in-place before replace; that
         # is the current behaviour. What matters is replace was never called.
         assert cosmos.replaced == []
+
+
+# ===========================================================================
+# DELETE /api/symbols/{symbol} — Delete symbol (used by the watchlist trash
+# action). This endpoint and its cosmos.delete_symbol() cascade already
+# existed prior to the frontend delete-button feature; these tests just
+# lock in the contract the new UI now depends on.
+# ===========================================================================
+
+class TestDeleteSymbol:
+
+    def test_delete_symbol_returns_200_and_removes_it(self, monkeypatch):
+        """Happy path: existing symbol → 200, removed from the store, and
+        cosmos.delete_symbol was invoked with the (uppercased) ticker."""
+        cosmos = FakeCosmos({"AAPL": _make_symbol_doc("AAPL", total_shares=100)})
+        client = _make_client_with_cosmos(cosmos)
+        res = client.delete("/api/symbols/AAPL")
+
+        assert res.status_code == 200
+        body = res.json()
+        assert body == {"status": "deleted", "symbol": "AAPL"}
+        assert cosmos.get_symbol("AAPL") is None
+        assert cosmos.deleted == ["AAPL"]
+
+    def test_delete_symbol_is_case_insensitive(self, monkeypatch):
+        """A lowercase path segment still resolves and deletes the stored
+        (uppercase) symbol."""
+        cosmos = FakeCosmos({"MSFT": _make_symbol_doc("MSFT")})
+        client = _make_client_with_cosmos(cosmos)
+        res = client.delete("/api/symbols/msft")
+
+        assert res.status_code == 200
+        assert res.json()["symbol"] == "MSFT"
+        assert cosmos.get_symbol("MSFT") is None
+
+    def test_delete_unknown_symbol_returns_404_and_does_not_call_delete(self, monkeypatch):
+        """A symbol that was never created (or already deleted) → 404, and
+        the destructive delete_symbol() call is never reached."""
+        cosmos = FakeCosmos()
+        client = _make_client_with_cosmos(cosmos)
+        res = client.delete("/api/symbols/NOPE")
+
+        assert res.status_code == 404
+        assert "NOPE" in res.json()["error"]
+        assert cosmos.deleted == []
+
+    def test_delete_symbol_when_cosmos_unavailable_returns_503(self, monkeypatch):
+        """CosmosDB not configured/unavailable → 503, not a false success.
+
+        Uses monkeypatch (not a direct, permanent mutation) so app.state is
+        automatically restored after this test, regardless of test order —
+        `raising=False` because `cosmos`/`cosmos_error` may not have been
+        set on `app.state` yet when this test runs first.
+        """
+        from web.app import app
+        monkeypatch.setattr(app.state, "cosmos", None, raising=False)
+        monkeypatch.setattr(app.state, "cosmos_error", "not configured", raising=False)
+        monkeypatch.setattr(app.state, "yf_provider", None, raising=False)
+        from starlette.testclient import TestClient
+        client = TestClient(app, raise_server_exceptions=False)
+
+        res = client.delete("/api/symbols/AAPL")
+
+        assert res.status_code == 503
+
+    def test_delete_symbol_does_not_touch_other_symbols(self, monkeypatch):
+        """Deleting one symbol must not remove or mutate any other symbol's
+        watchlist config (no accidental cross-symbol cascade)."""
+        cosmos = FakeCosmos({
+            "AAPL": _make_symbol_doc("AAPL", total_shares=10),
+            "MSFT": _make_symbol_doc("MSFT", total_shares=20),
+        })
+        client = _make_client_with_cosmos(cosmos)
+        res = client.delete("/api/symbols/AAPL")
+
+        assert res.status_code == 200
+        assert cosmos.get_symbol("AAPL") is None
+        remaining = cosmos.get_symbol("MSFT")
+        assert remaining is not None
+        assert remaining["total_shares"] == 20
 
 
 # ===========================================================================

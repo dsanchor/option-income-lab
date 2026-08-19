@@ -259,8 +259,8 @@ class AgentRunner:
     def _format_options_chain(raw_chain: str, symbol: str, current_strike: float = None, option_type: str = None) -> str:
         """Format options chain data for agent consumption.
 
-        The yfinance provider returns already-structured JSON. Parse it
-        and apply filters.
+        The yfinance provider returns already-structured JSON. Parse it,
+        apply the agent-facing normalization boundary, then apply filters.
         """
         try:
             structured = json.loads(raw_chain) if isinstance(raw_chain, str) else raw_chain
@@ -268,13 +268,26 @@ class AgentRunner:
             structured = {"calls": {}, "puts": {}}
 
         if structured.get("calls") or structured.get("puts"):
+            # Agent-prompt seam (Danny's zero-free decision §2.2/§4): every
+            # contract is normalized through the frozen `to_agent_view`
+            # boundary *before* any filter runs, so a raw provider zero
+            # (bid=0.0, etc.) is never what an agent's delta filter/prompt
+            # sees. `filter_options_chain_by_delta` already requires
+            # `delta is not None`, so a nulled Greek is safely excluded
+            # from candidate selection with no special-casing needed here.
+            from src.options_chain_cache import apply_agent_view
+            structured = apply_agent_view(structured)
+
             if option_type:
                 structured = filter_options_chain_by_type(structured, option_type)
             if current_strike is not None:
                 structured = filter_options_chain_for_position(structured, current_strike, option_type)
             structured = filter_options_chain_by_delta(structured)
 
-            # Sanity check: warn if contracts have null bid values
+            # Sanity check: a null bid is now the *expected* representation
+            # of "no usable market" (§2.4) — not itself anomalous — so this
+            # stays a ratio-based signal for a provider-wide outage, not an
+            # alarm on any single contract.
             null_bid_count = 0
             total_count = 0
             for side in ("calls", "puts"):
@@ -285,8 +298,10 @@ class AgentRunner:
                             null_bid_count += 1
             if null_bid_count > 0:
                 logger.warning(
-                    "Options chain for %s: %d/%d contracts have NULL bid — "
-                    "agents will be unable to calculate premium.",
+                    "Options chain for %s: %d/%d contracts have no usable bid "
+                    "— this can be normal (no market/no trades this cycle) "
+                    "and is not itself a data outage; consult "
+                    "_meta.field_status per contract.",
                     symbol, null_bid_count, total_count,
                 )
 
@@ -320,6 +335,16 @@ class AgentRunner:
             structured = json.loads(raw_chain) if isinstance(raw_chain, str) else raw_chain
         except (json.JSONDecodeError, TypeError):
             structured = {"calls": {}, "puts": {}}
+
+        # Agent-prompt seam (Danny's zero-free decision §2.2/§4): normalize
+        # the whole chain *before* extracting the single held contract, so
+        # it inherits already-nulled quote/Greek fields rather than the
+        # raw provider values. `executable_buyback_ask(None)` and
+        # `executable_buyback_ask(0.0)` are equivalent (both unusable), so
+        # this is safe regardless of whether `ask` was a genuine 0.0 or
+        # already-null.
+        from src.options_chain_cache import apply_agent_view
+        structured = apply_agent_view(structured)
 
         bucket_key = "calls" if option_type == "call" else "puts"
         exp_key = expiration.replace("-", "")
@@ -1592,6 +1617,18 @@ Provide your alpha advisor analysis in the JSON format specified above."""
             option_type = "put"
         else:
             return ""
+        # Agent-prompt seam (Danny's zero-free decision §2.2/§4): normalize
+        # through the frozen `to_agent_view` boundary *before* any filter
+        # runs (mirrors `_format_options_chain`/`_format_current_contract_chain`
+        # above), so both the candidate chain serialized below via
+        # `json.dumps(structured)` and `current_contract` (captured from
+        # this same normalized `structured`) already carry nulled
+        # quote/Greek fields instead of raw provider zeros.
+        # `filter_options_chain_by_delta` already requires `delta is not
+        # None`, so a nulled Greek is safely excluded with no special-
+        # casing needed here.
+        from src.options_chain_cache import apply_agent_view
+        structured = apply_agent_view(structured)
         structured = filter_options_chain_by_type(structured, option_type)
         # Capture current contract BEFORE delta filter (for buyback cost reference)
         current_contract = None
@@ -2459,6 +2496,13 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 structured_chain = json.loads(data.get('options_chain', '{}'))
             except (json.JSONDecodeError, TypeError):
                 structured_chain = {"calls": {}, "puts": {}}
+            # Agent-prompt seam (Danny's zero-free decision §2.2/§4):
+            # normalize before extracting the current contract or building
+            # the Phase 2 filtered chain / roll candidate table below — all
+            # downstream consumers of `structured_chain` see the same
+            # already-nulled representation an agent's prompt does.
+            from src.options_chain_cache import apply_agent_view
+            structured_chain = apply_agent_view(structured_chain)
             current_contract = get_contract(
                 structured_chain,
                 float(strike),

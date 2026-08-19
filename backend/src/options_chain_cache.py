@@ -127,6 +127,12 @@ _ET_ZONE = ZoneInfo("America/New_York")
 # refresh on next access (stale-while-revalidate).
 _DEFAULT_TTL_SECONDS = 1800
 
+# Default for `options_chain_cache.stale_quote_warn_seconds` (Danny's
+# zero-free decision §4.3) — the single input to `_meta.stale` in
+# `options_chain_view.to_agent_view` and to the per-refresh staleness
+# quality counter below. Previously configured but read by nothing.
+_DEFAULT_STALE_QUOTE_WARN_SECONDS = 86400
+
 # Per-symbol refresh timeout to prevent hung jobs from blocking the queue
 _REFRESH_SYMBOL_TIMEOUT = 90
 
@@ -542,6 +548,26 @@ class OptionsChainCache:
             put_count,
         )
 
+        # Step 7.5: per-refresh quality metrics (Danny's zero-free decision
+        # §4.2) — computed through the same frozen `to_agent_view` boundary
+        # every other consumer goes through, so these counts reflect
+        # exactly what an agent/API caller would see (not the raw
+        # persisted/merged data underneath). Logged once per symbol per
+        # cycle and exposed via `stats()` / `GET /api/health/options-chain`
+        # so a provider-wide outage (an all-null chain) is visible
+        # immediately instead of quietly served.
+        quality = _compute_chain_quality(merged, now=now)
+        logger.info(
+            "%s: chain quality — %d contracts total, %d no usable bid, "
+            "%d greeks invalid, %d stale",
+            symbol, quality["contracts_total"], quality["contracts_no_usable_bid"],
+            quality["contracts_greeks_invalid"], quality["contracts_stale"],
+        )
+        with self._lock:
+            entry = self._store.get(symbol)
+            if entry is not None:
+                entry["quality"] = quality
+
         # Step 8: best-effort persistence — never allowed to affect the
         # return value; failures are logged and counted only.
         self._persist_best_effort(symbol, merged, now=now)
@@ -652,21 +678,39 @@ class OptionsChainCache:
 
         Note: entries are never evicted for being past the TTL — `expired`
         here means "stale" (eligible for a background refetch), not "gone".
+
+        `persistence` merges the live store instance's own health
+        (`OptionsChainStore.stats()`) with the process-wide construction/
+        retry health (`get_persistence_health()`, §4.1/§4.2) — a different
+        concern (can the shared singleton be built at all vs. is this
+        already-built instance currently reachable). Each `entries[sym]`
+        block additionally carries that symbol's most recent per-refresh
+        quality counters (§4.2) when a refresh has completed at least once.
         """
+        from src.options_chain_store import get_persistence_health
+
         with self._lock:
             now = time.monotonic()
             entries = {}
             for sym, entry in self._store.items():
                 age = now - entry["cached_at"]
-                entries[sym] = {
+                entry_stats = {
                     "age_seconds": round(age, 1),
                     "expired": age >= self._ttl,
                 }
+                quality = entry.get("quality")
+                if quality:
+                    entry_stats.update(quality)
+                entries[sym] = entry_stats
+
+            persistence = dict(self._get_store().stats())
+            persistence.update(get_persistence_health())
+
             return {
                 "ttl_seconds": self._ttl,
                 "entries_count": len(self._store),
                 "entries": entries,
-                "persistence": self._get_store().stats(),
+                "persistence": persistence,
             }
 
     # ------------------------------------------------------------------
@@ -931,6 +975,87 @@ def _resolve_ttl_from_config() -> int:
         logger.info("options_chain_cache.ttl_seconds not configured (%s) — using default %ds",
                     exc, _DEFAULT_TTL_SECONDS)
         return _DEFAULT_TTL_SECONDS
+
+
+def get_stale_quote_warn_seconds() -> int:
+    """Read `options_chain_cache.stale_quote_warn_seconds` (Danny's
+    zero-free decision §4.3 — previously configured but read by nothing).
+    This is the single input to `_meta.stale` in
+    `options_chain_view.to_agent_view` and to the per-refresh staleness
+    quality counter (`_compute_chain_quality`, below). Falls back to
+    `_DEFAULT_STALE_QUOTE_WARN_SECONDS` on any error, mirroring
+    `_resolve_ttl_from_config()`."""
+    try:
+        from src.config import Config
+        cfg = Config()
+        value = (cfg.config.get("options_chain_cache") or {}).get("stale_quote_warn_seconds")
+        return int(value) if value is not None else _DEFAULT_STALE_QUOTE_WARN_SECONDS
+    except Exception as exc:
+        logger.info(
+            "options_chain_cache.stale_quote_warn_seconds not configured (%s) — using default %ds",
+            exc, _DEFAULT_STALE_QUOTE_WARN_SECONDS,
+        )
+        return _DEFAULT_STALE_QUOTE_WARN_SECONDS
+
+
+def apply_agent_view(chain: Any, *, now: Optional[datetime] = None) -> Any:
+    """Shared serving-seam helper (Danny's zero-free decision §2.2/§5) —
+    the single place every chain-returning consumer this module's owner is
+    responsible for (`web/app.py` API endpoints, `agent_runner.py`'s
+    prompt-building) goes through to apply Linus's frozen, G0-contract
+    ``options_chain_view.to_agent_view`` with the correctly-configured
+    ``stale_after_seconds`` (§4.3), instead of every call site re-reading
+    config and re-deriving that argument itself.
+
+    Total: never raises. A malformed/non-dict ``chain`` — or an internal
+    failure applying the view — is returned unmodified (logged at ERROR,
+    since ``to_agent_view`` itself is documented total/never-raising, so
+    reaching this fallback indicates a genuine, reportable defect, not an
+    expected input shape).
+    """
+    if not isinstance(chain, dict):
+        return chain
+    try:
+        from src.options_chain_view import to_agent_view
+        moment = now or datetime.now(timezone.utc)
+        return to_agent_view(chain, now=moment, stale_after_seconds=get_stale_quote_warn_seconds())
+    except Exception:
+        logger.exception("apply_agent_view: to_agent_view failed unexpectedly — serving chain unmodified")
+        return chain
+
+
+def _compute_chain_quality(chain: dict, *, now: datetime) -> Dict[str, int]:
+    """Per-refresh quality counters (Danny's zero-free decision §4.2),
+    computed through the same frozen ``to_agent_view`` boundary every
+    other consumer uses — so these counts reflect exactly what an agent/
+    API caller would see, not the raw persisted/merged data underneath.
+    Never raises; returns all-zero counts on any failure."""
+    counts = {
+        "contracts_total": 0,
+        "contracts_no_usable_bid": 0,
+        "contracts_greeks_invalid": 0,
+        "contracts_stale": 0,
+    }
+    try:
+        from src.options_chain_view import to_agent_view
+        view = to_agent_view(chain, now=now, stale_after_seconds=get_stale_quote_warn_seconds())
+        for side in ("calls", "puts"):
+            for strikes in (view.get(side) or {}).values():
+                for contract in (strikes or {}).values():
+                    if not isinstance(contract, dict):
+                        continue
+                    counts["contracts_total"] += 1
+                    if contract.get("bid") is None:
+                        counts["contracts_no_usable_bid"] += 1
+                    meta = contract.get("_meta") or {}
+                    if meta.get("greeks_valid") is False:
+                        counts["contracts_greeks_invalid"] += 1
+                    if meta.get("stale"):
+                        counts["contracts_stale"] += 1
+    except Exception:
+        logger.exception("%s: failed to compute chain quality metrics",
+                          chain.get("symbol") if isinstance(chain, dict) else "?")
+    return counts
 
 
 def get_options_chain_cache(ttl_seconds: int = _TTL_UNSET) -> OptionsChainCache:

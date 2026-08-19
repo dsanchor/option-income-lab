@@ -40,6 +40,179 @@
 
 ## Recent Learnings
 
+### 2026-08-19 — Frontend null-safety sweep (backend zero-free G5 follow-up)
+- Separate, frontend-only task: with backend now legitimately returning
+  `null` for bid/ask/lastPrice/iv/mid/delta/gamma/theta/vega/rho (never a
+  fabricated 0), audited every component reachable from
+  `symbols/[symbol]/options-chain/page.tsx` and `symbols/[symbol]/page.tsx`
+  for numeric assumptions on those fields (`toFixed`, arithmetic, `Intl`/
+  formatter coercion-to-0).
+- Findings: `options-chain/page.tsx` + `types/options-chain.ts` were
+  already fully null-safe (`fmtPrice`/`fmtGreek`/`fmtIV` helpers, `number |
+  null` types) — no changes needed. `RollTableView`/`fmt2`/`numOrNull` in
+  `PositionDetail.tsx` were also already null-safe in *value* handling but
+  the `RollCell`/`RollTable` TS interfaces still declared `bid?: number`
+  etc. (optional, not nullable) — a type-accuracy gap, not a runtime bug.
+  `lib/format.ts`'s `usd`/`pct` DO coerce null→0, but traced every call
+  site reachable from these two pages and none apply them to a bid/ask/
+  greek field (only portfolio-exposure totals already gated by an outer
+  `!= null` check) — left untouched, out of blast-radius for this task.
+  No action button in either page's component tree is gated on a live
+  executable quote (roll/close/buyback-edit are all manual-entry forms
+  independent of chain data) — nothing to disable.
+- Real fix, `PositionDetail.tsx` only: the `DpsAnalysis` "Input parameters"
+  panel rendered `inp.delta`/`gamma`/`theta` raw (blank, not "N/A", when
+  null) and `inp.iv` could render a bare stray "%" with no number when
+  null — replaced with a `fmtNullable()` helper → explicit "N/A". Widened
+  `DpsResult.inputs` to `Record<string, number | string | null>` and
+  `RollCell`/`RollRow`/`RollTable` (`bid`/`ask`/`delta`/`net_credit`/
+  `strike`/`pct_captured`/`buyback_cost`/`buyback_per_share`/
+  `premium_received`) to explicitly allow `null` (was `?number`, i.e.
+  `number | undefined` — a real type-vs-runtime mismatch once the backend
+  starts sending JSON `null` instead of omitting the key), which required
+  widening `appliedPct`/`moneyness`/`eqStrike`'s parameter types to match
+  (caught by `tsc`, not guessed). Added a new type-accurate `data_quality?:
+  {missing_fields, confidence, quote_asof, stale}` field to `DpsResult`
+  (Rule Z9's additive confidence block, previously undeclared/unused) and
+  a small gray badge in the DPS Analysis header surfacing
+  "partial"/"insufficient" confidence + missing fields — reuses the
+  existing risk_zone-badge visual pattern, only renders when confidence
+  isn't "full". `STATUS_COLORS`/`RISK_COLORS`'s existing `?? "#8d969e"`
+  fallback already renders "NO_DATA"/"UNKNOWN" in gray with zero code
+  changes needed.
+- Validated: `tsc --noEmit` clean project-wide. `eslint` clean on
+  `PositionDetail.tsx`, `options-chain/page.tsx`, `symbols/[symbol]/
+  page.tsx`, `types/options-chain.ts`, `types/symbol-detail.ts` — one
+  pre-existing, unrelated `react-hooks/set-state-in-effect` finding in
+  `options-chain/page.tsx`'s data-fetch `useEffect` (calling `setLoading`/
+  `setError` synchronously at the top of the effect body), confirmed via
+  `git status`/`git log` to predate this session (file has zero
+  uncommitted diff — last touched by an unrelated earlier commit) — left
+  untouched as out-of-scope for a null-safety sweep. No frontend test
+  runner exists in this repo (still true, re-confirmed) — nothing to run.
+  Watchlist-deletion files (`SymbolsTable.tsx`, `api/symbols/[symbol]/
+  route.ts`) confirmed untouched/still present via `git status`.
+
+### 2026-08-19 — G3 revision (zero-free agent option chains): `_build_alpha_options_chain` raw-zero leak
+- Reassigned to me as independent revision owner after reviewer REJECTed
+  Livingston's G3 seam and locked him out of this artifact. Strict scope:
+  `agent_runner.py`'s `_build_alpha_options_chain()` + `yfinance_data_provider.py`'s
+  `OPTIONS_CHAIN_SCHEMA_DESCRIPTION` text only; `test_zero_free_agent_chain.py`
+  is Basher's reviewer-owned acceptance test, read-only.
+- Root cause (confirmed by Basher's Z-I1 tests, `test_agent_runner_alpha_options_chain_text_clean`
+  / `test_agent_runner_alpha_current_position_reference_block_clean`): unlike
+  its siblings `_format_options_chain`/`_format_current_contract_chain`
+  (which already correctly called `options_chain_cache.apply_agent_view()`
+  before filtering/serializing — that part of Livingston's G3 work was
+  sound and untouched), `_build_alpha_options_chain()` filtered/serialized
+  the **raw** chain straight into `json.dumps(structured)` for the
+  Alpha-advisor LLM prompt, and separately read `current_contract.get("bid")`
+  /`.get("ask")`/`.get("delta")` off the same raw (pre-view) contract for the
+  "CURRENT POSITION" reference block — two independent raw-zero leaks into
+  a live agent-facing surface, exactly as reported.
+- Fix: one `structured = apply_agent_view(structured)` call inserted right
+  after the option_type branch, before `filter_options_chain_by_type` — the
+  same frozen `to_agent_view` boundary (via the existing `apply_agent_view`
+  helper in `options_chain_cache.py`) the sibling functions already use.
+  Since `current_contract` is captured (via `get_contract`) from this same
+  now-normalized `structured` later in the function, both leak paths are
+  closed by a single call — no changes needed to the ref_block construction
+  itself (`executable_buyback_ask`, `contract.get("delta")` etc. now
+  naturally read already-nulled values). `filter_options_chain_by_type`/
+  `filter_options_chain_by_delta`/`get_contract`/`exclude_contract` are all
+  purely structural (key/shape lookups, or already `delta is not None`
+  guarded) — confirmed safe to run on a view-normalized chain, no special-
+  casing required.
+- `yfinance_data_provider.py`: found and fixed the actual contradiction —
+  the `_meta.greeks_valid` doc bullet said computed-but-invalid Greeks
+  "default to 0 / intrinsic-only," directly contradicting the adjacent
+  "NULL vs ZERO" section's "a numeric 0 will never appear in these fields."
+  Reworded to state Greeks are `null` (never 0/intrinsic) when invalid,
+  consistent with Z3/Z4. No other contradictory sentences found elsewhere
+  in the schema text.
+- `apply_agent_view`/`contract_view` naming: task phrasing said
+  "apply_agent_view/contract_view boundary"; design doc draft names the
+  chain-level function `to_agent_view`. Checked actual source: both exist
+  exactly as expected — `options_chain_cache.apply_agent_view()` (a thin,
+  already-implemented config-wiring wrapper around
+  `options_chain_view.to_agent_view()`) and `options_chain_view.contract_view()`
+  are both real, frozen, already-authored functions I only needed to call,
+  not define. No naming ambiguity in practice — no decision file needed.
+- Validated: Basher's `test_zero_free_agent_chain.py` (15/15 passed, incl.
+  both Z-I1 tests targeting this exact function), `test_open_call_zero_quote.py`
+  (15/15), focused chain suite (`test_zero_free_agent_chain.py` +
+  `test_open_call_zero_quote.py` + `test_options_chain_view.py` +
+  `test_options_chain_merge.py` + `test_options_math.py` + `test_roll_table.py`
+  + `test_options_chain_position_and_direction_filters.py` +
+  `test_yfinance_data_provider.py` = 648 total, 645 passed / 3 pre-existing
+  failures confirmed via `git stash` to predate this change — Linus's already-
+  landed `_process_option_df` mid/greeks-removal made 3 assertions in
+  `TestOptionsChainStructure` stale; out of my ownership/scope, not touched).
+  `py_compile` clean on both files.
+
+### 2026-08-19 — Watchlist "Delete Symbol" action
+- New task, unrelated to option-chain work. Added a trash-icon delete
+  action as the last cell in every `SymbolsTable` row, gated by a mandatory
+  `window.confirm` naming the symbol (existing app convention, mirrored
+  from `ActivityActions`/`PositionDetail`/`AgentLogsView`) — no new confirm-
+  modal component introduced, kept consistent with the rest of the app.
+- Key discovery: `DELETE /api/symbols/{symbol}` and
+  `cosmos_db.delete_symbol()` **already existed**, fully implemented —
+  deletes the `symbol_config` doc (which also holds embedded `positions`)
+  plus every other doc in that symbol's partition (`activity`, `alert`,
+  `report`, `technical_analysis`, `agent_trace`, `price_forecast`,
+  `position_snapshot`, `action_plan`, `enrichment_history`, `action_plan`,
+  etc. — anything with `doc_type != "symbol_config"`). This full-cascade
+  behavior is the accepted, already-shipped "delete a symbol" product
+  semantics referenced by the charter ("existing product semantics
+  explicitly define that"), so `backend/web/app.py`/`cosmos_db.py` were
+  **not touched** — only a `DELETE` proxy was added to the existing
+  `app/api/symbols/[symbol]/route.ts` BFF route, mirroring the identical
+  pattern already used for `positions/[positionId]/route.ts`.
+- Delete failures surface via `toast.error` (sonner, already globally
+  mounted in `layout.tsx`) — no optimistic hide before the request
+  succeeds. On success the row is hidden immediately via local
+  `removedSymbols` state (avoids a flash of stale data before
+  `router.refresh()` lands) *and* `router.refresh()` reconciles from the
+  server. Caught my own edge case before shipping: `removedSymbols` is
+  local component state that survives `router.refresh()` (no remount), so
+  re-adding the exact same ticker later without a full page reload would
+  stay incorrectly hidden — fixed by pruning entries no longer present once
+  a fresh `rows` prop arrives, using React's documented render-time
+  "adjust state when a prop changes" pattern (compare-in-render), not a
+  `useEffect`+`setState` (which this repo's eslint config explicitly flags
+  as an error: `react-hooks/set-state-in-effect`).
+- Delete button's `<td>` stops click propagation (matches the existing
+  shares-edit cell) so it never triggers the row's `onClick`→
+  `SymbolInfoModal` navigation; button has `aria-label`/`title` naming the
+  symbol and is `disabled` while its own delete request is pending.
+- Added 5 new backend tests (`TestDeleteSymbol` in
+  `test_watchlist_symbols.py`, extending the existing `FakeCosmos` with a
+  `delete_symbol` method) locking in the pre-existing endpoint's contract
+  now that UI depends on it: happy path, case-insensitivity, 404 on unknown
+  symbol (delete never called), 503 when Cosmos unavailable (no false
+  success), and no cross-symbol bleed. 54/54 passed in that file. No
+  frontend test runner exists in this repo (checked — no jest/vitest/
+  playwright config anywhere), so frontend validation was ESLint +
+  `tsc --noEmit`, both clean, consistent with prior frontend-change
+  validation practice.
+- **Danny quality follow-up (same day):** (1) aria-label/title now read
+  "Delete {symbol} and all its data" (not "…from the watchlist" — avoids
+  implying a lesser-scoped operation). (2) Confirm text now explicitly
+  lists positions, activity history, plans, forecasts, and analysis. (3)
+  Replaced the single `deletingSymbol: string | null` slot with a
+  `deletingSymbols: Set<string>` — the old single-slot design meant
+  starting a second symbol's delete while a first was still in flight
+  silently re-enabled the first row's button (state moved to the new
+  symbol), allowing a duplicate DELETE for it; the Set tracks each
+  in-flight symbol independently, plus a defensive re-entrancy guard at
+  the top of `deleteSymbol` itself. (4) `test_delete_symbol_when_cosmos_
+  unavailable_returns_503` now uses `monkeypatch.setattr(app.state, ...,
+  raising=False)` instead of a bare, permanent `app.state.cosmos = None`
+  assignment — auto-restored after the test, verified order-independent by
+  running it deliberately first. Re-ran ESLint/tsc (clean) and the full
+  `test_watchlist_symbols.py` (54/54, including the reordered check).
+
 ### 2026-08-18 — Buy Tracker "Score 0/5, canonical fields unavailable" bug
 - Unrelated new task (prior option-chain lockout explicitly lifted). Traced
   the full reported symptom end-to-end: schema/prompt

@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from src.options_chain_merge import (
+    _iso,
     gate_bucket,
     gate_contract,
     is_accepted,
@@ -457,6 +458,22 @@ class TestMergePriorObservedZeroOverwrite:
         accumulated = merge_prior(prior, live, now=NOW + timedelta(minutes=30))
         assert accumulated["calls"]["20260101"]["100.0"]["volume"] == 0
 
+    def test_z_m4_live_bid_zero_passing_trust_gate_overwrites_and_is_stored_as_zero(self):
+        """Z-M4 (provenance regression guard): a live bid=0.0 that passes
+        the source's trust gate (bid is per-field-zero-valid) overwrites a
+        non-zero prior and is faithfully stored as 0.0 in the raw layer —
+        never coerced/nulled at the raw merge layer."""
+        prior = merge_prior({}, merge_sources(
+            _chain(calls={"20260101": _bucket(_yf_contract(bid=3.0, ask=3.2))}), _chain(),
+        ), now=NOW)
+        live = merge_sources(
+            _chain(calls={"20260101": _bucket(_yf_contract(bid=0.0, ask=3.2))}), _chain(),
+        )
+        accumulated = merge_prior(prior, live, now=NOW + timedelta(minutes=30))
+        contract = accumulated["calls"]["20260101"]["100.0"]
+        assert contract["bid"] == 0.0
+        assert isinstance(contract["bid"], float)
+
 
 class TestMergePriorStaleFill:
     """Explicit task scenario: prior has valid data, this cycle supplies
@@ -629,6 +646,41 @@ class TestRecomputeDerived:
         chain = _chain(calls={"20260601": _bucket(_yf_contract(expiration="20260601", iv=0.25, delta=999))})
         result = recompute_derived(chain, underlying_price=100.0, now=NOW)
         assert result["calls"]["20260601"]["100.0"]["delta"] != 999
+
+    def test_z_m1_invalid_iv_nulls_all_five_greeks_and_greeks_asof(self):
+        """Z-M1: invalid/missing iv -> delta/gamma/theta/vega/rho are all
+        None, greeks_valid is False, and greeks_asof is None. No 0.0
+        anywhere."""
+        chain = _chain(calls={"20260101": _bucket(_yf_contract(iv=0.0))})
+        result = recompute_derived(chain, underlying_price=100.0, now=NOW)
+        contract = result["calls"]["20260101"]["100.0"]
+        for field in ("delta", "gamma", "theta", "vega", "rho"):
+            assert contract[field] is None, f"{field} should be None, got {contract[field]!r}"
+        assert contract["_meta"]["greeks_valid"] is False
+        assert contract["_meta"]["greeks_asof"] is None
+
+    def test_z_m2_no_usable_bid_or_ask_mid_is_none_not_zero(self):
+        """Z-M2: no usable bid and no usable ask -> mid is None, never
+        0.0."""
+        chain = _chain(calls={"20260101": _bucket(_yf_contract(bid=0.0, ask=0.0))})
+        result = recompute_derived(chain, underlying_price=100.0, now=NOW)
+        contract = result["calls"]["20260101"]["100.0"]
+        assert contract["mid"] is None
+
+    def test_z_m3_happy_path_regression_unchanged_numeric_greeks(self):
+        """Z-M3: valid iv + valid price/strike -> unchanged numeric
+        Greeks/mid (no behavior change on the happy path)."""
+        chain = _chain(calls={"20260601": _bucket(_yf_contract(
+            expiration="20260601", bid=2.0, ask=2.2, iv=0.28,
+        ))})
+        result = recompute_derived(chain, underlying_price=100.0, now=NOW)
+        contract = result["calls"]["20260601"]["100.0"]
+        assert contract["mid"] == pytest.approx(robust_mid(2.0, 2.2))
+        assert contract["_meta"]["greeks_valid"] is True
+        assert contract["_meta"]["greeks_asof"] == _iso(NOW)
+        for field in ("delta", "gamma", "theta", "vega", "rho"):
+            assert isinstance(contract[field], float)
+            assert math.isfinite(contract[field])
 
 
 # ===========================================================================

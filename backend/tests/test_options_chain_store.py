@@ -34,7 +34,14 @@ from azure.cosmos.exceptions import (
     CosmosResourceNotFoundError,
 )
 
-from src.options_chain_store import OptionsChainStore, get_options_chain_store, set_options_chain_store
+import src.options_chain_store as options_chain_store_module
+from src.options_chain_store import (
+    OptionsChainStore,
+    get_options_chain_store,
+    get_persistence_health,
+    normalize_persisted_v1_to_v2,
+    set_options_chain_store,
+)
 
 
 # ===========================================================================
@@ -100,13 +107,25 @@ class FakeContainer:
             raise CosmosResourceNotFoundError()
         del self.store[item]
 
-    def query_items(self, query, parameters=None, partition_key=None):
+    def query_items(self, query, parameters=None, partition_key=None, **kwargs):
         params = {p["name"]: p["value"] for p in (parameters or [])}
-        symbol = params.get("@s")
-        results = [
-            copy.deepcopy(doc) for doc in self.store.values()
-            if doc.get("symbol") == symbol
-        ]
+        if "@s" in params:
+            symbol = params["@s"]
+            results = [
+                copy.deepcopy(doc) for doc in self.store.values()
+                if doc.get("symbol") == symbol
+            ]
+        else:
+            # Cross-partition query (no per-symbol filter) — e.g.
+            # `list_symbols_with_shards()` enumerating every symbol with a
+            # persisted shard. Extra kwargs (e.g.
+            # `enable_cross_partition_query=True`) are accepted and
+            # ignored, matching the real SDK's call shape.
+            doc_type = params.get("@t")
+            results = [
+                copy.deepcopy(doc) for doc in self.store.values()
+                if doc_type is None or doc.get("doc_type") == doc_type
+            ]
         return results
 
 
@@ -348,8 +367,9 @@ class TestPersistBasic:
         assert f"optchain_AAPL_{exp1}" in container.store
         assert f"optchain_AAPL_{exp2}" in container.store
         assert container.store[f"optchain_AAPL_{exp1}"]["doc_type"] == "options_chain"
-        # schema_version 3 (Livingston, D1/D3): adds `underlying_price`.
-        assert container.store[f"optchain_AAPL_{exp1}"]["schema_version"] == 3
+        # schema_version 4 (Livingston, Danny's zero-free decision §4.4):
+        # marks shards written after the mid/Greeks fabrication fix.
+        assert container.store[f"optchain_AAPL_{exp1}"]["schema_version"] == 4
 
 
 # ===========================================================================
@@ -759,3 +779,369 @@ class TestSharedStoreWiring:
             assert store.is_available() is False
         finally:
             set_options_chain_store(None)
+
+
+# ===========================================================================
+# Z-P1: shared store construction retry/backoff (Danny's zero-free
+# decision §4.1) — a transient failure must not be memoized forever; only
+# an explicit `persistence_enabled: false` or a successful connection is
+# permanent. Time is injected via `now=`, never slept.
+# ===========================================================================
+
+class TestSharedStoreRetryBackoff:
+    def _reset(self):
+        set_options_chain_store(None)
+
+    def test_transient_failure_is_not_memoized_and_retries_after_backoff(self, monkeypatch):
+        """Z-P1: a construction failure (transient) must not stick forever —
+        once the backoff window elapses, the next call retries
+        construction; a successful retry is then memoized. Spies directly
+        on ``_build_store_from_config`` (the actual "did we attempt
+        construction" signal) rather than counting ``Config()`` calls,
+        since the cheap backoff-duration lookup
+        (``_resolve_persistence_retry_seconds``) legitimately re-reads
+        config on every check — same precedent as
+        ``_resolve_ttl_from_config()`` in ``options_chain_cache.py`` — and
+        that is not itself a construction attempt."""
+        self._reset()
+        try:
+            attempts = {"n": 0}
+
+            def _fake_build():
+                attempts["n"] += 1
+                if attempts["n"] == 1:
+                    return options_chain_store_module._ConstructionOutcome(
+                        OptionsChainStore(enabled=False), terminal=False,
+                        reason="transient Cosmos outage",
+                    )
+                return options_chain_store_module._ConstructionOutcome(
+                    OptionsChainStore(enabled=False), terminal=True,
+                    reason="persistence_enabled=false",
+                )
+
+            monkeypatch.setattr(options_chain_store_module, "_build_store_from_config", _fake_build)
+            monkeypatch.setattr(options_chain_store_module, "_resolve_persistence_retry_seconds", lambda: 300.0)
+
+            t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            store1 = get_options_chain_store(now=t0)
+            assert store1.is_available() is False
+            assert options_chain_store_module._shared_store is None, (
+                "a transient failure must not memoize a disabled store"
+            )
+            health = get_persistence_health()
+            assert health["constructed"] is False
+            assert health["failure_count"] == 1
+            assert "transient Cosmos outage" in health["last_error"]
+
+            # Still inside the backoff window: no retry attempt yet.
+            store2 = get_options_chain_store(now=t0 + timedelta(seconds=1))
+            assert store2.is_available() is False
+            assert attempts["n"] == 1, "must not retry construction inside the backoff window"
+
+            # Past the (default 300s) backoff window: retries, and this
+            # time succeeds (terminal) ⇒ memoized permanently.
+            store3 = get_options_chain_store(now=t0 + timedelta(seconds=301))
+            assert attempts["n"] == 2
+            assert options_chain_store_module._shared_store is store3
+            health = get_persistence_health()
+            assert health["constructed"] is True
+            assert health["failure_count"] == 0
+            assert health["last_error"] is None
+        finally:
+            self._reset()
+
+    def test_explicit_disable_is_memoized_permanently_no_retry(self, monkeypatch):
+        """An explicit persistence_enabled=false is a deliberate terminal
+        outcome — memoized on the very first call, no backoff/retry
+        needed."""
+        self._reset()
+        try:
+            calls = {"n": 0}
+
+            def _disabled_config():
+                calls["n"] += 1
+                cfg = type("Cfg", (), {})()
+                cfg.config = {"options_chain_cache": {"persistence_enabled": False}}
+                return cfg
+
+            monkeypatch.setattr("src.config.Config", _disabled_config)
+
+            store1 = get_options_chain_store()
+            store2 = get_options_chain_store()
+            assert store1 is store2
+            assert calls["n"] == 1, "an explicit disable must be memoized, not retried"
+            assert get_persistence_health()["constructed"] is True
+        finally:
+            self._reset()
+
+    def test_repeated_transient_failures_use_capped_exponential_backoff(self, monkeypatch):
+        """Backoff doubles per consecutive failure, capped at 3600s — a
+        persistently-down Cosmos does not get hammered on every call."""
+        self._reset()
+        try:
+            def _always_boom():
+                raise ConnectionError("still down")
+
+            monkeypatch.setattr("src.config.Config", _always_boom)
+
+            t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            get_options_chain_store(now=t0)  # failure #1, backoff ~300s
+            get_options_chain_store(now=t0 + timedelta(seconds=301))  # failure #2, backoff ~600s
+            health = get_persistence_health()
+            assert health["failure_count"] == 2
+            # A retry 301s after failure #2 (backoff ~600s) must still be
+            # suppressed — confirms the backoff actually grew.
+            before_calls = health["failure_count"]
+            get_options_chain_store(now=t0 + timedelta(seconds=301 + 301))
+            assert get_persistence_health()["failure_count"] == before_calls, (
+                "doubled backoff must still be in effect, no new attempt yet"
+            )
+        finally:
+            self._reset()
+
+    def test_set_options_chain_store_clears_backoff_bookkeeping(self, monkeypatch):
+        """Explicit test/admin override must not leak a pending backoff
+        window into whatever runs next."""
+        self._reset()
+        try:
+            def _boom():
+                raise ConnectionError("down")
+
+            monkeypatch.setattr("src.config.Config", _boom)
+            get_options_chain_store(now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+            assert get_persistence_health()["failure_count"] == 1
+
+            set_options_chain_store(OptionsChainStore(enabled=False))
+            health = get_persistence_health()
+            assert health["failure_count"] == 0
+            assert health["last_error"] is None
+        finally:
+            self._reset()
+
+
+# ===========================================================================
+# Z-P2/Z-P6: mandatory lazy migration (`normalize_persisted_v1_to_v2`) and
+# hydrate() wiring — Rule Z3 (null fabricated derived fields) / Z11 (never
+# touch an observed field, including a legitimate zero).
+# ===========================================================================
+
+class TestNormalizePersistedV1ToV2:
+    def test_explicit_greeks_invalid_nulls_all_five_greeks(self):
+        contract = _contract(_meta={"greeks_valid": False, "quote_asof": "x"})
+        out = normalize_persisted_v1_to_v2(contract)
+        for greek in ("delta", "gamma", "theta", "vega", "rho"):
+            assert out[greek] is None
+        assert out["_meta"]["greeks_valid"] is False
+
+    def test_missing_meta_and_invalid_iv_nulls_greeks(self):
+        """Legacy shard predating `_meta`/`greeks_valid` tracking entirely:
+        no `_meta` at all, `iv` missing/invalid ⇒ treat Greeks as
+        untrustworthy (stricter than the view layer's "no meta trusts the
+        raw value" rule, which assumes a hand-built fixture, not real
+        legacy persisted data)."""
+        contract = _contract(iv=0.0)
+        contract.pop("_meta", None)
+        out = normalize_persisted_v1_to_v2(contract)
+        for greek in ("delta", "gamma", "theta", "vega", "rho"):
+            assert out[greek] is None
+
+    def test_missing_meta_but_valid_iv_trusts_raw_greeks(self):
+        """No `_meta`, but `iv` is a genuinely usable positive number: the
+        Greeks are left alone — nothing here indicates the fabrication
+        defect actually happened."""
+        contract = _contract(iv=0.3, delta=0.42)
+        contract.pop("_meta", None)
+        out = normalize_persisted_v1_to_v2(contract)
+        assert out["delta"] == 0.42
+
+    def test_mid_nulled_when_neither_bid_nor_ask_usable(self):
+        contract = _contract(bid=0.0, ask=0.0, mid=0.0)
+        out = normalize_persisted_v1_to_v2(contract)
+        assert out["mid"] is None
+        # Z11: the raw zero bid/ask themselves are never touched.
+        assert out["bid"] == 0.0
+        assert out["ask"] == 0.0
+
+    def test_mid_kept_when_bid_or_ask_usable(self):
+        contract = _contract(bid=1.0, ask=1.2, mid=1.1)
+        out = normalize_persisted_v1_to_v2(contract)
+        assert out["mid"] == 1.1
+
+    def test_observed_fields_never_touched(self):
+        contract = _contract(bid=0.0, ask=0.0, iv=0.0, volume=0, openInterest=0, lastPrice=0.0)
+        contract.pop("_meta", None)
+        out = normalize_persisted_v1_to_v2(contract)
+        assert out["bid"] == 0.0
+        assert out["ask"] == 0.0
+        assert out["iv"] == 0.0
+        assert out["volume"] == 0
+        assert out["openInterest"] == 0
+        assert out["lastPrice"] == 0.0
+
+    def test_pure_does_not_mutate_input(self):
+        contract = _contract(_meta={"greeks_valid": False})
+        original = copy.deepcopy(contract)
+        normalize_persisted_v1_to_v2(contract)
+        assert contract == original
+
+    def test_idempotent(self):
+        contract = _contract(_meta={"greeks_valid": False}, bid=0.0, ask=0.0)
+        once = normalize_persisted_v1_to_v2(contract)
+        twice = normalize_persisted_v1_to_v2(once)
+        assert once == twice
+
+    def test_non_dict_input_returned_unchanged(self):
+        assert normalize_persisted_v1_to_v2(None) is None
+        assert normalize_persisted_v1_to_v2("not a contract") == "not a contract"
+
+    def test_never_raises_on_malformed_meta(self):
+        contract = _contract(_meta="not a dict")
+        out = normalize_persisted_v1_to_v2(contract)
+        assert out is not None
+
+
+class TestHydrateAppliesMigration:
+    def test_hydrate_nulls_fabricated_greeks_from_a_legacy_shard(self, store, container):
+        """A pre-fix shard (no `_meta`, `iv=0.0`, but stale fabricated
+        Greeks left over from the old intrinsic-fallback code) must never
+        be served as-is — hydrate() unconditionally normalizes every
+        contract it returns, regardless of `schema_version`."""
+        exp = _future_exp_key(10)
+        legacy_contract = _contract(expiration=exp, iv=0.0, delta=0.5, gamma=0.01,
+                                     theta=-0.01, vega=0.02, rho=0.001)
+        legacy_contract.pop("_meta", None)
+        container.store[f"optchain_AAPL_{exp}"] = {
+            "id": f"optchain_AAPL_{exp}", "symbol": "AAPL", "doc_type": "options_chain",
+            "expiration": exp, "schema_version": 2,
+            "calls": {"100.0": legacy_contract}, "puts": {}, "_etag": "e1",
+        }
+        hydrated = store.hydrate("AAPL")
+        out = hydrated["calls"][exp]["100.0"]
+        assert out["delta"] is None
+        assert out["gamma"] is None
+
+    def test_hydrate_preserves_raw_zero_bid_verbatim(self, store, container):
+        exp = _future_exp_key(10)
+        contract = _contract(expiration=exp, bid=0.0, ask=0.0, mid=0.0,
+                              _meta={"greeks_valid": True, "quote_asof": "x"})
+        container.store[f"optchain_AAPL_{exp}"] = {
+            "id": f"optchain_AAPL_{exp}", "symbol": "AAPL", "doc_type": "options_chain",
+            "expiration": exp, "schema_version": 4,
+            "calls": {"100.0": contract}, "puts": {}, "_etag": "e1",
+        }
+        hydrated = store.hydrate("AAPL")
+        out = hydrated["calls"][exp]["100.0"]
+        assert out["bid"] == 0.0
+        assert out["ask"] == 0.0
+        assert out["mid"] is None  # neither side usable -> derived field nulled
+
+
+# ===========================================================================
+# Repair support methods (scripts/repair_options_chain_shards.py)
+# ===========================================================================
+
+class TestRepairSupportMethods:
+    def test_list_symbols_with_shards(self, store, container):
+        exp = _future_exp_key(5)
+        store.persist("AAPL", {"calls": {exp: {"100.0": _contract(expiration=exp)}}, "puts": {}})
+        store.persist("MSFT", {"calls": {exp: {"200.0": _contract(expiration=exp, strike=200.0)}}, "puts": {}})
+        symbols = store.list_symbols_with_shards()
+        assert symbols == ["AAPL", "MSFT"]
+
+    def test_list_symbols_with_shards_unavailable_returns_empty(self):
+        disabled = OptionsChainStore(enabled=False)
+        assert disabled.list_symbols_with_shards() == []
+
+    def test_list_shard_expirations(self, store, container):
+        exp1, exp2 = _future_exp_key(5), _future_exp_key(20)
+        store.persist("AAPL", {
+            "calls": {
+                exp1: {"100.0": _contract(expiration=exp1)},
+                exp2: {"105.0": _contract(expiration=exp2, strike=105.0)},
+            },
+            "puts": {},
+        })
+        assert store.list_shard_expirations("AAPL") == sorted([exp1, exp2])
+
+    def test_repair_shard_dry_run_detects_change_without_writing(self, store, container):
+        exp = _future_exp_key(5)
+        legacy = _contract(expiration=exp, iv=0.0, delta=0.5)
+        legacy.pop("_meta", None)
+        container.store[f"optchain_AAPL_{exp}"] = {
+            "id": f"optchain_AAPL_{exp}", "symbol": "AAPL", "doc_type": "options_chain",
+            "expiration": exp, "schema_version": 2,
+            "calls": {"100.0": legacy}, "puts": {}, "_etag": "e1",
+        }
+        result = store.repair_shard("AAPL", exp, dry_run=True)
+        assert result["changed"] is True
+        assert result["written"] is False
+        assert result["error"] is None
+        # Dry-run must not touch the stored shard at all.
+        assert container.store[f"optchain_AAPL_{exp}"]["calls"]["100.0"]["delta"] == 0.5
+
+    def test_repair_shard_applies_and_is_idempotent(self, store, container):
+        exp = _future_exp_key(5)
+        legacy = _contract(expiration=exp, iv=0.0, delta=0.5)
+        legacy.pop("_meta", None)
+        container.store[f"optchain_AAPL_{exp}"] = {
+            "id": f"optchain_AAPL_{exp}", "symbol": "AAPL", "doc_type": "options_chain",
+            "expiration": exp, "schema_version": 2,
+            "calls": {"100.0": legacy}, "puts": {}, "_etag": "e1",
+        }
+        result = store.repair_shard("AAPL", exp, dry_run=False)
+        assert result["changed"] is True
+        assert result["written"] is True
+        assert container.store[f"optchain_AAPL_{exp}"]["calls"]["100.0"]["delta"] is None
+        assert container.store[f"optchain_AAPL_{exp}"]["schema_version"] == 4
+
+        # Second run against the now-clean shard: no-op, no write.
+        etag_before = container.store[f"optchain_AAPL_{exp}"]["_etag"]
+        result2 = store.repair_shard("AAPL", exp, dry_run=False)
+        assert result2["changed"] is False
+        assert result2["written"] is False
+        assert container.store[f"optchain_AAPL_{exp}"]["_etag"] == etag_before
+
+    def test_repair_shard_not_found(self, store, container):
+        result = store.repair_shard("AAPL", "20990101", dry_run=True)
+        assert result["error"] == "shard not found"
+
+    def test_repair_shard_retries_on_cas_conflict(self, store, container):
+        exp = _future_exp_key(5)
+        legacy = _contract(expiration=exp, iv=0.0, delta=0.5)
+        legacy.pop("_meta", None)
+        container.store[f"optchain_AAPL_{exp}"] = {
+            "id": f"optchain_AAPL_{exp}", "symbol": "AAPL", "doc_type": "options_chain",
+            "expiration": exp, "schema_version": 2,
+            "calls": {"100.0": legacy}, "puts": {}, "_etag": "e1",
+        }
+        container.force_conflicts = 1
+        result = store.repair_shard("AAPL", exp, dry_run=False)
+        assert result["written"] is True
+        assert container.store[f"optchain_AAPL_{exp}"]["calls"]["100.0"]["delta"] is None
+
+
+# ===========================================================================
+# stats()/writes_ok/writes_failed extension
+# ===========================================================================
+
+class TestStatsExtension:
+    def test_stats_reports_configured_and_write_counters(self, store, container):
+        exp = _future_exp_key(5)
+        store.persist("AAPL", {"calls": {exp: {"100.0": _contract(expiration=exp)}}, "puts": {}})
+        stats = store.stats()
+        assert stats["configured"] is True
+        assert stats["writes_ok"] == 1
+        assert stats["writes_failed"] == 0
+
+    def test_stats_disabled_store_configured_false(self):
+        disabled = OptionsChainStore(enabled=False)
+        assert disabled.stats()["configured"] is False
+
+    def test_writes_failed_counted_on_persist_exception(self, store, container, monkeypatch):
+        def _boom(*a, **kw):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(store, "_write_shard", _boom)
+        exp = _future_exp_key(5)
+        store.persist("AAPL", {"calls": {exp: {"100.0": _contract(expiration=exp)}}, "puts": {}})
+        assert store.stats()["writes_failed"] == 1

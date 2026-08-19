@@ -52,3 +52,33 @@ def robust_mid(bid, ask, last=0.0):
         # stale-high ask cannot inflate the mark (only bites on garbage)
         return round(min(ask, 0.10), 4)
     return 0.0
+
+
+def robust_mid_optional(bid, ask, last=None) -> float | None:
+    """Like ``robust_mid``, but returns ``None`` instead of a fabricated
+    ``0.0`` when neither bid nor ask is usable (Z3, danny-zero-free-agent-
+    option-chains.md): a mid with no real bid/ask input is our own
+    manufactured artifact, not a market fact, and must never be served as
+    a usable ``$0.00`` mark.
+
+    Delegates to ``robust_mid`` for the actual computation whenever at
+    least one side is usable, so the numeric result is byte-identical to
+    ``robust_mid`` on every path that used to return a real price — only
+    the "nothing usable" fallback differs (``None`` instead of ``0.0``).
+    ``robust_mid`` itself is intentionally left unchanged so any existing
+    caller keeps its current (0.0-on-nothing-usable) behavior.
+
+    Args:
+        bid: Current bid price (or 0/None/NaN if missing)
+        ask: Current ask price (or 0/None/NaN if missing)
+        last: Last traded price (unused; kept for signature parity)
+
+    Returns:
+        float | None: Robust mid-price rounded to 4 decimals, or None when
+        neither bid nor ask is a usable (finite, positive) quote.
+    """
+    bid_usable = bool(bid) and bid > 0
+    ask_usable = bool(ask) and ask > 0
+    if not bid_usable and not ask_usable:
+        return None
+    return robust_mid(bid, ask, last if last is not None else 0.0)

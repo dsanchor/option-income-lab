@@ -16,6 +16,7 @@ Shape mirrors the reported case exactly: MSFT $525 call, expiration
 """
 
 import datetime
+import re
 
 from src.options_chain_filters import (
     filter_options_chain_by_delta,
@@ -249,3 +250,162 @@ class TestFormatRollCandidatesTableCurrentContractParam:
             roll_type="ROLL_UP",
         )
         assert "Buyback cost (ask): $3.20" in table
+
+
+# ===========================================================================
+# Z-F1 / Z-F2 (danny-zero-free-agent-option-chains.md, §6.1): hidden-count
+# footer accuracy and no fabricated-zero rendering.
+# ===========================================================================
+
+def _mixed_eligibility_chain():
+    """A chain with: 1 current position (excluded from candidates by
+    strike/expiration match, not by eligibility), 2 healthy candidates,
+    and 3 contracts that must each be excluded as roll candidates for a
+    distinct Z10 reason (zero/absent bid, zero open interest, invalid
+    greeks)."""
+    return {
+        "symbol": "TEST",
+        "timestamp": "2026-08-18T06:00:00Z",
+        "calls": {
+            "20260904": {
+                "500.0": {  # current position
+                    "strike": 500.0, "bid": 3.00, "ask": 3.20, "mid": 3.10,
+                    "iv": 0.22, "delta": 0.35, "gamma": 0.01, "theta": -0.05,
+                    "vega": 0.3, "rho": 0.05, "volume": 100, "openInterest": 50,
+                    "lastPrice": 3.10, "lastTradeDate": "2026-08-17T20:00:00Z",
+                    "inTheMoney": False, "expiration": "20260904", "option_type": "call",
+                },
+            },
+            "20261016": {
+                "490.0": {  # healthy candidate #1
+                    "strike": 490.0, "bid": 8.50, "ask": 8.80, "mid": 8.65,
+                    "iv": 0.22, "delta": 0.45, "gamma": 0.01, "theta": -0.05,
+                    "vega": 0.4, "rho": 0.1, "volume": 500, "openInterest": 1000,
+                    "lastPrice": 8.60, "lastTradeDate": "2026-08-17T20:00:00Z",
+                    "inTheMoney": False, "expiration": "20261016", "option_type": "call",
+                },
+                "495.0": {  # healthy candidate #2
+                    "strike": 495.0, "bid": 6.20, "ask": 6.50, "mid": 6.35,
+                    "iv": 0.21, "delta": 0.40, "gamma": 0.01, "theta": -0.04,
+                    "vega": 0.35, "rho": 0.09, "volume": 300, "openInterest": 800,
+                    "lastPrice": 6.30, "lastTradeDate": "2026-08-17T20:00:00Z",
+                    "inTheMoney": False, "expiration": "20261016", "option_type": "call",
+                },
+                "500.0": {  # hidden: zero bid (no_market -> unusable)
+                    "strike": 500.0, "bid": 0.0, "ask": 5.50, "mid": None,
+                    "iv": 0.20, "delta": 0.38, "gamma": 0.01, "theta": -0.04,
+                    "vega": 0.3, "rho": 0.08, "volume": 20, "openInterest": 200,
+                    "lastPrice": 0.0, "lastTradeDate": "2026-08-17T20:00:00Z",
+                    "inTheMoney": False, "expiration": "20261016", "option_type": "call",
+                },
+                "505.0": {  # hidden: zero open interest
+                    "strike": 505.0, "bid": 4.80, "ask": 5.10, "mid": 4.95,
+                    "iv": 0.20, "delta": 0.33, "gamma": 0.01, "theta": -0.04,
+                    "vega": 0.3, "rho": 0.07, "volume": 5, "openInterest": 0,
+                    "lastPrice": 4.90, "lastTradeDate": "2026-08-17T20:00:00Z",
+                    "inTheMoney": False, "expiration": "20261016", "option_type": "call",
+                },
+                "510.0": {  # hidden: invalid greeks (greeks_valid False)
+                    "strike": 510.0, "bid": 3.60, "ask": 3.90, "mid": 3.75,
+                    "iv": 0.0, "delta": None, "gamma": None, "theta": None,
+                    "vega": None, "rho": None, "volume": 10, "openInterest": 150,
+                    "lastPrice": 3.70, "lastTradeDate": "2026-08-17T20:00:00Z",
+                    "inTheMoney": False, "expiration": "20261016", "option_type": "call",
+                    "_meta": {"greeks_valid": False},
+                },
+            },
+        },
+        "puts": {},
+    }
+
+
+class TestZF1HiddenCountFooter:
+    def test_footer_present_and_accurate_with_mixed_eligibility(self):
+        chain = _mixed_eligibility_chain()
+        table = format_roll_candidates_table(
+            chain=chain,
+            current_strike=500.0,
+            current_expiration="2026-09-04",
+            option_type="call",
+            underlying_price=495.0,
+            roll_type="ROLL_OUT",
+        )
+        # 3 ineligible candidates hidden (zero bid, zero OI, invalid greeks).
+        assert "3 contracts hidden: no usable bid / no open interest / greeks unavailable" in table
+        # And the 2 healthy candidates are visible.
+        assert "490.0" in table
+        assert "495.0" in table
+        # The excluded strikes must not appear as candidate rows.
+        assert "| 505.0 " not in table
+        assert "| 510.0 " not in table
+
+    def test_footer_present_even_when_all_candidates_hidden(self):
+        chain = _mixed_eligibility_chain()
+        del chain["calls"]["20261016"]["490.0"]
+        del chain["calls"]["20261016"]["495.0"]
+        table = format_roll_candidates_table(
+            chain=chain,
+            current_strike=500.0,
+            current_expiration="2026-09-04",
+            option_type="call",
+            underlying_price=495.0,
+            roll_type="ROLL_OUT",
+        )
+        assert "3 contracts hidden: no usable bid / no open interest / greeks unavailable" in table
+        assert "NO VALID CANDIDATES found for ROLL_OUT" in table
+
+    def test_footer_reports_zero_when_nothing_hidden(self):
+        chain = _mixed_eligibility_chain()
+        del chain["calls"]["20261016"]["500.0"]
+        del chain["calls"]["20261016"]["505.0"]
+        del chain["calls"]["20261016"]["510.0"]
+        table = format_roll_candidates_table(
+            chain=chain,
+            current_strike=500.0,
+            current_expiration="2026-09-04",
+            option_type="call",
+            underlying_price=495.0,
+            roll_type="ROLL_OUT",
+        )
+        assert "0 contracts hidden: no usable bid / no open interest / greeks unavailable" in table
+
+
+class TestZF2NoFabricatedZeroRendering:
+    def test_rendered_table_has_no_dollar_zero_or_percent_zero_cells(self):
+        """No `$0.00`, ` 0.00 `, or `0.0%` cell for an unavailable field —
+        every value rendered is either a real positive number or the `N/A`/
+        `-` placeholder, never a manufactured zero."""
+        chain = _mixed_eligibility_chain()
+        table = format_roll_candidates_table(
+            chain=chain,
+            current_strike=500.0,
+            current_expiration="2026-09-04",
+            option_type="call",
+            underlying_price=495.0,
+            roll_type="ROLL_OUT",
+        )
+        assert not re.search(r"\$0\.00\b", table)
+        assert not re.search(r"\s0\.00\s", table)
+        assert not re.search(r"\b0\.0%", table)
+
+    def test_current_position_with_no_usable_quotes_renders_na_not_zero(self):
+        """A current position with no usable bid/delta/theta must render
+        `N/A`, never a fabricated `$0.00` / `0.00` / `0` cell."""
+        chain = _mixed_eligibility_chain()
+        current = chain["calls"]["20260904"]["500.0"]
+        current["bid"] = 0.0
+        current["delta"] = None
+        current["theta"] = None
+        current["ask"] = 0.0
+        table = format_roll_candidates_table(
+            chain=chain,
+            current_strike=500.0,
+            current_expiration="2026-09-04",
+            option_type="call",
+            underlying_price=495.0,
+            roll_type="ROLL_OUT",
+        )
+        assert "Bid: N/A" in table
+        assert "Delta: N/A" in table
+        assert "Theta: N/A" in table
+        assert not re.search(r"\$0\.00\b", table)

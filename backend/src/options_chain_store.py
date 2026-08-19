@@ -31,6 +31,24 @@ required — ``hydrate()`` never gates on ``schema_version`` being present or
 matching, so v2 shards (missing ``underlying_price``) still read back fine,
 just without that one field.
 
+``schema_version`` 4 (Livingston, 2026-08-19, Danny's "Zero-Free Agent-
+Facing Option Chains" decision, §4.4) marks shards written *after*
+``options_chain_merge.recompute_derived`` stopped fabricating a ``mid: 0.0``
+mark or intrinsic-only Greeks for invalid inputs (Rule Z3). Shards written
+before that fix (any ``schema_version < 4``, including absent) may still
+carry those fabricated derived values. Rather than gate on the version
+number, ``hydrate()`` unconditionally passes every contract it reads through
+``normalize_persisted_v1_to_v2()`` — a no-op on an already-correct contract,
+so no un-normalized shard is *ever* served, even before the one-time batch
+repair script (``scripts/repair_options_chain_shards.py``) has run. Rule
+Z11 (no destructive migration) applies: only the derived fields ``mid`` and
+the five Greeks are ever nulled; every observed field (``bid``/``ask``/
+``lastPrice``/``iv``/``volume``/``openInterest``/``lastTradeDate``/
+``inTheMoney``) is untouched, byte-for-byte, including a legitimate
+``bid: 0.0``. The lazy hydrate-time pass never writes anything back — only
+the repair script persists a normalized shard, via the same ETag CAS path
+``persist()`` already uses.
+
 Write protocol: read -> reconcile -> replace with ETag +
 ``MatchConditions.IfNotModified``. Reconciliation is a plain, store-owned
 contract-level union between whatever is *currently* persisted (which may be
@@ -78,20 +96,28 @@ import copy
 import hashlib
 import json
 import logging
+import math
 import threading
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 _DOC_TYPE = "options_chain"
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _DEFAULT_EXPIRED_SHARD_GRACE_DAYS = 7
 _DEFAULT_MAX_SHARD_BYTES = 1_600_000
 _MAX_CAS_ATTEMPTS = 3
 # Contracts eligible for the size escape valve must additionally be unseen
 # for at least this many days (Danny's design §4.5).
 _SIZE_VALVE_UNSEEN_DAYS = 30
+# P0 retry/backoff for the shared store singleton's construction (Danny's
+# zero-free decision §4.1) — default `options_chain_cache.persistence_retry_
+# seconds`, capped exponential backoff so a persistently-down Cosmos doesn't
+# retry every call.
+_DEFAULT_PERSISTENCE_RETRY_SECONDS = 300
+_MAX_RETRY_BACKOFF_SECONDS = 3600
+_GREEK_FIELDS = ("delta", "gamma", "theta", "vega", "rho")
 
 
 def _shard_id(symbol: str, exp_key: str) -> str:
@@ -186,6 +212,79 @@ def _reconcile_bucket(stored_bucket: dict, want_bucket: dict) -> dict:
     return merged
 
 
+def _is_usable_price(value: Any) -> bool:
+    """Local, minimal finite-and-positive check. Deliberately not imported
+    from ``options_chain_view.py`` (its internals are Linus's — this module
+    only ever calls that module's five frozen public functions, and this
+    predicate isn't one of them)."""
+    if value is None or isinstance(value, bool):
+        return False
+    if not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value) and value > 0
+
+
+def normalize_persisted_v1_to_v2(contract: Any) -> Any:
+    """Mandatory, lazy, read-time normalization (Danny's zero-free decision
+    §4.4.1, Rule Z3/Z11) applied to every contract ``hydrate()`` returns,
+    regardless of the shard's stored ``schema_version`` — so no
+    un-normalized shard is ever served, even before
+    ``scripts/repair_options_chain_shards.py`` has had a chance to run
+    against it.
+
+    Nulls *only* the two derived-field defects the pre-fix
+    ``options_chain_merge.recompute_derived`` could fabricate:
+
+    * All five Greeks together, whenever they are not genuinely valid —
+      either an explicit ``_meta.greeks_valid is False`` (the common case:
+      the old code still set this flag honestly, it was just ignored
+      downstream), or a contract with no ``_meta`` at all whose ``iv`` is
+      itself missing/invalid (a shard old enough to predate
+      ``greeks_valid`` tracking entirely — the decision's explicit
+      migration-only rule; note this is *stricter* than
+      ``options_chain_view.usable_greek``'s "no meta trusts the raw value"
+      rule, which is about a hand-built fixture, not real legacy data).
+    * ``mid``, whenever neither ``bid`` nor ``ask`` was a usable (finite,
+      positive) quote — the exact "nothing usable -> 0.0" fabrication
+      ``robust_mid`` documented and ``robust_mid_optional`` fixed going
+      forward.
+
+    Every observed field (``bid``/``ask``/``lastPrice``/``iv``/``volume``/
+    ``openInterest``/``lastTradeDate``/``inTheMoney``) is untouched,
+    byte-for-byte — including a legitimate ``bid: 0.0`` (Z11: no
+    destructive migration). Pure: never mutates ``contract``, returns a new
+    dict. Total: never raises; a malformed/non-dict input is returned
+    unchanged. Idempotent: re-applying to an already-normalized (or
+    already-correct) contract is a no-op.
+    """
+    if not isinstance(contract, dict):
+        return contract
+    try:
+        meta_raw = contract.get("_meta")
+        has_meta = isinstance(meta_raw, dict)
+        meta = dict(meta_raw) if has_meta else {}
+
+        if has_meta:
+            needs_null_greeks = meta.get("greeks_valid") is False
+        else:
+            needs_null_greeks = not _is_usable_price(contract.get("iv"))
+
+        result = dict(contract)
+        if needs_null_greeks:
+            for greek in _GREEK_FIELDS:
+                result[greek] = None
+            meta["greeks_valid"] = False
+            meta["greeks_asof"] = None
+            result["_meta"] = meta
+
+        if not _is_usable_price(contract.get("bid")) and not _is_usable_price(contract.get("ask")):
+            result["mid"] = None
+
+        return result
+    except Exception:
+        return contract
+
+
 class OptionsChainStore:
     """CosmosDB-backed sharded persistence for one symbol's options chain.
 
@@ -210,6 +309,8 @@ class OptionsChainStore:
         self._persist_errors = 0
         self._last_persist_error_at: Optional[str] = None
         self._last_persist_error: Optional[str] = None
+        self._writes_ok = 0
+        self._writes_failed = 0
         if enabled and container is None:
             logger.info(
                 "OptionsChainStore: constructed without a Cosmos container — "
@@ -229,15 +330,32 @@ class OptionsChainStore:
         logger.warning("%s: options chain persistence error: %s", symbol, exc)
 
     def stats(self) -> dict:
-        """Persistence health, merged into ``OptionsChainCache.stats()``."""
+        """This instance's own persistence health — write outcomes, errors,
+        and configuration. Merged into ``OptionsChainCache.stats()`` /
+        ``GET /api/health/options-chain`` alongside the shared singleton's
+        construction/retry health (``get_persistence_health()``, §4.1/§4.2 —
+        a *different* concern: this instance already exists; that tracks
+        whether/when the process-wide singleton could be built at all)."""
         with self._lock:
             return {
                 "available": self.is_available(),
+                # `enabled`: alias of `available` under the exact key name
+                # Danny's zero-free decision §4.2 specifies for the merged
+                # health block (`GET /api/health/options-chain`).
+                "enabled": self.is_available(),
+                # `configured`: persistence was turned ON in config,
+                # independent of whether a container is currently reachable
+                # (that's `available`) — lets an operator distinguish
+                # "deliberately memory-only" from "should be connected but
+                # isn't right now".
+                "configured": self._enabled,
                 "persist_errors": self._persist_errors,
                 "last_persist_error_at": self._last_persist_error_at,
                 "last_persist_error": self._last_persist_error,
                 "expired_shard_grace_days": self.expired_shard_grace_days,
                 "max_shard_bytes": self.max_shard_bytes,
+                "writes_ok": self._writes_ok,
+                "writes_failed": self._writes_failed,
             }
 
     # ------------------------------------------------------------------
@@ -282,6 +400,19 @@ class OptionsChainStore:
                 continue
             calls = shard.get("calls") or {}
             puts = shard.get("puts") or {}
+            # Mandatory lazy migration (Rule Z3/Z11, §4.4.1): every contract
+            # is normalized on the way out regardless of the shard's stored
+            # schema_version, so a chain read back is never stale on the
+            # derived-field-fabrication defect even before the batch repair
+            # script has visited this shard.
+            calls = {
+                strike: normalize_persisted_v1_to_v2(contract)
+                for strike, contract in calls.items()
+            }
+            puts = {
+                strike: normalize_persisted_v1_to_v2(contract)
+                for strike, contract in puts.items()
+            }
             if calls:
                 chain["calls"][exp_key] = calls
             if puts:
@@ -329,8 +460,13 @@ class OptionsChainStore:
             try:
                 outcome = self._write_shard(symbol, exp_key, calls, puts, now, underlying_price)
                 result[outcome] = result.get(outcome, 0) + 1
+                if outcome == "written":
+                    with self._lock:
+                        self._writes_ok += 1
             except Exception as exc:
                 result["errors"] += 1
+                with self._lock:
+                    self._writes_failed += 1
                 self._record_error(symbol, exc)
 
         return result
@@ -580,6 +716,145 @@ class OptionsChainStore:
                 self._record_error(symbol, exc)
         return deleted
 
+    # ------------------------------------------------------------------
+    # Repair / migration support (scripts/repair_options_chain_shards.py)
+    # ------------------------------------------------------------------
+    def list_symbols_with_shards(self) -> List[str]:
+        """Distinct symbols with at least one persisted options-chain
+        shard — cross-partition query (mirrors the existing cross-
+        partition pattern in ``src/cosmos_db.py``). Empty on any failure
+        or when unavailable; never raises. Handles both a real driver's
+        ``SELECT DISTINCT VALUE c.symbol`` flat-string rows and a test
+        double that returns full documents."""
+        if not self.is_available():
+            return []
+        try:
+            rows = list(self._container.query_items(
+                query="SELECT DISTINCT VALUE c.symbol FROM c WHERE c.doc_type=@t",
+                parameters=[{"name": "@t", "value": _DOC_TYPE}],
+                enable_cross_partition_query=True,
+            ))
+        except Exception as exc:
+            self._record_error("*", exc)
+            return []
+        symbols = set()
+        for row in rows:
+            if isinstance(row, str):
+                symbols.add(row)
+            elif isinstance(row, dict):
+                sym = row.get("symbol")
+                if sym:
+                    symbols.add(sym)
+        return sorted(symbols)
+
+    def list_shard_expirations(self, symbol: str) -> List[str]:
+        """All persisted shard expiration keys (``YYYYMMDD``) for
+        ``symbol``. Empty on any failure/unavailability; never raises."""
+        if not self.is_available():
+            return []
+        try:
+            rows = list(self._container.query_items(
+                query="SELECT c.expiration FROM c WHERE c.symbol=@s AND c.doc_type=@t",
+                parameters=[
+                    {"name": "@s", "value": symbol},
+                    {"name": "@t", "value": _DOC_TYPE},
+                ],
+                partition_key=symbol,
+            ))
+        except Exception as exc:
+            self._record_error(symbol, exc)
+            return []
+        return sorted({r.get("expiration") for r in rows if r.get("expiration")})
+
+    def repair_shard(self, symbol: str, exp_key: str, *, dry_run: bool = True) -> dict:
+        """Idempotent, ETag-CAS single-shard repair for
+        ``scripts/repair_options_chain_shards.py``: read the shard, run
+        every contract through ``normalize_persisted_v1_to_v2``, and —
+        unless ``dry_run`` — write it back only if normalization actually
+        changed something (Rule Z11: no destructive migration, and no
+        unnecessary write/RU cost when a shard is already clean, matching
+        ``persist()``'s own write-skip discipline).
+
+        Returns ``{"changed": bool, "written": bool, "error": str|None}``.
+        Never raises.
+        """
+        result: Dict[str, Any] = {"changed": False, "written": False, "error": None}
+        if not self.is_available():
+            result["error"] = "store unavailable"
+            return result
+
+        from azure.core import MatchConditions
+        from azure.cosmos.exceptions import (
+            CosmosHttpResponseError,
+            CosmosResourceNotFoundError,
+        )
+
+        shard_id = _shard_id(symbol, exp_key)
+        for attempt in range(_MAX_CAS_ATTEMPTS):
+            try:
+                stored = self._container.read_item(item=shard_id, partition_key=symbol)
+            except CosmosResourceNotFoundError:
+                result["error"] = "shard not found"
+                return result
+            except Exception as exc:
+                result["error"] = str(exc)
+                self._record_error(symbol, exc)
+                return result
+
+            calls = stored.get("calls") or {}
+            puts = stored.get("puts") or {}
+            new_calls = {k: normalize_persisted_v1_to_v2(v) for k, v in calls.items()}
+            new_puts = {k: normalize_persisted_v1_to_v2(v) for k, v in puts.items()}
+
+            if new_calls == calls and new_puts == puts:
+                result["changed"] = False
+                return result
+
+            result["changed"] = True
+            if dry_run:
+                return result
+
+            underlying_price = stored.get("underlying_price")
+            new_hash = _content_hash(new_calls, new_puts, underlying_price)
+            body = dict(stored)
+            body.update({
+                "calls": new_calls,
+                "puts": new_puts,
+                "schema_version": _SCHEMA_VERSION,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "_content_hash": new_hash,
+            })
+            # Cosmos system properties must not be sent back in the body —
+            # `etag=` (below) is the CAS token; the rest are server-owned.
+            for sys_prop in ("_etag", "_rid", "_self", "_attachments", "_ts"):
+                body.pop(sys_prop, None)
+
+            try:
+                self._container.replace_item(
+                    item=shard_id,
+                    body=body,
+                    etag=stored.get("_etag"),
+                    match_condition=MatchConditions.IfNotModified,
+                )
+                result["written"] = True
+                with self._lock:
+                    self._writes_ok += 1
+                return result
+            except CosmosHttpResponseError as exc:
+                if exc.status_code not in (409, 412):
+                    result["error"] = str(exc)
+                    with self._lock:
+                        self._writes_failed += 1
+                    self._record_error(symbol, exc)
+                    return result
+                if attempt + 1 >= _MAX_CAS_ATTEMPTS:
+                    result["error"] = "CAS conflict persisted after max attempts"
+                    return result
+                continue  # re-read (fresh etag) and re-check next iteration
+
+        result["error"] = "CAS conflict persisted after max attempts"
+        return result
+
 
 # ======================================================================
 # Module-level singleton — lazily built from config.yaml / environment
@@ -587,26 +862,112 @@ class OptionsChainStore:
 
 _shared_store: Optional[OptionsChainStore] = None
 _shared_store_lock = threading.Lock()
+# P0 construction-retry bookkeeping (Danny's zero-free decision §4.1): a
+# *transient* failure (unreachable Cosmos, a config-load hiccup) must not
+# be memoized into `_shared_store` forever — only an explicit
+# `persistence_enabled: false`, or a successful connection, is permanent.
+_last_failure_at: Optional[datetime] = None
+_last_failure_error: Optional[str] = None
+_failure_count: int = 0
+_last_success_at: Optional[datetime] = None
 
 
-def _build_store_from_config() -> OptionsChainStore:
+class _ConstructionOutcome:
+    """Result of one ``_build_store_from_config()`` attempt.
+
+    ``terminal=True`` means the result should be memoized into
+    ``_shared_store`` permanently — either a deliberate
+    ``persistence_enabled: false`` or a successful connection.
+    ``terminal=False`` means a transient failure: the disabled store
+    returned is thrown away, and the *next* call to
+    ``get_options_chain_store()`` (once the backoff window elapses) will
+    retry construction from scratch.
+    """
+
+    __slots__ = ("store", "terminal", "reason")
+
+    def __init__(self, store: "OptionsChainStore", *, terminal: bool, reason: str = "") -> None:
+        self.store = store
+        self.terminal = terminal
+        self.reason = reason
+
+
+def _resolve_persistence_retry_seconds() -> float:
+    """Reads ``options_chain_cache.persistence_retry_seconds`` (default
+    ``_DEFAULT_PERSISTENCE_RETRY_SECONDS``). Mirrors the
+    ``_resolve_ttl_from_config()`` pattern in ``options_chain_cache.py``.
+    Never raises — falls back to the default on any config problem
+    (including the exact "config itself is unavailable" case this backoff
+    exists to survive)."""
+    try:
+        from src.config import Config
+        cfg = Config()
+        options_cfg = cfg.config.get("options_chain_cache") or {}
+        return float(options_cfg.get("persistence_retry_seconds", _DEFAULT_PERSISTENCE_RETRY_SECONDS))
+    except Exception:
+        return float(_DEFAULT_PERSISTENCE_RETRY_SECONDS)
+
+
+def _retry_backoff_seconds(failure_count: int) -> float:
+    """Capped exponential backoff: ``base * 2**(n-1)``, capped at
+    ``_MAX_RETRY_BACKOFF_SECONDS`` — so a persistently-down Cosmos doesn't
+    get hammered on every single ``get_options_chain_store()`` call, but a
+    momentary blip recovers within one ``persistence_retry_seconds``
+    window."""
+    if failure_count <= 0:
+        return 0.0
+    base = _resolve_persistence_retry_seconds()
+    return min(base * (2 ** (failure_count - 1)), _MAX_RETRY_BACKOFF_SECONDS)
+
+
+def get_persistence_health() -> dict:
+    """Process-wide store-*construction* health — distinct from any one
+    instance's own ``OptionsChainStore.stats()`` (which reports whether
+    *that already-built* container is currently reachable). This reports
+    whether the shared singleton itself could be built at all, so an
+    operator/health-endpoint can see a stuck transient failure and when
+    the next retry is due. Merged into ``OptionsChainCache.stats()``
+    /``GET /api/health/options-chain``."""
+    with _shared_store_lock:
+        retry_in: Optional[float] = None
+        if _shared_store is None and _last_failure_at is not None:
+            backoff = _retry_backoff_seconds(_failure_count)
+            elapsed = (datetime.now(timezone.utc) - _last_failure_at).total_seconds()
+            retry_in = max(0.0, backoff - elapsed)
+        return {
+            "constructed": _shared_store is not None,
+            "last_error": _last_failure_error,
+            "last_error_at": _last_failure_at.isoformat() if _last_failure_at else None,
+            "last_success_at": _last_success_at.isoformat() if _last_success_at else None,
+            "failure_count": _failure_count,
+            "retry_in_seconds": retry_in,
+        }
+
+
+def _build_store_from_config() -> _ConstructionOutcome:
     """Best-effort construction from ``config.yaml`` + environment.
 
     Any failure (missing config, missing/invalid Cosmos credentials,
-    connectivity error) degrades to a disabled (memory-only) store — logged
-    once, never raised. Mirrors the existing optional-container pattern in
-    ``src/cosmos_db.py``.
+    connectivity error) degrades to a disabled (memory-only) store, tagged
+    as *transient* (``terminal=False``) so it is never memoized forever —
+    logged at ERROR (visible, not silently swallowed) rather than WARNING,
+    since an operator needs to notice a persistently-failing connection.
+    An explicit ``persistence_enabled: false`` is the one *deliberate*
+    disabled outcome (``terminal=True``, logged at INFO, memoized
+    permanently — today's existing, intentional behavior). Mirrors the
+    existing optional-container pattern in ``src/cosmos_db.py``.
     """
     try:
         from src.config import Config
         cfg = Config()
         options_cfg = cfg.config.get("options_chain_cache") or {}
     except Exception as exc:
-        logger.warning(
+        logger.error(
             "OptionsChainStore: could not load config.yaml — persistence "
-            "disabled, falling back to memory-only chain caching: %s", exc
+            "disabled for now (will retry with backoff), falling back to "
+            "memory-only chain caching in the meantime: %s", exc
         )
-        return OptionsChainStore(enabled=False)
+        return _ConstructionOutcome(OptionsChainStore(enabled=False), terminal=False, reason=str(exc))
 
     persistence_enabled = options_cfg.get("persistence_enabled", True)
     grace_days = options_cfg.get(
@@ -619,7 +980,7 @@ def _build_store_from_config() -> OptionsChainStore:
             "OptionsChainStore: options_chain_cache.persistence_enabled=false "
             "— memory-only mode (today's existing behavior)."
         )
-        return OptionsChainStore(enabled=False)
+        return _ConstructionOutcome(OptionsChainStore(enabled=False), terminal=True, reason="persistence_enabled=false")
 
     try:
         endpoint = cfg.cosmosdb_endpoint
@@ -631,32 +992,90 @@ def _build_store_from_config() -> OptionsChainStore:
         cosmos = CosmosDBService(endpoint=endpoint, key=key, database_name=database)
         container = cosmos.container
     except Exception as exc:
-        logger.warning(
-            "OptionsChainStore: CosmosDB unavailable at startup — persistence "
-            "disabled, falling back to memory-only chain caching: %s", exc
+        logger.error(
+            "OptionsChainStore: CosmosDB unavailable — persistence disabled "
+            "for now (will retry with backoff), falling back to memory-only "
+            "chain caching in the meantime: %s", exc
         )
-        return OptionsChainStore(enabled=False)
+        return _ConstructionOutcome(OptionsChainStore(enabled=False), terminal=False, reason=str(exc))
 
-    return OptionsChainStore(
-        container=container,
-        enabled=True,
-        expired_shard_grace_days=grace_days,
-        max_shard_bytes=max_bytes,
+    logger.info(
+        "OptionsChainStore: connected to Cosmos (database=%s) — persistence "
+        "enabled.", database,
+    )
+    return _ConstructionOutcome(
+        OptionsChainStore(
+            container=container,
+            enabled=True,
+            expired_shard_grace_days=grace_days,
+            max_shard_bytes=max_bytes,
+        ),
+        terminal=True,
+        reason="",
     )
 
 
-def get_options_chain_store() -> OptionsChainStore:
-    """Process-wide shared store instance, lazily constructed on first use."""
-    global _shared_store
-    if _shared_store is None:
-        with _shared_store_lock:
-            if _shared_store is None:
-                _shared_store = _build_store_from_config()
-    return _shared_store
+def get_options_chain_store(*, now: Optional[datetime] = None) -> OptionsChainStore:
+    """Process-wide shared store instance, lazily constructed on first use.
+
+    A transient construction failure is *not* memoized forever (the P0 bug
+    Danny's zero-free decision §4.1 called out — a momentary Cosmos outage
+    at process start previously disabled persistence for the rest of the
+    process's life): outside the current capped-exponential backoff
+    window, every call retries construction from scratch. Only an
+    explicit ``persistence_enabled: false``, or a successful connection,
+    is memoized permanently.
+
+    ``now`` is an injectable clock for deterministic tests (time is
+    injected, never slept) — production callers never pass it.
+    """
+    global _shared_store, _last_failure_at, _last_failure_error, _failure_count, _last_success_at
+
+    if _shared_store is not None:
+        return _shared_store
+
+    with _shared_store_lock:
+        if _shared_store is not None:
+            return _shared_store
+
+        moment = now or datetime.now(timezone.utc)
+
+        if _last_failure_at is not None:
+            backoff = _retry_backoff_seconds(_failure_count)
+            elapsed = (moment - _last_failure_at).total_seconds()
+            if elapsed < backoff:
+                # Still within the backoff window: return a cheap,
+                # unmemoized disabled placeholder rather than hammering
+                # Cosmos (or the config loader) on every single call.
+                return OptionsChainStore(enabled=False)
+
+        outcome = _build_store_from_config()
+        if outcome.terminal:
+            _shared_store = outcome.store
+            _last_failure_at = None
+            _last_failure_error = None
+            _failure_count = 0
+            if outcome.store.is_available():
+                _last_success_at = moment
+            return _shared_store
+
+        _failure_count += 1
+        _last_failure_at = moment
+        _last_failure_error = outcome.reason
+        return outcome.store
 
 
 def set_options_chain_store(store: Optional[OptionsChainStore]) -> None:
-    """Override the process-wide shared store (tests / explicit wiring)."""
-    global _shared_store
+    """Override the process-wide shared store (tests / explicit wiring).
+
+    Also clears any pending construction-retry backoff bookkeeping so a
+    test that resets the singleton with ``set_options_chain_store(None)``
+    never leaks a backoff window into the next test."""
+    global _shared_store, _last_failure_at, _last_failure_error, _failure_count, _last_success_at
     with _shared_store_lock:
         _shared_store = store
+        _last_failure_at = None
+        _last_failure_error = None
+        _failure_count = 0
+        if store is not None and store.is_available():
+            _last_success_at = datetime.now(timezone.utc)

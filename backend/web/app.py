@@ -573,6 +573,40 @@ async def startup():
         logger.exception("YFinance provider init failed")
         app.state.yf_provider = None
 
+    # Eager options-chain persistence probe (Danny's zero-free decision
+    # §4.2): forces the first `get_options_chain_store()` construction
+    # attempt now, at web-app-lifespan startup, rather than lazily on the
+    # first refresh — so a broken/unreachable Cosmos connection is
+    # immediately visible in the logs at ERROR (with the retry interval),
+    # never a bare WARNING that scrolls away. Non-fatal either way: the app
+    # continues to serve with a memory-only chain cache on failure. Note:
+    # the scheduler bootstrap (src/main.py / run.py) is outside this file's
+    # authorized scope — that process's own first `refresh_all` cycle
+    # already triggers the same probe automatically via
+    # `get_options_chain_store()`'s own first-call construction, since the
+    # probe/logging lives inside the store module itself, not here.
+    try:
+        from src.options_chain_store import get_options_chain_store
+        chain_store = get_options_chain_store()
+        if chain_store.is_available():
+            logger.info("options chain persistence: ENABLED at startup")
+        else:
+            from src.options_chain_store import get_persistence_health
+            health = get_persistence_health()
+            if health.get("last_error"):
+                logger.error(
+                    "options chain persistence: DISABLED at startup — %s "
+                    "(retry in ~%ss)",
+                    health["last_error"], health.get("retry_in_seconds"),
+                )
+            else:
+                logger.info(
+                    "options chain persistence: disabled at startup "
+                    "(persistence_enabled=false) — memory-only mode."
+                )
+    except Exception:
+        logger.exception("options chain persistence: startup probe failed unexpectedly")
+
 
 def _get_cosmos(request: Request):
     cosmos = getattr(request.app.state, "cosmos", None)
@@ -2771,6 +2805,13 @@ async def api_symbol_options_chain(request: Request, symbol: str):
             status_code=404,
         )
 
+    # Reference/display view (Danny's zero-free decision, Rule Z10):
+    # retained with nulls + `_meta.field_status`, never filtered — the
+    # user is entitled to see the whole market picture. Applied to the
+    # raw stored chain; never mutates it.
+    from src.options_chain_cache import apply_agent_view
+    result = apply_agent_view(result)
+
     return JSONResponse({
         "symbol": symbol.upper(),
         "timestamp": result.get("timestamp", ""),
@@ -2824,6 +2865,13 @@ async def api_debug_agent_chain(request: Request, symbol: str,
             {"error": "No options chain data available", "symbol": sym_upper},
             status_code=404,
         )
+
+    # Mirrors the production agent prompt pipeline exactly (this endpoint's
+    # whole purpose): apply the same agent-facing normalization boundary
+    # before any pipeline stage runs, so what this debug view shows is
+    # byte-for-byte what the agent actually sees.
+    from src.options_chain_cache import apply_agent_view
+    structured = apply_agent_view(structured)
 
     # Helper to count expirations/contracts for one side of a chain
     def _chain_stats(chain_data, opt_type):
@@ -3249,6 +3297,15 @@ async def api_activity_chat(request: Request, activity_id: str):
             full_chain = cache.get_or_load(symbol)
             # Parse the JSON string to dict
             chain_dict = json.loads(full_chain) if isinstance(full_chain, str) else full_chain
+            # Agent-facing normalization boundary (Danny's zero-free
+            # decision §2.2): applied to the raw stored/cached chain
+            # *before* `filter_options_chain_for_position` runs below, so
+            # the filter's own `current_position` addition survives
+            # (`to_agent_view`'s output is strictly `{symbol, timestamp,
+            # calls, puts}` and would otherwise silently drop it if
+            # applied after).
+            from src.options_chain_cache import apply_agent_view
+            chain_dict = apply_agent_view(chain_dict)
             
             # Filter for position if we have one
             if sym_doc and position_id and matched:
@@ -4475,6 +4532,47 @@ async def api_settings_runtime(request: Request):
         "telemetry_stats": telemetry_stats,
         "cache_stats": cache_stats,
         "recent_errors": recent_errors,
+    })
+
+
+@app.get("/api/health/options-chain")
+async def api_health_options_chain(request: Request):
+    """Options-chain persistence/serving health (Danny's zero-free
+    decision §4.2). Always returns HTTP 200 — degraded persistence is
+    non-fatal by design (memory-only chain caching keeps serving), so
+    monitoring can alert on `status == "degraded"` without the endpoint
+    itself failing health checks.
+
+    Returns the merged persistence health block (construction/retry state
+    from `get_persistence_health()` plus the live store instance's own
+    `stats()` — availability, error counts, write counters) together with,
+    per cached symbol, the last refresh cycle's quality counters
+    (`contracts_total`, `contracts_no_usable_bid`, `contracts_greeks_invalid`,
+    `contracts_stale`).
+    """
+    try:
+        from src.options_chain_cache import get_options_chain_cache
+        stats = get_options_chain_cache().stats()
+    except Exception as exc:
+        logger.exception("GET /api/health/options-chain: failed to read cache stats")
+        return JSONResponse({"status": "degraded", "error": str(exc)}, status_code=200)
+
+    persistence = stats.get("persistence", {})
+    status = "ok" if persistence.get("available") else "degraded"
+
+    symbols = {}
+    for sym, entry in (stats.get("entries") or {}).items():
+        symbols[sym] = {
+            "contracts_total": entry.get("contracts_total", 0),
+            "contracts_no_usable_bid": entry.get("contracts_no_usable_bid", 0),
+            "contracts_greeks_invalid": entry.get("contracts_greeks_invalid", 0),
+            "contracts_stale": entry.get("contracts_stale", 0),
+        }
+
+    return JSONResponse({
+        "status": status,
+        "persistence": persistence,
+        "symbols": symbols,
     })
 
 

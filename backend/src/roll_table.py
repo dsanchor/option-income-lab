@@ -40,6 +40,7 @@ from datetime import date
 from typing import Optional
 
 from src.options_math import executable_buyback_ask
+from src.options_chain_view import usable_greek, usable_quote
 from src.options_chain_filters import get_contract
 
 logger = logging.getLogger(__name__)
@@ -221,7 +222,7 @@ def compute_roll_table(
     # ── 1. Buy-back cost (current short position) ──────────────────────────
     current_contract = get_contract(chain, current_strike, current_expiration, option_type)
     if current_contract is not None:
-        buyback_per_share = executable_buyback_ask(current_contract.get("ask"))
+        buyback_per_share = executable_buyback_ask(usable_quote(current_contract, "ask"))
     else:
         logger.warning(
             "roll_table: current contract not found (strike=%.2f, exp=%s) — buyback unavailable",
@@ -344,21 +345,19 @@ def compute_roll_table(
                 cells.append(_gray_cell(exp_display, dte))
                 continue
 
-            new_bid = float(contract.get("bid") or 0)
-            new_ask = float(contract.get("ask") or 0)
-            raw_delta = contract.get("delta")
-            delta: Optional[float] = (
-                round(float(raw_delta), 4) if raw_delta is not None else None
-            )
+            new_bid = usable_quote(contract, "bid")
+            new_ask = usable_quote(contract, "ask")
+            raw_delta = usable_greek(contract, "delta")
+            delta: Optional[float] = round(raw_delta, 4) if raw_delta is not None else None
 
-            new_premium = round(new_bid * 100 * contracts, 2)
+            new_premium = round(new_bid * 100 * contracts, 2) if new_bid is not None else None
             net_credit = (
                 round(new_premium - buyback_cost, 2)
-                if buyback_cost is not None
+                if (new_premium is not None and buyback_cost is not None)
                 else None
             )
 
-            if new_bid == 0 or net_credit is None:
+            if new_bid is None or net_credit is None:
                 color = "gray"
             elif net_credit > 0:
                 color = "green"
@@ -370,8 +369,8 @@ def compute_roll_table(
                     "expiration": exp_display,
                     "dte": dte,
                     "strike": chosen_strike,
-                    "bid": round(new_bid, 2),
-                    "ask": round(new_ask, 2),
+                    "bid": round(new_bid, 2) if new_bid is not None else None,
+                    "ask": round(new_ask, 2) if new_ask is not None else None,
                     "delta": delta,
                     "net_credit": net_credit,
                     "color": color,

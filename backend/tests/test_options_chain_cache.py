@@ -387,6 +387,8 @@ class _FakeStore:
         self.prune_calls = []
         self.purge_calls = []
         self._persist_errors = 0
+        self.writes_ok = 0
+        self.writes_failed = 0
 
     def is_available(self):
         return self._enabled
@@ -400,10 +402,12 @@ class _FakeStore:
         self.persist_calls.append((symbol, copy.deepcopy(chain)))
         if self._raise_on_persist:
             self._persist_errors += 1
+            self.writes_failed += 1
             raise RuntimeError("simulated persistence failure")
         # Read-your-writes, like the real store: a later hydrate() sees
         # what was just persisted, unless a fixed override was supplied.
         self._hydrate_data = copy.deepcopy(chain)
+        self.writes_ok += 1
         return {"written": 1, "unchanged": 0, "conflicts_skipped": 0, "errors": 0}
 
     def prune_expired(self, symbol, *, today_et, grace_days=None):
@@ -418,11 +422,15 @@ class _FakeStore:
     def stats(self):
         return {
             "available": self._enabled,
+            "enabled": self._enabled,
+            "configured": self._enabled,
             "persist_errors": self._persist_errors,
             "last_persist_error_at": None,
             "last_persist_error": None,
             "expired_shard_grace_days": 7,
             "max_shard_bytes": 1_600_000,
+            "writes_ok": self.writes_ok,
+            "writes_failed": self.writes_failed,
         }
 
 
@@ -999,9 +1007,14 @@ class TestCarriedForwardContractShape:
         # advance — this genuinely IS last-known-good, not freshly live.
         assert carried["_meta"]["quote_asof"] == first_asof
         # Greeks are never carried as observations — always freshly
-        # recomputed this cycle (still a real number, not stale/None).
-        assert carried["delta"] is not None
-        assert isinstance(carried["delta"], float)
+        # recomputed this cycle from current primitives. Neither fixture
+        # cycle sets `underlying_price`, so `_extract_underlying_price`
+        # falls back to 0.0 both cycles ⇒ `greeks_valid` is False and the
+        # Greeks are correctly `None` (Rule Z3/Z4) — not a stale/carried
+        # number, and not the old intrinsic-fallback behavior this test
+        # was originally written against.
+        assert carried["delta"] is None
+        assert carried["_meta"]["greeks_valid"] is False
 
 
 # ===========================================================================
@@ -1218,3 +1231,126 @@ class TestGetOrLoadSyncCallerBehaviorPreserved:
             other_lock.release()
 
         assert json.loads(results["value"])["calls"][exp]["100.0"]["bid"] == 1.0
+
+
+# ===========================================================================
+# Z-P4/Z-P7: stale_quote_warn_seconds wiring, per-refresh quality metrics,
+# apply_agent_view() serving-seam helper (Danny's zero-free decision,
+# Livingston's persistence/serving scope §4.2/§4.3).
+# ===========================================================================
+
+from src.options_chain_cache import apply_agent_view, get_stale_quote_warn_seconds  # noqa: E402
+
+
+class TestStaleQuoteWarnSecondsWiring:
+    def test_default_when_not_configured(self, monkeypatch):
+        def _boom():
+            raise FileNotFoundError("no config.yaml")
+
+        monkeypatch.setattr("src.config.Config", _boom)
+        assert get_stale_quote_warn_seconds() == 86400
+
+    def test_reads_configured_value(self, monkeypatch):
+        class _Cfg:
+            config = {"options_chain_cache": {"stale_quote_warn_seconds": 60}}
+
+        monkeypatch.setattr("src.config.Config", lambda: _Cfg())
+        assert get_stale_quote_warn_seconds() == 60
+
+    def test_config_value_reaches_meta_stale_end_to_end(self, monkeypatch):
+        """Z-P7: a config change to `stale_quote_warn_seconds` must be
+        honoured all the way through to `_meta.stale` on a served/viewed
+        contract — not just read and discarded."""
+        class _Cfg:
+            config = {"options_chain_cache": {"stale_quote_warn_seconds": 60}}
+
+        monkeypatch.setattr("src.config.Config", lambda: _Cfg())
+
+        now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        old_asof = (now - timedelta(seconds=120)).isoformat()
+        chain = {
+            "symbol": "TEST",
+            "timestamp": now.isoformat(),
+            "calls": {
+                "20990101": {
+                    "100.0": _contract(
+                        bid=1.0, ask=1.2,
+                        _meta={"quote_asof": old_asof, "quote_source": "yfinance", "carried": False},
+                    )
+                }
+            },
+            "puts": {},
+        }
+        viewed = apply_agent_view(chain, now=now)
+        # 120s old > the configured 60s threshold -> stale.
+        assert viewed["calls"]["20990101"]["100.0"]["_meta"]["stale"] is True
+
+
+class TestApplyAgentViewHelper:
+    def test_nulls_zero_bid_and_preserves_shape(self):
+        now = datetime.now(timezone.utc)
+        chain = {
+            "symbol": "TEST", "timestamp": now.isoformat(),
+            "calls": {"20990101": {"100.0": _contract(bid=0.0, ask=0.0, mid=0.0)}},
+            "puts": {},
+        }
+        viewed = apply_agent_view(chain, now=now)
+        contract = viewed["calls"]["20990101"]["100.0"]
+        assert contract["bid"] is None
+        assert contract["mid"] is None
+
+    def test_non_dict_input_returned_unchanged(self):
+        assert apply_agent_view(None) is None
+        assert apply_agent_view("not a chain") == "not a chain"
+
+    def test_never_raises_when_view_module_broken(self, monkeypatch):
+        import src.options_chain_cache as cache_module
+
+        def _boom(*a, **kw):
+            raise RuntimeError("simulated view failure")
+
+        monkeypatch.setattr("src.options_chain_view.to_agent_view", _boom)
+        chain = {"symbol": "TEST", "timestamp": "x", "calls": {}, "puts": {}}
+        # Falls back to the original chain rather than raising/crashing a
+        # serving path.
+        assert apply_agent_view(chain) == chain
+
+
+class TestPerRefreshQualityMetrics:
+    def test_stats_exposes_quality_counters_after_a_refresh(self, monkeypatch):
+        store = _FakeStore()
+        cache_obj = OptionsChainCache(ttl_seconds=1800, store=store)
+        exp = _future_exp_key(20)
+        yf_chain = {
+            "symbol": "TEST",
+            "underlying_price": 150.0,
+            "calls": {
+                exp: {
+                    # A genuinely good, live, executable contract.
+                    "100.0": _contract(strike=100.0, expiration=exp, bid=4.8, ask=5.0, iv=0.30),
+                    # A degenerate contract: no usable bid/ask/iv at all.
+                    "105.0": _contract(strike=105.0, expiration=exp, bid=0.0, ask=0.0, iv=0.0),
+                },
+            },
+            "puts": {},
+        }
+        _patch_sources(monkeypatch, cache_obj, yf_chain, _empty_chain())
+        run_async(cache_obj.refresh("TEST"))
+
+        stats = cache_obj.stats()
+        quality = stats["entries"]["TEST"]
+        assert quality["contracts_total"] == 2
+        assert quality["contracts_no_usable_bid"] == 1
+        assert quality["contracts_greeks_invalid"] == 1
+
+    def test_stats_merges_store_and_construction_health(self):
+        store = _FakeStore()
+        cache_obj = OptionsChainCache(ttl_seconds=1800, store=store)
+        persistence = cache_obj.stats()["persistence"]
+        # From the live store instance's own stats() (Z-P4).
+        for key in ("available", "enabled", "configured", "writes_ok", "writes_failed"):
+            assert key in persistence
+        # From the process-wide construction/retry health (§4.1/§4.2,
+        # `get_persistence_health()`).
+        for key in ("constructed", "last_error", "last_success_at", "failure_count", "retry_in_seconds"):
+            assert key in persistence

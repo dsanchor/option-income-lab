@@ -23,8 +23,20 @@ Field classes (design §2.1):
                      openInterest, inTheMoney: field-level merge per §2.3.
   * Derived       — mid, delta, gamma, theta, vega, rho: never merged from
                      any source; always recomputed by ``recompute_derived``.
+                     Rule Z3 (danny-zero-free-agent-option-chains.md): a
+                     derived field is ``None`` whenever its inputs were not
+                     valid — ``mid`` is ``None`` when neither bid nor ask is
+                     usable (``robust_mid_optional``), and all five Greeks
+                     are ``None`` together whenever ``_meta.greeks_valid``
+                     would be False (the intrinsic-only ``_expired_greeks``
+                     fallback is never persisted or served). This nulling
+                     happens in the raw/persisted layer too — a fabricated
+                     derived number is our own artifact, not a provider
+                     observation, so it carries no provenance to protect.
   * Provenance    — ``_meta``: written by the merger only, never read from
-                     a source.
+                     a source. ``greeks_asof`` mirrors ``quote_asof``: set
+                     only when greeks were actually recomputed this cycle
+                     (i.e. whenever ``greeks_valid`` is True).
 
 Absence is not zero (Rule S1 / S2): a provider that cannot observe a field
 MUST emit ``None`` or omit the key. The merger treats a missing key and an
@@ -41,7 +53,7 @@ import re
 from datetime import date, datetime, timezone
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-from src.options_math import robust_mid
+from src.options_math import robust_mid_optional
 
 # ---------------------------------------------------------------------------
 # Field-class constants
@@ -533,7 +545,20 @@ def _time_to_expiry_years(exp_key: str, now: datetime) -> float:
     return max(dte / 365.0, 1e-10)
 
 
-def _recompute_contract(contract: dict, underlying_price: Any, T: float, flag: str, greeks_calc) -> dict:
+def _recompute_contract(
+    contract: dict, underlying_price: Any, T: float, flag: str, greeks_calc, now_iso: str
+) -> dict:
+    """Recompute mid + greeks for one contract (design §1.3 / Rule Z3-Z4).
+
+    A derived field is `None` whenever its inputs were not valid — never a
+    placeholder number. `mid` is `None` when neither bid nor ask is usable
+    (`robust_mid_optional`). The five Greeks are `None` together whenever
+    `greeks_valid` would be False; `GreeksCalculator.compute()` (and its
+    `_expired_greeks()` intrinsic-only fallback) is simply never called in
+    that case, so no manufactured intrinsic-limit number is ever produced,
+    persisted, or served. `_meta.greeks_asof` mirrors `_meta.quote_asof`:
+    it is set only when greeks were actually (re)computed this cycle.
+    """
     new_contract = dict(contract)
 
     bid = contract.get("bid")
@@ -542,27 +567,30 @@ def _recompute_contract(contract: dict, underlying_price: Any, T: float, flag: s
     iv = contract.get("iv")
     strike = contract.get("strike")
 
-    new_contract["mid"] = robust_mid(bid, ask, last_price if last_price is not None else 0.0)
+    new_contract["mid"] = robust_mid_optional(bid, ask, last_price)
 
     iv_valid = is_accepted("iv", iv)
     price_ok = _finite_number(underlying_price) and underlying_price > 0
     strike_ok = _finite_number(strike) and strike > 0
+    greeks_valid = bool(iv_valid and price_ok and strike_ok)
 
-    greeks = greeks_calc.compute(
-        flag,
-        float(underlying_price) if price_ok else 0.0,
-        float(strike) if strike_ok else 0.0,
-        T,
-        float(iv) if iv_valid else 0.0,
-    )
-    new_contract["delta"] = greeks["delta"]
-    new_contract["gamma"] = greeks["gamma"]
-    new_contract["theta"] = greeks["theta"]
-    new_contract["vega"] = greeks["vega"]
-    new_contract["rho"] = greeks["rho"]
+    if greeks_valid:
+        greeks = greeks_calc.compute(flag, float(underlying_price), float(strike), T, float(iv))
+        new_contract["delta"] = greeks["delta"]
+        new_contract["gamma"] = greeks["gamma"]
+        new_contract["theta"] = greeks["theta"]
+        new_contract["vega"] = greeks["vega"]
+        new_contract["rho"] = greeks["rho"]
+    else:
+        new_contract["delta"] = None
+        new_contract["gamma"] = None
+        new_contract["theta"] = None
+        new_contract["vega"] = None
+        new_contract["rho"] = None
 
     meta = dict(contract.get("_meta") or {})
-    meta["greeks_valid"] = bool(iv_valid and price_ok and strike_ok)
+    meta["greeks_valid"] = greeks_valid
+    meta["greeks_asof"] = now_iso if greeks_valid else None
     new_contract["_meta"] = meta
     return new_contract
 
@@ -581,6 +609,7 @@ def recompute_derived(chain: dict, underlying_price: float, *, now: datetime) ->
         "puts": {},
     }
     greeks_calc = _get_greeks_calculator()
+    now_iso = _iso(now)
 
     for side, flag in (("calls", "c"), ("puts", "p")):
         side_bucket = chain.get(side) or {}
@@ -590,7 +619,7 @@ def recompute_derived(chain: dict, underlying_price: float, *, now: datetime) ->
             merged_strikes: Dict[str, Any] = {}
             for strike_key, contract in strikes.items():
                 merged_strikes[strike_key] = _recompute_contract(
-                    contract, underlying_price, T, flag, greeks_calc
+                    contract, underlying_price, T, flag, greeks_calc, now_iso
                 )
             merged_side[exp_key] = merged_strikes
         result[side] = merged_side

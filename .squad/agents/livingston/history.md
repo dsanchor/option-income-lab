@@ -199,3 +199,165 @@ synchronous hit on a never-before-fetched symbol from an async caller.
 recommended path for new async call sites. Pre-existing
 `test_yfinance_data_provider.py` flakiness unrelated to this fix, flagged
 again for its owner.
+
+## 2026-08-19 — G3: persistence/serving portions of Danny's "Zero-Free
+## Agent-Facing Option Chains" decision implemented
+
+**Scope:** implemented §4 (persistence: retry/backoff, startup probe,
+stale wiring, lazy migration + repair script, observability) plus applied
+Linus's frozen `options_chain_view.to_agent_view()` at every serving/
+agent-prompt seam within my exclusive write scope
+(`options_chain_store.py`, `options_chain_cache.py`, `web/app.py`,
+`agent_runner.py` serialization seam only, `yfinance_data_provider.py`
+schema-description text only, `config.yaml`, new
+`scripts/repair_options_chain_shards.py`). Did **not** touch
+`options_chain_view.py`, `options_chain_merge.py`, `options_chain_filters.py`,
+`roll_table.py`, `dps_scorer.py`, `options_math.py`, or `refresh_all` —
+those remain Linus/frozen per the decision's ownership table (§5).
+
+**§4.1 P0 fix — permanent negative memoization:** `get_options_chain_store()`
+previously memoized a transient Cosmos construction failure forever (one
+WARNING at process start, persistence dead for the process's whole life).
+Rewrote as: only a successful/enabled store is memoized; a failure records
+`(_last_failure_at, _last_error, _failure_count)` module globals and
+returns an unmemoized disabled placeholder for that call only; every
+subsequent call retries once `now - _last_failure_at >= backoff` (config
+`persistence_retry_seconds`, default 300, capped-exponential to 1 hour);
+`persistence_enabled: false` is still terminal/permanent/INFO-once. Time is
+injected (`now=` param) in tests, never slept.
+
+**§4.2 startup probe + observability:** eager `get_options_chain_store()`
+call added to `web/app.py`'s `startup()` (ERROR log + retry interval on
+failure, INFO with database/container on success); the scheduler-bootstrap
+side (`src/main.py`/`run.py`) is out of my writable scope, documented as
+relying on the store's own first-call construction/logging as a
+substitute — flagged below as a residual gap for whoever owns that file.
+`stats()` extended with `configured/enabled/last_error/last_error_at/
+last_success_at/failure_count/retry_in_seconds/writes_ok/writes_failed`
+plus per-symbol `quality` counters (`contracts_total/
+contracts_no_usable_bid/contracts_greeks_invalid/contracts_stale`),
+computed once per refresh cycle in `_refresh_locked`. New
+`GET /api/health/options-chain` (always HTTP 200; `status: ok|degraded`)
+surfaces both blocks.
+
+**§4.3 stale wiring:** `stale_quote_warn_seconds` was a dead config key.
+Added `get_stale_quote_warn_seconds()` (mirrors the existing
+`_resolve_ttl_from_config()` pattern) and threaded it through as the
+`stale_after_seconds` input to `to_agent_view`/quality-metric computation,
+so `_meta.stale` and the `contracts_stale` counter are both finally driven
+by the configured value instead of silently defaulting everywhere.
+
+**§4.4 lazy migration + repair script:** `normalize_persisted_v1_to_v2()`
+(pure, total, idempotent) nulls *only* the two defects the pre-fix
+`recompute_derived` could fabricate — all five Greeks when not genuinely
+valid, and `mid` when neither bid nor ask is usable — never touching any
+observed field (bid/ask/lastPrice/iv/volume/openInterest/provenance), per
+Rule Z11. Wired unconditionally into `hydrate()` so no un-migrated shard is
+ever served regardless of its stored `schema_version` (bumped 3→4; the
+decision text mentions `_schema_version` — I kept the established
+unprefixed `schema_version` field name/lineage from the D3 revision since
+`hydrate()`'s migration is version-independent by design, a naming note
+only, not a behavioral gap). Store gained `list_symbols_with_shards()`,
+`list_shard_expirations()`, `repair_shard(symbol, exp, dry_run=True)`
+(ETag-CAS, idempotent, no-op/no-write when a shard is already clean).
+New `backend/scripts/repair_options_chain_shards.py`: thin CLI wrapper
+(`--symbol X`/`--all`, `--apply` [dry-run is default], `--limit N`),
+reports `shards_scanned/shards_changed/shards_written/cas_conflicts/errors`,
+exit code always 0 on a normal scan (a bad CLI arg is the only non-zero
+exit) — no migration logic lives in the script itself.
+
+**Agent-prompt/serving seam:** applied `options_chain_cache.apply_agent_view`
+(a total, never-raises wrapper around `to_agent_view`) at every
+chain-returning/agent-prompt boundary in my scope: `web/app.py`'s
+`api_symbol_options_chain`, `api_debug_agent_chain`, and `api_activity_chat`
+(applied *before* `filter_options_chain_for_position` there specifically,
+since `to_agent_view`'s output shape is strictly
+`{symbol,timestamp,calls,puts}` and would silently drop the
+`current_position` key if applied after); `agent_runner.py`'s
+`_format_options_chain` (before any filter runs), `_format_current_contract_chain`
+(before the single held-contract extraction, so `executable_buyback_ask`
+sees the same null it would from a real unusable quote), and the inline
+Phase-2 `structured_chain` block (before `get_contract`/
+`format_roll_candidates_table` — those already render nulls gracefully,
+so feeding them a pre-viewed chain is exactly the point, not a
+double-application concern). Confirmed via investigation that
+`api_symbol_options_chain`/`api_debug_agent_chain` already flow entirely
+through `get_options_chain_cache().get_or_load_async()` (not raw
+single-source yfinance data despite their naming) — one seam covers both.
+Reworded `agent_runner`'s "NULL bid" warning per §2.4 (ratio-based, "N/M
+contracts have no usable bid," framed as expected/not-anomalous) and
+updated `OPTIONS_CHAIN_SCHEMA_DESCRIPTION` with the exact null-vs-zero
+normative text plus `field_status`/`stale` guidance.
+
+**Two old invalid-Greeks assertions fixed (G3-authorized, not weakened):**
+`test_options_chain_cache.py::TestCarriedForwardContractShape` (fixture
+never set `underlying_price` → `greeks_valid` is honestly `False` →
+`carried["delta"] is None`, was asserting `is not None`) and
+`test_options_chain_persistence_integration.py::TestR1...test_mid_and_all_five_greeks_present_after_three_cycles`
+(a contract with intentionally invalid `iv` was asserting all 5 Greeks
+were fabricated non-null values pre-Rule-Z3 — now asserts they are
+properly `None` while `mid` — not Greek-tied, and this contract had a
+real usable bid/ask — correctly remains a real number). Both are the
+*old* pre-G3 test expectations catching up to the Rule Z3 fix already
+landed in `options_chain_merge.py` by Linus, not a weakening.
+
+**Tests added:** ~30 new tests in `test_options_chain_store.py` (retry/
+backoff, migration, repair-support methods, stats extension) — 65/65;
+3 new classes in `test_options_chain_cache.py` (stale wiring, agent-view
+helper, per-refresh quality metrics) — 47/47; new
+`tests/test_repair_options_chain_shards.py` (13 tests: fake-store unit
+tests for control flow/error classification + real-store end-to-end
+dry-run/apply/idempotence/multi-symbol sweep) — 13/13; 2 new classes in
+`test_options_chain_persistence_integration.py` composing the real store +
+real cache + real `apply_agent_view` (raw bid=0.0 survives verbatim while
+the agent view nulls it with a `no_market`-family `field_status`; a
+legacy v1 shard's fabricated Greeks are lazily migrated on cold hydrate
+and the result composes cleanly with the agent view) — full file 10/10.
+
+**Test outcome — focused G3 suite** (merge/cache/store/integration/
+roll_table/format_roll_table/dps_insights/open_call_zero_quote/
+get_contract/exclude_contract/position_and_direction_filters/
+debug_agent_chain_pipeline/options_math/options_chain_view/
+repair_options_chain_shards/activity_chat): **808 passed, 2 failed** — both
+failures pre-existing and unrelated (see below). `py_compile` clean on
+every touched Python file; `config.yaml` re-validated with `yaml.safe_load`.
+
+**Full backend suite:** 1398 passed, 22 failed. All 22 failures confirmed
+pre-existing via `git stash`/re-run on the unmodified tree (identical
+failures, same tests, same assertions) — none caused by this change:
+  - 2x a real-wall-clock DTE off-by-one
+    (`test_debug_agent_chain_pipeline.py::test_current_contract_surfaces_buyback_cost_despite_delta_filter`,
+    `test_format_roll_candidates_table.py::test_buyback_cost_surfaces_via_current_contract_override`):
+    both assert `"17 DTE"` for a fixture expiration of `2026-09-04`, computed
+    against the real system clock (now `2026-08-19`, one day later than
+    when these fixtures were written) rather than the fixture's own
+    embedded timestamp — inside `roll_table.py`/`format_roll_candidates_table`
+    (Linus-frozen, out of my scope). Reproduces identically on the
+    unmodified tree; will keep drifting by a day every day until fixed at
+    the source — flagging for whoever owns that file/test.
+  - 20x `test_yfinance_data_provider.py` order-dependent failures that only
+    appear under full-suite ordering (3 failures when the file runs alone,
+    20 when run after the rest of `tests/`) — reproduces identically on
+    the unmodified tree, and is the exact same pre-existing,
+    order/network-dependent flakiness already documented in the P1 entry
+    above. Not a regression from this change.
+
+**Residual risks / G4 seam notes for Basher:**
+  - The `src/main.py`/`run.py` scheduler-bootstrap eager persistence probe
+    (§4.2) is out of my writable scope — only the `web/app.py` FastAPI
+    lifespan probe was added directly; the scheduler path relies on the
+    store's own first-call construction/logging as a substitute. If a
+    dedicated scheduler-side probe is wanted, that's a `src/main.py`/
+    `run.py` change outside this charter.
+  - `schema_version` numbering: the decision text says the migration
+    "stamps `_schema_version: 2`" but the codebase's established field
+    (no underscore, D3-established lineage) was bumped 3→4 instead —
+    functionally equivalent (`hydrate()`'s migration never gates on the
+    version number), naming/numbering note only.
+  - Pre-existing DTE real-clock flakiness (2 tests) and
+    `test_yfinance_data_provider.py` order-dependent flakiness (up to 20
+    tests) both remain unresolved — out of my authorized write scope
+    (`roll_table.py`/`format_roll_candidates_table.py` are frozen;
+    `test_yfinance_data_provider.py`'s isolation bug isn't part of this
+    charter) and were pre-existing before this task. Recommend a
+    dedicated owner/ticket for both, independent of G3.

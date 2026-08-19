@@ -74,7 +74,18 @@ options_chain_cache:
   expired_shard_grace_days: 7    # Days past actual expiration (America/New_York)
                                   # before a persisted shard is deleted.
   max_shard_bytes: 1600000       # Escape valve, under Cosmos's 2MB item limit.
-  stale_quote_warn_seconds: 86400  # Age at which a quote_asof is flagged stale.
+  stale_quote_warn_seconds: 86400  # Wired (2026-08-19 zero-free decision §4.3):
+                                  # single input to `_meta.stale` in
+                                  # options_chain_view.to_agent_view and to the
+                                  # per-refresh "contracts_stale" quality counter.
+  persistence_retry_seconds: 300   # Base backoff before retrying shared-store
+                                  # construction after a *transient* failure
+                                  # (unreachable Cosmos, config-load hiccup) —
+                                  # doubles per consecutive failure, capped at
+                                  # 3600s. Does not apply to an explicit
+                                  # persistence_enabled: false, which is
+                                  # terminal (never retried). See
+                                  # src/options_chain_store.py get_options_chain_store().
 
 portfolio_enrichment:
   enabled: true

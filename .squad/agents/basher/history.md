@@ -714,3 +714,321 @@ prompt clarification is consistent with the already-correct normalizer
 contract. No regressions; new tests are rigorous and non-fake (real
 `YFinanceDataProvider`/`build_buy_tracker_evidence`, only network-facing
 `ticker` is stood in).
+
+## G2 review: Linus's Zero-Free Agent-Facing Option Chains (danny-zero-free-agent-option-chains.md)
+
+Read the full 450-line decision doc + Linus's history entry, then reviewed
+his actual `git diff` line-by-line against every rule (Z1-Z11), the frozen
+`options_chain_view.py` five-function contract, the ownership table (§5),
+and backward-compat rules (§7). Scope: `options_math.py`,
+`options_chain_merge.py`, new `options_chain_view.py`,
+`options_chain_filters.py`, `roll_table.py`, `dps_scorer.py` + all
+changed/new tests.
+
+**Diff findings (all 6 src files, no defects):**
+- `options_math.py`: new `robust_mid_optional` delegates to unchanged
+  `robust_mid`, returns `None` only when neither bid nor ask usable —
+  numerically identical on every path that used to return a real price.
+- `options_chain_merge.py`: `_recompute_contract` nulls all 5 Greeks
+  *together* via one `greeks_valid` gate (never partial), stamps
+  `greeks_asof`; raw-layer `is_accepted` gate untouched (provenance intact).
+- `options_chain_view.py` (new, frozen contract): pure/total (try/except),
+  non-mutating. Idempotence mechanism hand-traced: `contract_view` reuses
+  an already-present `_meta.field_status` verbatim on a 2nd pass instead of
+  re-deriving from now-nulled values — confirmed stable across 2 passes.
+  `greeks_valid`-absence-trusts-raw design choice matches Z-V6's own spec
+  and is correctly deferred to Livingston's G3 legacy-shard migration.
+- `options_chain_filters.py`: candidate filtering uses `is_candidate_eligible`
+  with accurate hidden-count footer in every branch; current-position block
+  stays unfiltered (Z10 compliant).
+- `roll_table.py`: grid cells null-safe via `usable_quote`/`usable_greek`,
+  `color="gray"` on unusable bid/net_credit (Z-R1); intentionally NOT
+  filtered by `is_candidate_eligible` (current-contract row, out of scope).
+- `dps_scorer.py` (285-line rewrite, both put/call): `_finite_or_none`
+  never coerces via `or 0`; every factor/combo gated on `is not None`;
+  `risk_zone="UNKNOWN"` when delta missing; `_data_quality_block` forces
+  `status="NO_DATA"` on insufficient confidence without ever nulling the
+  numeric `score`; put P&L now aligned to `executable_buyback_ask` (matches
+  call's pre-existing behavior, Z7). `rg "or 0\b"` sweep across all 6 owned
+  files: zero live coercions remain.
+
+**Independent live reproduction (real production code, not mocks):**
+1. All-zero provider payload (bid/ask/last/iv=0) → raw layer keeps `bid=0.0`
+   faithfully, `mid=None`/`greeks_valid=False` (Z3/Z4) even at the raw
+   layer since nothing usable; agent view nulls bid/ask/last/iv/mid/greeks
+   to `None` with correct `field_status` per field; `volume`/`openInterest`
+   stay integer `0` (Z2 carve-out) at both layers.
+2. Recursive walk of a full agent view for any numeric `0`/`0.0` outside
+   `volume`/`openInterest`: **zero violations found** (Z-I1).
+3. `to_agent_view` applied twice to its own output: **byte-identical**
+   (idempotent).
+4. One-sided real ask (bid=0 invalid, ask=1.2 valid) → `mid=0.10` at both
+   layers — initially looked suspicious, but confirmed this is
+   `robust_mid`'s own pre-existing, explicitly-unchanged "bid-less, mark
+   conservatively near ask-capped-at-0.10" convention (a real derived value
+   from a genuinely valid ask, not a fabricated placeholder) — not a Z3
+   violation, matches §7 grandfathering.
+5. TV-zero-overlay over a valid yfinance quote → merged contract retains
+   yfinance's real bid/ask (1.0/1.2), TV's zeros do not overwrite —
+   confirms the already-approved persistent-merge TV invariant survived
+   Linus's Z3/Z4 changes to `recompute_derived`.
+6. `dps_scorer.score_short_put` direct calls: full data → P&L correctly
+   computed off executable ask (Z7); `ask=None` → P&L unavailable, 0 pts,
+   `buyback_ask` input stays `None` (no bid/mid fallback); `delta=None` →
+   `status=NO_DATA`, `risk_zone=UNKNOWN`, `confidence=insufficient`, Delta
+   factor scores exactly 0 pts ("unavailable — not scored", no punishment),
+   overall `score` stays a legitimate non-null number (69) built from the
+   still-available factors — exact match to Z5/Z9 intent.
+
+**Test outcome (exact, run myself):**
+- Targeted (10 files): `pytest tests/test_options_math.py
+  tests/test_options_chain_merge.py tests/test_options_chain_view.py
+  tests/test_roll_table.py tests/test_dps_insights.py
+  tests/test_format_roll_candidates_table.py tests/test_exclude_contract.py
+  tests/test_get_contract.py
+  tests/test_options_chain_position_and_direction_filters.py
+  tests/test_debug_agent_chain_pipeline.py -q` → **645 passed, 2 failed.**
+  `test_options_chain_view.py` alone: **59 passed.**
+- The 2 failures (`test_debug_agent_chain_pipeline.py::...::test_current_
+  contract_surfaces_buyback_cost_despite_delta_filter` and
+  `test_format_roll_candidates_table.py::...::test_buyback_cost_surfaces_
+  via_current_contract_override`) are hardcoded "17 DTE" wall-clock-relative
+  assertions now reading "16 DTE" (sandbox date advanced to 2026-08-19).
+  **Confirmed via `git stash` both fail identically on the pre-diff
+  baseline** — pre-existing date drift, not introduced by this diff, and
+  matches Linus's own self-reported "2 hardcoded-date drift" note.
+- Explicitly located and ran the 2 named Livingston/G3-owned tests:
+  `test_options_chain_cache.py::TestCarriedForwardContractShape::
+  test_carried_contract_keeps_executable_ask_and_gets_fresh_delta` and
+  `test_options_chain_persistence_integration.py::
+  TestR1DerivedFieldsSurviveMultiplePersistCycles::
+  test_mid_and_all_five_greeks_present_after_three_cycles` — **both fail,
+  and fail exactly as described**: they assert old numeric Greeks on a
+  contract whose `_meta.greeks_valid == False` (iv=0 invalid), i.e. they
+  assert pre-Z3/Z4 fabricated-Greeks behavior. Ran the full Livingston
+  persistence/cache/store suite (`test_options_chain_cache.py
+  test_options_chain_store.py test_options_chain_persistence_integration.py`,
+  86 tests): **exactly these 2 fail, 84 pass** — no other collateral
+  damage in Livingston's test surface.
+- Full suite `pytest tests/ -q`: **24 failed, 1347 passed** (post-diff) vs.
+  `git stash`-restored pre-diff baseline: **22 failed, 1260 passed**. Delta
+  is exactly `+2 failed` (the 2 expected G3-owned tests above) and `+87
+  passed` (new Z1-Z10 tests), with the remaining 22 failures identical in
+  both runs (20 pre-existing `test_yfinance_data_provider.py` full-suite-
+  only artifacts + the 2 date-drift tests). **No unexplained failures
+  anywhere in the corpus.**
+- Ownership boundary check: `git diff --stat` on all 6 Livingston-owned
+  files (`options_chain_store.py`, `options_chain_cache.py`, `web/app.py`,
+  `agent_runner.py`, `yfinance_data_provider.py`, `config.yaml`) is
+  **completely empty** — Linus touched none of them.
+
+**Verdict: APPROVE.** Every Z1-Z10 rule is correctly implemented across
+all 6 owned files; the frozen `options_chain_view.py` contract is pure,
+total, and provably idempotent; raw-layer fidelity (Z2/Z3 raw exception)
+and the pre-existing TV-overlay/persistent-merge invariant both survive
+unmodified; scoring never rewards or punishes missing inputs and
+correctly surfaces `UNKNOWN`/`NO_DATA`/`data_quality`; put buyback is
+executable-ask-aligned; roll table nulls instead of fabricating zero;
+current-position retention vs. candidate exclusion (Z10) is correct;
+compatibility is additive-only (no renames, `robust_mid()` itself
+untouched). The only test regressions are the 2 explicitly-expected
+Livingston/G3-owned assertions (independently confirmed to fail for
+exactly the stated reason) plus 2 pre-existing unrelated date-drift
+failures (independently confirmed via `git stash` to predate this diff).
+No hidden incompatibilities found. Clear to proceed to G3 (Livingston).
+
+## 2026-08-19 — G4 Blocking Integration Review: Zero-Free Agent-Facing Option Chains (Linus G1 + Livingston G3 combined) — **REJECT**
+
+Read-only cross-layer review against the full accepted decision doc
+(`danny-zero-free-agent-option-chains.md`, all sections) and the actual
+combined diff. Reviewed in full: `options_chain_store.py` (480-line diff:
+`normalize_persisted_v1_to_v2`, retry/backoff singleton, health/repair
+support — no defects), `options_chain_cache.py` (`apply_agent_view`,
+`get_stale_quote_warn_seconds`, `_compute_chain_quality`, extended
+`stats()` — no defects), `web/app.py` (startup probe, new
+`/api/health/options-chain`, `apply_agent_view` wired at 3 endpoints — no
+defects), `agent_runner.py` (`_format_options_chain`/
+`_format_current_contract_chain`/Phase-2 `structured_chain` all correctly
+gained `apply_agent_view` — **but see defect below**),
+`yfinance_data_provider.py` (schema text — **see defect below**), new
+`scripts/repair_options_chain_shards.py` (171 lines, dry-run default,
+CAS-conflict handling — no defects).
+
+**DEFECT 1 (high confidence, blocking — Z1/Z-I1 violation):**
+`AgentRunner._build_alpha_options_chain()` (`agent_runner.py` ~L1585-1662)
+never calls `apply_agent_view`/`to_agent_view` before serializing the raw
+chain. Two independent raw-zero leaks confirmed by direct reproduction
+and by the new integration test:
+  1. The main candidate block: `json.dumps(structured, indent=2)` on line
+     ~1635 dumps the raw (delta-filtered-but-unviewed) chain straight into
+     `alpha_chain_text`.
+  2. The "CURRENT POSITION (buyback-cost reference)" block reads
+     `current_contract.get("bid")`/`.get("delta")`/`.get("last")` directly
+     off the raw pre-filter contract (~L1642-1650).
+  Both feed `alpha_market_data` → `_run_alpha_review(..., market_data=
+  alpha_market_data, ...)`, a real, live Alpha-advisor LLM prompt call
+  (confirmed at ~L1927-1933, 2918, 3003) — not a debug/internal-only path.
+  Reproduced live with a realistic one-sided illiquid quote (bid=0.0,
+  lastPrice=0.0, valid ask=1.2/iv=0.30 so it survives
+  `filter_options_chain_by_delta`): literal `"bid": 0.0` and
+  `"lastPrice": 0.0` appear verbatim in the text actually sent to the LLM.
+  This directly violates Rule Z1 and the Z-I1 headline requirement ("no
+  numeric zero appears... anywhere in the agent prompt"). Not mentioned
+  in Livingston's own history fix inventory — a genuine missed seam, not
+  a documented exception. Root cause of the earlier all-zero fixture not
+  catching this: an all-signal-absent contract has no valid iv, so
+  `filter_options_chain_by_delta` drops it before reaching the vulnerable
+  `json.dumps` line — the defect only reproduces with a partially-valid
+  quote (valid ask/iv, invalid bid), which is the realistic case.
+
+**DEFECT 2 (lower severity, non-blocking on its own but must accompany
+the fix above):** `OPTIONS_CHAIN_SCHEMA_DESCRIPTION` in
+`yfinance_data_provider.py` contains a self-contradiction: a pre-existing
+sentence (~L81-83, untouched by this diff) says
+"greeks_valid: false ... values default to 0 / intrinsic-only in that
+case" while Livingston's newly-added text a few lines below (~L96) says
+"A numeric 0 will never appear in these fields." Both are sent verbatim
+in the same prompt text — a self-contradictory instruction to the agent.
+
+**Independent verification of everything else (all clean, no defects):**
+- Derived fields (mid/Greeks) are already nulled at the raw/persisted
+  layer via `recompute_derived`'s `greeks_valid` gate — the leak above is
+  confined to raw-observed `bid`/`ask`/`lastPrice`/`iv`, not derived
+  fields.
+- `roll_table.py`/`dps_scorer.py`/`options_chain_filters.py` are
+  self-sufficient (call `usable_quote`/`usable_greek`/`contract_view`
+  directly) and do not depend on callers pre-applying `apply_agent_view` —
+  confirmed no equivalent gap there.
+- `robust_mid`/`robust_mid_optional`'s bid-less/ask-capped convention is
+  pre-existing, grandfathered, not a Z3 violation.
+- Persistence retry/backoff, `_ConstructionOutcome`, health endpoint,
+  v1→v2 lazy migration (pure/idempotent/never touches observed fields),
+  repair script (CAS, dry-run, idempotent) — all independently verified
+  correct, no defects.
+- `api_debug_agent_chain` actually sources raw via `provider.fetch_all()`
+  rather than the cache (contradicts Livingston's own history wording)
+  but is still safe since `apply_agent_view` is applied regardless — a
+  documentation-accuracy nit, not a functional defect.
+
+**Test authoring (only file I'm permitted to write, per decision §5
+ownership table):** created `backend/tests/test_zero_free_agent_chain.py`
+(~640 lines), covering Z-I1 through Z-I7 against real production modules
+(`options_chain_merge`, `options_chain_store` with a `FakeContainer`,
+`options_chain_cache`, `options_chain_view`, `agent_runner.AgentRunner`,
+`dps_scorer`, `roll_table`, `options_chain_filters`) — no mocking of the
+merge/store/view seam itself. While building it, found and fixed a bug in
+my own zero-detection regex helper (false-positived on legitimate
+non-zero decimals like `"iv": 0.3`); fixed by parsing the captured numeric
+token with `float()` instead of pattern-matching digits. Also discovered
+that a fully-all-zero fixture (bid=ask=iv=0) is correctly rejected in
+whole by `options_chain_merge.gate_contract` (needs a valid ask>0 or
+valid iv to accept any of the quote group) — this is the existing,
+already-approved persistent-merge trust gate correctly distinguishing
+"provider omission/no-quote" from "genuine one-sided zero," not a new
+bug — so Z-I5's realistic fixture uses a valid-ask/invalid-bid contract
+instead, which is also what correctly exercises Defect 1 above.
+
+**Test results:**
+- `test_zero_free_agent_chain.py` alone: **13 passed, 2 failed** — the 2
+  failures are exactly `test_agent_runner_alpha_options_chain_text_clean`
+  and `test_agent_runner_alpha_current_position_reference_block_clean`,
+  precisely isolating Defect 1 (confirmed expected/correct to fail until
+  Livingston fixes the seam).
+- Full G3+G4 focused suite (merge/cache/store/persistence-integration/
+  roll_table/format_roll_candidates_table/dps_insights/
+  open_call_zero_quote/get_contract/exclude_contract/
+  options_chain_position_and_direction_filters/
+  debug_agent_chain_pipeline/options_math/options_chain_view/
+  repair_options_chain_shards/zero_free_agent_chain): **808 passed, 4
+  failed** — 2 pre-existing wall-clock "N DTE" date-drift failures
+  (independently reconfirmed: today's date advanced one more day since
+  these were last green; not caused by this diff) + the same 2 expected
+  Defect-1 failures above.
+- Full backend suite `pytest tests/ -q`: **24 failed, 1411 passed**.
+  Confirmed via `--ignore=tests/test_zero_free_agent_chain.py`: without my
+  new file, **22 failed, 1398 passed** (20 pre-existing order-dependent
+  `test_yfinance_data_provider.py` full-suite-only failures — reconfirmed
+  isolated run only fails 3 of them — + the 2 date-drift failures);
+  adding my file contributes exactly `+2 failed` (Defect 1) and `+13
+  passed`, with zero interference/pollution on any other test.
+
+**Verdict: REJECT.** Defect 1 is a real, reachable, high-confidence Z1/
+Z-I1 violation: a genuine provider zero (e.g., no-bid illiquid quote)
+reaches a live Alpha-advisor LLM prompt completely unfiltered, in two
+separate spots inside `_build_alpha_options_chain`. This must be fixed
+(apply `apply_agent_view`/`to_agent_view` — or an equivalent per-contract
+`contract_view`/`usable_quote` pass — to both the main serialized chain
+and the CURRENT POSITION reference block) before G5. Defect 2 (schema
+self-contradiction) should be fixed in the same pass since it's in the
+same prompt text and cheap to correct (delete/rewrite the pre-existing
+"values default to 0" sentence). Everything else in the combined G1+G3
+diff — persistence retry/backoff/migration/repair, health endpoint, the
+3 other serialization seams, scoring/roll-table/view invariants — passed
+rigorous independent verification with no other defects found.
+
+## 2026-08-19 — G4 Re-Review After Rusty's Fix: Zero-Free Agent-Facing Option Chains — **APPROVE**
+
+Read-only re-review of Rusty's fix targeting my prior G4 REJECT (Defects 1
+and 2). No production files edited by me.
+
+**Defect 1 fix verified in `agent_runner.py`:** `_build_alpha_options_chain`
+now calls `apply_agent_view(structured)` immediately after option-type
+resolution — *before* `filter_options_chain_by_type`, before
+`current_contract` capture, and before `filter_options_chain_by_delta`.
+Both leaks are closed: the main candidate `json.dumps(structured, ...)`
+block now serializes the viewed chain, and `current_contract` (captured
+from that same already-viewed `structured`) feeds the CURRENT POSITION
+reference block, so `current_contract.get("bid")` is now the
+view-nulled value, not raw. `executable_buyback_ask(None)` correctly
+returns `None` (confirmed in `options_math.py`), so the buyback-cost
+reference degrades gracefully when ask is unusable. The same
+`apply_agent_view` seam is (unchanged from before) also present in
+`_format_options_chain`, `_format_current_contract_chain`, and the Phase-2
+`structured_chain` block.
+
+Independently re-reproduced live (not just via my own test) with a
+2-contract chain (current position: bid=0.0/ask=1.2 valid/iv=0.30; a
+second near-ATM candidate strike: bid=0.0/ask=0.85/iv=0.30, volume=0,
+openInterest=0) through the real `merge_sources` → `merge_prior` →
+`recompute_derived` → `_build_alpha_options_chain` pipeline: **zero
+numeric-zero violations** in the guarded fields (bid/ask/lastPrice/iv/mid
++ 5 Greeks) anywhere in the emitted text; `bid`/`lastPrice` correctly
+render `null`; `volume: 0`/`openInterest: 0` correctly preserved as real,
+faithful integers (Z2); the CURRENT POSITION block's `bid` is `null`
+while its valid `ask`/`delta` pass through untouched.
+
+**Defect 2 fix verified in `yfinance_data_provider.py`:** the old
+self-contradicting sentence ("values default to 0 / intrinsic-only ...")
+is rewritten to "the Greeks are null (never 0 or an intrinsic-only
+substitute); treat them as absent, not as unreliable numbers." Confirmed
+via `grep` no remaining "default to 0" text anywhere in the schema
+description, and the existing "field_status"/"stale"/"NULL vs ZERO"
+sections are unchanged and consistent with it — no self-contradiction, no
+duplication.
+
+**Test results:**
+- `test_zero_free_agent_chain.py` (my reviewer-owned file, unchanged since
+  last review): **15 passed, 0 failed** — both previously-failing Defect-1
+  tests (`test_agent_runner_alpha_options_chain_text_clean`,
+  `test_agent_runner_alpha_current_position_reference_block_clean`) now
+  pass.
+- Focused suite (merge/cache/store/persistence-integration/roll_table/
+  format_roll_candidates_table/dps_insights/open_call_zero_quote/
+  get_contract/exclude_contract/
+  options_chain_position_and_direction_filters/
+  debug_agent_chain_pipeline/options_math/options_chain_view/
+  repair_options_chain_shards/zero_free_agent_chain): **810 passed, 2
+  failed** — only the 2 pre-existing wall-clock "N DTE" date-drift
+  failures remain (reconfirmed unrelated to this diff).
+- Full backend suite `pytest tests/ -q`: **22 failed, 1413 passed** —
+  identical to the known pre-existing baseline (20 order-dependent
+  `test_yfinance_data_provider.py` full-suite-only failures + the 2
+  date-drift failures). **Zero new failures; zero regressions.**
+
+**Verdict: APPROVE.** Both blocking defects from my prior REJECT are
+independently confirmed fixed, with no new defects introduced and no
+regressions anywhere in the corpus. The `_build_alpha_options_chain` seam
+now matches the same `apply_agent_view`-before-filter pattern already
+used by the other 3 serialization seams, closing the last unguarded
+agent-facing surface. Schema description is now internally consistent
+with the null/status contract. Clear to proceed to G5 (Danny).

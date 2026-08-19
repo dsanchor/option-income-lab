@@ -263,10 +263,18 @@ class TestR1DerivedFieldsSurviveMultiplePersistCycles:
         assert call_100["_meta"]["greeks_valid"] is True
 
         call_110 = hydrated["calls"][call_exp]["110.0"]
-        for field in ("mid", "delta", "gamma", "theta", "vega", "rho"):
-            assert call_110.get(field) is not None
-        # iv was invalid every cycle for this contract -> greeks_valid must
-        # honestly reflect that, not default to True.
+        # `mid` is still a real number -- bid/ask were both usable quotes,
+        # and `mid` is only nulled when neither is (it is not Greek-tied).
+        assert call_110.get("mid") is not None
+        # iv was invalid every cycle for this contract, so `greeks_valid`
+        # must honestly reflect that (False) -- and, per Rule Z3 (a
+        # manufactured intrinsic-only Greek is no better than a
+        # manufactured 0.0), the five Greeks themselves must be `null`,
+        # never a fabricated value, when they are not genuinely valid.
+        for field in ("delta", "gamma", "theta", "vega", "rho"):
+            assert call_110.get(field) is None, (
+                f"calls/110.0 {field} must be null (not fabricated) when greeks_valid is False"
+            )
         assert call_110["_meta"]["greeks_valid"] is False
 
         put_95 = hydrated["puts"][put_exp]["95.0"]
@@ -620,3 +628,111 @@ class TestR7WriteSkipGuardEffective:
             "unchanged market-observable data must not trigger a shard rewrite (D5/R7); "
             "a content hash keyed on the volatile _meta timestamps would fail this"
         )
+
+
+# ===========================================================================
+# G3 — Danny's "Zero-Free Agent-Facing Option Chains" decision: the raw
+# persisted layer stays faithful (a genuine bid=0.0 quote survives storage
+# byte-for-byte) while the agent-facing view (`to_agent_view`, applied via
+# `options_chain_cache.apply_agent_view`) never shows a numeric zero for a
+# quote/derived field. Composes the real store + real cache exactly like
+# R1-R7 above; the only new ingredient is applying the real, frozen
+# `options_chain_view.to_agent_view` (via `apply_agent_view`) to what
+# `hydrate()` returns.
+# ===========================================================================
+
+class TestG3RawZeroSurvivesWhileAgentViewIsNull:
+    def test_raw_stored_bid_zero_survives_while_agent_view_nulls_it(self, store, monkeypatch):
+        from src.options_chain_cache import apply_agent_view
+
+        cache = OptionsChainCache(ttl_seconds=1800, store=store)
+        symbol = "AAPL"
+        exp = _future_exp_key(10)
+
+        async def _fake_yf(sym):
+            return {
+                "symbol": symbol,
+                "underlying_price": 150.0,
+                "calls": {
+                    exp: {
+                        # A genuine "no bid quoted" observation -- raw
+                        # provider zero, not a sentinel/placeholder.
+                        "100.0": _source_contract(expiration=exp, strike=100.0, bid=0.0),
+                    }
+                },
+                "puts": {},
+            }
+
+        monkeypatch.setattr(cache, "_fetch_yfinance", _fake_yf)
+        monkeypatch.setattr(cache, "_fetch_tradingview", _empty_source)
+
+        for _ in range(2):
+            run_async(cache.refresh(symbol))
+
+        # Raw/persisted layer: the observed zero is retained verbatim --
+        # this is the two-layer architecture's whole point (Z1/Z11): raw
+        # storage never lies about what was actually observed.
+        hydrated = store.hydrate(symbol)
+        assert hydrated is not None
+        raw_contract = hydrated["calls"][exp]["100.0"]
+        assert raw_contract["bid"] == 0.0, (
+            "the raw persisted layer must retain an observed bid=0.0 verbatim -- "
+            "it is a real market observation, not a data error"
+        )
+
+        # Agent-facing layer: the exact same hydrated chain, once passed
+        # through the serving seam (`apply_agent_view`), must show `null`
+        # for that same contract's bid -- never the raw numeric zero.
+        agent_view = apply_agent_view(hydrated)
+        view_contract = agent_view["calls"][exp]["100.0"]
+        assert view_contract["bid"] is None, (
+            "the agent-facing view must never surface a raw quote zero as "
+            "a numeric 0 -- it must be null (Z1/§2.4)"
+        )
+        assert view_contract["_meta"]["field_status"]["bid"] in (
+            "no_market", "no_trades", "unavailable",
+        )
+
+    def test_legacy_shard_migration_composes_with_agent_view_on_cold_hydrate(self, store, container):
+        """A pre-G3 (schema_version < 4) shard with a fabricated
+        `mid`/Greeks (the old bug the migration exists to correct) is
+        lazily normalized by `hydrate()`, and the resulting chain is then
+        agent-view-safe too -- proving the migration and the serving seam
+        compose correctly end to end on a real store, not just in
+        isolated unit tests of each piece."""
+        from src.options_chain_cache import apply_agent_view
+
+        symbol = "MSFT"
+        exp = _future_exp_key(10)
+        # A legacy contract: invalid iv (0.0) yet a fabricated non-zero
+        # delta and mid -- exactly the pre-fix bug shape, with no _meta at
+        # all (the oldest possible shard shape).
+        legacy_contract = _persisted_contract(
+            expiration=exp, iv=0.0, delta=0.5, mid=1.1, strike=100.0,
+        )
+        legacy_contract.pop("_meta", None)
+        container.store[f"optchain_{symbol}_{exp}"] = {
+            "id": f"optchain_{symbol}_{exp}", "symbol": symbol, "doc_type": "options_chain",
+            "expiration": exp, "schema_version": 2,
+            "calls": {"100.0": legacy_contract}, "puts": {},
+            "underlying_price": 150.0, "_etag": "e1",
+        }
+
+        hydrated = store.hydrate(symbol)
+        assert hydrated is not None
+        raw_contract = hydrated["calls"][exp]["100.0"]
+        # Migration nulled the fabricated derived Greeks (invalid iv)...
+        assert raw_contract["delta"] is None
+        # ...but `mid` is only nulled when neither bid nor ask is usable;
+        # this legacy contract has a real bid/ask (1.0/1.2), so its `mid`
+        # is a genuine, computable value and must be left untouched.
+        assert raw_contract["mid"] == legacy_contract["mid"]
+        # The observed raw fields (bid/ask/iv) are exactly what was
+        # actually recorded, per Rule Z11 -- never touched by migration.
+        assert raw_contract["bid"] == legacy_contract["bid"]
+        assert raw_contract["iv"] == 0.0
+
+        # The already-migrated (null Greeks) chain remains agent-view-safe.
+        agent_view = apply_agent_view(hydrated)
+        view_contract = agent_view["calls"][exp]["100.0"]
+        assert view_contract["delta"] is None
