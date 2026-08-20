@@ -333,3 +333,40 @@
   what the *persisted merge* accepts from a fresh fetch, not for the agent-view boundary or for values
   already stored; and no migration/backfill is planned for already-clobbered Cosmos values — they self-heal
   only on a future genuine positive quote. `test_options_chain_merge.py`: 441/441 passing.
+
+- **2026-08-20 — theta double-`/365` fix in `greeks_calculator.py`** (focused, single-file task, scope
+  strictly `greeks_calculator.py` + its dedicated tests only). Root cause: py_vollib 1.0.1's own `theta()`
+  already returns the *daily* per-share value (divides its raw annual formula by 365 internally — confirmed
+  by reading its source, not assuming; its own doctest cites Hull Example 17.2). `compute()`'s py_vollib
+  branch divided by 365 again, deflating theta ~365x on that path only; the manual/scipy fallback was
+  already correct (single division). Fixed by removing the redundant `/365` from one line; left
+  delta/gamma/vega/rho and the fallback path untouched. Confirmed via `grep` that no caller anywhere
+  compensates with a downstream `*365` — the whole codebase (yfinance docs, agent instructions, scorer,
+  filters) already assumed the correct daily convention this bug violated.
+  - Added `TestThetaUnitConversionRegression` (11 tests) to `test_greeks_calculator.py`: Hull reference
+    values, full-matrix path-equivalence vs. manual fallback, forced-fallback-vs-real-py_vollib check,
+    sign/finiteness/expiry-edge sanity, a derived closed-form call-put parity identity, direct raw-vs-
+    computed equality, and an explicit other-Greeks-unchanged guard.
+  - **Verified effectiveness directly, not just by inspection**: temporarily reverted the fix and reran —
+    7/11 new tests failed immediately (the other 4 correctly test magnitude-independent properties). This
+    is a good habit worth repeating for future "prove the regression test actually regresses" checks —
+    passing tests alone don't prove they'd catch the bug; deliberately reintroducing it does.
+  - Regression run (677 tests: greeks_calculator, options_math, dps_insights, roll_table,
+    options_chain_merge, options_chain_position_and_direction_filters, options_chain_view,
+    zero_free_agent_chain): 0 failures, 0 unexpected — no existing test had hardcoded the old buggy
+    magnitude.
+  - Disclosed but explicitly did not fix (out of the task's single-conversion scope) two sibling bugs found
+    by the same source+numeric-sweep method: `vega` has an analogous double-`/100` division on the
+    py_vollib path (~100x deflation); `rho` has a path-inconsistency where the manual fallback is un-scaled
+    (~100x larger than the py_vollib path) rather than a double-division. Recorded both in
+    `.squad/decisions.md` as a recommended, explicitly scoped follow-up task — did not touch either, per the
+    user's "fix exactly one unit conversion" instruction.
+
+- **2026-08-20 — user confirmed volume/OI scope for zero-never-overwrites**: asked explicitly "el 0
+  absoluto no debe sobreescribir ningún campo" (absolute zero must never overwrite any field, no
+  exceptions). This resolves Basher's twice-flagged, non-blocking caveat about volume/OI staleness masking
+  a genuinely fresh 0 — user accepts that tradeoff codebase-wide. No code change needed: the existing
+  `_ZERO_SENSITIVE_FIELDS` implementation (bid/lastPrice/volume/openInterest) plus `is_accepted`'s own
+  positive-finite rejection of ask/iv zeros already satisfies this exactly. Re-ran
+  `test_options_chain_merge.py`: 441/441 green. Recorded as a closing decision entry in
+  `.squad/decisions.md` — this item is now closed, not just disclosed.

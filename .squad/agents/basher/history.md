@@ -1420,3 +1420,228 @@ owner's file. The previously flagged, non-blocking volume/OI staleness scope ris
 volume=0 can be masked by a stale positive prior indefinitely) remains disclosed and unchanged in this
 pass — still not a blocker, still recommended for one explicit user/Danny sign-off line, unaffected by
 today's re-verification since no src content changed between reviews.
+
+## 2026-08-20: Greeks unit-conversion reviewer prep — theta double-`/365` root cause, plus two sibling defects found (vega double-`/100`, manual-path rho missing `*0.01`)
+
+**Scope:** read-only root-cause analysis of `backend/src/greeks_calculator.py` and the installed
+`py_vollib==1.0.1` implementation, independently verified against a from-scratch finite-difference
+numerical reference (not just py_vollib's own docstring), across a DTE/IV/moneyness/call-put matrix, plus
+downstream-caller unit-expectation inspection. **No production/test files edited.** Note: the repo working
+tree for `greeks_calculator.py`/`test_greeks_calculator.py` was observed to be actively, concurrently
+edited by another process during this review (diff content changed between successive `git diff` calls
+within the same session) — findings below are grounded in py_vollib's own (stable, third-party, unchanging)
+source and my own independent finite-difference math, not a single snapshot of the in-flux working tree.
+
+### Root cause (confirmed directly from `py_vollib/black_scholes/greeks/analytical.py` source)
+`py_vollib`'s own `theta()` and `vega()` functions **already** apply the "practitioner" scaling
+**internally**, per their own docstrings:
+- `theta()`: *"The text book analytical formula does not divide by 365, but in practice theta is defined
+  as the change in price for each day change in t, hence we divide by 365."* — returns `(...)/365.0`
+  directly; the value returned **is already the daily theta**.
+- `vega()`: *"The text book analytical formula does not multiply by .01, but in practice vega is defined
+  as the change in price for each 1 percent change in IV, hence we multiply by 0.01."* — returns
+  `S*pdf(d1)*sqrt(t)*0.01` directly; **already** the per-1%-IV vega.
+- `rho()`: same pattern, returns `t*K*e^(-rt)*N(d2)*.01` — **already** per-1%-rate-change.
+
+`greeks_calculator.py`'s py_vollib branch was written as if these functions returned the **raw, textbook,
+un-scaled** annualized/full values (matching the mental model of the *manual* scipy fallback path, which
+correctly computes the raw formula itself) and then re-applied the exact same scaling divisor a second
+time: `_vol_theta(...) / 365` and `_vol_vega(...) / 100`. Since `_vol_theta`/`_vol_vega` are **already**
+scaled, this is a **double-scaling bug**, not a missing one. Confirmed live (repo `compute()` isolated at
+one clean snapshot, S=49 K=50 r=.05 T=0.3846 σ=0.2 — Hull Example 17.2/17.6, also py_vollib's own doctest):
+
+| Greek | py_vollib raw (already correctly scaled) | repo `compute()` before/if double-scaled | reference (Hull textbook) |
+|---|---|---|---|
+| theta (daily) | -0.011796 | **-0.0000323** (≈365x too small) | -4.31/365 = -0.011808 |
+| vega (per 1% IV) | 0.121052 | **0.001211** (≈100x too small) | 0.121 |
+| rho (per 1% rate, py_vollib path) | 0.089066 | 0.089066 (unchanged, correct) | 0.0891 |
+
+**Two sibling defects of the identical class, found independently — not limited to theta:**
+1. **Vega double-`/100` — same bug shape as theta, in the same py_vollib branch, still present as of this
+   review (`"vega": round(_vol_vega(...) / 100, 6)`)**: `_vol_vega` already returns the per-1%-IV value;
+   dividing by 100 again deflates it another 100x (effectively a "per-0.01%-IV-change" unit, meaningless in
+   practice). This is the *same root cause* as the theta bug — whoever fixes theta should fix vega in the
+   same change, or it will remain silently wrong even after theta is corrected.
+2. **Rho missing `*0.01` — the *opposite* defect, in the *manual/scipy fallback* path**:
+   `_manual_greeks()`'s `rho_val = K*T*disc*N(d2)` (call) / `-K*T*disc*N(-d2)` (put) computes the *raw,
+   un-scaled* textbook rho and returns it **without** the `*0.01` the py_vollib path (and the Hull "per 1%
+   rate change" convention the module implicitly follows for vega/theta) requires — manual-path rho is
+   **~100x too large** (confirmed: manual rho = 8.906574 vs. reference 0.0891 vs. py_vollib-path rho =
+   0.089066, correct). This means **rho is inconsistently scaled between the two code paths** — a chain
+   fetched while py_vollib import succeeds gets correct rho; the same chain recomputed after a py_vollib
+   exception (the branch's own `except Exception: pass` fallthrough) or in an environment without
+   py_vollib installed gets rho 100x too large, with no error, warning, or `greeks_valid=False` signal —
+   this is silent, non-deterministic (environment-dependent) magnitude corruption.
+   Delta/gamma have no directional/day/percent scaling convention and are correctly unmodified/consistent
+   on both paths.
+
+### Why this passed unnoticed: existing test gap
+`test_greeks_calculator.py` (pre-existing, before today's in-flight edits) only asserts **sign and rough
+range** for delta (`0 < delta < 1`, `-1 < delta < 0`) and **sign only** for theta/vega/rho (`< 0`, `> 0`,
+`> 0`/`< 0`) — **no test anywhere checked numerical magnitude** against a known reference value. A 365x or
+100x scaling error preserves sign and preserves delta's range checks entirely, so the existing suite passed
+green throughout. This is the primary edge-case/acceptance gap this task exists to close.
+
+### Why the "Zero-Free"/Rule Z3-Z4 anti-corruption pipeline does not catch this either
+`options_chain_merge.py::_recompute_contract` only gates on `greeks_valid = iv_valid and price_ok and
+strike_ok` **before** calling `compute()` — it has no post-hoc check on the *magnitude* of the returned
+Greeks. A wrongly-scaled-but-finite, correctly-signed theta/vega (e.g. `-0.0000323` instead of `-0.0118`)
+passes every existing `<=0`/finiteness guard trivially. This bug is fully orthogonal to, and unaffected by,
+all of the prior Zero-Free/G1-G4 Greeks-validity work — a distinct review surface.
+
+### Downstream caller impact (confirmed by reading, not assuming)
+- `dps_scorer.py`: theta/vega/rho are **never used in scoring math** (0 points always; theta is purely
+  informational, rendered as `f"Θ {theta:.4f} (informational, not scored)"`) — the DPS **score** itself is
+  not corrupted, but the informational reason text would show a materially misleading near-zero theta.
+- `options_chain_filters.py::format_roll_candidates_table` / current-position block: theta is rendered
+  directly as `f"${theta_val}"` in the "CURRENT POSITION" reference text fed to the roll/hold LLM agents —
+  `alpha_instructions.py`/`supervisor_instructions.py` explicitly expect and reason about "theta is
+  $X/day"/"theta/day" in dollar-per-day terms; a 365x-deflated value would read as ~$0.00/day, actively
+  misleading roll-timing and hold/close reasoning that depends on theta's magnitude, not just its sign.
+- `yfinance_data_provider.py` docstring **already documents the intended, correct units** ("theta: Theta
+  (daily time decay, negative value)", "vega: Vega (sensitivity to volatility per 1% change)") — the
+  intended contract has always been the correctly-scaled value; the bug is purely an implementation defect
+  against the module's own stated contract, not an ambiguous spec.
+- `tv_options_chain_fetcher.py` surfaces TradingView's own raw theta/vega as a "legacy direct consumer"
+  best-effort field, but the current production pipeline (`options_chain_merge.recompute_derived`) **always
+  overwrites** derived fields via `GreeksCalculator.compute()` regardless of source — so the bug is uniform
+  across yfinance/TV-sourced contracts in the current pipeline (no source-dependent inconsistency there);
+  it *is* however inconsistent depending on whether the py_vollib-vs-manual branch is taken for rho, and
+  will be inconsistent for theta/vega too if only one of the two sibling bugs gets fixed.
+- Frontend (`options-chain/page.tsx`, `PositionDetail.tsx`, `types/options-chain.ts`) renders theta/vega
+  directly to end users — this is a **user-visible** defect, not only an internal/LLM-prompt one.
+
+### Independent numerical acceptance matrix (finite-difference reference, S/K/DTE/IV/call-put grid)
+Built and ran a from-scratch central-difference reference (`price(T) vs price(T-1day)` for theta,
+`price(σ+0.01%)` bump for vega) across DTE ∈ {7,30,45,90,365}, IV ∈ {15%,30%,60%}, moneyness ∈
+{ITM,ATM,OTM} (S/K = 105/100, 100/100, 95/100), both flags — 90 combinations. The correctly-scaled
+py_vollib raw value and the manual/scipy fallback path agree with the finite-difference reference to
+better than 3% relative error in every cell (expected residual curvature/discretization error, not a
+defect); the double-scaled (buggy) value diverges from the reference by the full systematic 365x/100x
+factor in every single cell with no exceptions — confirms the defect is deterministic and universal across
+the whole DTE/IV/moneyness space, not an edge-case-only artifact.
+
+### Edge cases checked (py_vollib core math, independent of the wrapper bug)
+- Near-0DTE (T≈1 hour): finite, sane, correctly signed theta/vega/rho — no NaN/inf blow-up.
+- T exactly 0 / σ exactly 0: `greeks_calculator.py`'s own `T <= 1e-10 or sigma <= 1e-10` guard routes to
+  `_expired_greeks` (intrinsic delta only, theta/gamma/vega/rho = 0.0) — untouched by this bug, correct.
+- Extreme IV (300%), tiny IV (1%): both scale-correctly in py_vollib's raw output; no instability.
+- Deep ITM/deep OTM: vega/theta correctly shrink toward 0 as expected (low gamma regime); no defect
+  interaction with moneyness.
+- r = 0 and r < 0 (negative-rate regime): py_vollib's formulas remain finite and well-behaved; rho scales
+  correctly with r including through zero — no additional edge case introduced by rate sign.
+- 1-year DTE (long-dated LEAPS-like): still finite, matches finite-difference reference within tolerance —
+  bug is not DTE-magnitude-dependent (the deflation factor is constant, not a function of T).
+
+### Recommended tight tolerances for an eventual regression test
+- Theta: `abs(actual - finite_difference_or_hull_reference) <= 2e-4` (absolute) for typical equity-option
+  ranges (S,K ∈ [10,1000], DTE ∈ [1,365], σ ∈ [0.05,2.0]) — matches the ~1e-4 curvature residual observed
+  in the finite-difference check above with margin.
+- Vega: `abs(actual - reference) <= 2e-4` (absolute), same domain.
+- Rho: `abs(actual - reference) <= 2e-4` (absolute); additionally assert **path-parity**: py_vollib-backed
+  and manually-forced-fallback (`monkeypatch _HAS_VOLLIB = False`) results for identical inputs must agree
+  within the same tolerance — this single assertion would have caught both the theta and the rho defects
+  (and would catch the still-open vega defect) without needing an external reference at all, since it
+  directly detects the two paths *disagreeing by their own systematic factor*.
+- A magnitude sanity band per Greek (e.g. `-0.5 < theta_30dte_atm < -0.01`, `0.01 < vega_30dte_atm < 1.0`
+  for a $100 underlying) is a cheap, human-readable regression guard against a reintroduced 100x/365x-class
+  bug, independent of the reference-value tests.
+
+### Objective acceptance criteria for the eventual fix (do not fix myself — reviewer prep only)
+1. Theta, vega, **and** rho on the py_vollib path must each match an independent reference (Hull textbook
+   value and/or finite-difference) within 2e-4 absolute, for both calls and puts.
+2. The manual/scipy fallback path must independently match the same reference within the same tolerance —
+   not merely agree with the (possibly still-buggy) py_vollib path.
+3. **Path parity**: forcing `_HAS_VOLLIB = False` must reproduce the same Greeks (within tolerance) the
+   real py_vollib path produces for identical inputs, for all 5 Greeks — this is the single most valuable
+   regression test to add, since it is self-checking (no external reference needed) and would have caught
+   all three defects found here.
+4. Fix must be scoped to `greeks_calculator.py` only unless a caller is found relying on the *buggy*
+   magnitude (searched: none — `dps_scorer.py` theta usage is sign/finiteness-only informational text,
+   never a numeric threshold; no config/scoring logic depends on the deflated scale).
+5. No change to `greeks_valid`/`_expired_greeks`/T≤1e-10/σ≤1e-10 edge-case routing — confirmed unaffected
+   and correct, out of scope.
+6. New regression tests must assert **magnitude**, not just sign, for theta/vega/rho — closing the gap that
+   let this ship unnoticed; a reviewer should reject any fix whose accompanying tests still only assert
+   sign/range for these three Greeks.
+7. Full existing `test_greeks_calculator.py` (37 pre-existing tests) plus focused suite
+   (`options_chain_merge.py`, `dps_scorer.py`, `roll_table.py`) must stay green — theta/vega/rho magnitude
+   was never load-bearing for any existing scoring/threshold assertion, so a correct fix should not require
+   any change outside `greeks_calculator.py`/its own test file.
+
+**No verdict rendered — this is prep only, per task instructions.** Findings appended here; no production
+or test files edited.
+
+## 2026-08-20: Theta double-`/365` fix — final reviewer verdict: **APPROVE**
+
+**Scope:** read-only final gate on Linus's actual diff, `backend/src/greeks_calculator.py` (13 lines,
++12/-1) and `backend/tests/test_greeks_calculator.py` (+151, new `TestThetaUnitConversionRegression`
+class). No production/test files edited by me.
+
+### Diff verification
+- `git diff` confirms **only the theta line** in the py_vollib branch of `compute()` changed: the extra
+  `/ 365` was removed (`_vol_theta(...)` now returned as-is, with a clear explanatory comment citing
+  py_vollib's own docstring). Vega (`/ 100`), rho, delta, gamma, `_manual_greeks()` (fallback path, incl.
+  its still-uncorrected rho), `_expired_greeks`, and all edge-case routing are **byte-identical** to
+  before — confirmed by reading the full current file. No scope creep.
+- Repo-wide `git status`/`git diff --stat` confirms no other backend src/test file changed as part of
+  this fix (only squad process files + the 2 expected files).
+
+### Independent verification performed (not just re-running the author's own tests)
+1. **Precise numerical accuracy vs. an independent central-difference reference** (own from-scratch BS
+   pricer, tiny `T` bump, NOT dependent on py_vollib or the repo code): re-ran the same 90-scenario
+   DTE×IV×moneyness×call/put matrix from my prior prep task. A crude 1-day forward-difference showed up to
+   ~22% relative error at short-DTE/high-IV cells (expected curvature/discretization artifact of a coarse
+   1-day step, not a defect); switching to a precise small-step central difference brought max error down
+   to **4.9e-7 absolute / 0.0366% relative across all 90 scenarios** — confirms the fix is numerically
+   correct to high precision, not merely "roughly right."
+2. **Path parity** (independently, beyond the author's own `test_theta_forced_fallback_matches_real_vollib_path`
+   single-scenario test): forced `_HAS_VOLLIB=False` and compared theta/delta/gamma against the real
+   py_vollib path across 108 combinations (2 flags × 6 DTEs × 3 strikes × 3 IVs) — **0 mismatches** (tol
+   2e-4). Confirms the two code paths now agree on theta everywhere, not just at the one point the new
+   test checks.
+3. **Confirmed vega/rho untouched and still exhibiting the exact pre-existing, previously-disclosed
+   defects** (informational only, explicitly out of scope per this task): vega real(vollib)=0.00114 vs
+   forced(manual)=0.113951 (~100x, same double-`/100` bug as before); rho real(vollib)=0.040944 (correct)
+   vs forced(manual)=4.094417 (~100x too large, same missing-`*0.01` bug as before). Unchanged from prior
+   prep findings — disclosed follow-ups, not grounds to reject this change.
+4. **Downstream/convention check**: grepped all `GreeksCalculator`/`greeks_calculator` references
+   repo-wide — only `options_chain_merge.py` and `yfinance_data_provider.py` consume it; neither test file
+   (`test_options_chain_merge.py`, `test_yfinance_data_provider.py`) asserts an exact theta magnitude
+   (only sign/None/finiteness/day-over-day-change checks) — confirms no caller depended on the old
+   (buggy) deflated scale, and `yfinance_data_provider.py`'s own docstring ("daily time decay") is now
+   actually satisfied by the code for the first time.
+
+### Test results
+- `test_greeks_calculator.py` standalone: **39 passed, 0 failed** (28 pre-existing + 11 new/net, all in
+  `TestThetaUnitConversionRegression`: Hull call/put reference values, path-equivalence across
+  flag×DTE×K×σ, forced-fallback path parity, negative-theta-always sign check, near-expiry monotonic
+  growth + finiteness, true-expiry-zero, human-scale sanity band, exact call-put parity closed-form
+  identity, raw-py_vollib-passthrough check, explicit "other Greeks unchanged" check).
+- Focused downstream suite (`test_greeks_calculator.py` + `test_options_chain_merge.py` +
+  `test_dps_insights.py` + `test_roll_table.py` + `test_options_chain_view.py` +
+  `test_format_roll_candidates_table.py` + `test_debug_agent_chain_pipeline.py`): **634 passed, 0 failed**.
+- Full backend suite, post-fix: **20 failed, 1434 passed**. Full backend suite, `git stash`ed back to
+  pre-fix baseline: **20 failed, 1423 passed** — **identical 20 pre-existing failures** (confirmed by name
+  match: all in `test_yfinance_data_provider.py`, order/event-loop-reuse-dependent, pass individually in
+  isolation — e.g. `test_chain_has_required_top_keys` passes standalone). Delta of +11 passing tests is
+  exactly the new regression class added; **zero regressions introduced anywhere**.
+
+### Verdict: **APPROVE**
+The fix precisely and exclusively addresses the reported theta double-`/365` bug, is numerically correct
+to <0.04% against an independent reference, achieves full path parity with the previously-correct manual
+fallback, introduces no scope creep into vega/rho/delta/gamma/edge-case routing, and causes zero
+regressions against the exact pre-existing 20-failure baseline. New tests correctly assert **magnitude**
+(closing the sign-only test gap this whole investigation started from), not just sign — closing the
+acceptance-criteria gap I flagged in the prior prep task.
+
+**Disclosed, non-blocking follow-ups (unchanged from prior prep, explicitly out of this task's scope per
+user instruction):** vega on the py_vollib path still has the identical double-`/100` defect (~100x too
+small); rho on the manual/scipy fallback path is still missing its `*0.01` scaling (~100x too large,
+inconsistent with the correct py_vollib-path rho). Both confirmed still present and unchanged in this
+diff. Recommend a follow-up task scoped to these two before considering Greeks unit-conversion fully
+closed — the single highest-leverage regression test for that follow-up (per prior prep) is a path-parity
+assertion for vega/rho, exactly mirroring the `test_theta_forced_fallback_matches_real_vollib_path`
+pattern already landed for theta.
+
+No production or test files edited by me. Verdict delivered to requester in chat.

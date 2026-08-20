@@ -89,7 +89,18 @@ class GreeksCalculator:
                 return {
                     "delta": round(_vol_delta(flag, S, K, T, r, sigma), 6),
                     "gamma": round(_vol_gamma(flag, S, K, T, r, sigma), 6),
-                    "theta": round(_vol_theta(flag, S, K, T, r, sigma) / 365, 6),
+                    # py_vollib's own theta() already divides its raw annual
+                    # Black-Scholes theta by 365 internally (see its
+                    # docstring: "the text book analytical formula does not
+                    # divide by 365 ... hence we divide by 365") — it
+                    # returns the daily, per-share theta directly. Dividing
+                    # by 365 again here was a double-division bug that
+                    # deflated theta by ~365x on this path (confirmed by
+                    # reading py_vollib 1.0.1's source and cross-checking
+                    # against the manual/scipy fallback below, which is not
+                    # affected since it computes the raw annual formula and
+                    # divides by 365 exactly once).
+                    "theta": round(_vol_theta(flag, S, K, T, r, sigma), 6),
                     "vega": round(_vol_vega(flag, S, K, T, r, sigma) / 100, 6),
                     "rho": round(_vol_rho(flag, S, K, T, r, sigma), 6),
                 }

@@ -217,6 +217,157 @@ class TestBatchComputation:
 
 
 # ---------------------------------------------------------------------------
+# 5b. Theta unit-conversion regression (py_vollib double /365 bug)
+# ---------------------------------------------------------------------------
+
+class TestThetaUnitConversionRegression:
+    """Regression suite for the py_vollib double-division bug: py_vollib's
+    own `theta()` already divides its raw annual Black-Scholes theta by
+    365 internally (its own docstring: "the text book analytical formula
+    does not divide by 365 ... hence we divide by 365" — it returns the
+    daily, per-share value directly). `GreeksCalculator.compute()`'s
+    py_vollib branch used to divide by 365 again, deflating theta by
+    ~365x. Every test below would fail if that extra division were
+    reintroduced."""
+
+    def test_hull_textbook_call_reference_value(self):
+        """Hull Example 17.2, p.359 — also py_vollib's own doctest for
+        `theta()`: S=49, K=50, r=.05, T=0.3846, sigma=0.2, call. Annual
+        theta ~= -4.30538996455 -> correct daily = annual/365. Uses r=0.05
+        (not the fixture's 0.045) to match the reference example exactly."""
+        hull_calc = GreeksCalculator(risk_free_rate=0.05)
+        g = hull_calc.compute(flag="c", S=49.0, K=50.0, T=0.3846, sigma=0.2)
+        expected_daily = -4.30538996455 / 365
+        assert g["theta"] == pytest.approx(expected_daily, abs=2e-4)
+        # A regression to the double-divided bug would be ~365x smaller
+        # in magnitude than the correct reference value.
+        assert abs(g["theta"]) > abs(expected_daily) / 50
+
+    def test_hull_textbook_put_reference_value(self):
+        """Same Hull example, put side (py_vollib's own doctest reference
+        value): annual theta = -1.8530056722."""
+        hull_calc = GreeksCalculator(risk_free_rate=0.05)
+        g = hull_calc.compute(flag="p", S=49.0, K=50.0, T=0.3846, sigma=0.2)
+        expected_daily = -1.8530056722 / 365
+        assert g["theta"] == pytest.approx(expected_daily, abs=2e-4)
+
+    def test_theta_matches_manual_fallback_across_scenarios(self, calc):
+        """Path equivalence: the py_vollib-backed result and the manual/
+        scipy fallback must agree (same underlying daily-theta formula)
+        across a spread of strikes/DTE/IV/call+put — a double-division on
+        only one path would make this diverge by ~365x."""
+        r = calc.risk_free_rate
+        for flag in ("c", "p"):
+            for dte in (1, 7, 30, 60, 365):
+                T = dte / 365
+                for K in (90.0, 100.0, 110.0):
+                    for sigma in (0.20, 0.50):
+                        vollib_theta = calc.compute(flag, 100.0, K, T, sigma)["theta"]
+                        manual_theta = calc._manual_greeks(flag, 100.0, K, T, r, sigma)["theta"]
+                        assert vollib_theta == pytest.approx(manual_theta, abs=2e-4), (
+                            f"path divergence flag={flag} dte={dte} K={K} sigma={sigma}: "
+                            f"vollib={vollib_theta} manual={manual_theta}"
+                        )
+
+    def test_theta_forced_fallback_matches_real_vollib_path(self, calc, monkeypatch):
+        """Forcing the module to behave as if py_vollib were unavailable
+        (`_HAS_VOLLIB = False`) must produce the same daily theta as the
+        real py_vollib-backed path for identical inputs — the two code
+        paths must never silently disagree by a ~365x unit mismatch."""
+        import src.greeks_calculator as gc_module
+
+        params = dict(flag="c", S=185.0, K=190.0, T=30 / 365, sigma=0.25)
+        with_vollib = calc.compute(**params)["theta"]
+
+        monkeypatch.setattr(gc_module, "_HAS_VOLLIB", False)
+        forced_fallback = calc.compute(**params)["theta"]
+        assert forced_fallback == pytest.approx(with_vollib, abs=2e-4)
+
+    def test_theta_negative_across_dte_range_both_flags(self, calc):
+        """Long options always lose value to time decay -> theta < 0 for
+        both calls and puts, at every DTE in the task's required matrix
+        (ATM, moderate IV, no dividend — the conventional negative-theta
+        regime)."""
+        for flag in ("c", "p"):
+            for dte in (1, 7, 30, 60, 365):
+                g = calc.compute(flag=flag, S=100.0, K=100.0, T=dte / 365, sigma=0.30)
+                assert g["theta"] < 0, f"flag={flag} dte={dte}: expected negative theta, got {g['theta']}"
+
+    def test_theta_finite_and_growing_near_expiry(self, calc):
+        """As T shrinks toward (but not at) zero, theta must stay finite
+        (no inf/NaN blow-up) and its magnitude must grow as expiry nears —
+        the hallmark of correctly-scaled time decay acceleration."""
+        magnitudes = []
+        for dte in (30, 7, 1, 0.5):
+            g = calc.compute(flag="c", S=100.0, K=100.0, T=dte / 365, sigma=0.30)
+            assert math.isfinite(g["theta"])
+            magnitudes.append(abs(g["theta"]))
+        assert magnitudes == sorted(magnitudes), (
+            f"theta magnitude should grow as DTE shrinks, got {magnitudes}"
+        )
+
+    def test_theta_at_true_expiry_is_zero(self, calc):
+        g = calc.compute(flag="c", S=100.0, K=100.0, T=0.0, sigma=0.30)
+        assert g["theta"] == 0.0
+
+    def test_daily_theta_is_human_scale_not_365x_too_small(self, calc):
+        """Sanity check against the module's own documented convention
+        (`compute()`'s docstring: "theta is daily"). A realistic 30 DTE
+        ATM option should decay a human-scale fraction of its premium per
+        day, not ~1e-4/365 — the bug's magnitude signature."""
+        g = calc.compute(flag="c", S=100.0, K=100.0, T=30 / 365, sigma=0.30)
+        assert -0.5 < g["theta"] < -0.01
+
+    def test_call_put_theta_parity_matches_closed_form_identity(self, calc):
+        """Exact analytical identity (derivable directly from the shared
+        Black-Scholes theta formula, independent of sigma): daily
+        theta_call - theta_put == -r * K * exp(-r*T) / 365. A double
+        division on only the py_vollib path (or any inconsistent scaling
+        between call/put) would break this by the same ~365x factor."""
+        r = calc.risk_free_rate
+        for K in (90.0, 100.0, 110.0):
+            for dte in (1, 30, 365):
+                T = dte / 365
+                call_theta = calc.compute("c", 100.0, K, T, 0.30)["theta"]
+                put_theta = calc.compute("p", 100.0, K, T, 0.30)["theta"]
+                expected_diff = -r * K * math.exp(-r * T) / 365
+                assert (call_theta - put_theta) == pytest.approx(expected_diff, abs=2e-4), (
+                    f"K={K} dte={dte}: call-put={call_theta - put_theta} expected={expected_diff}"
+                )
+
+    def test_raw_py_vollib_theta_equals_computed_theta_directly(self, calc):
+        """Direct cross-check against py_vollib's own `theta()` return
+        value (already daily per its docstring) — `compute()` must pass
+        it through unchanged, not rescale it further."""
+        from py_vollib.black_scholes.greeks.analytical import theta as vol_theta
+
+        r = calc.risk_free_rate
+        for flag in ("c", "p"):
+            for K in (90.0, 100.0, 110.0):
+                raw = vol_theta(flag, 100.0, K, 30 / 365, r, 0.30)
+                computed = calc.compute(flag, 100.0, K, 30 / 365, 0.30)["theta"]
+                assert computed == pytest.approx(raw, abs=1e-4)
+
+    def test_other_greeks_unchanged_by_the_theta_fix(self, calc):
+        """The fix touches only the theta line — delta/gamma/vega/rho on
+        the py_vollib path must still equal their own dedicated py_vollib
+        functions exactly as before (no collateral change to other
+        Greeks, per this task's explicit scope)."""
+        from py_vollib.black_scholes.greeks.analytical import delta as vol_delta
+        from py_vollib.black_scholes.greeks.analytical import gamma as vol_gamma
+        from py_vollib.black_scholes.greeks.analytical import vega as vol_vega
+        from py_vollib.black_scholes.greeks.analytical import rho as vol_rho
+
+        r = calc.risk_free_rate
+        flag, S, K, T, sigma = "c", 185.0, 190.0, 30 / 365, 0.25
+        g = calc.compute(flag, S, K, T, sigma)
+        assert g["delta"] == pytest.approx(vol_delta(flag, S, K, T, r, sigma), abs=1e-6)
+        assert g["gamma"] == pytest.approx(vol_gamma(flag, S, K, T, r, sigma), abs=1e-6)
+        assert g["vega"] == pytest.approx(vol_vega(flag, S, K, T, r, sigma) / 100, abs=1e-6)
+        assert g["rho"] == pytest.approx(vol_rho(flag, S, K, T, r, sigma), abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
 # 6. Risk-free rate fallback
 # ---------------------------------------------------------------------------
 
