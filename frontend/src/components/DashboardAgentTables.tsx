@@ -151,6 +151,7 @@ export default function DashboardAgentTables({ tables }: { tables: AgentTable[] 
                         </>
                       ) : (
                         <>
+                          <th className={TH}>Rec.</th>
                           <th className={THNUM}>Strike</th>
                           <th className={TH}>Expiry</th>
                           <th className={THNUM}>Premium</th>
@@ -242,6 +243,14 @@ export default function DashboardAgentTables({ tables }: { tables: AgentTable[] 
                           </>
                         ) : (
                           <>
+                            <td className={TD}>
+                              {!row.paused && row.recommendation_source === "alpha" && (
+                                <span className="inline-flex gap-1">
+                                  <Badge style={activityStyle("SELL")}>SELL</Badge>
+                                  <Badge style={styleFor("purple")}>ALPHA</Badge>
+                                </span>
+                              )}
+                            </td>
                             <td className={TDNUM}>{row.paused ? "—" : row.strike ?? "—"}</td>
                             <td className={TD}>{row.paused ? "—" : row.expiration || "—"}</td>
                             <td className={TDNUM}>{row.paused ? "—" : money(row.premium)}</td>

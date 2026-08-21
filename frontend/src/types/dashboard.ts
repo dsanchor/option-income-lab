@@ -42,6 +42,7 @@ export interface AgentRow {
   strike?: number | string | null;
   expiration?: string | null;
   premium?: number | null;
+  recommendation_source?: "agent" | "alpha" | null;
   [k: string]: unknown;
 }
 

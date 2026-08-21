@@ -2037,6 +2037,19 @@ async def api_activities(request: Request, agent_type: str = None,
 # Page Routes — Dashboard
 # ===========================================================================
 
+def _is_complete_triplet(strike, expiration, premium) -> bool:
+    """Return True if strike/expiration/premium form a complete, valid contract triplet."""
+    try:
+        s = float(strike) if strike is not None else 0.0
+    except (ValueError, TypeError):
+        s = 0.0
+    try:
+        p = float(premium) if premium is not None else 0.0
+    except (ValueError, TypeError):
+        p = 0.0
+    return s > 0 and bool(expiration) and p > 0
+
+
 def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
     """Build per-agent table data for the dashboard from CosmosDB data."""
     agent_tables = []
@@ -2250,14 +2263,32 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
                     row["strike_pct"] = None
                     row["option_type"] = "put"
                 else:
-                    row["strike"] = dec.get("strike")
-                    row["expiration"] = dec.get("expiration")
-                    row["premium"] = dec.get("premium")
-                    # Gap: percentage difference between price and recommended strike
+                    main_strike = dec.get("strike")
+                    main_expiration = dec.get("expiration")
+                    main_premium = dec.get("premium")
+                    # Alpha fallback: when main triplet is incomplete, use alpha alternative
+                    # only if opportunity_strength is MODERATE or STRONG and alt triplet is valid.
+                    use_alpha = False
+                    if not _is_complete_triplet(main_strike, main_expiration, main_premium):
+                        av = dec.get("alpha_view") or {}
+                        if av.get("opportunity_strength") in ("MODERATE", "STRONG"):
+                            alt = av.get("alternative") or {}
+                            a_strike = alt.get("strike")
+                            a_exp = alt.get("expiration")
+                            a_prem = alt.get("premium")
+                            if _is_complete_triplet(a_strike, a_exp, a_prem):
+                                use_alpha = True
+                                main_strike = a_strike
+                                main_expiration = a_exp
+                                main_premium = a_prem
+                    row["strike"] = main_strike
+                    row["expiration"] = main_expiration
+                    row["premium"] = main_premium
+                    row["recommendation_source"] = "alpha" if use_alpha else "agent"
+                    # Gap: uses the displayed (possibly alpha-sourced) strike
                     up = row.get("underlying_price")
-                    rec_strike = dec.get("strike")
                     try:
-                        rec_strike_f = float(rec_strike) if rec_strike else None
+                        rec_strike_f = float(main_strike) if main_strike else None
                     except (ValueError, TypeError):
                         rec_strike_f = None
                     if rec_strike_f and up is not None:
