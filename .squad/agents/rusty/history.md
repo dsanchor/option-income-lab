@@ -443,3 +443,31 @@
   checks, and scoped diffs.
 - Preserve unrelated baseline provider failures in reports.
 - Verify runner ordering and object identity at downstream boundaries.
+
+## Alpha Fallback Recommendation in Dashboard FOLLOWING Tables (2026-08-21)
+
+**Task:** Implement alpha fallback in `_build_dashboard_tables` for
+`covered_call` / `cash_secured_put` rows; expose result in frontend.
+
+**Key patterns:**
+- `_is_complete_triplet(strike, expiration, premium)` — module-level helper
+  before `_build_dashboard_tables`; float-casts with fallback to 0, asserts
+  strike > 0, non-empty expiration, premium > 0.
+- Alpha fallback activates only when: (1) main triplet is incomplete AND (2)
+  `alpha_view.opportunity_strength in ("MODERATE", "STRONG")` AND (3) alpha
+  `alternative` triplet is complete. Never partial — whole triplet from one
+  source.
+- `recommendation_source: "alpha" | "agent"` added to the row dict (backend)
+  and to `AgentRow` type (frontend). String enum preferred over boolean for
+  extensibility.
+- Gap/strike_pct computed from the displayed strike (which may be alpha-
+  sourced) — consistently uses `main_strike` variable after potential
+  substitution.
+- Frontend `Rec.` column added to FOLLOWING tables only (the `!isPM && !isBuy`
+  branch). Renders `[SELL][ALPHA]` badges only when `recommendation_source ===
+  "alpha"`. Main agent's `RecentCell` (WAIT) stays untouched.
+- `buy_tracker` and position monitor branches have no `recommendation_source`
+  field — confirmed by test.
+- Pre-existing flaky test (`test_yfinance_data_provider`) fails when run with
+  the full suite due to asyncio event loop interaction; passes in isolation;
+  unrelated to this work.

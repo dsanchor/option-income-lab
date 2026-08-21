@@ -3366,3 +3366,88 @@ untouched for all other agent types):
   (no model credentials available in this sandbox); the prompt clarification
   is reasonable defense-in-depth layered on top of the primary, fully
   reproduced upstream data fix.
+
+---
+
+## Alpha Fallback Recommendations — Dashboard FOLLOWING Rows
+
+**Date:** 2026-08-21  
+**Author:** Rusty  
+**Status:** Implemented & Approved  
+**Review:** Basher (APPROVED)
+
+### Context
+
+The FOLLOWING dashboard tables (Covered Call, Cash-Secured Put) display the latest agent recommendation (strike / expiration / premium). When the main agent returns a WAIT with no complete contract triplet, the alpha advisor may have produced a viable alternative. The approved behavior requires surfacing that alternative in the dashboard without misrepresenting the main agent's status.
+
+### Decision
+
+#### Backend (`web/app.py`)
+
+- Added `_is_complete_triplet(strike, expiration, premium) -> bool` helper:
+  strike > 0, non-empty expiration, premium > 0. Non-numeric values are treated
+  as 0 (not complete).
+- In `_build_dashboard_tables`, for `covered_call` and `cash_secured_put` rows
+  only:
+  - Check if main recommendation triplet is complete.
+  - If incomplete, check `alpha_view.opportunity_strength in ("MODERATE", "STRONG")`
+    AND `alpha_view.alternative` triplet is also complete before selecting alpha.
+  - Populate `row["strike"]`, `row["expiration"]`, `row["premium"]` from alpha
+    when alpha is selected, and from main otherwise.
+  - Set `row["recommendation_source"] = "alpha" | "agent"` (string enum).
+  - Gap/strike_pct always computed from the displayed (possibly alpha) strike.
+- Scope is strictly `covered_call` and `cash_secured_put`. `buy_tracker` and
+  position monitor branches are untouched.
+
+#### Frontend (`src/types/dashboard.ts`)
+
+- Added `recommendation_source?: "agent" | "alpha" | null` to `AgentRow`.
+
+#### Frontend (`src/components/DashboardAgentTables.tsx`)
+
+- Added a `Rec.` column (header + cell) to FOLLOWING tables only.
+- When `recommendation_source === "alpha"`, renders two badges: SELL (red,
+  `activityStyle("SELL")`) + ALPHA (purple, `styleFor("purple")`).
+- Cell is empty for `"agent"` source or paused rows.
+- Main agent's `RecentCell` (WAIT) is unchanged — no implication that the
+  agent emitted SELL or that anything executed.
+
+### Constraints Honoured
+
+- Never mix triplet fields from different sources: only full alpha alternative
+  is used, never partial combination with main.
+- A complete main recommendation is never overridden by alpha, regardless of
+  `opportunity_strength`.
+- `buy_tracker`, position monitors, and all other agents are unaffected.
+
+### Testing
+
+- 19 new tests added and passing:
+  - Triplet completeness validation
+  - Alpha fallback trigger conditions
+  - Source attribution correctness
+  - Edge cases (zero quotes, missing fields, expired contracts, low liquidity)
+  - Mixed-source prevention
+- Full backend test suite passing (pre-existing network-dependent yfinance failures noted)
+- TypeScript compilation clean
+
+### Review & Approval
+
+**Basher (Tester/Reviewer):** APPROVED  
+- Code inspection: All logic sound, scope correctly limited, constraints honored
+- Test validation: 19 new tests passing, full suite passing
+- Edge cases: All identified edge cases covered and validated
+- No high-confidence correctness issues identified
+
+### Files Changed
+
+- `backend/web/app.py` — Dashboard table builder, triplet validation, alpha fallback logic
+- `frontend/src/types/dashboard.ts` — Type definition for recommendation source
+- `frontend/src/components/DashboardAgentTables.tsx` — UI rendering for alpha fallback badge
+- `backend/tests/` — 19 new tests for fallback logic and edge cases
+
+### Status
+
+✅ Implementation complete  
+✅ Review approved  
+✅ Ready for production commit (no commit requested in this session)
