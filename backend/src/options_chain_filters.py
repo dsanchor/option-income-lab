@@ -117,6 +117,61 @@ def filter_options_chain_for_position(
     return result
 
 
+def filter_options_chain_by_dte(
+    chain: dict,
+    *,
+    min_dte: int,
+    max_dte: int,
+    today_et: datetime.date,
+) -> dict:
+    """Filter a parsed options chain to expirations whose DTE (calendar days
+    from ``today_et``) falls within ``[min_dte, max_dte]`` inclusive.
+
+    Design: `.squad/decisions/inbox/danny-best-options-design.md` §4.1/§7
+    (Best Options page). This is finding F1's fix — "``options_chain_filters.py``
+    has no DTE filter at all" — and the *only* DTE-related filter Best
+    Options applies. It never drops an individual contract within a kept
+    expiration: an entire expiration bucket is kept, or dropped, as a unit.
+    (Best Options additionally applies a second, category-aware delta-range
+    row filter of its own, implemented locally in `best_options.py` rather
+    than here or via `filter_options_chain_by_delta` below — see that
+    module's docstring and `.squad/decisions/inbox/linus-best-options-scoring.md`
+    for why a category-aware filter belongs with the category thresholds it
+    reads, not in this chain-level module.)
+
+    ``today_et`` must be the caller's America/New_York calendar date (the
+    same convention as ``options_chain_cache``'s same-day pruning): a DTE
+    computed from a UTC "today" flips by one after 20:00 ET and silently
+    moves rows across the ``max_dte`` boundary.
+
+    Malformed/unparseable expiration keys are dropped rather than kept
+    with a nonsensical DTE, mirroring ``options_chain_merge``'s Rule S3
+    calendar validation (a numerically ``YYYYMMDD``-shaped key must also
+    parse as a real calendar date).
+    """
+    def _dte(exp_key) -> Optional[int]:
+        try:
+            digits = str(exp_key).replace("-", "")
+            exp_date = datetime.date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
+        except (ValueError, IndexError, TypeError):
+            return None
+        return (exp_date - today_et).days
+
+    def _filter_bucket(bucket: dict) -> dict:
+        kept = {}
+        for exp_key, strikes in (bucket or {}).items():
+            dte = _dte(exp_key)
+            if dte is None or dte < min_dte or dte > max_dte:
+                continue
+            kept[exp_key] = strikes
+        return kept
+
+    result = {k: v for k, v in chain.items() if k not in ("calls", "puts")}
+    result["calls"] = _filter_bucket(chain.get("calls", {}))
+    result["puts"] = _filter_bucket(chain.get("puts", {}))
+    return result
+
+
 def filter_options_chain_by_delta(
     chain: dict,
     call_delta_range: tuple[float, float] = (0.15, 0.90),

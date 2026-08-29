@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, Optional
 from croniter import croniter
+import inspect
 import logging
 import queue
 import threading
@@ -205,7 +206,7 @@ class TaskRegistry:
             try:
                 # Wait for a job (blocks with timeout so we can check shutdown flag)
                 try:
-                    task_name = self._job_queue.get(timeout=1.0)
+                    task_name, job_kwargs = self._job_queue.get(timeout=1.0)
                 except queue.Empty:
                     continue
                 
@@ -220,7 +221,17 @@ class TaskRegistry:
                 def run_task():
                     """Job execution wrapper for sub-thread."""
                     try:
-                        task.job_func()
+                        # Forward only the kwargs task.job_func's own
+                        # signature currently declares (e.g. force_alpha,
+                        # run_trigger). This lets a manual "Run Now" trigger
+                        # attach per-invocation flags without requiring
+                        # every registered task's job_func to accept them --
+                        # tasks that haven't opted in are completely
+                        # unaffected (job_kwargs is empty for scheduled runs
+                        # in any case; see execute_due_tasks).
+                        accepted = inspect.signature(task.job_func).parameters
+                        kwargs = {k: v for k, v in job_kwargs.items() if k in accepted}
+                        task.job_func(**kwargs)
                     except Exception as e:
                         print(f"❌ SCHEDULER ERROR in {task.name}: {e}")
                         logger.exception(f"Error executing task {task_name}")
@@ -273,7 +284,9 @@ class TaskRegistry:
                 
                 # Enqueue job for worker thread
                 task.running = True
-                self._job_queue.put(task.name)
+                # Scheduled runs carry no extra kwargs -- see trigger_task_now
+                # for the manual-trigger path, which may attach some.
+                self._job_queue.put((task.name, {}))
     
     def _advance_next_run(self, task: ScheduledTask, now_tz: datetime) -> datetime:
         """Advance next_run to the next future occurrence.
@@ -304,9 +317,15 @@ class TaskRegistry:
         """Store config reference for handle_cron_changes."""
         self._config = config
     
-    def trigger_task_now(self, name: str) -> dict:
+    def trigger_task_now(self, name: str, **job_kwargs) -> dict:
         """Manually trigger a task execution (for Run Now button).
-        
+
+        job_kwargs: optional per-invocation keyword arguments forwarded to
+        the task's job_func for this run only (e.g. run_trigger="manual",
+        force_alpha=True). Silently dropped for any kwarg the job_func's
+        signature doesn't declare -- see _worker_loop -- so this has zero
+        effect on tasks that haven't opted into a given flag.
+
         Returns: {"success": bool, "message": str}
         """
         task = self.tasks.get(name)
@@ -322,7 +341,7 @@ class TaskRegistry:
         
         # Enqueue for worker thread
         task.running = True
-        self._job_queue.put(task.name)
+        self._job_queue.put((task.name, job_kwargs))
         return {"success": True, "message": f"{task.display_name} queued for execution"}
     
     def get_all_task_metadata(self) -> list[dict]:

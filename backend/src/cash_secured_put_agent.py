@@ -8,7 +8,9 @@ import random
 async def run_cash_secured_put_analysis(config, runner: AgentRunner,
                                          cosmos: CosmosDBService,
                                          context_provider: ContextProvider,
-                                         symbol: str = None):
+                                         symbol: str = None,
+                                         run_trigger: str = "scheduled",
+                                         force_alpha: bool = False):
     """Run cash secured put analysis for all enabled symbols from CosmosDB.
 
     Args:
@@ -17,6 +19,11 @@ async def run_cash_secured_put_analysis(config, runner: AgentRunner,
         cosmos: CosmosDBService instance
         context_provider: ContextProvider for activity history
         symbol: Optional symbol to filter analysis (e.g., 'AAPL')
+        run_trigger: Execution provenance — "scheduled" (cron) or
+            "manual" (dashboard/API triggered). Pass-through only.
+        force_alpha: When True, requests an Alpha Advisor review even for
+            symbols that would otherwise stay Alpha-silent this cycle.
+            Pass-through only; see AgentRunner.run_symbol_agent.
     """
     print(f"\n{'='*60}")
     print(f"Starting CashSecuredPutAgent analysis" + (f" for {symbol}" if symbol else ""))
@@ -61,6 +68,8 @@ async def run_cash_secured_put_analysis(config, runner: AgentRunner,
             supervisor_model=config.model_for('supervisor'),
             alpha_model=config.model_for('alpha'),
             symbol_category=category,
+            run_trigger=run_trigger,
+            force_alpha=force_alpha,
         )
 
     print(f"\n{'='*60}")

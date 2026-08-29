@@ -471,3 +471,266 @@
 - Pre-existing flaky test (`test_yfinance_data_provider`) fails when run with
   the full suite due to asyncio event loop interaction; passes in isolation;
   unrelated to this work.
+
+## Best Options — API/Plumbing + Frontend (2026-08-29)
+
+**Task:** Implement Rusty's slice of Danny's accepted "Best Options" design
+(`.squad/decisions/inbox/danny-best-options-design.md`): the FastAPI
+endpoint, the `normalize_category` fix in `agent_runner.py`, and the entire
+frontend (BFF route, page, view components, types, nav entry). Explicitly did
+**not** touch the deterministic scoring/gates (`best_options.py`,
+`category_params.py` — Linus) or cache lifecycle (`options_chain_cache.py` —
+Livingston), per charter.
+
+**Concurrent multi-agent tree:** this session ran while Linus and Livingston
+were actively landing `best_options.py`, `category_params.py`,
+`options_chain_filters.py`'s DTE filter, and `options_chain_cache.py`'s
+`get_or_hydrate`/`schedule_background_refresh` in the same working tree in
+real time. Approach: build the owned pieces against the design doc's exact
+contracts with guarded imports, and re-poll the tree periodically rather than
+stub/guess the missing modules. By the end of the session all three had
+landed and full integration was verified end-to-end.
+
+**Backend:**
+- `GET /api/symbols/{symbol}/best-options` (query: `side`, `dte_min`,
+  `dte_max`, `support_level`). Uses `get_or_hydrate()` (never
+  `get_or_load`/`get_or_load_async`) so a cold cache can never block the
+  event loop; a true miss calls `schedule_background_refresh()` and returns
+  an explicit `200 {"status":"warming","retry_after":15}` rather than a 503 —
+  deliberately not copying the roll-table endpoint's `except RuntimeError:
+  503` anti-pattern, since `OptionsChainNotReadyError` subclasses
+  `RuntimeError` and would be silently swallowed by that shape.
+- Assembles `category` (from `symbol_doc.enrichment.category`),
+  `total_shares`, `next_earnings_date`/`ex_dividend_date` (from the existing
+  Cosmos calendar accessors) and passes them plus the raw cached chain into
+  `src.best_options.evaluate_best_options(...)`, returning its response
+  envelope verbatim (it already carries `symbol`/`status`/`schema_version`/
+  `parameters`/`calls`/`puts` — the endpoint does not re-wrap or duplicate
+  those keys).
+- `support_level` has **no deterministic source anywhere in this codebase**
+  (pivot points are LLM-prompt-extracted text only, never a callable
+  function) — accepted as an optional query param, never auto-derived. This
+  is a deliberate scope decision, not an oversight; documented in the
+  decision file.
+- `agent_runner.py`: adopted `category_params.normalize_category(category)
+  .replace("_", " ")` in `_resolve_category_skill` and
+  `_get_category_delta_context`, fixing the divergence where
+  `"high-yield"`/`"High Yield"` previously silently fell back to
+  `"balanced"` instead of resolving to the correct delta range. The
+  space-form `_CATEGORY_SKILL_MAP`/`_CATEGORY_DELTA_RANGES` dicts were left
+  untouched — normalizer fixed only, no cross-agent dict refactor stacked on
+  top.
+
+**Frontend:**
+- New: `types/best-options.ts`, `app/api/symbols/[symbol]/best-options/
+  route.ts` (BFF proxy — forwards `searchParams` and the upstream status code
+  verbatim, following the `positions/.../snapshots` route's pattern rather
+  than `options-chain/route.ts`'s throw-on-non-2xx pattern, so warming/error/
+  ok are all distinguishable to the client), `components/BestOptionsParams.tsx`,
+  `components/BestOptionsView.tsx`, `app/symbols/[symbol]/best-options/
+  page.tsx`. `lib/badges.ts` gained `preferenceStyle()` mapping backend
+  `color` -> CSS accent class (no `--accent-yellow` variable exists in this
+  codebase; "yellow" maps to `--accent-orange`, matching existing WAIT/HOLD
+  semantics).
+- `SymbolActions.tsx`: added `{ href: "best-options", icon: Trophy, label:
+  "Best Options" }` as the first entry in the `ANALYZE` dropdown.
+- Accessibility ("not color-only"): `ColorBadge` always pairs an icon
+  (`CheckCircle2`/`AlertTriangle`/`XCircle`) with the backend-supplied text
+  label; the frontend never invents or recomputes label/color/threshold
+  text — it renders exactly what the API returned (design: "the UI never
+  owns the semantics").
+- Warming UX: explicit banner + auto-retry timer keyed off the backend's
+  `retry_after`, plus a manual "Retry now"/"Refresh" affordance — no
+  spinner-forever state on a cold cache.
+
+**Findings for the team:**
+- `npm run lint` already fails on this tree independent of this work: 10
+  pre-existing violations of the (evidently newly-enabled/strict)
+  `react-hooks/set-state-in-effect` rule exist in files this session never
+  touched (`GlobalChatView.tsx`, `PositionsTable.tsx`, `RecentActivities.tsx`,
+  `SymbolChat.tsx`, `SymbolInfoModal.tsx`, `CalendarView.tsx`, ...) — even
+  `options-chain/page.tsx`, the exact fetch-on-mount template this session
+  copied, has the same violation. `BestOptionsView.tsx` was refactored to
+  avoid a synchronous `setState` in its mount effect where practical, but the
+  rule's cross-function analysis still flags the pattern once an
+  effect-invoked async callback eventually calls `setState` at all — matching
+  every comparable component in the codebase. Not fixed here: fixing the
+  other 10 files is out of scope and would require a repo-wide pattern
+  decision, not a Best-Options-scoped change.
+- Mid-session, `tests/test_best_options.py::TestNoDirectContractAccess::
+  test_source_has_no_banned_direct_quote_or_greek_reads` failed transiently
+  because its banned-pattern regex matched the literal example text inside
+  `best_options.py`'s own module docstring (not an actual `contract.get(...)`
+  call) — a false positive from a concurrent in-progress edit, not a real
+  acceptance-gate violation. It had self-resolved by the final full test run
+  (130/130 passing) — noted here in case a similar docstring wording
+  reappears in a future edit to that file.
+
+**Validation:** `python3 -m py_compile` on all touched backend files;
+`pytest tests/test_best_options.py tests/test_category_params.py
+tests/test_options_chain_dte_filter.py tests/test_options_chain_cache.py
+tests/test_buy_tracker_normalization.py` — 130/130 passed; an ad-hoc,
+non-committed `TestClient`+`FakeCosmos` smoke script (deleted after use)
+exercised cold-cache warming, warm-cache success shape, `side` validation,
+and unknown-symbol 404 end-to-end against the real endpoint + real
+`evaluate_best_options`; `npx tsc --noEmit` clean; `npm run build` — compiled
+successfully, both new routes present in the route manifest.
+
+## Best Options — Visual Consistency With Roll Scenarios (2026-08-29, follow-up)
+
+**Directive:** `.squad/decisions/inbox/copilot-directive-20260829T102715+0200.md` —
+Best Options must closely reuse the Roll Scenarios table's structure,
+row/background colour treatment, spacing, typography, and controls rather than
+inventing a new table pattern.
+
+**What changed:**
+- Inspected the actual Roll Scenarios implementation (`PositionDetail.tsx`'s
+  `RollTableView`): `border-collapse text-xs` table, plain `border-b
+  border-border` header rule (no card frame around the table itself),
+  `border-b border-border/40` body rows, `px-2 py-1` cell padding, and a
+  per-cell background tint keyed off a `color -> rgba` map at a fixed 14%
+  alpha (`CELL_BG`).
+- Restyled `BestOptionsView.tsx`'s `OptionsTable` to match that structure
+  exactly: same table classes, same header/row border treatment, same cell
+  padding, and the same 14%-alpha row background tint (now applied per-row,
+  since a Best Options row is one semantic colour end to end, unlike Roll's
+  per-cell colouring). Dropped the outer rounded-card wrapper that previously
+  boxed the table so it now sits the same bare way Roll Scenarios' table
+  does.
+- **Reused, not duplicated:** extracted Roll Scenarios' `CELL_BG` rgba map
+  into `lib/badges.ts` as `ROW_TINT_BG` (verbatim values, so no visual
+  change to Roll Scenarios itself) plus a `preferenceRowTint(color)` helper
+  that maps Best Options' `green/yellow/red` onto that same shared palette
+  (`yellow` -> the shared `orange` bucket, consistent with the existing
+  `preferenceStyle` helper's precedent). `PositionDetail.tsx` now imports
+  `ROW_TINT_BG` instead of declaring its own local copy of the same
+  constant — one shared token, both tables, per the directive's "reuse
+  shared components/tokens where possible."
+- **Accessibility preserved:** `ColorBadge` (icon + backend-supplied text
+  label, e.g. "Preferred"/"Acceptable"/"Avoid") is unchanged and still sits
+  inside every row alongside the new background tint — the tint is an
+  *additional* visual cue matching Roll Scenarios' look, not a replacement
+  for the existing non-colour-only label.
+- Left `BestOptionsParams.tsx` (the parameters panel) as its own bordered
+  card section — that panel has no Roll Scenarios equivalent (Roll's
+  compact inline stat-line only carries ~7 fields; Best Options' parameters
+  block intentionally surfaces ~15 fields plus mandatory disclosure banners
+  per Danny's design §6) and collapsing it into an inline strip would lose
+  required provenance/disclosure content, not just restyle it.
+
+**Validation:** `npx tsc --noEmit` clean; `npx eslint` on the three touched
+files shows only the same single pre-existing `react-hooks/set-state-in-effect`
+finding already logged above (unchanged by this restyle, not newly
+introduced); `npm run build` — compiled successfully, both Best Options
+routes present.
+
+## Force Alpha — API/Scheduler Plumbing + Trigger UI (2026-08-29)
+
+**Design:** `.squad/decisions/inbox/danny-force-alpha-design.md`. Semantics
+were corrected mid-task by `.squad/decisions/inbox/copilot-force-alpha-semantics-superseded.md`
+(supersedes the earlier `copilot-force-alpha-semantics.md`): **only** the
+dashboard's per-agent trigger route forces Alpha; Settings "Run Now", "Full
+analysis"/`trigger-all`, and the cron sweep all stay due-only. My scope was
+API/frontend plumbing only — the actual gate formula, cooldown-neutrality
+(H1) and notification-suppression (H2) safeguards live entirely in
+`agent_runner.py` (Linus's file, not touched here beyond reusing what he
+landed concurrently).
+
+**What changed (`backend/web/app.py`):**
+- New explicit contract parsing on `POST /api/trigger/{agent_type}`:
+  `run_trigger` ("scheduled"|"manual", defaults "manual") and `force_alpha`
+  (bool, defaults **True** for this route only — a human clicked it, so it
+  gets a forced review unless the caller explicitly overrides either
+  field).
+- New in-flight guard, `_acquire_trigger_slot`/`_release_trigger_slot`, on
+  `app.state`, keyed by `(agent_type, symbol or "*")`. A duplicate
+  request for the same key gets HTTP 409
+  `{"status": "already_running", agent_type, symbol, started_at,
+  force_alpha}` instead of a second concurrent (and, with forcing,
+  potentially costly) run. Stale slots older than the scheduler's own
+  `_MAX_TASK_DURATION_SECONDS` (1800s, reused from `scheduler_registry.py`,
+  not reinvented) are reclaimed. Different symbols for the same agent_type
+  are independent keys and are never blocked by each other.
+- New `_call_agent_func` helper: forwards `run_trigger`/`force_alpha` to an
+  agent wrapper function only if its signature currently declares them
+  (`inspect.signature` guard). This let the API layer land ahead of, and
+  then transparently pick up, Linus's concurrent pass-through work on the
+  5 wrapper functions and `main.py`'s cron sweep — no follow-up change was
+  needed here once his edits landed; `buy_tracker` (which never accepts
+  these kwargs, by design) stays inert, never errors.
+- `POST /api/trigger-all` ("Full analysis"): stays hardcoded
+  `run_trigger="manual", force_alpha=False` with **no override surface** —
+  per the corrected decision, this call path must always be due-only, so
+  no request body is parsed for it at all (an earlier draft that allowed a
+  body override was removed once the semantics correction landed).
+- `POST /api/scheduler/tasks/{task_name}/run` ("Settings Run Now"): a
+  concurrent edit (already in the tree when I checked) explicitly passes
+  `run_trigger="manual", force_alpha=False` into `trigger_task_now` —
+  verified correct against the corrected decision and left as-is.
+
+**What changed (`backend/src/scheduler_registry.py`, in-charter "scheduling"
+plumbing):** `TaskRegistry`'s internal job queue now carries
+`(task_name, kwargs)` tuples instead of bare names; `trigger_task_now`
+accepts `**job_kwargs` and enqueues them; `execute_due_tasks` (the cron
+path) enqueues an empty kwargs dict; `_worker_loop` forwards only the
+kwargs a given task's `job_func` signature actually declares
+(introspection-guarded, exactly like `_call_agent_func`) — every other
+registered task, whose `job_func` doesn't declare `force_alpha`/
+`run_trigger`, is completely unaffected.
+
+**Frontend (`frontend/src/components/TriggerButton.tsx`):** always POSTs
+`{symbol, run_trigger: "manual", force_alpha: true}`; a 409 response now
+renders a distinct "⏳ Already running…" state (orange tone) instead of the
+red error state, auto-resets after 3s like the other transient states; a
+synchronous `useRef` pending-guard (checked before any state update or
+network call) prevents a rapid double-click from firing a second request
+before React re-renders the `disabled` attribute, in addition to the
+server-side 409 guard. Button title now says "(forces a fresh Alpha
+Advisor review)" for discoverability. No BFF proxy change was needed —
+`/api/trigger/[name]/route.ts` already forwards the request body and
+upstream status code verbatim. No change was needed to
+`DashboardAgentTables.tsx` or `SettingsConfigView.tsx`: the former only
+renders `TriggerButton` (whose own title now carries the forced-Alpha
+note); the latter's Monitoring Agent "Run Now" hits `/api/trigger-all`
+directly, which already defaults to due-only.
+
+**Note for the team (not mine to fix):** a full unfiltered
+`pytest tests/` run also shows 15 failed + 16 errored tests in
+`test_yfinance_data_provider.py`/`test_yfinance_technicals_dividend_availability.py`
+— confirmed pre-existing/environment-related (no file in that dependency
+chain was touched by anyone this session; isolated re-run shows the same
+failures with a "coroutine was never awaited" warning suggesting an
+async-fixture/event-loop issue unrelated to force-alpha work).
+
+**Validation:** `python3 -m py_compile backend/web/app.py
+backend/src/scheduler_registry.py`; new
+`backend/tests/test_force_alpha_plumbing.py` (8 tests, written this
+session, scoped strictly to the API/scheduler plumbing layer — contract
+defaulting/override, 409 guard incl. symbol-scoping and stale-reclaim,
+`_call_agent_func` introspection forwarding, `TaskRegistry` kwargs
+forwarding) — all pass; the pre-existing
+`tests/test_trigger_force_alpha_scoping.py` (written concurrently by
+another agent, locking down the corrected per-endpoint semantics matrix)
+— all 3 pass; full `pytest tests/` excluding the two known-unrelated
+yfinance files — 1650 passed; `npx tsc --noEmit` clean; `npx eslint
+src/components/TriggerButton.tsx` clean; `npm run build` — compiled
+successfully (required one `rm -rf .next` retry due to a transient
+OneDrive-mount filesystem I/O error unrelated to the code, same as the
+prior Best Options session).
+
+## Force Alpha — Re-confirmation against explicit user correction (2026-08-29T12:17)
+
+User sent an explicit binding correction restating the same
+`copilot-force-alpha-semantics-superseded.md` semantics I had already
+reconciled with earlier this session (only dashboard CC/CSP forces Alpha;
+Settings Run Now, Run Full, and cron all stay due-only). Re-audited all
+three routes plus the cron sweep against that text — no code drift, no
+change needed: `POST /api/trigger/{agent_type}` still defaults
+`force_alpha=True`; `POST /api/scheduler/tasks/{task_name}/run` and
+`POST /api/trigger-all` are still hardcoded `force_alpha=False` with no
+override surface; `main.py`'s cron sweep still passes
+`run_trigger="scheduled", force_alpha=False`. Re-ran
+`test_force_alpha_plumbing.py` + `test_trigger_force_alpha_scoping.py` +
+`test_force_alpha_execution.py` (34/34 pass) and the full suite excluding
+the two known-unrelated yfinance files (1655/1655 pass, suite grew by 5
+tests from concurrent agent work since the last check — all green).

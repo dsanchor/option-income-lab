@@ -7,7 +7,9 @@ import random
 async def run_open_put_monitor(config, runner: AgentRunner,
                                 cosmos: CosmosDBService,
                                 context_provider: ContextProvider,
-                                symbol: str = None):
+                                symbol: str = None,
+                                run_trigger: str = "scheduled",
+                                force_alpha: bool = False):
     """Run open cash-secured put position monitoring from CosmosDB.
 
     Args:
@@ -16,6 +18,11 @@ async def run_open_put_monitor(config, runner: AgentRunner,
         cosmos: CosmosDBService instance
         context_provider: ContextProvider for activity history
         symbol: Optional symbol to filter positions (e.g., 'AAPL')
+        run_trigger: Execution provenance — "scheduled" (cron) or
+            "manual" (dashboard/API triggered). Pass-through only.
+        force_alpha: When True, requests an Alpha Advisor review even for
+            positions that would otherwise stay Alpha-silent this cycle.
+            Pass-through only; see AgentRunner.run_position_monitor.
     """
     from .open_put_assessment_instructions import get_open_put_assessment_instructions
     from .open_put_roll_instructions import get_open_put_roll_instructions
@@ -74,6 +81,8 @@ async def run_open_put_monitor(config, runner: AgentRunner,
                 supervisor_model=config.model_for('supervisor'),
                 alpha_model=config.model_for('alpha'),
                 symbol_category=_category,
+                run_trigger=run_trigger,
+                force_alpha=force_alpha,
             )
 
     print(f"\n{'='*60}")

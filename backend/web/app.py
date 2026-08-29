@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import inspect
 import json
 import logging
 import math
@@ -21,6 +22,7 @@ from src.market_hours import is_us_market_open
 from fastapi.responses import JSONResponse
 
 from src.cosmos_db import is_watchlist_paused
+from src.scheduler_registry import _MAX_TASK_DURATION_SECONDS
 
 try:
     import yfinance as yf
@@ -2851,6 +2853,123 @@ async def api_symbol_options_chain(request: Request, symbol: str):
     })
 
 
+@app.get("/api/symbols/{symbol}/best-options")
+async def api_symbol_best_options(
+     request: Request,
+     symbol: str,
+     side: str = Query(default="both"),
+     dte_min: int = Query(default=0, ge=0),
+     dte_max: int = Query(default=49, ge=0, le=60),
+     support_level: Optional[float] = Query(default=None),
+):
+     """Deterministic "Best Options" screen (Danny's 2026-08-29 design,
+     `.squad/decisions/inbox/danny-best-options-design.md`): every contract
+     on the requested side whose expiration falls within [dte_min, dte_max]
+     days, scored and coloured by the pure, no-I/O, no-LLM
+     ``src.best_options.evaluate_best_options``. Zero LLM calls are
+     reachable from this endpoint (design acceptance gate #1).
+
+     On a cold cache this never blocks the event loop waiting on a live
+     yfinance/TradingView fetch (design finding F6): ``get_or_hydrate``
+     only ever returns a memory hit, a persistence hydrate, or ``None`` — a
+     true miss schedules a background refresh and this responds with an
+     explicit HTTP 200 warming state (not a 503 — the BFF collapses
+     non-2xx into a generic error, and "warming, retry shortly" is a real
+     UI state, not a failure) instead of hanging or erroring.
+     """
+     if side not in ("call", "put", "both"):
+         return JSONResponse(
+             {"error": "side must be one of: call, put, both"}, status_code=400,
+         )
+     if dte_min > dte_max:
+         return JSONResponse(
+             {"error": "dte_min must be <= dte_max"}, status_code=400,
+         )
+
+     try:
+         cosmos = _get_cosmos(request)
+     except RuntimeError as e:
+         return JSONResponse({"error": str(e)}, status_code=503)
+
+     sym_upper = symbol.upper()
+     sym_doc = cosmos.get_symbol(sym_upper)
+     if not sym_doc:
+         return JSONResponse({"error": f"Symbol {sym_upper} not found"}, status_code=404)
+
+     from src.options_chain_cache import get_options_chain_cache
+
+     cache = get_options_chain_cache()
+     chain_json = cache.get_or_hydrate(sym_upper)
+     if chain_json is None:
+         # True cold miss: never block on a live fetch (F6). Kick off a
+         # background refresh (non-blocking, at-most-one-in-flight-per-
+         # symbol) and let the client poll again shortly.
+         cache.schedule_background_refresh(sym_upper)
+         return JSONResponse({
+             "status": "warming",
+             "symbol": sym_upper,
+             "retry_after": 15,
+         })
+
+     try:
+         chain = json.loads(chain_json) if isinstance(chain_json, str) else chain_json
+     except (TypeError, ValueError) as e:
+         logger.exception("Best options: corrupt cached chain for %s", sym_upper)
+         return JSONResponse(
+             {"error": f"Cached option chain unreadable: {e}", "symbol": sym_upper},
+             status_code=500,
+         )
+
+     # Input assembly (Rusty's part per Danny's design §9) — category,
+     # shares, earnings/ex-dividend calendar dates. Spot price and ATM IV
+     # come from inside the chain itself (F7), not from a separate
+     # overview fetch, so they are not assembled here.
+     category = (sym_doc.get("enrichment") or {}).get("category")
+     total_shares = int(sym_doc.get("total_shares", 0) or 0)
+     next_earnings_date = cosmos.get_next_earnings_date(sym_upper)
+     ex_dividend_date = cosmos.get_next_calendar_event_date(sym_upper, "ex_dividend")
+     # `support_level` has no deterministic source in this codebase today
+     # (pivot points are currently LLM-extracted prompt context only, not a
+     # callable technical-analysis function) — accepted as an optional
+     # query param so a future deterministic source (or the UI) can supply
+     # it; omitted entirely, it simply disables the `below_support` flag.
+
+     try:
+         from src.best_options import evaluate_best_options
+     except ImportError as e:
+         logger.error("Best options: scorer module not available yet: %s", e)
+         return JSONResponse(
+             {"error": "Best Options scorer is not available yet", "symbol": sym_upper},
+             status_code=503,
+         )
+
+     try:
+         result = evaluate_best_options(
+             chain,
+             side=side,
+             category=category,
+             total_shares=total_shares,
+             next_earnings_date=next_earnings_date,
+             ex_dividend_date=ex_dividend_date,
+             support_level=support_level,
+             dte_min=dte_min,
+             dte_max=dte_max,
+             now=datetime.now(timezone.utc),
+         )
+     except Exception as e:
+         logger.exception("Best options evaluation failed for %s", sym_upper)
+         return JSONResponse(
+             {"error": str(e), "symbol": sym_upper}, status_code=500,
+         )
+
+     # `evaluate_best_options` already returns the full response envelope
+     # (symbol/status/schema_version/parameters/calls/puts) per Danny's
+     # design; return it verbatim rather than re-wrapping it, since a
+     # re-wrap would let `chain.get("symbol")` silently win over
+     # `sym_upper` on key collision.
+     return JSONResponse(result)
+
+
 @app.get("/api/debug/agent-chain/{symbol}")
 async def api_debug_agent_chain(request: Request, symbol: str,
                                  option_type: str = Query(default="call"),
@@ -4841,7 +4960,98 @@ AGENT_FUNCTIONS = {
 }
 
 
-def _run_agent_in_background(agent_type: str, scheduler, symbol: str = None):
+# ---------------------------------------------------------------------------
+# Force-alpha trigger contract (danny-force-alpha-design.md §6-§7)
+# ---------------------------------------------------------------------------
+# `run_trigger` records provenance (who asked: "scheduled" cron vs "manual"
+# API/UI click); `force_alpha` requests an unconditional Alpha Advisor
+# review. The two are orthogonal and must never be collapsed. The actual
+# gate (`run_alpha = is_alert or prolonged_wait or force_alpha`) and its
+# cooldown-neutrality/notification-suppression safeguards live entirely in
+# AgentRunner (Linus's file) — this module only carries the flags to the
+# call boundary.
+
+
+def _call_agent_func(func, config, runner, cosmos, context_provider, *,
+                      symbol: str = None, run_trigger: str = "scheduled",
+                      force_alpha: bool = False):
+    """Invoke an agent wrapper function, forwarding run_trigger/force_alpha
+    only if its signature currently declares them.
+
+    The wrapper functions (run_covered_call_analysis and siblings) gain
+    these parameters incrementally as they're threaded through to
+    AgentRunner.run_symbol_agent. Introspecting the target signature lets
+    this API layer roll out the contract independently of that work: calls
+    are unaffected (today's exact behavior) until a given wrapper accepts
+    the parameter, then start forwarding it automatically with no further
+    change here. buy_tracker is expected to never accept force_alpha (it's
+    excluded from Alpha/Supervisor review entirely) — forcing it is inert,
+    never an error.
+    """
+    kwargs = {"symbol": symbol}
+    accepted = inspect.signature(func).parameters
+    if "run_trigger" in accepted:
+        kwargs["run_trigger"] = run_trigger
+    if "force_alpha" in accepted:
+        kwargs["force_alpha"] = force_alpha
+    return func(config, runner, cosmos, context_provider, **kwargs)
+
+
+def _trigger_slot_key(agent_type: str, symbol: Optional[str]) -> str:
+    return f"{agent_type}:{symbol or '*'}"
+
+
+def _acquire_trigger_slot(app_state, agent_type: str, symbol: Optional[str],
+                           force_alpha: bool) -> Optional[dict]:
+    """Claim the in-flight slot for (agent_type, symbol-or-wildcard).
+
+    Returns None if claimed (caller may proceed to start the run), or a
+    snapshot of the existing in-flight record if another run for the same
+    key is still active (caller should respond 409). A slot is considered
+    stale — and reclaimable — after `_MAX_TASK_DURATION_SECONDS` (the same
+    30-minute constant the scheduler's own worker uses to abandon a
+    runaway job; reused here rather than inventing a second timeout).
+    """
+    registry = getattr(app_state, "_trigger_inflight", None)
+    if registry is None:
+        registry = {}
+        app_state._trigger_inflight = registry
+    lock = getattr(app_state, "_trigger_inflight_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        app_state._trigger_inflight_lock = lock
+
+    key = _trigger_slot_key(agent_type, symbol)
+    now = time.monotonic()
+    with lock:
+        existing = registry.get(key)
+        if existing is not None and (now - existing["_monotonic_started"]) < _MAX_TASK_DURATION_SECONDS:
+            return dict(existing)
+        registry[key] = {
+            "agent_type": agent_type,
+            "symbol": symbol,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "force_alpha": force_alpha,
+            "_monotonic_started": now,
+        }
+        return None
+
+
+def _release_trigger_slot(app_state, agent_type: str, symbol: Optional[str]) -> None:
+    registry = getattr(app_state, "_trigger_inflight", None)
+    if not registry:
+        return
+    lock = getattr(app_state, "_trigger_inflight_lock", None)
+    key = _trigger_slot_key(agent_type, symbol)
+    if lock is not None:
+        with lock:
+            registry.pop(key, None)
+    else:
+        registry.pop(key, None)
+
+
+def _run_agent_in_background(agent_type: str, scheduler, symbol: str = None,
+                              run_trigger: str = "manual", force_alpha: bool = True):
     import asyncio
     from src.covered_call_agent import run_covered_call_analysis
     from src.cash_secured_put_agent import run_cash_secured_put_analysis
@@ -4858,9 +5068,11 @@ def _run_agent_in_background(agent_type: str, scheduler, symbol: str = None):
     }
     func = funcs[agent_type]
     try:
-        asyncio.run(func(scheduler.config, scheduler.runner,
-                         scheduler.cosmos, scheduler.context_provider,
-                         symbol=symbol))
+        asyncio.run(_call_agent_func(
+            func, scheduler.config, scheduler.runner,
+            scheduler.cosmos, scheduler.context_provider,
+            symbol=symbol, run_trigger=run_trigger, force_alpha=force_alpha,
+        ))
     except Exception as e:
         print(f"ERROR running {agent_type} trigger: {e}")
 
@@ -5223,13 +5435,49 @@ async def trigger_agent(request: Request, agent_type: str):
             body = {}
     symbol = body.get("symbol") if isinstance(body, dict) else None
 
-    thread = threading.Thread(
-        target=_run_agent_in_background,
-        args=(agent_type, scheduler, symbol),
-        daemon=True,
-    )
+    # Explicit trigger contract (danny-force-alpha-design.md §6). Manual
+    # API/UI calls default force_alpha=True — a human clicked this, so it
+    # gets a fresh Alpha Advisor review unconditionally — but a caller may
+    # still override either field explicitly in the request body.
+    run_trigger = body.get("run_trigger") if isinstance(body, dict) else None
+    if run_trigger not in ("scheduled", "manual"):
+        run_trigger = "manual"
+    force_alpha = body.get("force_alpha") if isinstance(body, dict) else None
+    if not isinstance(force_alpha, bool):
+        force_alpha = True
+
+    # In-flight guard, keyed by (agent_type, symbol-or-"*"): a duplicate
+    # click/request for the same key returns 409 instead of launching a
+    # second concurrent (and, with force_alpha, potentially expensive) run.
+    existing = _acquire_trigger_slot(request.app.state, agent_type, symbol, force_alpha)
+    if existing is not None:
+        return JSONResponse(
+            {
+                "status": "already_running",
+                "agent_type": existing["agent_type"],
+                "symbol": existing["symbol"],
+                "started_at": existing["started_at"],
+                "force_alpha": existing["force_alpha"],
+            },
+            status_code=409,
+        )
+
+    def _run_and_release():
+        try:
+            _run_agent_in_background(agent_type, scheduler, symbol,
+                                      run_trigger=run_trigger, force_alpha=force_alpha)
+        finally:
+            _release_trigger_slot(request.app.state, agent_type, symbol)
+
+    thread = threading.Thread(target=_run_and_release, daemon=True)
     thread.start()
-    return JSONResponse({"status": "triggered", "agent_type": agent_type, "symbol": symbol})
+    return JSONResponse({
+        "status": "triggered",
+        "agent_type": agent_type,
+        "symbol": symbol,
+        "run_trigger": run_trigger,
+        "force_alpha": force_alpha,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -5245,8 +5493,19 @@ def _default_full_analysis_status() -> dict:
     return {"running": False, "current": None, "completed": [], "total": 5, "errors": []}
 
 
-def _run_all_agents_sequentially(scheduler, status: dict):
-    """Run all watchlist and monitor agent types sequentially in a single thread."""
+def _run_all_agents_sequentially(scheduler, status: dict, run_trigger: str = "manual",
+                                  force_alpha: bool = False):
+    """Run all watchlist and monitor agent types sequentially in a single thread.
+
+    Defaults preserve today's exact behavior: /api/trigger-all is
+    "scheduled/due-only" by default (force_alpha=False) per the user's
+    confirmed decision, which overrode Danny's own proposed default of
+    forcing this call path too. The frontend's Settings "Monitoring Agent"
+    Run Now button is the one caller within scope that must force Alpha
+    (same decision), so it explicitly opts in via the request body -- see
+    trigger_all_agents below. Any other/future caller that omits the body
+    stays due-only, which is this call path's actual identity.
+    """
     import asyncio
     from src.covered_call_agent import run_covered_call_analysis
     from src.cash_secured_put_agent import run_cash_secured_put_analysis
@@ -5265,9 +5524,10 @@ def _run_all_agents_sequentially(scheduler, status: dict):
     for agent_type in _FULL_ANALYSIS_AGENT_ORDER:
         status["current"] = agent_type
         try:
-            asyncio.run(funcs[agent_type](
-                scheduler.config, scheduler.runner,
+            asyncio.run(_call_agent_func(
+                funcs[agent_type], scheduler.config, scheduler.runner,
                 scheduler.cosmos, scheduler.context_provider,
+                run_trigger=run_trigger, force_alpha=force_alpha,
             ))
             status["completed"].append(agent_type)
         except Exception as e:
@@ -5325,7 +5585,18 @@ async def run_scheduler_task_now(request: Request, task_name: str):
     
     def _run_in_background():
         nonlocal result
-        result.update(scheduler.registry.trigger_task_now(task_name))
+        # Corrected trigger contract (copilot-force-alpha-semantics-superseded.md):
+        # ONLY the dashboard CC/CSP buttons (POST /api/trigger/{agent_type})
+        # force Alpha. Settings "Run Now" for any scheduled task -- like
+        # "Full analysis"/trigger-all -- must preserve due-only Alpha
+        # semantics, so force_alpha stays False here even though a human
+        # clicked the button (run_trigger="manual" still records that
+        # provenance accurately for the audit trail). This is inert for
+        # every task whose job_func doesn't declare run_trigger/force_alpha
+        # (see TaskRegistry._worker_loop's introspection guard).
+        result.update(scheduler.registry.trigger_task_now(
+            task_name, run_trigger="manual", force_alpha=False,
+        ))
     
     thread = threading.Thread(target=_run_in_background, daemon=True)
     thread.start()
@@ -5425,6 +5696,14 @@ async def trigger_all_agents(request: Request):
             {"error": "Full analysis already running", "status": status},
             status_code=409)
 
+    # Corrected trigger contract (copilot-force-alpha-semantics-superseded.md):
+    # "Run Full"/"Full analysis" always stays due-only -- no override
+    # surface. Only the per-agent dashboard trigger route
+    # (POST /api/trigger/{agent_type}) forces Alpha by default. run_trigger
+    # is still "manual" for audit-trace accuracy: a human clicked this.
+    run_trigger = "manual"
+    force_alpha = False
+
     status = _default_full_analysis_status()
     status["running"] = True
     request.app.state._full_analysis_status = status
@@ -5432,10 +5711,11 @@ async def trigger_all_agents(request: Request):
     thread = threading.Thread(
         target=_run_all_agents_sequentially,
         args=(scheduler, status),
+        kwargs={"run_trigger": run_trigger, "force_alpha": force_alpha},
         daemon=True,
     )
     thread.start()
-    return JSONResponse({"status": "started"})
+    return JSONResponse({"status": "started", "run_trigger": run_trigger, "force_alpha": force_alpha})
 
 
 @app.get("/api/trigger-all/status")

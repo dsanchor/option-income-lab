@@ -405,3 +405,260 @@ verified (Rusty's own concurrent fix) — confirmed directly, no action needed f
 
 **Residual risk:** none new. This was a pure test-alignment change to my one owned assertion; no
 production code in my files changed. `py_compile` clean.
+
+## 2026-08-29 -- Best Options: `get_or_hydrate` + public `schedule_background_refresh` (Danny's design, F6/section 7)
+
+Danny's accepted "Best Options" design (`.squad/decisions/inbox/danny-best-options-design.md`) assigns me
+`OptionsChainCache.get_or_hydrate` and a new public `schedule_background_refresh` -- the fix for F6: the
+existing `get_or_load_async` does NOT raise on a cold miss, it silently falls through to a full inline
+yfinance+TradingView fetch/merge/persist with no timeout, so an interactive endpoint (`best-options`)
+awaiting it would hang. The design is explicit that wrapping it in `asyncio.wait_for` is the wrong fix --
+that would cancel a refresh mid-flight while it holds the symbol OS lock and is writing Cosmos shards,
+strictly worse than a slow response.
+
+**Added to `options_chain_cache.py` (additive only, nothing existing renamed/removed/behavior-changed):**
+
+* `get_or_hydrate(symbol) -> str | None` -- memory hit (still triggering SWR if stale, same as
+  `get_or_load_async`), else persistence hydrate (`_hydrate_into_memory`, no provider I/O), else `None`.
+  Never falls through to `refresh()` on a true cold miss -- that's the entire behavioral delta from
+  `get_or_load`/`get_or_load_async`.
+* `schedule_background_refresh(symbol) -> None` -- public wrapper around the pre-existing private
+  `_schedule_background_refresh` (until now only reachable from inside `get_or_load_async`'s SWR path).
+  Reuses the exact same per-symbol OS lock / non-blocking try-acquire / at-most-one-in-flight guarantee
+  already established by the D4/P1 concurrency work -- deliberately did not introduce a second locking
+  mechanism for the same symbol from a different call site.
+
+**Decision explicitly followed:** no cancellation/timeout added anywhere around the scheduled refresh.
+Confirmed via a dedicated test that a deliberately slow patched fetch still completes and persists.
+
+**`refresh_all` watchdog (2026-06-30 decision) untouched** -- did not read or modify a single line inside
+it; every `TestRefreshAllWatchdogRegression` test still passes unmodified. Symbol locking and shard
+persistence semantics also untouched -- both new methods are pure call-throughs to existing, already-tested
+primitives (`get`, `is_stale`, `_hydrate_into_memory`, `_schedule_background_refresh`).
+
+**Tests added** (`test_options_chain_cache.py`, real `OptionsChainCache` + the file's existing `_FakeStore`
+double, hermetic -- no network, no real Cosmos, matching the file's own stated convention): 10 new tests
+across two classes -- `TestGetOrHydrateCacheStates` (warm/fresh, warm-but-stale with SWR still firing,
+cold-but-persisted with zero provider calls, true cold/missing returning `None` in under 0.5s, and a
+P1-style running-event-loop-never-blocks regression using a same-loop heartbeat coroutine) and
+`TestScheduleBackgroundRefreshPublicSurface` (schedules and lands a real refresh with persistence, does not
+duplicate an already-in-flight refresh for the same symbol, and a deliberately slow refresh still completes
+uninterrupted -- the direct regression guard for the no-added-timeout requirement).
+
+**Test outcome:** `test_options_chain_cache.py` 56/56 (was 46 + 10 new). Targeted persistence sweep
+(cache + store + persistence-integration + repair-script): 145/145. Full backend suite: 1454 passed, 11
+failed, 16 errors -- all in `test_yfinance_data_provider.py`/`test_yfinance_technicals_dividend_availability.py`,
+confirmed pre-existing and unrelated: reproduced identically both via `git stash` on the unmodified tree and
+running that file in isolation, same order/network-dependent flakiness already documented multiple times in
+this log's own prior entries. `py_compile` clean on both touched files.
+
+**Seam integration test deferred, not skipped:** the design also assigns me the real-module integration
+test composing real cache + real `best_options` (Linus) + real endpoint (Rusty) across our seam. Neither
+`backend/src/best_options.py` nor the FastAPI endpoint exist in the tree yet as of this task -- writing that
+test now would require a mutual fake standing in for one side, the exact anti-pattern the 2026-08-18
+"unowned seams" lesson (cited in my own assignment text) warns against. Documented as an explicit blocker in
+`.squad/decisions/inbox/livingston-best-options-cache.md` rather than either skipped silently or faked
+through; will pick this up the moment either module lands.
+
+**Residual ask for review:** `get_or_hydrate`'s stale-memory-hit behavior mirrors `get_or_load_async`'s
+existing SWR trigger (schedule background refresh, still return the stale value this call). The design
+text only specifies "memory hit, else hydrate, else None" and doesn't explicitly litigate the stale case --
+I read this as silent-but-consistent with the cache's established SWR contract rather than a new decision,
+but flagged it explicitly in the inbox decision for Danny/reviewers to confirm rather than let it stand as
+an unreviewed assumption.
+
+## 2026-08-29 (later) -- Forced Alpha execution: integration readiness check (NOT READY, blocked on Linus + Rusty)
+
+Assigned the API<->runner seam integration test (design case 26) for Danny's "Forced Alpha execution on
+manual CC/CSP runs" design (`.squad/decisions/inbox/danny-force-alpha-design.md`, still PROPOSED). Task
+was to validate the semantic matrix and prepare/own the real-module seam test once changes appear.
+
+**Semantics discrepancy caught before it caused wasted work:** two inbox files,
+`copilot-force-alpha-semantics.md` and `copilot-force-alpha-semantics-superseded.md`, carry near-identical
+timestamps but contradict each other on one point. By exact mtime the "-superseded"-named file is 30
+seconds *newer* and its own text says it supersedes the other, despite the misleading filename: **Settings
+"Run Now" does NOT force Alpha** (reversing the first file's claim that it does). Validated against the
+newer/correct one. Final matrix: dashboard CC/CSP+monitor buttons (`/api/trigger/{agent_type}`) -> manual +
+force_alpha=true; Settings "Run Now"/"Full analysis"/"Run Full" (`/api/trigger-all`) -> manual +
+force_alpha=false; scheduler cron -> scheduled + force_alpha=false (unchanged).
+
+**Cross-owner defect found in Danny's design, reported not fixed:** D1 (section 12) assumes Settings
+"Run Now" for the Monitoring Agent card routes through `POST /api/scheduler/tasks/{task_name}/run` ->
+`TaskRegistry.trigger_task_now`. Verified against the actual frontend
+(`frontend/src/components/SettingsConfigView.tsx:258`): that button is wired to `/api/trigger-all` --
+the exact same endpoint as "Full analysis". `/api/scheduler/tasks/{task_name}/run` has zero callers
+anywhere in `frontend/src` today. There is also no separate dashboard "Run Full" button distinct from
+this one Settings control -- "Full analysis"/"Run Full"/"Settings Run Now" all name the same single
+`/api/trigger-all` affordance. This means D1's proposed TaskRegistry-payload engineering problem doesn't
+exist for the button in question, and the corrected semantics needs zero `scheduler_registry.py` changes
+-- just a `force_alpha=false` default on `/api/trigger-all` that does not inherit `/api/trigger/{agent_type}`'s
+manual-defaults-true rule. Wrote this up in
+`.squad/decisions/inbox/livingston-force-alpha-readiness.md` for Danny/Linus/Rusty rather than silently
+correcting the design doc myself (not my surface to redefine).
+
+**Implementation status confirmed: not started anywhere.** `grep -r "force_alpha"` across
+`backend/src`, `backend/web`, `backend/tests`, `frontend/src` returns zero matches. Independently
+re-verified the design's "current behaviour" section against live code (not from memory) -- the four
+Alpha gate call sites in `agent_runner.py`, the exact `if act.get("alpha_view"): break` H1 bug in
+`_detect_prolonged_wait` (`:1227-1284`), the fully unguarded `POST /api/trigger/{agent_type}`
+(`web/app.py:5321`), and `_MAX_TASK_DURATION_SECONDS = 1800` (`scheduler_registry.py:17`) all match the
+design verbatim. Also confirmed there is **no pre-existing test coverage at all** for
+`run_symbol_agent`/`run_position_monitor`/`_detect_prolonged_wait`/`POST /api/trigger/*` -- whatever
+Linus/Basher write in the new `test_force_alpha_execution.py` will be first-ever coverage of this code,
+not a diff against an existing suite.
+
+**My owned surface (`options_chain_cache.py`/`options_chain_store.py`): untouched by this design, no
+defect to fix.** `git diff --stat` confirms those files carry only my earlier Best Options
+`get_or_hydrate`/`schedule_background_refresh` change from the prior task, unchanged since. Re-ran my
+targeted suite as a sanity check against any concurrent work: `test_options_chain_cache.py` +
+`test_options_chain_store.py` + `test_options_chain_persistence_integration.py` +
+`test_repair_options_chain_shards.py` + `test_best_options_endpoint.py` (the one real caller of my cache
+methods today) -- **156/156 passed.**
+
+**Seam test (case 26) explicitly blocked, not skipped:** writing it now would require a fake stand-in for
+whichever of Linus's `agent_runner.py` `force_alpha` param or Rusty's `web/app.py` in-flight registry is
+missing -- both are missing, and faking either is the exact mutual-fakes anti-pattern the design's own
+2026-08-18 citation warns against. Documented the five concrete assertions the seam test will make (real
+trigger -> real runner -> real activity doc with `alpha_run.forced`; real concurrent-409 dedup on the real
+lock; real `finally`-release on both success and raise; real cooldown-neutrality end-to-end incl. the
+legacy-no-`alpha_run` conservative case; real `/api/trigger-all` force_alpha=False enforcement) in the
+inbox decision, with an explicit ask to be pinged the moment both sides land.
+
+**Verdict: NOT READY.** No code to integration-test yet; readiness summary and cross-owner findings
+recorded in `.squad/decisions/inbox/livingston-force-alpha-readiness.md`.
+
+### 2026-08-29 — Force Alpha: binding correction applied (Settings/scheduled must never force)
+
+**User's binding correction:** ONLY dashboard CC/CSP (and monitor) buttons use
+`run_trigger="manual"` + `force_alpha=true`. Settings "Run Now", "Run Full"/`/api/trigger-all`, and
+scheduler cron must all stay due-only (`force_alpha=false`), matching
+`copilot-force-alpha-semantics-superseded.md`, which supersedes the earlier (reversed) semantics note I'd
+already flagged as suspect in the prior readiness check.
+
+**Found the concrete bug, in `backend/web/app.py`, not mine originally.** Between my last check and this
+one, Rusty landed the full trigger-contract plumbing (`_call_agent_func`, `_acquire_trigger_slot`/
+`_release_trigger_slot` 409 in-flight guard, `POST /api/trigger/{agent_type}`, `_run_all_agents_sequentially`
+for `/api/trigger-all`) and Linus landed the gate/cooldown-neutrality logic in `agent_runner.py` plus
+pass-through params in all four CC/CSP+monitor agent wrappers and `main.py`'s cron path. Verified each of
+these independently against the corrected matrix:
+- `POST /api/trigger/{agent_type}` (dashboard-only route -- `AGENT_FUNCTIONS` only lists the 5
+  dashboard agent types; Settings' other task buttons have their own dedicated routes registered earlier
+  and never reach this code) correctly defaults `force_alpha=True`. **Correct, left untouched.**
+- `/api/trigger-all` (`_run_all_agents_sequentially`, backing both "Run Full"/"Full analysis" and Settings'
+  Monitoring Agent "Run Now" -- confirmed in the prior task these are literally the same button/endpoint)
+  already hardcodes `force_alpha=False` explicitly. **Correct, left untouched.**
+- `main.py`'s cron path (`_run_all_agents_async`) passes `run_trigger="scheduled", force_alpha=False`
+  explicitly for the four Alpha-eligible agents, `buy_tracker` unchanged (never accepts the kwargs).
+  **Correct, left untouched.**
+- **`POST /api/scheduler/tasks/{task_name}/run` (`run_scheduler_task_now`) was wrong**: it hardcoded
+  `scheduler.registry.trigger_task_now(task_name, run_trigger="manual", force_alpha=True)` with a comment
+  explicitly citing the *original* (now-superseded) "Settings Run Now forces Alpha" reading of Danny's
+  design. This is the exact "Settings force behavior already added" the user's correction referred to.
+  Note: this specific endpoint has zero frontend callers today (the real Settings "Run Now" for
+  Monitoring Agent goes through `/api/trigger-all`, already correct) -- but it's a real, directly callable
+  API surface whose docstring self-labels "Settings Run Now (button)", so leaving it forcing would be a
+  live regression the moment anything wires up to it, and it directly contradicts the user's explicit
+  instruction. **Fixed**: now passes `force_alpha=False` (kept `run_trigger="manual"` -- a human did click
+  it, audit trail should say so; only the forcing behavior was wrong). Comment rewritten to cite the
+  correct, current decision doc.
+
+**No other cross-owner sites needed a fix.** Grepped the whole repo (`backend/web`, `backend/src`,
+`frontend/src`) for every remaining `force_alpha` reference after the fix; `scheduler_registry.py`'s
+generic kwargs-forwarding plumbing (task registry `_worker_loop`/`trigger_task_now`) is caller-agnostic
+and correct as-is -- the bug was entirely in what `web/app.py` chose to pass in, not in the registry
+itself. `TriggerButton.tsx` (dashboard-only component, confirmed via grep it's used nowhere in
+Settings) explicitly sends `force_alpha: true` in its request body -- correct and consistent.
+
+**Added a regression test that would have caught this**: `tests/test_trigger_force_alpha_scoping.py`
+(3 tests, real-module seam tests against the actual route handlers / scheduler sweep, only outer I/O
+faked) --
+`TestSettingsRunNowNeverForces` (locks `run_scheduler_task_now`'s `force_alpha=False` contract, the exact
+gap Rusty's own `test_force_alpha_plumbing.py` doesn't cover -- his registry-level test passes its own
+kwargs directly and never exercises this route handler's literal default), `TestTriggerAllNeverForces`
+(locks the sequential `/api/trigger-all` sweep never forces any of the 5 agents), and
+`TestSchedulerCronNeverForces` (calls the real `OptionsAgentScheduler._run_all_agents_async` with faked
+agent wrappers, confirms `run_trigger="scheduled", force_alpha=False` for all four Alpha-eligible agents
+and that `buy_tracker` is called with zero extra kwargs). All 3 pass; ran alongside the full targeted
+suite (my own cache/store/persistence-integration/repair-script/best-options-endpoint tests, 159 total)
+-- all green, no regressions.
+
+**Cross-owner defect found and reported, NOT fixed by me (out of charter)**: `tests/test_force_alpha_execution.py`
+(Linus's/Basher's own new suite for `agent_runner.py`'s gate/cooldown logic) has 4 failing tests as of this
+check -- `test_case8_incomplete_quote_wait_force_alpha_true_alpha_skipped`,
+`test_case10_alpha_raises_under_forcing_primary_decision_survives`,
+`test_case13_due_alpha_review_consumes_cooldown_as_before`,
+`test_case14_legacy_alpha_view_without_alpha_run_is_treated_as_not_forced`. Confirmed via `git stash` on
+just my one touched file (`web/app.py`) that these failures are pre-existing and entirely unrelated to my
+change -- they're real defects (or intentionally-still-red TDD tests) in `agent_runner.py`'s gate logic
+itself, squarely Linus's owned surface. Flagged for Linus/Basher; did not attempt to fix (would require
+redefining Alpha gate semantics, outside my charter).
+
+**Seam test (Danny's design case 26 / the API<->runner real-module integration test) still deferred, this
+time for a different reason than before**: both sides have now landed (agent_runner.py's gate + web/app.py's
+plumbing), so it's technically composable, but agent_runner.py's own test suite has 4 known-red cases in
+exactly the gate/cooldown/legacy-doc logic a seam test would need to assert against. Writing a seam test on
+top of not-yet-settled gate semantics risks encoding a still-buggy contract as "expected." Recommend
+revisiting once Linus's 4 failing cases are green.
+
+### 2026-08-29 (later) — Best Options D2/D3 revision: frontend/backend contract fixed (Rusty locked out)
+
+**Assignment:** Basher REJECTED Rusty's Best Options frontend/backend integration a second time
+(`.squad/decisions/inbox/basher-best-options-review.md`, "final re-review"). Rusty is locked out of
+`frontend/src/types/best-options.ts`, `BestOptionsParams.tsx`, `BestOptionsView.tsx` for this cycle. I'm
+the assigned independent revision owner (not the original author of any of the three files). D1 (row
+inclusion documentation) was already resolved by the user's direct ratification and is out of scope here.
+
+**Inspected the live payload directly** (not from memory/design snippets) by calling
+`evaluate_best_options` against a minimal fabricated chain and reading the actual JSON. Confirmed
+precisely what Basher found, plus one thing his review didn't call out by name:
+- `parameters.thresholds`, `parameters.thresholds_source`, `parameters.skill_reference` are all nested
+  `{"call": ..., "put": ...}` — CC and CSP thresholds genuinely differ per category
+  (`rule_evaluator.CATEGORY_THRESHOLDS_CC`/`_CSP`, e.g. `premium_min_pct` 0.8 vs 1.2 for "balanced").
+- **`parameters.premium.basis` is ALSO nested `{"call": "underlying_price", "put": "strike"}`** — same
+  flat-vs-nested defect class as D2, just not a `TypeError` (renders `[object Object]` silently instead of
+  throwing) so it slipped past Basher's crash-focused finding. Fixed it in the same pass since it's the
+  identical contract bug in the same `parameters` object built by the same function.
+- `calls`/`puts` sections both carry `excluded_by_delta_band: int`; only the `calls` section (or a
+  placeholder `calls` section when `side` doesn't include call) carries `coverable_contracts: int | None`
+  and `no_shares_held: bool | None` — never present on `puts` at all (D3).
+
+**Fixed `frontend/src/types/best-options.ts`:** added `BestOptionsThresholdsBySide`/
+`BestOptionsSourceBySide` types; `thresholds`/`thresholds_source`/`skill_reference` and
+`premium.basis` all now typed as the real nested `{call, put}` shape; added
+`excluded_by_delta_band: number`, `coverable_contracts?: number | null`,
+`no_shares_held?: boolean | null` to `BestOptionsSide`.
+
+**Fixed `BestOptionsParams.tsx`:** every accessor that read the four fields flat now reads
+`.call`/`.put` explicitly (delta band, premium floor/wait, IV rank note, premium basis, thresholds
+source, skill reference) — the panel now shows both CC and CSP values side by side rather than
+picking one arbitrarily or crashing.
+
+**Fixed `BestOptionsView.tsx`:** the "0 shares held" banner previously checked
+`data.rows.some((r) => r.flags.includes("no_shares_held"))` — a per-row flag the evaluator never sets
+(design §5's "capital" row is explicit this is a page/section banner, not a row flag); it could never
+have rendered. Now reads the real section-level `data.no_shares_held === true`. Added visible
+`excluded_by_delta_band` (both sides) and `coverable_contracts` (call side) stats next to the existing
+"Shown: X of Y" line — the count-metadata transparency the binding excluded-contracts directive
+requires, previously computed by the backend and never surfaced anywhere in the UI.
+
+**Validation:** `npx tsc --noEmit` → 0 errors (type-level check only — not sufficient alone, since a
+wrong type just means the compiler never sees the real shape; this is exactly how D2 shipped past a
+clean typecheck the first time). Added a new real-module seam test file,
+`backend/tests/test_best_options_frontend_contract.py` (5 tests, independently-authored fixtures per
+this suite's "avoid mutual fakes" convention, real cache + real evaluator + real endpoint via
+`TestClient`) that pins the exact JSON key shape the frontend types must mirror — the one thing a
+TypeScript compile alone cannot catch. Ran alongside the full Best Options + force-alpha targeted suite:
+**240/240 passed.** `npx eslint` on the two files I substantively edited
+(`best-options.ts`, `BestOptionsParams.tsx`): clean. `BestOptionsView.tsx` has one **pre-existing**
+`react-hooks/set-state-in-effect` lint error at its original mount-effect (`useEffect(() => { load() },
+[load])`) — confirmed by direct inspection that this exact line predates my edit and is untouched by it;
+out of scope for this D2/D3 fix (unrelated to the contract mismatch, would be a separate behavioral
+change). `npx next build` hit an unrelated WSL/OneDrive filesystem `EIO` error on `.next/standalone`
+scandir — an environment limitation with bracketed route folder names on this mount, not a code defect;
+`tsc`/`eslint` are the meaningful signal here.
+
+**Strict lockout observed:** did not consult, message, or attempt to coordinate with Rusty at any point;
+revised the three files independently based on the live payload and Basher's written findings only.
+
+**Reported for Basher re-review:**
+`.squad/decisions/inbox/livingston-best-options-d2d3-revision.md`.

@@ -49,6 +49,45 @@ export function riskStyle(r?: string): Style {
   return tone(C.muted);
 }
 
+/** Best Options row preference (green/yellow/red from backend/src/best_options.py).
+ * Colour is always paired with an icon + the backend's own text label
+ * (Preferred/Acceptable/Avoid) by the consuming component — never colour alone. */
+export function preferenceStyle(color?: string): Style {
+  const v = (color || "").toLowerCase();
+  if (v === "green") return tone(C.green);
+  if (v === "yellow") return tone(C.orange);
+  if (v === "red") return tone(C.red);
+  return tone(C.muted);
+}
+
+/** Shared row/cell background tint palette. This is the exact same palette
+ * the Roll Scenarios table (`PositionDetail.tsx`) paints its per-cell
+ * backgrounds with — centralised here so every screen that needs a
+ * "tinted row/cell by semantic colour" treatment (Roll Scenarios, Best
+ * Options, and any future one) reads from one shared token instead of each
+ * component re-declaring its own ad-hoc rgba map. */
+export const ROW_TINT_BG: Record<string, string> = {
+  green: "rgba(63,185,80,0.14)",
+  orange: "rgba(240,136,62,0.14)",
+  red: "rgba(248,81,73,0.14)",
+  blue: "rgba(93,173,226,0.14)",
+  purple: "rgba(188,140,255,0.14)",
+};
+
+/** Best Options row background tint — reuses `ROW_TINT_BG` (Roll Scenarios'
+ * own palette) so a green/yellow/red Best Options row is painted with
+ * exactly the same tint a green/orange/red Roll Scenarios cell already
+ * uses. "yellow" maps to the shared "orange" bucket, matching how every
+ * other WAIT/HOLD affordance in this app already renders backend "yellow"
+ * (see `preferenceStyle` above; there is no `--accent-yellow` token). */
+export function preferenceRowTint(color?: string): string {
+  const v = (color || "").toLowerCase();
+  if (v === "green") return ROW_TINT_BG.green;
+  if (v === "yellow") return ROW_TINT_BG.orange;
+  if (v === "red") return ROW_TINT_BG.red;
+  return "transparent";
+}
+
 /** Confidence pill (high / medium / low). */
 export function confidenceStyle(c?: string | number): Style {
   const v = String(c || "").toLowerCase();

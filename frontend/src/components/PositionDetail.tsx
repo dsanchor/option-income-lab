@@ -12,6 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import { renderMarkdown } from "@/lib/markdown";
+import { ROW_TINT_BG } from "@/lib/badges";
 import type { Position } from "@/types/symbol-detail";
 
 // ── Snapshot chart ────────────────────────────────────────────────────────
@@ -423,13 +424,9 @@ interface RollTable {
   rows?: RollRow[];
 }
 
-const CELL_BG: Record<string, string> = {
-  green: "rgba(63,185,80,0.14)",
-  orange: "rgba(240,136,62,0.14)",
-  red: "rgba(248,81,73,0.14)",
-  blue: "rgba(93,173,226,0.14)",
-  purple: "rgba(188,140,255,0.14)",
-};
+// Shared with Best Options (`lib/badges.ts`'s `ROW_TINT_BG`) so both tables
+// paint the same semantic colour with the exact same background tint.
+const CELL_BG = ROW_TINT_BG;
 
 function fmt2(v: unknown): string {
   const n = numOrNull(v);

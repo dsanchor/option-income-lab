@@ -1645,3 +1645,394 @@ assertion for vega/rho, exactly mirroring the `test_theta_forced_fallback_matche
 pattern already landed for theta.
 
 No production or test files edited by me. Verdict delivered to requester in chat.
+
+## 2026-08-29: Best Options adversarial acceptance coverage — final reviewer verdict: **REJECT**
+
+Task: build adversarial acceptance coverage for the new "Best Options" feature
+(`.squad/decisions/inbox/danny-best-options-design.md`, accepted 2026-08-29) across the
+evaluator/cache/API seam, in Basher-owned files, then render an APPROVE/REJECT verdict.
+Implementers: Linus (`src/best_options.py`, `src/category_params.py`), Livingston
+(`src/options_chain_cache.py` `get_or_hydrate`/background refresh), Rusty (the FastAPI
+endpoint in `web/app.py` **and** the frontend page/types).
+
+### Coverage delivered
+- `backend/tests/test_best_options_adversarial.py` (new, 88 tests, all passing): DTE window
+  boundaries (0/49/50, plus the empirically-confirmed structural finding that **every DTE=0
+  row is unconditionally `insufficient_data`**, since `annualized_return`+`cushion` weight
+  0.70 both require `dte>0` and drop out, leaving only 0.30 of weight basis — below the 0.5
+  floor — regardless of delta fit/liquidity quality); absolute-delta normalization across all
+  five categories' CC/CSP bands (sign-independent, verified both in- and out-of-band, signed
+  vs unsigned display split); calls-vs-puts asymmetry (premium basis, cushion direction,
+  `ex_div_within_dte` vs `below_support` flags); deterministic ordering/tie-breaking (score →
+  DTE → delta-distance, including two contracts with distinct dict keys `"103.00"`/`"103.0"`
+  both resolving to strike 103.0, isolating the third tie-break term); exact score/colour
+  boundaries at 39.999/40/64.999/65 (via a white-box fixture solver calling the evaluator's own
+  private `_component_*` functions to construct exact raw scores, not hand-derived guesses);
+  zero/missing bid; missing/invalid Greeks (including the `greeks_valid=False` vs
+  delta-key-absent distinction, which route to different `nearest_miss` tiers — tradability
+  vs delta_band); stale-chain flag never downgrading colour; unknown-earnings and
+  known-earnings-spanning-expiration gate boundaries (exact on-date-passes/day-after-fails
+  edge); sparse liquidity (OI=0 shown-but-red vs delta-band exclusion, a genuine asymmetry in
+  the evaluator); category profile default + provenance disclosure; DTE-scaled premium floor
+  values at dte=15/30/49; `nearest_miss` correctness even with qualifying rows present, for
+  every one of its 6 tiers; payload/UI-contract invariants (schema_version, weights,
+  color_thresholds, parameters block shape); explicit assertions that no test/fixture/code
+  path here ever references `iv_rank`/an LLM call.
+- `backend/tests/test_best_options_endpoint.py` (new, 11 tests, all passing): the real
+  seam — genuine `OptionsChainCache` + genuine `evaluate_best_options` + the real FastAPI
+  endpoint via `TestClient`, with only the true edges faked (`FakeCosmos`, monkeypatched
+  `_fetch_yfinance`/`_fetch_tradingview` — no network, no mutual fakes with Linus's/
+  Livingston's own suites). Covers: unknown-symbol 404; query-param validation (invalid
+  `side` → 400, `dte_min > dte_max` → 400, `dte_max > 60`/negative `dte_min` → 422 via
+  FastAPI's own validation); cold-cache warming (immediate `{"status":"warming"}` response
+  under 2s, **and** a follow-up check that the `asyncio.create_task` background refresh this
+  same request scheduled actually completes and populates the cache — not just the immediate
+  response shape); warm-cache full-table response incl. `coverable_contracts`; an
+  endpoint-vs-direct-evaluator parameter-consistency check (`parameters` block byte-for-byte
+  identical modulo `evaluated_at`) per the design's own "must be the same object the scorer
+  consumed, not a re-derivation" requirement; zero-LLM-reachability as an operational proxy
+  (fast wall-clock completion, no LLM-capable fake in the dependency graph); and the broad
+  `except Exception` around the evaluator call surfacing a genuine exception as 500 with the
+  real message, not a misleading 503.
+- One subtlety worth recording for future test authors on this seam: the real cache's
+  `recompute_derived` step is the sole writer of `delta`/`mid`/other Greeks (Linus's frozen
+  `options_chain_merge` interface) — any Greeks a raw provider fixture supplies are discarded
+  and recomputed from strike/IV/underlying_price/DTE via the real Black-Scholes path. Endpoint-
+  level delta-band fixtures must therefore pick strikes empirically verified to land in-band
+  post-recompute (I used call strike 105.0 → delta ≈0.260 and put strike 96.0 → delta
+  ≈-0.253 against underlying 100.0/IV 0.30/~20 DTE, both in-band for `balanced` and
+  `high_yield`), not a hand-picked `delta` value in the fixture — a first draft of this file
+  fed a raw `delta` straight into the fixture and silently got 0 rows back until I traced it.
+- Combined run, all Best-Options-related files together: **224 passed, 0 failed**. Full
+  backend suite: 11 pre-existing failures + 16 pre-existing errors in
+  `test_yfinance_data_provider.py`/`test_yfinance_technicals_dividend_availability.py`,
+  confirmed **identical with and without** my two new files present (moved them aside, reran,
+  same 11 failed/16 errors; they also pass individually in isolation) — pre-existing,
+  order/event-loop-dependent, unrelated to Best Options, not a regression I introduced.
+
+### Defect 1 — unauthorized/undocumented deviation from the ACCEPTED design (row inclusion)
+`best_options.py`'s own module docstring and `_evaluate_side` now document a deliberate
+"interpretive decision... superseding an earlier reading," citing an "explicit
+product-owner instruction (2026-08-29)" and pointing at
+`.squad/decisions/inbox/linus-best-options-scoring.md`. Linus's own `history.md` independently
+corroborates a live correction occurred. **`.squad/decisions.md` — the durable, canonical team
+decision ledger — has zero entries for 2026-08-29 or Best Options at all**, and Danny's
+ACCEPTED design document has not been amended to reconcile its own literal text with the
+shipped behaviour. Whether the underlying behaviour is ultimately the *right* call is not
+the defect; the defect is that no future reader of the durable record can find the
+authorization for it. That is a process/documentation gap, and it blocks acceptance under
+this task's own instruction to test "no test expects IV Rank or any LLM call" *and* validate
+behaviour "as it appears" against Danny's design — a design whose accepted text this code
+silently no longer matches, on the record.
+
+### Defect 2 — frontend/backend `parameters` contract mismatch (live runtime-crash risk)
+Re-verified after Rusty's latest inbox note landed: `frontend/src/types/best-options.ts`
+still types `thresholds`/`thresholds_source`/`skill_reference` as flat
+(`BestOptionsThresholds` object + plain `string`s), and `BestOptionsParams.tsx` does
+`parameters.thresholds.delta_lo.toFixed(2)` directly. The real backend
+(`best_options.py` lines ~772-786) returns these three fields nested `{"call": {...},
+"put": {...}}` — necessarily so, since covered-call and cash-secured-put thresholds
+genuinely differ per category (e.g. `premium_min_pct` 0.8 vs 1.0 for the same category) and
+the design mandates one shared `parameters` panel for `side=both`. Danny's design doc's own
+section-6 example is flat and single-sided — a latent ambiguity in the ACCEPTED design for
+the `side=both` case, which Linus's/Rusty's endpoint pass-through resolved in the only
+coherent way. But the frontend types were authored from that same flat design snippet
+**without cross-checking the actual runtime shape Rusty's own endpoint returns**, and both
+halves of this mismatch (endpoint + frontend/types) are Rusty's own deliverable in this
+round. `th.delta_lo` on a `{call, put}` object is `undefined`; `.toFixed()` on it throws
+`TypeError` at runtime the first time this page renders. This is not a hypothetical edge
+case — it is the page's primary parameters panel, on every load.
+
+### Verdict: **REJECT**
+Two independent, precisely-located defects block acceptance: D1 (unauthorized/undocumented
+deviation from the ACCEPTED design's row-inclusion text, zero durable record) and D2 (a live
+frontend/backend contract mismatch that crashes the parameters panel on render). Per strict
+lockout: the original author of each defect's artifact may not self-revise.
+- **D1** lives in `best_options.py` (Linus's artifact). Linus is locked out of this fix.
+  Recommended revision owner: **Danny** (the design owner) to formally ratify or amend the
+  row-inclusion text and add the missing `decisions.md` entry reconciling it with the shipped
+  behaviour; if further code changes turn out to be needed beyond documentation, **Livingston**
+  is the eligible engineering owner (familiar with the evaluator/cache seam via his own
+  integration work, not the author of this deviation).
+- **D2** lives in `frontend/src/types/best-options.ts` + `BestOptionsParams.tsx` (Rusty's own
+  artifact, both halves). Rusty is locked out of this fix. Recommended revision owner:
+  **Livingston** (or a freshly-escalated frontend-capable agent per the reviewer-protocol's
+  "escalate" option) to correct the frontend types to the real nested `{call, put}` shape and
+  update `BestOptionsParams.tsx`'s accessors accordingly.
+
+No production code touched by me. Both new test files pass in full and were re-verified for
+zero regressions against the pre-existing baseline. Verdict and defects reported to requester;
+durable findings and lockout naming also filed to
+`.squad/decisions/inbox/basher-best-options-review.md` for the team ledger.
+
+## 2026-08-29 (later): Visual-consistency directive added to the Best Options reviewer gate — inspected, SATISFIED
+
+New binding user directive (`.squad/decisions/inbox/copilot-directive-20260829T102715+0200.md`):
+Best Options must reuse the Roll Scenarios table's structure/colors/spacing/typography/controls
+rather than inventing a new pattern, with accessible non-color labels preserved. Per the
+directive, this is now a permanent addition to my Best Options acceptance gate (alongside D1/D2
+below): **any future revision must reuse shared tokens/components, not duplicate an ad-hoc
+colour palette.**
+
+### Inspection (read-only, no production code touched)
+Compared `frontend/src/components/PositionDetail.tsx`'s `RollTableView` (the Roll Scenarios
+table) against Rusty's updated `frontend/src/components/BestOptionsView.tsx` and
+`frontend/src/lib/badges.ts`:
+- **Shared token, not a copy.** `lib/badges.ts` now exports `ROW_TINT_BG` as the single source
+  of the row/cell background-tint palette; `PositionDetail.tsx` was refactored to
+  `const CELL_BG = ROW_TINT_BG` (no longer its own local rgba map), and Best Options'
+  `preferenceRowTint()` is built on the same `ROW_TINT_BG`. Both tables paint a green/red row
+  with byte-identical rgba values because they read the same constant — this is genuine
+  token reuse, not two palettes that happen to look similar.
+- **Structure/typography/spacing match exactly:** both tables use `border-collapse text-xs`,
+  `border-b border-border px-2 py-1` header cells, `border-b border-border/40` body rows, and
+  `px-2 py-1` cell padding — same DOM shape, same class strings, not merely "similar-looking."
+- **Controls reuse an established app-wide idiom, not an invented one:** Best Options' new
+  expand/collapse row-detail control (▸/▾ + `aria-expanded`) matches the same idiom already
+  used in `PositionsTable.tsx` and `options-chain/page.tsx` — confirmed via a repo-wide grep,
+  not assumed.
+- **Accessible non-color labels preserved:** `ColorBadge` pairs every colour with an icon
+  (`CheckCircle2`/`AlertTriangle`/`XCircle`) *and* the backend's own text label
+  (Preferred/Acceptable/Avoid) — colour is never the sole signal, matching Roll Scenarios'
+  own "colour + moneyness text label" pattern and the design's own §4.4 requirement.
+- No frontend test harness exists in this repo (`frontend/package.json` has no `test` script,
+  no `*.test.ts(x)` files anywhere) — this was a code-reading inspection, not a new automated
+  check; inventing a frontend test framework for a single directive is out of scope per "only
+  run linters/builds/tests that already exist."
+
+### Verdict on this directive: **SATISFIED** — does not by itself change the overall Best Options verdict
+The visual-consistency requirement is met with genuine shared-token reuse, matched structure,
+and preserved accessible labels. This does **not** override the standing **REJECT** above:
+Defect 1 (undocumented design deviation) and Defect 2 (frontend/backend `parameters` shape
+mismatch — `frontend/src/types/best-options.ts` still types `thresholds`/`thresholds_source`/
+`skill_reference` flat, re-confirmed still present in this same file after this round's
+changes) remain unresolved and still block acceptance. Lockout naming for D1/D2 is unchanged
+(Danny/Livingston for D1; Livingston or a fresh frontend-capable agent for D2, Rusty locked
+out of both).
+
+## 2026-08-29 (final integration gate): Rusty's "completed" API/frontend integration re-reviewed — final reviewer verdict: **REJECT**
+
+Requester: user, directly. Scope: re-run the full reviewer gate against the current tree,
+now that (a) the visual-consistency directive has landed and (b) the user has explicitly,
+directly ratified Linus's row-inclusion semantics as binding: "rows are all and only
+contracts satisfying DTE 0-49 and the configured abs(delta) band; excluded contracts may
+appear only in nearest_miss/count metadata."
+
+### D1 (row-inclusion deviation): RESOLVED, no longer blocking
+Re-inspected `best_options.py`'s `_evaluate_side` (unchanged since the last review): `rows`
+is built as `in_band_rows = [r for r in all_rows if r["gates"]["delta_band"] == "pass"]`,
+`nearest_miss` computed over the full `all_rows` (DTE-window superset), and
+`excluded_by_delta_band = len(all_rows) - len(in_band_rows)` reported per side — this is an
+exact, byte-for-byte match to the user's own just-stated wording. The user's directive in
+this session is now the authoritative confirmation my original D1 finding was asking for;
+the underlying process gap (no `.squad/decisions.md` entry) is **not fully closed** —
+grepped `.squad/decisions.md` again, still zero Best-Options entries — but is downgraded
+from blocking to a **non-blocking follow-up**: recommend Scribe/Danny append a ledger entry
+capturing this exact directive verbatim, for future auditability. Updated my own
+`test_best_options_adversarial.py::TestRowInclusionDesignDeviation` docstring (comments
+only, no assertions changed) to record this resolution instead of reading as an open REJECT
+item; re-ran the full suite after the edit, still 224 passed.
+
+### D2 (frontend/backend `parameters.thresholds` shape mismatch): STILL PRESENT, STILL BLOCKING
+Re-read `frontend/src/types/best-options.ts` and `frontend/src/components/BestOptionsParams.tsx`
+in the current tree (post "final integration"): unchanged from my prior review.
+`BestOptionsThresholds` is still flat and `thresholds_source`/`skill_reference` are still
+plain `string`, while the real backend (`best_options.py` ~L772-786) returns all three
+nested `{"call": {...}, "put": {...}}` (re-confirmed via a live `evaluate_best_options` call
+with `side="both"`, printing the actual side-keyed shape). `BestOptionsParams.tsx` still does
+`parameters.thresholds.delta_lo.toFixed(2)` directly — `undefined.toFixed()` throws a
+`TypeError` the first time this page renders, for any symbol, every time. Ran
+`npx tsc --noEmit` in `frontend/` as an extra check: **0 compiler errors** — this is expected
+and is itself evidence of the danger, not a clean bill of health: the interface *declares* the
+wrong (flat) shape, so the compiler has no way to catch code written against that wrong
+declaration. A type-check pass here proves nothing about runtime correctness; only comparing
+the declared type against the real backend payload (which I did, directly) surfaces this bug.
+
+### D3 (NEW) — `no_shares_held` banner is dead code; `excluded_by_delta_band`/`coverable_contracts` never surfaced
+Found while specifically checking today's delta-semantics directive's "count metadata" claim
+against the actual frontend contract. `best_options.py` reports `excluded_by_delta_band` on
+**both** sides and `coverable_contracts`/`no_shares_held` on the call side (confirmed via a
+live evaluator call, printing `list(result["calls"].keys())` /
+`list(result["puts"].keys())`). None of these three fields exist on `BestOptionsSide` in
+`frontend/src/types/best-options.ts`, and none are read anywhere in
+`BestOptionsView.tsx`/`BestOptionsParams.tsx` (grepped both files for all three field names —
+zero matches other than an unrelated hardcoded flag-label string). Worse,
+`BestOptionsView.tsx`'s own "0 shares held" banner condition —
+`data.rows.some((r) => r.flags.includes("no_shares_held"))` — checks a **per-row** flag that
+`best_options.py` never sets; `no_shares_held` is only ever a **section-level** boolean
+(`sections[s]["no_shares_held"] = coverable == 0`), never added to any row's `flags` list
+(confirmed by grep across `best_options.py`). This banner can therefore never render, even
+when `total_shares` is genuinely 0 — a silent functional failure of a design-mandated
+disclosure (design §5: "0 -> page banner `no_shares_held`"), and it directly undercuts the
+very "count metadata" transparency the user's own directive just named as the required
+alternative surface for excluded contracts — that metadata is computed correctly on the
+backend and then never reaches the screen.
+
+### Validation run (smallest complete relevant set)
+`cd backend && python3 -m pytest tests/test_best_options.py tests/test_best_options_adversarial.py tests/test_best_options_endpoint.py tests/test_category_params.py tests/test_options_chain_dte_filter.py tests/test_options_chain_cache.py -q`
+→ **224 passed, 0 failed** (unchanged; docstring-only edit to my own test file, no behavior
+change). `frontend`: `npx tsc --noEmit` → 0 errors (does not exercise D2/D3, see above — no
+frontend test harness exists in this repo to add an automated regression check to).
+
+### Verdict: **REJECT**
+D2 (live crash risk on every page render) and D3 (dead banner + missing transparency fields,
+found specifically while validating today's directive) both live entirely inside Rusty's own
+"completed" frontend artifacts: `frontend/src/types/best-options.ts`,
+`frontend/src/components/BestOptionsParams.tsx`, `frontend/src/components/BestOptionsView.tsx`.
+Per strict lockout, **Rusty is locked out of revising these three files.** Recommended
+revision owner: **Livingston** (idle, not the author of any of these three files, already
+familiar with the Best Options data seam from his own cache work) to correct the
+`BestOptionsThresholds`/`thresholds_source`/`skill_reference` types to the real nested
+`{call, put}` shape, add `excluded_by_delta_band`/`coverable_contracts`/`no_shares_held` to
+`BestOptionsSide`, fix `BestOptionsParams.tsx`'s per-side accessors, and fix the
+`no_shares_held` banner condition in `BestOptionsView.tsx` to read the section-level field
+directly instead of a nonexistent per-row flag. If no agent with sufficient frontend/TS depth
+is available, escalate per the reviewer-protocol's "escalate" option rather than re-admitting
+Rusty.
+
+D1 is resolved for review purposes by the user's direct, explicit ratification this session
+(non-blocking ledger follow-up recommended, not required for approval). The visual-consistency
+directive remains satisfied (unaffected by this round's changes). No production code touched
+by me; one comment-only docstring edit to my own `test_best_options_adversarial.py`. Findings
+also filed to `.squad/decisions/inbox/basher-best-options-review.md`.
+
+## 2026-08-29 (later): Final combined reviewer gate — Best Options + Force Alpha — separate verdicts
+
+Scope: two independent verdicts requested against the live integrated tree — Best Options
+(post Danny's formal delta-filter ratification + Livingston's D2/D3 fix) and the brand-new
+Force Alpha feature (dashboard CC/CSP buttons force Alpha; Settings Run Now/Run Full/scheduled
+stay due-only). Did not trust any agent's self-reported pass counts; independently read every
+inbox decision record and re-derived every claim against the live code and a live test run.
+
+### VERDICT: Best Options — **APPROVE**
+
+- D1 (row-inclusion semantics): closed. `danny-best-options-delta-filter-correction.md` is a
+  durable, in-place amendment to the design doc (new §2A, corrected §4.1/4.2, original text
+  kept as a marked historical note) — the missing ledger record from my prior REJECT is now
+  present. `_evaluate_side` in `best_options.py` (unchanged, re-read this round) matches the
+  ratified text exactly: `rows` = DTE-window ∩ delta-band; `nearest_miss` computed over the
+  full DTE-window set; `excluded_by_delta_band` count on each section.
+- D2 (nested `{call,put}` typing crash) and D3 (dead banner, missing transparency fields):
+  independently re-verified fixed. Read `frontend/src/types/best-options.ts` in full —
+  `BestOptionsThresholdsBySide`, `BestOptionsSourceBySide`, `BestOptionsPremiumMeta.basis` all
+  correctly nested; `BestOptionsSide` carries `excluded_by_delta_band` (required) and
+  `coverable_contracts`/`no_shares_held` (optional, call-side only). Read
+  `BestOptionsParams.tsx` and `BestOptionsView.tsx` — every accessor uses the nested shape
+  (`th.call.*`, `th.put.*`, `parameters.premium.basis.call/.put`); the "0 shares held" banner
+  now reads `data.no_shares_held === true` (section-level), not a nonexistent per-row flag.
+- Full-field sweep of the real `parameters` block (read `evaluate_best_options`'s literal
+  dict-construction code, not a sample payload) against the frontend `BestOptionsParameters`
+  interface, key by key: every field matches, including the previously-unverified
+  `liquidity`/`weights`/`color_thresholds` static dicts. No further undiscovered nested-shape
+  defects beyond the four (thresholds/thresholds_source/skill_reference/premium.basis)
+  Livingston already fixed.
+- `test_best_options_frontend_contract.py` (Livingston, 5 tests) read in full: genuine
+  real-module seam test (real `OptionsChainCache` + real `evaluate_best_options` + real
+  FastAPI `TestClient`; only Cosmos and the provider's network edge faked) that pins the exact
+  JSON key shapes broken by D2/D3, not a re-statement of them. All 5 assertions are structural
+  (`set(value.keys()) == {"call","put"}`, exact `premium.basis` dict equality,
+  `coverable_contracts == 3` for 300 shares, `no_shares_held is True` for 0 shares, both fields
+  absent on the put side) — not vacuous presence checks.
+- Roll Scenarios visual-consistency directive: re-confirmed intact.
+  `frontend/src/lib/badges.ts`'s `ROW_TINT_BG` is still the single shared token consumed by
+  both `PositionDetail.tsx` (`CELL_BG = ROW_TINT_BG`, comment: "Shared with Best Options") and
+  `BestOptionsView.tsx` (via `preferenceRowTint`) — no duplicated ad-hoc colors introduced by
+  the D2/D3 fix.
+- `npx tsc --noEmit`: 0 errors (re-run post-fix; now meaningful evidence since the types
+  themselves are correct, not just internally consistent as before).
+- Independent test run, this session, this tree:
+  `pytest tests/test_best_options.py tests/test_best_options_adversarial.py
+  tests/test_best_options_endpoint.py tests/test_best_options_frontend_contract.py
+  tests/test_category_params.py tests/test_options_chain_dte_filter.py
+  tests/test_options_chain_cache.py` → all green (263 passed combined with the three Force
+  Alpha files run in the same invocation; Best-Options-only subset also independently green).
+  No IV Rank test anywhere; no LLM call in this evaluator path (confirmed:
+  `iv_rank_enforced: False` hardcoded, disclosed via `iv_rank_note`, never gated on).
+
+No defects found. **APPROVE.** No revision owner needed.
+
+### VERDICT: Force Alpha — **APPROVE**
+
+Independently re-derived every claim in this workstream's inbox records against the live code
+— did not accept Linus's/Rusty's/Livingston's self-reported numbers at face value, since two
+of the three self-reports (Rusty's own doc: 8 plumbing tests; Livingston's cache-correction
+doc: 4 known-failing tests in `test_force_alpha_execution.py` at time of writing) already
+diverged from the task prompt's stated "Linus 93/93 / Rusty 34/34."
+
+**Corrected, verified test count:** `test_force_alpha_execution.py` (Linus, agent_runner
+gate/cooldown) = 23; `test_force_alpha_plumbing.py` (Rusty, API/scheduler plumbing) = 8;
+`test_trigger_force_alpha_scoping.py` (Livingston, endpoint-scoping seam) = 3. Total = **34**,
+all passing on an independent run — but "34" is the combined total across all three files,
+not "Rusty's plumbing count" as the task prompt's phrasing implied, and "93" does not match
+Linus's own file (23 tests) or its docstring's claim (23). Flagging this as a documentation
+inaccuracy in the inbox trail, not a code defect — the actual behavior is correct regardless
+of which number was quoted where.
+
+Independently inspected, line-by-line, every requirement in the task:
+- **Four agent paths**: `agent_runner.py`'s two entry points (`run_symbol_agent`,
+  `run_position_monitor`) both gate identically: `run_alpha = is_alert or prolonged_wait or
+  force_alpha` (alert/roll branches run Alpha unconditionally, "forced" is never set true for
+  those); `forced = force_alpha and not prolonged_wait` in the prolonged-WAIT/force branch —
+  matches design precisely at all 4 call sites (verified via `grep -n` line-by-line read, not
+  a summary).
+- **buy_tracker exclusion**: `_skip_reviews = agent_type in ("buy_tracker",)`; forcing on
+  buy_tracker records `alpha_run.status == "skipped_agent_type"` and never calls Alpha.
+  `run_buy_tracker_analysis`'s real signature (read directly) has no
+  `run_trigger`/`force_alpha` params, so `_call_agent_func`'s introspection-guarded forwarding
+  in `web/app.py` makes forcing genuinely inert for it (design case 23), not merely untested.
+- **incomplete_quote_wait precedence**: confirmed in `run_position_monitor` — `if
+  incomplete_quote_wait: ... elif prolonged_wait or force_alpha: ...` — forcing is blocked and
+  `alpha_run.status = "skipped_incomplete_quotes"` recorded, exactly per design precedence.
+- **409 at-most-one in-flight**: `_acquire_trigger_slot`/`_release_trigger_slot` in
+  `web/app.py`, keyed `(agent_type, symbol-or-"*")`, `threading.Lock`-guarded, releases via
+  `finally` in `_run_and_release` (survives the runner raising), stale slots reclaimed after
+  `_MAX_TASK_DURATION_SECONDS` (imported from `scheduler_registry.py`, not a new constant) —
+  matches design §7 exactly.
+- **Force audit status**: `alpha_run = {"trigger", "forced", "status"}` persisted via
+  `cosmos.update_activity_field(..., field="alpha_run", ...)` at all 4 gate outcomes (ok,
+  failed, skipped_agent_type, skipped_incomplete_quotes) in both entry points — confirmed by
+  reading the literal dict-construction code at each site, not inferred from the design doc.
+- **Cooldown neutrality (H1)**: `_detect_prolonged_wait`'s scan (read directly, line ~1283)
+  breaks only when `act.get("alpha_view")` is set **and** `isinstance(alpha_run, dict) and
+  alpha_run.get("forced") is True` is false — i.e. it skips over forced-only reviews and keeps
+  counting, but still breaks on a due (non-forced) review or a legacy doc with no `alpha_run`
+  field at all (conservative default = not-forced = still breaks, preserving old behavior
+  byte-for-byte). Exactly matches design §9/case 12-14.
+- **No force-only Telegram (H2)**: confirmed by direct code read in both entry points —
+  `send_alert` gated on `is_alert` alone; `send_prolonged_wait_alert` gated on `prolonged_wait`
+  alone (`elif prolonged_wait and self.telegram_notifier:`). `force_alpha` never appears in
+  either gate condition. A forced-only run (force_alpha=True, is_alert=False,
+  prolonged_wait=False) cannot reach either notifier call.
+- **Legacy behavior**: verified above (missing `alpha_run` field ⇒ `forced = False` ⇒ still
+  breaks the cooldown scan, i.e. identical to pre-feature behavior for every historical
+  document).
+- **Final dashboard-only-forces policy** (narrower than Danny's original design's proposed
+  "manual ⇒ forced" default and its own D1/D2 proposals): confirmed by reading the literal
+  code, not the inbox narrative alone —
+  `POST /api/trigger/{agent_type}` (dashboard, `TriggerButton.tsx` always sends
+  `force_alpha: true`) defaults `force_alpha=True`, overridable; `POST /api/trigger-all`
+  hardcodes `force_alpha=False` with **no override surface** (`run_trigger =
+  "manual"; force_alpha = False` literal, not read from any body); `POST
+  /api/scheduler/tasks/{task_name}/run` ("Settings Run Now") hardcodes `force_alpha=False`
+  (this is Livingston's fix — confirmed the corrected code is what's actually in the tree
+  today, not just claimed); `main.py`'s cron loop passes `run_trigger="scheduled",
+  force_alpha=False` explicitly for all four Alpha-eligible agents, buy_tracker unchanged.
+  `SettingsConfigView.tsx`'s Monitoring Agent card is wired to `/api/trigger-all` (confirmed
+  by grep), so there is exactly one due-only "Run Full"/"Run Now" affordance in the frontend,
+  consistent with Livingston's finding that Danny's original D1 premise (a separate
+  `/api/scheduler/tasks/*` button) doesn't exist in the UI.
+- **Auth**: none anywhere in `web/app.py`, matching the design's explicit standing-risk
+  disclosure (not a new gap introduced by this feature; not in scope).
+
+**Independent full-suite run**, this tree, this session: `pytest tests/` → 1661 passed, 11
+failed / 16 errors, all in `test_yfinance_data_provider.py` /
+`test_yfinance_technicals_dividend_availability.py` — confirmed pre-existing/unrelated to both
+workstreams (network/live-data-shaped tests unrelated to Best Options or Force Alpha; same
+failure set observed and documented earlier this session before any Force Alpha code existed).
+Zero regressions attributable to either workstream.
+
+No defects found. **APPROVE.** No revision owner needed.
+
+Findings filed to `.squad/decisions/inbox/basher-best-options-review.md` (Best Options) and a
+new `.squad/decisions/inbox/basher-force-alpha-review.md` (Force Alpha, first review of this
+workstream). No production code touched by me this round; validation only.

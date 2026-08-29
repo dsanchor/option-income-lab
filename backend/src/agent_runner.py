@@ -41,6 +41,7 @@ from .rule_evaluator import (
     merge_phase_evaluations,
     normalize_buy_tracker_activity,
 )
+from .category_params import normalize_category
 
 # Canonical timestamp format — used for ALL activity and alert log entries.
 # ISO 8601 with UTC indicator to avoid timezone ambiguity.
@@ -210,7 +211,12 @@ class AgentRunner:
         type_map = self._CATEGORY_SKILL_MAP.get(agent_type)
         if not type_map:
             return None
-        cat_key = (category or "balanced").lower().strip()
+        # Normalised through category_params.normalize_category (Danny's
+        # 2026-08-29 Best Options design, F9): the canonical form is
+        # underscore ("high_yield"), so it is converted back to this map's
+        # own space-form keys ("high yield") rather than restructuring the
+        # map itself — normaliser fixed, no cross-agent refactor stacked on.
+        cat_key = normalize_category(category).replace("_", " ")
         skill_name = type_map.get(cat_key, type_map.get("balanced"))
         # Verify the skill directory exists
         if skill_name and (self._skills_dir / skill_name).exists():
@@ -238,7 +244,9 @@ class AgentRunner:
     @classmethod
     def _get_category_delta_context(cls, position_type: str, category: str | None) -> str:
         """Build a category-aware delta guidance block for roll agents."""
-        cat_key = (category or "balanced").lower().strip()
+        # Same F9 normaliser fix as `_resolve_category_skill` — converted
+        # back to this map's own space-form keys.
+        cat_key = normalize_category(category).replace("_", " ")
         type_key = position_type.lower()
         ranges = cls._CATEGORY_DELTA_RANGES.get(type_key, {})
         delta_range = ranges.get(cat_key, ranges.get("balanced", (0.20, 0.30)))
@@ -1178,7 +1186,8 @@ class AgentRunner:
     def _record_trace(self, cosmos, *, agent_type, symbol, system_prompt=None,
                       user_message=None, response_text=None, model=None,
                       skills=None, parsed=None, is_alert=None, phase=None,
-                      duration_seconds=None, error=None, extra=None) -> None:
+                      duration_seconds=None, error=None, extra=None,
+                      run_trigger=None, force_alpha=None) -> None:
         """Persist a full agent execution trace (best-effort, never raises)."""
         try:
             if cosmos is None or not self._trace_enabled(cosmos, agent_type):
@@ -1196,6 +1205,11 @@ class AgentRunner:
                 "is_alert": bool(is_alert) if is_alert is not None else None,
                 "duration_seconds": duration_seconds,
                 "error": error,
+                # Execution-mode provenance (force-alpha design, §10):
+                # was this call scheduled (cron) or manually triggered, and
+                # did the caller request forced Alpha review?
+                "run_trigger": run_trigger,
+                "force_alpha": bool(force_alpha) if force_alpha is not None else None,
             }
             if isinstance(parsed, dict):
                 trace["confidence"] = parsed.get("confidence")
@@ -1256,11 +1270,23 @@ class AgentRunner:
                 if activity != "WAIT":
                     return False
 
-            # Cooldown: count WAITs since the last alpha review
+            # Cooldown: count WAITs since the last DUE (non-forced) alpha
+            # review. A forced Alpha run (force_alpha=True while neither an
+            # alert nor an already-due prolonged-WAIT triggered it) must be
+            # cooldown-neutral — it must never reset/suppress the due
+            # prolonged-WAIT cadence (H1, danny-force-alpha-design.md §9).
+            # Legacy activities predating this field carry no `alpha_run`
+            # and are conservatively treated as NOT forced, so they still
+            # break the scan exactly as before — this preserves historical
+            # behavior byte-for-byte and can only ever delay a future
+            # review, never suppress one.
             waits_since_last_review = 0
             for act in recent:
                 if act.get("alpha_view"):
-                    break
+                    alpha_run = act.get("alpha_run")
+                    forced = isinstance(alpha_run, dict) and alpha_run.get("forced") is True
+                    if not forced:
+                        break
                 waits_since_last_review += 1
             # If a previous review exists, enforce cooldown
             if waits_since_last_review < len(recent) and waits_since_last_review < self.SUPERVISOR_COOLDOWN:
@@ -1687,6 +1713,8 @@ Provide your alpha advisor analysis in the JSON format specified above."""
         supervisor_model: str = None,
         alpha_model: str = None,
         symbol_category: str = None,
+        run_trigger: str = "scheduled",
+        force_alpha: bool = False,
     ):
         """Run agent analysis for a single symbol.
 
@@ -1700,6 +1728,14 @@ Provide your alpha advisor analysis in the JSON format specified above."""
             context_provider: ContextProvider for activity history injection
             max_activity_entries: Max recent activities for context (0–5)
             fetcher: YFinanceDataProvider instance (shared across symbols)
+            run_trigger: Execution provenance — "scheduled" (cron) or
+                "manual" (dashboard/API triggered). Purely descriptive;
+                does not affect gating on its own.
+            force_alpha: When True, requests an Alpha Advisor review even
+                when neither an alert nor a due prolonged-WAIT review would
+                otherwise trigger one. Never overrides the buy_tracker
+                skip. Defaults to False, which reproduces today's behavior
+                exactly for every existing (scheduled) caller.
         """
         print(f"\n--- Analyzing {symbol} ---")
         logger.info("Starting pre-fetch + agent.run() for symbol=%s", symbol)
@@ -1911,6 +1947,8 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                 is_alert=is_alert,
                 phase="analysis",
                 duration_seconds=round(time.time() - run_start, 2),
+                run_trigger=run_trigger,
+                force_alpha=force_alpha,
             )
 
             # ── Supervisor/Alpha reviews (skip for agent types without playbooks) ──
@@ -1918,8 +1956,19 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
             supervisor_view = None
             alpha_view = None
             prolonged_wait = False
+            alpha_run_meta = None
 
-            if not _skip_reviews:
+            if _skip_reviews:
+                # buy_tracker (and any future no-playbook agent type) never
+                # runs Alpha, even when explicitly forced — highest-precedence
+                # interaction rule (danny-force-alpha-design.md §6).
+                if force_alpha:
+                    alpha_run_meta = {
+                        "trigger": run_trigger,
+                        "forced": True,
+                        "status": "skipped_agent_type",
+                    }
+            else:
                 alpha_chain_text = self._build_alpha_options_chain(data, agent_type)
                 market_data = self._build_market_data_block(data, symbol, exchange)
                 alpha_market_data = self._build_market_data_block(data, symbol, exchange, options_chain_text=alpha_chain_text)
@@ -1944,9 +1993,18 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                             model=alpha_model,
                         ),
                     )
+                    # An alert always runs Alpha on its own merits — never
+                    # "forced" for provenance purposes, and therefore a due
+                    # review that legitimately resets the cooldown.
+                    alpha_run_meta = {
+                        "trigger": run_trigger,
+                        "forced": False,
+                        "status": "ok" if alpha_view is not None else "failed",
+                    }
                 else:
                     prolonged_wait = self._detect_prolonged_wait(cosmos, symbol, agent_type)
-                    if prolonged_wait:
+                    run_alpha = prolonged_wait or force_alpha
+                    if run_alpha:
                         print(f"⏳ Prolonged WAIT detected for {symbol} — triggering supervisor + alpha review")
                         # Both supervisor + alpha run in parallel
                         supervisor_view, alpha_view = await asyncio.gather(
@@ -1965,6 +2023,17 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                                 model=alpha_model,
                             ),
                         )
+                        # Only forced when it ran *purely* because of
+                        # force_alpha — a due prolonged-WAIT review is not
+                        # "forced" even if force_alpha also happened to be
+                        # True on this call, and it correctly resets the
+                        # cooldown (H1 mitigation).
+                        forced = force_alpha and not prolonged_wait
+                        alpha_run_meta = {
+                            "trigger": run_trigger,
+                            "forced": forced,
+                            "status": "ok" if alpha_view is not None else "failed",
+                        }
                     else:
                         # Supervisor runs alone (unconditional)
                         supervisor_view = await self._run_supervisor_review(
@@ -1996,6 +2065,19 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                     value=alpha_view,
                 )
                 print(f"🔍 Alpha [{alpha_view['opportunity_strength']}]: {alpha_view['one_liner']}")
+
+            # Persist execution-mode provenance for Alpha (trigger/forced/
+            # status) whenever Alpha was attempted or deliberately skipped
+            # under forcing — even on failure — so downstream cooldown
+            # detection and observability never depend on alpha_view alone
+            # (danny-force-alpha-design.md §8).
+            if alpha_run_meta is not None:
+                cosmos.update_activity_field(
+                    doc_id=dec_doc["id"],
+                    symbol=symbol,
+                    field="alpha_run",
+                    value=alpha_run_meta,
+                )
 
             # Telegram notifications
             if is_alert and self.telegram_notifier:
@@ -2155,6 +2237,8 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
         extra_context: str = "",
         cosmos=None,
         agent_type: str = None,
+        run_trigger: str = "scheduled",
+        force_alpha: bool = False,
     ) -> Tuple[str, Optional[Dict], Optional[Dict]]:
         """Run Phase 1 — position assessment agent.
 
@@ -2219,6 +2303,8 @@ Analyze the position risk and output your response in the required JSON format. 
             skills=["earnings-gate-monitor", "data-source", "activity-log", "risk-flags"],
             phase="assessment",
             duration_seconds=round(time.time() - _phase1_start, 2),
+            run_trigger=run_trigger,
+            force_alpha=force_alpha,
         )
 
         logger.info(
@@ -2256,6 +2342,8 @@ Analyze the position risk and output your response in the required JSON format. 
         category_delta_context: str = "",
         cosmos=None,
         agent_type: str = None,
+        run_trigger: str = "scheduled",
+        force_alpha: bool = False,
     ) -> Tuple[str, Optional[Dict]]:
         """Run Phase 2 — roll management agent.
 
@@ -2301,6 +2389,8 @@ Output your activity in the required JSON format. Use the timestamp above in you
             parsed=json_data,
             phase="roll",
             duration_seconds=round(time.time() - _phase2_start, 2),
+            run_trigger=run_trigger,
+            force_alpha=force_alpha,
         )
 
         logger.info(
@@ -2431,6 +2521,8 @@ Output your activity in the required JSON format. Use the timestamp above in you
         supervisor_model: str = None,
         alpha_model: str = None,
         symbol_category: str = None,
+        run_trigger: str = "scheduled",
+        force_alpha: bool = False,
     ):
         """Run position monitor for a single open position (2-phase).
 
@@ -2453,6 +2545,14 @@ Output your activity in the required JSON format. Use the timestamp above in you
             fetcher: YFinanceDataProvider instance (shared)
             assessment_instructions: Phase 1 system instructions
             roll_instructions: Phase 2 system instructions
+            run_trigger: Execution provenance — "scheduled" (cron) or
+                "manual" (dashboard/API triggered). Purely descriptive.
+            force_alpha: When True, requests an Alpha Advisor review even
+                when neither an alert/roll nor a due prolonged-WAIT review
+                would otherwise trigger one. Never overrides the
+                incomplete-quote-wait skip. Defaults to False, which
+                reproduces today's behavior exactly for every existing
+                (scheduled) caller.
         """
         strike = position["strike"]
         expiration = position["expiration"]
@@ -2583,6 +2683,8 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 extra_context=self._build_position_context_section(symbol, cosmos, data),
                 cosmos=cosmos,
                 agent_type=agent_type,
+                run_trigger=run_trigger,
+                force_alpha=force_alpha,
             )
 
             if position_type == "call":
@@ -2664,6 +2766,8 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         category_delta_context=_cat_delta_ctx,
                         cosmos=cosmos,
                         agent_type=agent_type,
+                        run_trigger=run_trigger,
+                        force_alpha=force_alpha,
                     )
                     # Use Phase 2 output as the final result
                     response_text = phase2_response
@@ -2935,6 +3039,14 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         model=alpha_model,
                     ),
                 )
+                # An alert/roll always runs Alpha on its own merits — never
+                # "forced" for provenance purposes, and therefore a due
+                # review that legitimately resets the cooldown.
+                alpha_run_meta = {
+                    "trigger": run_trigger,
+                    "forced": False,
+                    "status": "ok" if alpha_view is not None else "failed",
+                }
 
                 # Persist supervisor result (always)
                 if supervisor_view is not None:
@@ -2955,6 +3067,15 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         value=alpha_view,
                     )
                     print(f"🔍 Alpha [{alpha_view['opportunity_strength']}]: {alpha_view['one_liner']}")
+
+                # Persist execution-mode provenance (see run_symbol_agent for
+                # the full rationale) — always, even when Alpha failed.
+                cosmos.update_activity_field(
+                    doc_id=dec_doc["id"],
+                    symbol=symbol,
+                    field="alpha_run",
+                    value=alpha_run_meta,
+                )
 
                 if self.telegram_notifier:
                     # Extract roll economics for Telegram notification
@@ -3000,8 +3121,30 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         cosmos, symbol, agent_type, position_id=position_id,
                     )
                 )
+                alpha_run_meta = None
 
-                if prolonged_wait:
+                # incomplete_quote_wait wins over forcing (second-highest
+                # precedence, after the buy_tracker _skip_reviews rule):
+                # we cannot trust Alpha's economics against a quote we
+                # already know is incomplete, so forcing is deliberately
+                # blocked and the skip is recorded, not silent.
+                if incomplete_quote_wait:
+                    if force_alpha:
+                        alpha_run_meta = {
+                            "trigger": run_trigger,
+                            "forced": True,
+                            "status": "skipped_incomplete_quotes",
+                        }
+                    supervisor_view = await self._run_supervisor_review(
+                        activity_payload=activity_payload,
+                        market_data=market_data,
+                        previous_context=previous_context,
+                        agent_type=agent_type,
+                        model=supervisor_model,
+                    )
+                    alpha_view = None
+                    print(f"Logged activity")
+                elif prolonged_wait or force_alpha:
                     print(f"⏳ Prolonged WAIT detected for {symbol} ${strike} — triggering supervisor + alpha review")
                     # Both supervisor + alpha run in parallel
                     supervisor_view, alpha_view = await asyncio.gather(
@@ -3020,6 +3163,16 @@ Output your activity in the required JSON format. Use the timestamp above in you
                             model=alpha_model,
                         ),
                     )
+                    # Only forced when it ran purely because of force_alpha
+                    # — a due prolonged-WAIT review is not "forced" even if
+                    # force_alpha also happened to be True, and correctly
+                    # resets the cooldown (H1 mitigation).
+                    forced = force_alpha and not prolonged_wait
+                    alpha_run_meta = {
+                        "trigger": run_trigger,
+                        "forced": forced,
+                        "status": "ok" if alpha_view is not None else "failed",
+                    }
                 else:
                     # Supervisor runs alone (unconditional)
                     supervisor_view = await self._run_supervisor_review(
@@ -3051,6 +3204,16 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         value=alpha_view,
                     )
                     print(f"🔍 Alpha [{alpha_view['opportunity_strength']}]: {alpha_view['one_liner']}")
+
+                # Persist execution-mode provenance whenever Alpha was
+                # attempted or deliberately skipped under forcing.
+                if alpha_run_meta is not None:
+                    cosmos.update_activity_field(
+                        doc_id=dec_doc["id"],
+                        symbol=symbol,
+                        field="alpha_run",
+                        value=alpha_run_meta,
+                    )
 
                 if prolonged_wait and self.telegram_notifier:
                     has_supervisor_finding = (supervisor_view is not None and

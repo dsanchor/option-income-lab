@@ -16,6 +16,7 @@ import {
   Bell,
   Play,
   Pause,
+  Trophy,
   type LucideIcon,
 } from "lucide-react";
 
@@ -32,6 +33,7 @@ interface Props {
 }
 
 const ANALYZE: { href: string; icon: LucideIcon; label: string }[] = [
+  { href: "best-options", icon: Trophy, label: "Best Options" },
   { href: "options-chain", icon: CandlestickChart, label: "Option Chain" },
   { href: "chat", icon: MessageSquare, label: "Chat" },
   { href: "report", icon: FileText, label: "Report" },

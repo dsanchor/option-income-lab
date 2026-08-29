@@ -426,6 +426,70 @@ class OptionsChainCache:
             # from get_or_load_async, but fail safe rather than crash).
             os_lock.release()
 
+    def get_or_hydrate(self, symbol: str) -> Optional[str]:
+        """Non-blocking cache accessor for interactive callers that must
+        never wait on a provider fetch (Danny's 2026-08-29 Best Options
+        design, F6): returns a memory hit, else a persistence hydrate,
+        else ``None``. Unlike `get_or_load`/`get_or_load_async`, a true
+        cold miss here never falls through to `refresh()` — it returns
+        ``None`` immediately so the caller (e.g. the `best-options`
+        endpoint) can answer with an explicit warming/unavailable state of
+        its own instead of blocking its event loop or raising.
+
+        The only I/O this method performs is the same in-memory read and
+        persistence-store hydrate `get_or_load`/`get_or_load_async` already
+        use on a miss (`_hydrate_into_memory`) — never a live
+        yfinance/TradingView fetch, and never a wait on one already in
+        flight elsewhere.
+
+        A stale-but-present memory hit still kicks off the same
+        stale-while-revalidate background refresh `get_or_load_async`
+        triggers (non-blocking try-acquire, at most one in flight per
+        symbol), so a caller polling this accessor keeps converging toward
+        fresh data. A fresh persistence hydrate does not additionally
+        schedule one here, matching `get_or_load`/`get_or_load_async`'s
+        existing convention — the hydrated entry is already marked
+        immediately stale-eligible (D3) and will be picked up as such on
+        its own next access.
+        """
+        cached = self.get(symbol)
+        if cached is not None:
+            if self.is_stale(symbol):
+                self._schedule_background_refresh(symbol)
+            return cached
+
+        return self._hydrate_into_memory(symbol)
+
+    def schedule_background_refresh(self, symbol: str) -> None:
+        """Public entry point for starting a full hydrate -> fetch -> merge
+        -> persist refresh cycle for `symbol` without awaiting it.
+
+        Intended for a caller that just received ``None`` from
+        `get_or_hydrate` (a true cold/missing cache) and needs to kick off
+        real warming — as opposed to the internal stale-while-revalidate
+        callers above, who only ever need to *refresh* an entry that
+        already exists.
+
+        A thin public wrapper around the existing `_schedule_background_refresh`:
+        all the concurrency-correctness guarantees documented there apply
+        unchanged — a non-blocking try-acquire of this symbol's OS lock, so
+        at most one refresh runs per symbol at a time across every call
+        site (this one, SWR, `/api/trigger`, `refresh_all`'s scheduler
+        workers); a call made while one is already in flight is a no-op,
+        never a duplicate fetch. Deliberately no cancellation or timeout is
+        layered around the scheduled refresh: it holds the symbol's OS
+        lock across the fetch/merge/persist sequence, including Cosmos
+        shard writes, and forcibly cancelling it mid-flight would abandon
+        that lock/write rather than make the caller more responsive — the
+        exact hazard the accepted design calls out for why `get_or_hydrate`
+        itself must never wrap `get_or_load_async` in `asyncio.wait_for`.
+        Requires a running event loop on the calling thread (true of every
+        real caller — an async FastAPI handler); called with none running,
+        it is a safe no-op rather than a crash, matching
+        `_schedule_background_refresh`'s own behavior.
+        """
+        self._schedule_background_refresh(symbol)
+
     async def refresh(self, symbol: str) -> str:
         """Force-refresh the cache for a symbol.
 

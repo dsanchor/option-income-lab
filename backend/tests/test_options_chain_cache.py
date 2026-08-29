@@ -1380,3 +1380,251 @@ class TestPerRefreshQualityMetrics:
         # `get_persistence_health()`).
         for key in ("constructed", "last_error", "last_success_at", "failure_count", "retry_in_seconds"):
             assert key in persistence
+
+
+# ===========================================================================
+# Best Options (Danny's 2026-08-29 design, F6/§7): a non-blocking cache
+# accessor + public background-refresh trigger for an interactive endpoint
+# that must never await a provider/Cosmos fetch. `get_or_hydrate` returns a
+# memory hit, else a persistence hydrate, else None -- never fetches, never
+# blocks. `schedule_background_refresh` is a thin public wrapper around the
+# existing `_schedule_background_refresh` used for SWR -- same symbol
+# locking, same at-most-one-in-flight-per-symbol guarantee, no added
+# cancellation/timeout.
+# ===========================================================================
+
+class TestGetOrHydrateCacheStates:
+     """Cache-state coverage for the new non-blocking accessor: warm
+     (fresh), warm-but-stale (still returned, SWR triggered), cold-but-
+     persisted (hydrated, no provider call), and truly cold/missing
+     (returns None, no provider call, never blocks)."""
+
+     def test_warm_fresh_entry_returned_without_touching_store_or_provider(self, monkeypatch):
+         store = _FakeStore()
+         cache_obj = OptionsChainCache(ttl_seconds=1800, store=store)
+         exp = _future_exp_key(5)
+         yf_chain = {"symbol": "TEST", "calls": {exp: {"100.0": _contract(bid=1.0, ask=1.2, strike=100.0, expiration=exp)}}, "puts": {}}
+         _patch_sources(monkeypatch, cache_obj, yf_chain, _empty_chain())
+         run_async(cache_obj.refresh("TEST"))
+         store.persist_calls.clear()
+
+         result = cache_obj.get_or_hydrate("TEST")
+         assert result is not None
+         assert json.loads(result)["calls"][exp]["100.0"]["bid"] == 1.0
+         # Fresh entry -- no hydrate needed, no background refresh scheduled.
+         assert store.persist_calls == []
+
+     def test_warm_but_stale_entry_returned_immediately_and_schedules_refresh(self, monkeypatch):
+         store = _FakeStore()
+         cache_obj = OptionsChainCache(ttl_seconds=1800, store=store)
+         exp = _future_exp_key(5)
+         yf_chain = {"symbol": "TEST", "calls": {exp: {"100.0": _contract(bid=1.0, ask=1.2, strike=100.0, expiration=exp)}}, "puts": {}}
+         _patch_sources(monkeypatch, cache_obj, yf_chain, _empty_chain())
+         run_async(cache_obj.refresh("TEST"))
+         # Force staleness without waiting out the real TTL.
+         with cache_obj._lock:
+             cache_obj._store["TEST"]["cached_at"] -= 3600
+
+         refreshed_yf = {"symbol": "TEST", "calls": {exp: {"100.0": _contract(bid=9.0, ask=9.2, strike=100.0, expiration=exp)}}, "puts": {}}
+         _patch_sources(monkeypatch, cache_obj, refreshed_yf, _empty_chain())
+
+         async def main():
+             first = cache_obj.get_or_hydrate("TEST")
+             # Stale-while-revalidate: the stale value is returned as-is on
+             # this exact call, not the freshly-scheduled one.
+             assert json.loads(first)["calls"][exp]["100.0"]["bid"] == 1.0
+             for _ in range(50):
+                 await asyncio.sleep(0.01)
+                 if json.loads(cache_obj.get("TEST"))["calls"][exp]["100.0"]["bid"] == 9.0:
+                     break
+             return cache_obj.get("TEST")
+
+         updated = run_async(main())
+         assert json.loads(updated)["calls"][exp]["100.0"]["bid"] == 9.0
+
+     def test_cold_but_persisted_hydrates_without_any_provider_call(self, monkeypatch):
+         exp = _future_exp_key(5)
+         persisted = {
+             "symbol": "TEST",
+             "calls": {exp: {"100.0": _contract(bid=2.5, ask=2.7, expiration=exp)}},
+             "puts": {},
+         }
+         store = _FakeStore(hydrate_data=persisted)
+         cache_obj = OptionsChainCache(ttl_seconds=1800, store=store)
+
+         provider_called = {"yf": False, "tv": False}
+
+         async def _fake_yf(symbol):
+             provider_called["yf"] = True
+             return _empty_chain(symbol)
+
+         async def _fake_tv(symbol):
+             provider_called["tv"] = True
+             return _empty_chain(symbol)
+
+         monkeypatch.setattr(cache_obj, "_fetch_yfinance", _fake_yf)
+         monkeypatch.setattr(cache_obj, "_fetch_tradingview", _fake_tv)
+
+         result = cache_obj.get_or_hydrate("TEST")
+         assert result is not None
+         assert json.loads(result)["calls"][exp]["100.0"]["bid"] == 2.5
+         assert provider_called == {"yf": False, "tv": False}
+
+     def test_true_cold_miss_returns_none_never_fetches_never_blocks(self, monkeypatch):
+         store = _FakeStore()  # hydrate_data=None -> nothing persisted
+         cache_obj = OptionsChainCache(ttl_seconds=1800, store=store)
+
+         provider_called = {"yf": False, "tv": False}
+
+         async def _fake_yf(symbol):
+             provider_called["yf"] = True
+             return _empty_chain(symbol)
+
+         async def _fake_tv(symbol):
+             provider_called["tv"] = True
+             return _empty_chain(symbol)
+
+         monkeypatch.setattr(cache_obj, "_fetch_yfinance", _fake_yf)
+         monkeypatch.setattr(cache_obj, "_fetch_tradingview", _fake_tv)
+
+         start = time.monotonic()
+         result = cache_obj.get_or_hydrate("NOPE")
+         elapsed = time.monotonic() - start
+
+         assert result is None
+         assert provider_called == {"yf": False, "tv": False}
+         assert elapsed < 0.5, f"get_or_hydrate blocked for {elapsed:.3f}s on a true cold miss"
+
+     def test_true_cold_miss_never_blocks_a_running_event_loop(self, monkeypatch):
+         """Same shape as the P1 get_or_load regression: called as a plain
+         function from inside an already-running loop (the FastAPI handler
+         shape), a true cold miss must not stall that loop even a little."""
+         store = _FakeStore()
+         cache_obj = OptionsChainCache(ttl_seconds=1800, store=store)
+
+         async def main():
+             heartbeat_ticks = {"n": 0}
+             stop = asyncio.Event()
+
+             async def heartbeat():
+                 while not stop.is_set():
+                     heartbeat_ticks["n"] += 1
+                     await asyncio.sleep(0.005)
+
+             async def caller():
+                 await asyncio.sleep(0.02)
+                 result = cache_obj.get_or_hydrate("NOPE")
+                 stop.set()
+                 return result
+
+             results = await asyncio.gather(heartbeat(), caller())
+             return heartbeat_ticks["n"], results[1]
+
+         ticks, result = run_async(main())
+         assert result is None
+         assert ticks > 0, "event loop heartbeat never advanced -- loop was blocked"
+
+
+class TestScheduleBackgroundRefreshPublicSurface:
+     """`schedule_background_refresh` is the public entry point a caller
+     uses after a `get_or_hydrate` cold miss to request real warming without
+     awaiting it. It must share the exact same symbol-locking/at-most-one-
+     in-flight semantics as the existing SWR path, and must never be wrapped
+     in a cancellation/timeout that could abandon an in-flight persistence
+     write."""
+
+     def test_schedules_a_refresh_that_populates_the_cache(self, monkeypatch):
+         store = _FakeStore()
+         cache_obj = OptionsChainCache(ttl_seconds=1800, store=store)
+         symbol = "TEST"
+         exp = _future_exp_key(5)
+         yf_chain = {"symbol": symbol, "calls": {exp: {"100.0": _contract(bid=1.0, ask=1.2, strike=100.0, expiration=exp)}}, "puts": {}}
+         _patch_sources(monkeypatch, cache_obj, yf_chain, _empty_chain(symbol))
+
+         async def main():
+             assert cache_obj.get_or_hydrate(symbol) is None
+             cache_obj.schedule_background_refresh(symbol)
+             for _ in range(50):
+                 await asyncio.sleep(0.01)
+                 if cache_obj.get(symbol) is not None:
+                     break
+             return cache_obj.get(symbol)
+
+         populated = run_async(main())
+         assert populated is not None
+         assert json.loads(populated)["calls"][exp]["100.0"]["bid"] == 1.0
+         # Persisted -- shard writes are not skipped just because this
+         # entry point is used instead of the internal SWR path.
+         assert len(store.persist_calls) == 1
+
+     def test_does_not_duplicate_an_already_inflight_refresh(self, monkeypatch):
+         store = _FakeStore()
+         cache_obj = OptionsChainCache(ttl_seconds=1800, store=store)
+         symbol = "TEST"
+         fetch_calls = {"n": 0}
+
+         async def _fake_yf(sym):
+             fetch_calls["n"] += 1
+             await asyncio.sleep(0.05)
+             return _empty_chain(sym)
+
+         async def _fake_tv(sym):
+             return _empty_chain(sym)
+
+         monkeypatch.setattr(cache_obj, "_fetch_yfinance", _fake_yf)
+         monkeypatch.setattr(cache_obj, "_fetch_tradingview", _fake_tv)
+
+         async def main():
+             cache_obj.schedule_background_refresh(symbol)
+             await asyncio.sleep(0)  # let it start and acquire the OS lock
+             # A second request racing in behind it (e.g. two concurrent
+             # best-options requests for the same cold symbol) must not
+             # start a duplicate fetch.
+             cache_obj.schedule_background_refresh(symbol)
+
+             for _ in range(50):
+                 await asyncio.sleep(0.01)
+                 if cache_obj.get(symbol) is not None:
+                     break
+
+         run_async(main())
+         assert fetch_calls["n"] == 1, "duplicate background refresh scheduled for the same symbol"
+
+     def test_slow_inflight_refresh_completes_uninterrupted_no_timeout_added(self, monkeypatch):
+         """Regression guard for the design's explicit prohibition: wrapping
+         the scheduled refresh in any cancellation/timeout would abandon it
+         mid-flight while it holds the symbol OS lock and may be writing
+         Cosmos shards. A refresh slower than a plausible interactive-page
+         timeout must still run to completion and land its persistence
+         write."""
+         store = _FakeStore()
+         cache_obj = OptionsChainCache(ttl_seconds=1800, store=store)
+         symbol = "TEST"
+         exp = _future_exp_key(5)
+
+         async def _fake_yf(sym):
+             # Deliberately longer than a typical request-scoped timeout
+             # (e.g. the 15s `retry_after` in the design) would be, scaled
+             # down for test speed -- the point is it is not the instant
+             # case, so a timeout wrapper would have fired first.
+             await asyncio.sleep(0.2)
+             return {"symbol": sym, "calls": {exp: {"100.0": _contract(bid=3.0, ask=3.2, strike=100.0, expiration=exp)}}, "puts": {}}
+
+         async def _fake_tv(sym):
+             return _empty_chain(sym)
+
+         monkeypatch.setattr(cache_obj, "_fetch_yfinance", _fake_yf)
+         monkeypatch.setattr(cache_obj, "_fetch_tradingview", _fake_tv)
+
+         async def main():
+             cache_obj.schedule_background_refresh(symbol)
+             for _ in range(100):
+                 await asyncio.sleep(0.01)
+                 if cache_obj.get(symbol) is not None:
+                     break
+             return cache_obj.get(symbol)
+
+         populated = run_async(main())
+         assert populated is not None
+         assert json.loads(populated)["calls"][exp]["100.0"]["bid"] == 3.0
+         assert len(store.persist_calls) == 1

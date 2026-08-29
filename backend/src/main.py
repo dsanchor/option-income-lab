@@ -275,7 +275,17 @@ class OptionsAgentScheduler:
 
         for agent_name, agent_func in agents:
             try:
-                await agent_func(config, runner, cosmos, ctx)
+                # Regression lock (danny-force-alpha-design.md §6): the
+                # cron path is always scheduled/due-only. `buy_tracker`
+                # never accepts these kwargs (it has no Alpha playbook),
+                # so pass them explicitly only to the four agents that do.
+                if agent_name == "buy_tracker":
+                    await agent_func(config, runner, cosmos, ctx)
+                else:
+                    await agent_func(
+                        config, runner, cosmos, ctx,
+                        run_trigger="scheduled", force_alpha=False,
+                    )
             except Exception as e:
                 print(f"ERROR running {agent_name}: {str(e)}")
         
