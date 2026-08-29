@@ -2036,3 +2036,255 @@ No defects found. **APPROVE.** No revision owner needed.
 Findings filed to `.squad/decisions/inbox/basher-best-options-review.md` (Best Options) and a
 new `.squad/decisions/inbox/basher-force-alpha-review.md` (Force Alpha, first review of this
 workstream). No production code touched by me this round; validation only.
+
+## 2026-08-29 (focused revision): Best Options 45d-alignment + coverable_contracts removal +
+copy removal — reviewer gate — **APPROVE**
+
+Scope: Danny's two ACCEPTED design docs — `danny-best-options-45d-design.md` (default DTE
+window `[0,49]` -> `[0,45]` inclusive, aligned to the agents' own hard cap; `coverable_contracts`
+removed entirely; `no_shares_held` preserved as an independent, directly-computed boolean) and
+`danny-best-options-copy-removal-design.md` (remove four user-facing architecture/process
+commentary phrases; keep provenance disclosures and colour-mechanics copy). No agent files in
+scope (confirmed via `git status --porcelain`: zero changes to `agent_runner.py`, any
+`*_agent.py`, `main.py`, or anywhere else agents live — only `best_options.py`, `web/app.py`,
+the three Best Options frontend files, and the four Best-Options test files changed).
+
+**My own ownership (test-writing, within charter) done first:** rewrote
+`TestDteWindowBoundaries` in `test_best_options_adversarial.py` for the new `[0,45]` default
+(`test_dte_45_is_included`, `test_dte_46_is_excluded_by_default_window`, both explicit
+`dte_max=45` since this module-level suite's own `_evaluate` helper deliberately keeps its
+test-fixture-local default at 49 — documented choice, item #9 option (a) — with the true
+"endpoint's own un-overridden default" contract left to the endpoint-seam layer); updated the
+two `exceeds_system_dte_cap` flag tests to explicit `dte_max=60` overrides (DTE 46 no longer
+reaches the flag logic at all under the new default — it's excluded from the window first);
+fixed the `test_explicit_dte_window_can_include_50_when_requested` comment; added the
+copy-removal negative assertion (`"model-supplied" not in params["iv_rank_note"].lower()`).
+
+**Waited for and independently verified each owner's landed change (polled the tree, did not
+assume completion from any inbox write-up):**
+- **Linus** (`best_options.py`, `test_best_options.py`): `DEFAULT_DTE_MAX: 49 -> 45` confirmed;
+  `_evaluate_side`'s `coverable = ... // 100` line and `result["coverable_contracts"]` deleted;
+  `no_shares_held` now computed directly (`max(_safe_int(total_shares), 0) < 100`), no
+  intermediate; side-not-requested branch keeps `no_shares_held: None`, drops
+  `coverable_contracts: None`; `iv_rank_note` trimmed to drop the "model-supplied value"
+  clause. `test_best_options.py` updated: `coverable_contracts` assertions dropped,
+  `no_shares_held` assertions kept, both explicit negative assertions added
+  (`"coverable_contracts" not in result["calls"/"puts"]`).
+- **Rusty** (`web/app.py`, frontend): went beyond the minimum — imported
+  `DEFAULT_DTE_MIN`/`DEFAULT_DTE_MAX` from `src.best_options` directly instead of a second
+  hardcoded `49`/`45` literal (the design's named, optional tech-debt fix), so
+  `Query(default=DEFAULT_DTE_MIN/MAX, ...)` can never drift from the module's own default
+  again. `test_best_options_endpoint.py`'s parity test's direct-call `dte_max` updated
+  `49 -> 45` (verified this is the load-bearing fix the design flagged — without it the parity
+  test would have silently compared two different windows). `coverable_contracts` badge
+  deleted from `BestOptionsView.tsx`; `coverable_contracts` field and its stale doc-comment
+  deleted from `best-options.ts`, `no_shares_held`'s comment rewritten to stand on its own
+  (no longer defined in terms of the deleted field). Copy removal: the "Deterministic
+  screen... not an agent decision..." `<p>` block deleted whole from `BestOptionsParams.tsx`;
+  the H1 subtitle in `BestOptionsView.tsx` trimmed to drop "— deterministic, no LLM in this
+  path", factual clause kept. Both files' out-of-scope developer-facing comments (JSDoc,
+  file-header) correctly left untouched, confirmed by grep.
+- **Livingston** (`test_best_options_frontend_contract.py`): took longer to land than the
+  other two owners (tracked this via repeated polling — the file's `coverable_contracts` count
+  didn't move for several minutes, then updated mid-edit before settling) — dropped/renamed
+  the old `coverable_contracts` assertions, kept and strengthened the `no_shares_held`
+  assertions, and added a new `TestDefaultDteWindowAlignedTo45` class that is a *better* test
+  of the true production default than anything in my own suite: it calls the real endpoint
+  with **no query parameters at all** (`client.get(".../best-options")`, no `dte_max=`) and
+  asserts `parameters.dte == {"min":0,"max":45,"source":"default",...}` directly — this is the
+  one place in the whole suite that actually exercises `app.py`'s own `Query(default=...)`
+  fallback end-to-end, not an explicit override standing in for it (my own adversarial suite
+  cannot do this, since its `_evaluate` helper always passes an explicit `dte_max`). A second
+  test in the same class hits `?dte_max=60` and confirms DTE 45/46 both appear with
+  `exceeds_system_dte_cap` correctly absent/present respectively — directly proving "explicit
+  override still behaves as designed" at the real HTTP layer.
+
+**Reviewer-gate checks (all independently run, not trusted from any write-up):**
+- Zero `coverable_contracts` occurrences anywhere in `backend/src`, `backend/web`, or
+  `frontend/src` as an actual field/key/variable (grep swept all three trees) — the only
+  remaining occurrences of the string anywhere are (a) one explanatory code comment in
+  `best_options.py` documenting *why* it was removed, and (b) test-file doc comments +
+  `assert "coverable_contracts" not in ...` negative assertions in `test_best_options.py` and
+  `test_best_options_frontend_contract.py` — exactly the expected end-state, not a residual
+  defect.
+- `no_shares_held` semantics confirmed unchanged end-to-end: call-side-only, section-level,
+  independent of the deleted field (direct `total_shares` computation), still `null` when the
+  call side wasn't requested.
+- Endpoint/direct-call parity test (`test_best_options_endpoint.py`) actually exercises the new
+  default — confirmed its direct `evaluate_best_options(...)` call now passes `dte_max=45`,
+  matching the endpoint's own real (query-param-free) default.
+- `exceeds_system_dte_cap` confirmed still reachable and correct under an explicit override
+  past 45 — both at my own unit-test layer and, more convincingly, at Livingston's real
+  endpoint-seam layer (`?dte_max=60`).
+- `npx tsc --noEmit`: 0 errors.
+- Roll Scenarios visual-consistency directive re-confirmed untouched: `ROW_TINT_BG` still the
+  single shared token, still consumed by both `PositionDetail.tsx` and `BestOptionsView.tsx` —
+  this revision made zero changes to colour/row-tint code.
+- Full targeted suite: `test_best_options.py` + `test_best_options_adversarial.py` +
+  `test_best_options_endpoint.py` + `test_best_options_frontend_contract.py` +
+  `test_category_params.py` + `test_options_chain_dte_filter.py` + `test_options_chain_cache.py`
+  → **232 passed, 0 failed**. Full backend suite (`pytest tests/`): 1664 passed, 11 failed/16
+  errors — same pre-existing/unrelated `test_yfinance_*` failures observed all session, zero
+  new regressions (count only grew by the 3 new tests Livingston added).
+
+No defects found. **APPROVE.** No revision owner needed. Findings also filed to
+`.squad/decisions/inbox/basher-best-options-review.md`.
+
+## Supervisor/Alpha execution tracing — reviewer gate (separate from Best Options 45D gate)
+
+Design: `.squad/decisions/inbox/danny-supervisor-alpha-traces-design.md` (ACCEPTED,
+2026-08-29). Trigger: `.squad/decisions/inbox/copilot-supervisor-alpha-traces.md`. Owner
+table: Rusty (`agent_runner.py` runner instrumentation + `test_agent_trace_supervisor_alpha.py`
+plumbing tests + frontend `agent-traces.ts` types), Livingston (`cosmos_db.py` persistence +
+`test_cosmos_agent_trace_roundtrip.py`), Basher (own `test_agent_trace_adversarial.py` +
+reviewer gate). Linus not involved (no strategy/instructions surface).
+
+**My own test-writing (within charter, done before waiting on other owners):** wrote
+`backend/tests/test_agent_trace_adversarial.py` from scratch (25 tests) against the design's
+*specified future* behavior of `_run_supervisor_review`/`_run_alpha_review` (production had
+not yet landed when I wrote it). Covers, directly against the real methods (faking only the
+`Agent`/LLM boundary + a minimal recording fake Cosmos, never mutual fakes with another
+owner's test file): full-field trace capture on success (prompt/response/parsed/model/
+duration/phase/agent_type/run_id/parent_trace_id); the *unmapped* `agent_type` requirement for
+`open_call_monitor`/`open_put_monitor` (design §1); every enumerated `error` string from §3
+(`no_parseable_json`, `missing_required_fields:[...]`, `invalid_challenge_strength:...`/
+`invalid_opportunity_strength:...`, and the bare exception path); the "initialize instructions/
+message/response_text to None *before* `try:`" requirement, adversarially proven by making
+`get_supervisor_instructions`/`get_alpha_instructions` themselves raise before `agent.run()` is
+ever reached; the model-completeness fix (`model=None` resolves to the real deployment in the
+trace; an explicit override is recorded verbatim); tracing-failure isolation (§8: a raising
+`cosmos.write_agent_trace` must never change the review method's own return value or escape);
+the `enabled_types` toggle suppressing Supervisor/Alpha traces without suppressing the review
+itself (§6e); and — reusing Linus's already-passing `_symbol_runner_fixture`/
+`_monitor_runner_fixture` orchestration fixtures from `test_force_alpha_execution.py`, layering
+a second `_record_trace` spy on top via `monkeypatch.setattr` (disclosed reuse of test
+*infrastructure* for a *different* assertion axis, not a mutual fake) — zero trace writes for
+all three named skip paths (§4: buy_tracker, calm-WAIT non-forced, incomplete_quote_wait).
+
+**Real regression caught, then fixed by the correct owner before I finalized the gate:**
+Rusty's `agent_runner.py` change (landed ~16:14) extended `_run_position_assessment`'s return
+to a 4-tuple (`+ assessment_trace_id`) and `_run_roll_management`'s to a 3-tuple
+(`+ roll_trace_id`), exactly per design. This broke two **pre-existing, previously-green**
+monitor-path test fixtures that fake `_run_position_assessment`/`_run_roll_management` with
+the old, shorter tuple shape: `test_force_alpha_execution.py`'s `_monitor_runner_fixture`
+(Linus-authored) and `test_open_call_zero_quote.py`'s `_runner_fixture` (Basher-authored, my
+own earlier work). 12 tests failed with `ValueError: not enough values to unpack (expected 4,
+got 3)` — a real, falsifiable regression the design's own §11 ("these four files ... must
+remain green unmodified") had not anticipated, since it assumed only the `_record_trace`
+kwarg surface would matter, not the assessment/roll tuple arity. I did not fix this myself
+(strict lockout — I am a co-author of one of the two broken files); Rusty landed a minimal,
+correct fix ~5 minutes later (widening both fakes' return tuples with trailing `None`
+trace-id placeholders, `+4/+3 lines`, nothing else touched) and all 12 tests passed again on
+re-run. Recorded here as a durable finding for future gates: **any change to
+`_run_position_assessment`/`_run_roll_management`'s return arity must be cross-checked against
+every test file that fakes those two methods, not just the ones the originating design
+document happens to name.**
+
+**Transient, self-correcting anomaly (not a defect, methodology note):** a mid-polling read of
+`agent_runner.py` briefly showed the entire tracing implementation absent (back to the pre-
+feature baseline byte-for-byte) immediately after Rusty's new `test_agent_trace_supervisor_
+alpha.py` landed, causing that file's 4 tests to fail against a stale unpacking arity. A
+re-read ~90 seconds later showed the full, correct implementation restored (same byte size as
+my earlier verified-good read). Treated as an in-flight file-rewrite artifact of the shared
+background-agent tree, not a genuine regression — confirmed stable across two independent
+full-suite re-runs before finalizing this verdict. Reinforces the established rule from this
+session: never render a verdict from a single snapshot read of a live, concurrently-edited
+file; always re-confirm stability.
+
+**Independent code verification (all 11 `_run_supervisor_review`/`_run_alpha_review` call
+sites grepped individually, not inferred from test-count alone):** every one passes
+`cosmos=cosmos, run_id=run_id, parent_trace_id=...` — the 5 `asyncio.gather` pairs use
+`analysis_trace_id`/`final_phase_trace_id` correctly, and the 3 "supervisor alone" branches
+likewise. `_record_trace` mints its own `trace_id = str(uuid4())`, includes it as `trace["id"]`,
+and returns it only if `cosmos.write_agent_trace(...)` returned non-`None` — a disabled or
+failed write can never produce a dangling `parent_trace_id`. `activity_payload["run_id"] =
+run_id` confirmed present at all 3 required write sites in both `run_symbol_agent` and
+`run_position_monitor` (success path + the `except Exception` error-activity path in each).
+`cosmos_db.py`'s diff is a minimal, fully additive 13-line change (caller-supplied `id`
+honoring in `write_agent_trace`, `run_id`/`parent_trace_id` added to `list_agent_traces`'s
+projection) — no DDL/TTL/container change, `AGENT_TRACE_TTL_SECONDS == 7776000` confirmed
+unchanged. Frontend: `agent-traces.ts` additively typed (`run_id?`, `parent_trace_id?` on both
+`AgentTraceRow`/`AgentTraceDetail`); `AgentLogsView.tsx` and `[trace_id]/page.tsx` confirmed
+**zero diff** — both already render `phase`/generic fields dynamically with no hardcoded
+allowlist, exactly as the design predicted; `web/app.py::api_agent_traces` confirmed zero
+trace-related diff (unrelated diff present is the already-approved Best Options DTE-45 work).
+`npx tsc --noEmit`: 0 errors.
+
+**Full suite:** targeted (`test_agent_trace_adversarial.py` + `test_cosmos_agent_trace_
+roundtrip.py` + `test_agent_trace_supervisor_alpha.py` + the 4 named must-not-regress files) →
+**94 passed, 0 failed**. Full backend suite: 1732 passed, 11 failed/16 errors — same
+pre-existing/unrelated `test_yfinance_*` failures observed all session, zero new regressions.
+
+No outstanding defects. **APPROVE.** No revision owner needed — the one regression found
+during this gate was already fixed by its correct owner (Rusty) before I finalized. Findings
+also filed to `.squad/decisions/inbox/basher-supervisor-alpha-traces-review.md`.
+
+## 2026-08-29T15:11Z — Options Screener reviewer gate: APPROVE
+
+Scope: Linus's `options_screener.py` aggregator, Rusty's `/api/screener/options` endpoint,
+Livingston's `options_chain_cache.py` concurrency fix, and the frontend Screener nav/view/
+shared-formatting-lib work, reviewed against Linus's design doc and the binding Roll-Scenarios
+visual-consistency directive.
+
+New Basher-owned adversarial coverage this gate:
+- `backend/tests/test_options_screener_adversarial.py` (8 tests, new): exact-evaluator-reuse via
+  spy (screener-level `min_dte`/`max_dte` never leak into per-symbol `evaluate_best_options`
+  calls; symbol facts pass through unmodified), put-side category-band narrowing-only (Linus's
+  own suite only covered calls), rows/`nearest_miss` mutual exclusion, explicit Avoid-selectable
+  preference, full-payload no-`coverable_contracts` scan, byte-stability under mixed statuses.
+- `backend/tests/test_options_screener_endpoint.py` (14 tests, new): real FastAPI TestClient +
+  real `OptionsChainCache` + real aggregator, independent `FakeScreenerCosmos`. Covers query-param
+  validation, O(1) Cosmos metadata reads, <=4 cold-warm concurrency cap, no-`coverable_contracts`,
+  `nearest_miss`/`rows` disjointness, non-default sort + pagination-after-resort, and the
+  put-side `no_shares_held` leak below.
+
+Defects found during this gate and confirmed fixed before verdict:
+1. Endpoint originally attached `no_shares_held` to every row regardless of `side`, leaking a
+   covered-call-only concept (per `best_options.py`) onto cash-secured-put rows. Caught by
+   `TestNoSharesHeldPutSideDefect`; confirmed fixed — now gated `if side == "call":`. Whole-chain
+   freshness flag also correctly renamed `stale` -> `chain_stale` to avoid colliding with
+   `best_options.py`'s own per-contract `stale` field.
+2. Livingston independently found and fixed a more serious event-loop-blocking defect (real
+   Cosmos/persistence I/O running synchronously inside the async endpoint handler, freezing
+   concurrent requests) via additive `trigger_swr` kwarg + `run_in_executor` offload; verified
+   4/4 of his `test_options_screener_cache_concurrency.py` tests independently.
+3. Visual-consistency directive violation: `BestOptionsView.tsx` still carried a byte-identical
+   duplicate of `FLAG_LABELS`/`ColorBadge`/`GateBadge`/`flagLabel`/`fmtNum`/`fmtPct`/
+   `fmtExpiration` despite the new shared `frontend/src/lib/options-row-format.tsx` claiming to
+   have been extracted from it. Confirmed fixed — `BestOptionsView.tsx` now imports from the
+   shared lib instead of duplicating.
+
+Non-blocking finding: `npx eslint .` surfaces `react-hooks/set-state-in-effect` errors in 11
+files project-wide (incl. `BestOptionsView.tsx` and the new `OptionsScreenerView.tsx`), but 9 of
+the 11 (e.g. `EconomicsView.tsx`, `CalendarView.tsx`, `PositionsTable.tsx`, `SymbolInfoModal.tsx`,
+`GlobalChatView.tsx`) are entirely unrelated to this feature and share the exact same
+`useEffect(() => { load(); }, [load])` pattern. This is pre-existing repo-wide lint debt, not a
+regression introduced by the Screener feature (`OptionsScreenerView.tsx` merely copied an
+already-established pattern). Not grounds for rejection of this gate; flagged for a future
+dedicated lint-debt pass owned outside this feature's scope.
+
+Verification snapshot: 192/192 passed across all Best-Options + Screener test files combined;
+1758 passed / 11 failed / 16 errors backend-wide (the 11 failed + 16 errors are pre-existing
+yfinance data-provider issues, unrelated, matching the established baseline); `npx tsc --noEmit`
+clean; `npm run build` succeeds (confirms `/screener/options`, `/screener/dgi`, and the `/dgi`
+and `/dgi/analyze/:symbol` redirects all compile). No `coverable_contracts` occurrences outside
+comments/negative-assertions. No IV Rank, no LLM call anywhere in this feature.
+
+**Verdict: APPROVE.** Options Screener feature (backend aggregator + endpoint + cache concurrency
+fix + frontend nav/view/shared-formatting) satisfies Linus's design doc and the binding visual-
+consistency directive. No outstanding defects.
+
+## 2026-08-29T15:12Z — Options Screener gate re-confirmation (Rusty's "e2e complete" report)
+
+Rusty reported end-to-end completion and requested re-execution of the final gate. Tree
+inspection showed all Screener-related files unmodified since the 15:11Z APPROVE gate
+(newest mtime 14:55:51Z, before that verdict was written) -- no new changes to verify.
+Re-ran the full combined Best-Options + Screener suite (192/192 passing) and spot-confirmed
+by direct code inspection: `no_shares_held` still gated `if side == "call":` (never leaks to
+put rows); `chain_stale` (whole-chain) vs `stale` (per-contract) naming collision remains
+resolved; `options_screener.py` still calls `evaluate_best_options(` directly with no local
+scoring/threshold reimplementation; no Cosmos/persistence writes in the aggregator;
+`_SCREENER_MAX_COLD_WARMS_PER_REQUEST = 4` cap unchanged and enforced.
+
+**Verdict: APPROVE (reconfirmed, no changes to re-review).** Same outcome and evidence as the
+15:11Z gate; see that entry and `basher-options-screener-review.md` for full detail.

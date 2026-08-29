@@ -662,3 +662,172 @@ revised the three files independently based on the live payload and Basher's wri
 
 **Reported for Basher re-review:**
 `.squad/decisions/inbox/livingston-best-options-d2d3-revision.md`.
+
+### 2026-08-29 (later still) — Best Options 45d-alignment: contract test updated for DTE default + coverable_contracts removal
+
+**Assignment:** `.squad/decisions/inbox/copilot-best-options-45d-no-coverable.md` (user directive) ->
+`.squad/decisions/inbox/danny-best-options-45d-design.md` (ACCEPTED). My scoped item is #7: update
+`backend/tests/test_best_options_frontend_contract.py` once the production changes (Linus's
+`best_options.py`, Rusty's `web/app.py`/frontend) land. Did not touch production code, `refresh_all`,
+or evaluator semantics -- test-file-only change, in charter.
+
+**Waited for the dependency, did not implement it myself:** polled the actual files (not memory/design
+text) until both landed: `best_options.py`'s `DEFAULT_DTE_MAX: 49 -> 45` and `coverable_contracts`
+fully deleted (Linus); `web/app.py`'s `Query(default=49,...)` changed to import and reuse
+`best_options.DEFAULT_DTE_MAX` directly (Rusty, closing the second-source-of-truth tech debt the
+design flagged as recommended-not-required) and all frontend `coverable_contracts` references gone
+(Rusty). Confirmed via direct grep against the live tree, not assumed from the design doc's plan.
+
+**Updated the test file:**
+- Removed both `coverable_contracts` assertions (`== 3`, `== 0`) and renamed
+  `test_coverable_contracts_and_no_shares_held_are_call_only` ->
+  `test_no_shares_held_is_call_only_and_coverable_contracts_absent`; added explicit
+  `assert "coverable_contracts" not in body["calls"]` / `not in body["puts"]` in both the
+  call-only-fields test and the zero-shares test -- proving *complete* absence (not just missing on
+  puts, which was the old, narrower assertion), matching the design's "not recolored, not renamed,
+  not defaulted to null -- must not appear at all" wording and `no_shares_held` preserved as
+  independent (computed directly from `total_shares`, not derived from the deleted count).
+- Added a new class, `TestDefaultDteWindowAlignedTo45` (3 tests), pinning the `[0, 45]` inclusive
+  default at the real cache+evaluator+endpoint seam (not a white-box unit call), since `app.py`'s
+  `Query(default=...)` is an independently-editable second source of truth and only the real endpoint
+  proves the two stay in sync:
+  - `parameters.dte` on an unmodified request equals
+    `{min: 0, max: 45, source: "default", system_cap: 45, timezone: "America/New_York"}`.
+  - A fixture with one call contract at DTE 45 and one at DTE 46 (strikes/deltas empirically verified
+    first, not assumed -- both land in the "balanced" category's delta band so DTE is the only variable
+    that can explain either one's presence) proves DTE 45 is genuinely included by default
+    (`rows == [dte 45]`, `nearest_miss.dte == 45`) and DTE 46 is not merely hidden from rows but
+    entirely absent from evaluation (`excluded_by_delta_band == 0` -- it never reached the delta-band
+    check at all).
+  - The same fixture with an explicit `dte_max=60` override surfaces DTE 46 as a real row carrying
+    `exceeds_system_dte_cap`, confirming that flag (design §2, "preserved... reachable the moment a
+    caller explicitly widens `dte_max` past 45") is live, not orphaned dead code.
+
+**Validation:** `test_best_options_frontend_contract.py` alone: 8/8 passed. Combined with
+`test_best_options.py`, `test_best_options_adversarial.py`, `test_best_options_endpoint.py`,
+`test_category_params.py`, `test_options_chain_dte_filter.py` (the design's own named reviewer-gate
+suite): **176 passed, 0 failed.** Grepped `backend/` and `frontend/src/` for `coverable_contracts`:
+zero hits in any production or frontend file (only comments/test names/negative assertions
+documenting its removal remain, plus stale `.pytest_cache` node-id entries which are not code).
+
+No production, frontend, or `refresh_all` code touched -- test-file-only, within my persistence/
+integration-test charter and this task's explicit scope.
+
+### 2026-08-29 (evening) — Supervisor/Alpha trace design: Cosmos round-trip portion (separate from Best Options)
+
+**Assignment:** `.squad/decisions/inbox/copilot-supervisor-alpha-traces.md` (user directive) ->
+`.squad/decisions/inbox/danny-supervisor-alpha-traces-design.md` (ACCEPTED). My scoped items are #2
+(`backend/src/cosmos_db.py`) and #7 (new round-trip test file). Did not touch
+`backend/src/agent_runner.py` (Rusty's runner instrumentation, explicitly out of my charter and this
+task's boundary) or any `refresh_all`/watchdog surface. No DDL/index/retention/settings change.
+
+**`cosmos_db.py::write_agent_trace`:** changed `doc["id"] = str(uuid4())` (unconditional) to
+`doc["id"] = trace.get("id") or str(uuid4())`, and excluded `"id"` from the trailing `**{k:v for k,v
+in trace.items() ...}` spread (previously only `"symbol"` was excluded there). Note for the record:
+because that spread already ran *after* the initial `"id"` key in the same dict literal, a
+caller-supplied `trace["id"]` was, subtly, already winning via Python's later-key-wins dict-literal
+semantics -- but that was implicit/accidental-looking, not an intentional contract, and the explicit
+`trace.get("id") or str(uuid4())` form the design calls for is what's actually in place now, with the
+same behavior made unambiguous and independent of spread ordering. Docstring updated to name `run_id`/
+`parent_trace_id` as expected optional keys.
+
+**`cosmos_db.py::list_agent_traces`:** added `c.run_id, c.parent_trace_id` to the lightweight `SELECT`
+projection (previously: id/symbol/agent_type/model/phase/is_alert/duration_seconds/timestamp/error/
+activity_summary/confidence/activity). `get_agent_trace`'s `SELECT *` needed no change (already returns
+everything). `web/app.py::api_agent_traces` needed no change either (already passes rows through
+verbatim) -- confirmed by reading it, not touched.
+
+**New test file, `backend/tests/test_cosmos_agent_trace_roundtrip.py`** (7 tests, all passing): follows
+the `test_cosmos_close.py` fake-container pattern but goes further -- `FakeAgentTracesContainer` is a
+small in-memory store whose `query_items` actually *parses* the real SELECT/WHERE/ORDER BY/LIMIT text
+`cosmos_db.py` issues (regex-based, not hardcoded per-test expected output), so this is a genuine
+write-then-read round trip through the production query strings, not an assertion against a mock's
+call arguments.
+- `TestWriteAgentTraceIdHandling` (3 tests): caller-supplied `id` honored; UUID fallback still works and
+  never collides across two auto-generated writes; TTL (`AGENT_TRACE_TTL_SECONDS == 7776000`) and
+  `doc_type` shape unchanged -- direct proof of "no retention change," not just an unverified claim.
+- `TestListAgentTracesProjection` (2 tests): `run_id`/`parent_trace_id` present in the lightweight list
+  projection; `get_agent_trace`'s full-detail read surfaces both plus `error`, and an untruncated
+  5000-char `system_prompt` round-trips byte-for-byte (locks design §6's "no truncation" rule at the
+  storage seam, the one place a bug here would silently clip it).
+- `TestRunIdCorrelationAcrossParentAndChildTraces` (2 tests) -- the cross-seam check design item #7
+  names as my remit: (a) an `analysis` parent trace plus `supervisor`+`alpha` children, all sharing one
+  `run_id`, survive storage and can be recovered as a set by filtering `list_agent_traces`'s rows on
+  `run_id` client-side (exactly how a reader/UI would use the activity document's new `run_id` field to
+  find its trace set); an unrelated trace with a different `run_id` is proven not to leak into the
+  filtered set; both children's `parent_trace_id` point at the analysis trace, which itself has
+  `parent_trace_id=None`. (b) the 2-phase monitor path: `assessment` -> `roll` -> `supervisor`/`alpha`,
+  proving Supervisor/Alpha `parent_trace_id` points at the **roll** trace (not assessment) when a roll
+  occurred this cycle, per design §2's "they review the decision that was actually made"; also locks
+  that the original, unmapped `agent_type` (`open_call_monitor`, not the supervisor-instructions-lookup
+  remapped `open_call`) survives the round trip, per design §1.
+
+**Validation:** new file alone: 7/7 passed. Regression check alongside `test_cosmos_close.py` (only
+other cosmos_db.py test file) plus the four trace-adjacent suites the design's reviewer gate names as
+"must remain green unmodified" (`test_force_alpha_execution.py`, `test_open_call_zero_quote.py`,
+`test_buy_tracker_normalization.py`, `test_zero_free_agent_chain.py`): **67 passed, 0 failed** (5
+pre-existing, unrelated `datetime.utcnow()` deprecation warnings only). Grepped for any other existing
+test touching `write_agent_trace`/`list_agent_traces`/`get_agent_trace`/`agent_traces_container`: none
+found besides my own new file, so no other test needed updating.
+
+**Scope discipline:** `agent_runner.py` (Rusty's item #1 -- minting `run_id`, restructuring
+`_run_supervisor_review`/`_run_alpha_review`, threading `run_id`/`parent_trace_id` into 11 call sites)
+had not landed at the time of this work; my Cosmos-layer changes and test are independent of that
+landing and fully backward-compatible either way (a caller that never passes `id`/`run_id`/
+`parent_trace_id` behaves exactly as before). Did not implement or stub any part of Rusty's surface.
+Wrote to `.squad/decisions/inbox/livingston-supervisor-alpha-cosmos.md` for the team record.
+
+## Options Screener — cache/API-seam integration (concurrency defect found and fixed)
+
+Task: verify Rusty's new `GET /api/screener/options` endpoint against the approved
+directive's cache/calendar-seam requirements (`.squad/decisions/inbox/copilot-options-screener-approved.md`,
+`.squad/decisions/inbox/linus-options-screener-design.md`) and add integration tests.
+
+**Confirmed already correct:** `_build_screener_symbol_inputs` calls `cosmos.list_symbols()`
+once and `cosmos.get_calendar_events()` once, grouping calendar rows into per-symbol
+earliest-future-date dicts in Python instead of looping per-symbol Cosmos queries -- O(1)
+metadata reads, as required.
+
+**Defect found (mine to fix -- concurrency correctness in my owned cache/API seam):** that
+same helper performed all of this Cosmos/persistence I/O -- including a blocking
+`OptionsChainStore.hydrate()` query per cold symbol -- directly on the request's event loop,
+not in a worker thread. Across a many-symbol watchlist this froze the loop for the full
+duration, starving every other concurrent request. Empirically proven with a slow-Cosmos
+probe (0.6s+ block before the fix, ~0.05s scheduling delay after).
+
+**Fix:** `options_chain_cache.py`'s `get_or_hydrate` gained an additive `trigger_swr: bool =
+True` keyword (default preserves every existing caller's behavior) so a batch caller can skip
+the in-line stale-while-revalidate trigger, which calls `asyncio.create_task` and would
+silently no-op on a thread with no running loop anyway. `app.py`'s helper no longer calls
+`schedule_background_refresh` itself; it decides *which* symbols need warming (same
+`_SCREENER_MAX_COLD_WARMS_PER_REQUEST`=4 cap on cold misses, uncapped for stale-but-present
+hits) and returns them as `to_warm`. The endpoint now runs the whole helper via
+`loop.run_in_executor` (one worker thread, sequential inside it) and applies
+`cache.schedule_background_refresh` for each `to_warm` symbol back on the event-loop thread
+afterward, where `asyncio.create_task` works correctly. Preserves symbol locking,
+`refresh_all`'s watchdog (untouched), no cancellation/timeout around an in-flight refresh, and
+the cold-miss cap of 4.
+
+**New test file, `backend/tests/test_options_screener_cache_concurrency.py`** (4 tests,
+independently authored, no shared fakes with Basher's `test_options_screener_endpoint.py`):
+event-loop non-blocking proof via a concurrent `/healthz` request during a slow screener
+request; deferred-warming-still-fires (a cold symbol reported "warming" is actually populated
+shortly after, locking the worker-thread-to-event-loop hand-off); zero-Cosmos-writes proof (no
+second source of truth, via a fake that records any write/upsert/save/persist call); and a
+single shared `generated_at` timestamp per request. Uses the codebase's existing
+`run_async()`-via-isolated-event-loop convention (no pytest-asyncio dependency, matching
+`test_options_chain_cache.py`).
+
+**Validation:** new file 4/4 (stable x3 runs); `test_options_screener_endpoint.py` (Basher's
+suite, actively being written/stabilized in parallel during this work -- self-resolved from 6
+failures to 0 via Basher's own `_warm_symbol` fix, unrelated to mine) 14/14; `test_options_chain_cache.py`
+56/56 (additive kwarg, no behavior change for existing callers); combined targeted run 114/114.
+Full `backend/tests/` sweep: 1758 passed; 11 failed/16 errored, all confined to
+`test_yfinance_data_provider.py`/`test_yfinance_technicals_dividend_availability.py` --
+pre-existing, unrelated to any cache/persistence/API-seam work, not touched by me or by any of
+my prior tasks. Reporting as a cross-owner defect, not fixing (outside my charter).
+
+**Scope discipline:** did not modify `src/options_screener.py` (Linus's pure aggregator), any
+`refresh_all`/watchdog code, or Basher's own test file (observed it self-stabilize in parallel
+rather than touching it). Wrote `.squad/decisions/inbox/livingston-options-screener-cache.md`
+for the team record.

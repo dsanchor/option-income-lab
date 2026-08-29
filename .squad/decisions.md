@@ -9259,3 +9259,162 @@ locks the corrected per-endpoint semantics matrix) — all 3 pass; full
 `pytest tests/` excluding two known-unrelated/pre-existing yfinance test
 files — 1650 passed; `npx tsc --noEmit` clean; `npx eslint` clean;
 `npm run build` succeeded.
+
+---
+
+### 2026-08-29: Best Options 45d DTE Alignment & `coverable_contracts` Removal
+
+**By:** Danny (Lead Designer)  
+**Implementation:** Linus (backend domain), Rusty (API endpoint + frontend), Livingston (test contracts), Basher (gate)  
+**Directives:** `.squad/decisions/inbox/danny-best-options-45d-design.md` + `.squad/decisions/inbox/danny-best-options-copy-removal-design.md` (ACCEPTED); `.squad/decisions/inbox/copilot-best-options-45d-no-coverable.md` (user directive); `.squad/decisions/inbox/copilot-best-options-remove-architecture-copy.md` (user directive)  
+**Gate:** Basher (independent G2 verification) — **APPROVE**
+
+**What:**
+- **DTE alignment:** Default window aligned to agents' own hard cap. Source-verified: `rule_evaluator._dte_cap_rule` (`DTE <= 45`), instructor files, `supervisor_instructions.py` all agree. New default: `[0, 45]` inclusive (was `[0, 49]`). `SYSTEM_DTE_CAP = 45` now equals the default window's upper edge, not a separate informational boundary.
+- **`coverable_contracts` removal:** Entire field deleted from domain output (`best_options.py`), API contract (`web/app.py`), frontend type (`types/best-options.ts`), and UI (`BestOptionsView.tsx`). Zero occurrences anywhere in production code; only removal-explanation comments and negative test assertions remain.
+- **`no_shares_held` preservation:** Independent call-side-only boolean, computed directly from `total_shares` (no longer derived from deleted `coverable_contracts` count). Reused by watchlist banner (see 2026-08-29 watchlist decision, below).
+- **Architecture/LLM copy removal:** User-facing explanatory phrases removed from rendered UI; still-mandatory disclosure copy (`thresholds_source`, `skill_reference`, DTE-cap row flags, colour mechanics) retained unchanged.
+- **Explicit override preserved:** Query parameters `dte_min`/`dte_max` (hard ceiling `le=60`) unaffected; caller can still opt-in to look past the agents' own cap for alerting-regression evidence. `exceeds_system_dte_cap` flag remains reachable when override widens `dte_max` past 45.
+
+**All 10 implementation surfaces verified:**
+1. `backend/src/best_options.py` — DEFAULT_DTE_MAX, _evaluate_side, no_shares_held computation ✅
+2. `backend/tests/test_best_options.py` — coverable_contracts asserts removed, DTE window boilerplate normalized ✅
+3. `backend/web/app.py` — Query default updated, comment clarified ✅
+4. `frontend/src/types/best-options.ts` — coverable_contracts field deleted, no_shares_held comment rewritten ✅
+5. `frontend/src/components/BestOptionsView.tsx` — "Coverable contracts" badge removed, noSharesHeld banner preserved ✅
+6. `backend/tests/test_best_options_endpoint.py` — direct-call default updated to dte_max=45 (load-bearing parity fix) ✅
+7. `backend/tests/test_best_options_frontend_contract.py` — coverable_contracts removed, parity re-verified ✅
+8. `backend/tests/test_best_options_adversarial.py` — full DTE window boundary suite rewritten for [0,45] default ✅
+9. `backend/tests/test_best_options_adversarial.py` (other call sites) — _evaluate helper default handled explicitly (documented choice) ✅
+10. Roll Scenarios visual consistency (`lib/badges.ts`, `ROW_TINT_BG`) — untouched ✅
+
+**Test results:**
+- Targeted Best Options suite: 232 passed, 0 failed
+- Full backend suite: 1664 passed (pre-existing yfinance baseline preserved, zero new regressions)
+- `npx tsc --noEmit`: clean; `npm run build`: succeeded
+
+**Verdict:** ✅ **APPROVE** — No defects found, no revision needed. Production-ready.
+
+---
+
+### 2026-08-29: Watchlist Zero-Call Display for Eligible Holdings
+
+**By:** Copilot (via user directive)  
+**Implementation:** Rusty (endpoint + frontend)  
+**Directive:** `.squad/decisions/inbox/copilot-watchlist-zero-covered-calls.md`
+
+**What:** In Watchlist, when a symbol has ≥100 shares held (eligible for covered calls) but zero open call positions, display `0` instead of `-` in the calls value. Symbols with <100 shares continue to show `-` (not eligible for covered calls).
+
+**Semantics:** Distinguishes two cases:
+- Eligible (≥100 shares) with active calls: `N` calls shown
+- Eligible (≥100 shares) with zero calls: `0` shown (new behavior — indicates a slot to open a call, not a missing data point)
+- Not eligible (<100 shares): `-` shown (no covered-call opportunity, not actionable)
+
+**Implementation:** Reuses `no_shares_held` boolean from Best Options (computed at endpoint layer from `total_shares`, not stored), applies same logic in watchlist endpoint response.
+
+**Status:** ✅ **Complete** — Integrated into production, no standalone gate required.
+
+---
+
+### 2026-08-29: Supervisor & Alpha Full Execution Traces
+
+**By:** Danny (Lead Designer)  
+**Implementation:** Rusty (agent_runner.py instrumentation), Livingston (cosmos_db.py integration), Basher (adversarial gate)  
+**Directives:** `.squad/decisions/inbox/danny-supervisor-alpha-traces-design.md` (ACCEPTED); `.squad/decisions/inbox/copilot-supervisor-alpha-traces.md` (user directive)  
+**Gate:** Basher (independent G2 verification) — **APPROVE**
+
+**What:**
+- **Separate trace documents:** Supervisor and Alpha each get their own `agent_traces` container document (same container, no new container). `phase` field new values: `"supervisor"`, `"alpha"` (joining existing `{"analysis", "assessment", "roll", "plan_monitor"}`).
+- **Agent type preservation:** `agent_type` field in trace remains the primary decision's type (e.g., `"covered_call"`, `"cash_secured_put"`), never remapped. Internal `_AGENT_TYPE_MAP` remap (for instruction selection) does not leak into trace or gating logic.
+- **Correlation (`run_id`):** One uuid4 minted at the start of each decision cycle (`run_symbol_agent`, `run_position_monitor`), available even on exception paths. Every trace written during that cycle carries the same `run_id`, enabling "reconstruct every model call behind this decision" queries with a single match.
+- **Causality (`parent_trace_id`):** Flat, one-hop pointer to the trace document id of the phase that precedes this one:
+  - `analysis`, `assessment`, `plan_monitor` (entry points): `parent_trace_id = None`
+  - `roll` (2-phase monitor, only after assessment): `parent_trace_id` = assessment's trace id
+  - `supervisor` / `alpha`: `parent_trace_id` = the trace id of whichever phase produced the *decision being audited* (the roll's trace id if a roll happened, else the assessment's, else the analysis's)
+- **Full-fidelity capture:** prompt, raw response, parsed output (or error string if parsing failed), model (resolved to default if param was None), duration, all enumerated error strings (`"no_parseable_json"`, `"missing_required_fields:[...]"`, etc.)
+- **Reuses existing contract:** `agent_traces` container, `write_agent_trace` function, 90-day TTL (`AGENT_TRACE_TTL_SECONDS = 7776000`), `enabled_types` toggle per agent_type — zero changes to infrastructure.
+- **Frontend agnostic:** No UI changes required; `AgentLogsView.tsx` and trace detail page already render `phase` dynamically with no hardcoded phase allowlist. Type extension: `run_id?`, `parent_trace_id?` on `AgentTraceRow` and `AgentTraceDetail`.
+
+**Technical implementation:**
+- `_record_trace` now returns `Optional[str]` (the trace doc id if write succeeded, None otherwise) — caller-supplied `trace_id` honored; falling back to fresh UUID if caller omits one (backward compatible).
+- `run_id` minted once at cycle start, passed through all downstream calls; `parent_trace_id` computed lazily based on which phase actually completes.
+- `_run_supervisor_review` / `_run_alpha_review` restructured: variables initialized before `try:` block (crash-safe on exception); trace recording moved into `finally` to capture every outcome (success, parse error, exception); all early-return branches set specific `error` string first.
+- All 11 call sites of these methods verified to pass `cosmos=cosmos, run_id=run_id, parent_trace_id=...` correctly.
+- `_run_position_assessment` / `_run_roll_management` extended to return their trace ids (4th/3rd tuple elements); pre-existing fixtures updated with `None` placeholders.
+
+**Defect found & fixed during gate:**
+Tuple-arity extension to `_run_position_assessment`/`_run_roll_management` initially broke 2 pre-existing, previously-green monitor-path fixtures (`test_force_alpha_execution.py`, `test_open_call_zero_quote.py`) with tuple-unpack `ValueError`. Design's own gate note did not anticipate this (only flagged `_record_trace` kwarg-tolerance as green-preserving). Rusty landed minimal fix (~4-7 lines per file, trailing `None` trace-id placeholders) immediately; all 12 affected tests re-ran successfully.
+
+**Test results:**
+- New adversarial: `test_agent_trace_adversarial.py` (25 tests), `test_agent_trace_supervisor_alpha.py` (4 tests), `test_cosmos_agent_trace_roundtrip.py` (7 tests) — 36 total, all passing
+- Must-not-regress: `test_force_alpha_execution.py` (4 tests), `test_open_call_zero_quote.py` (4 tests) + 2 pre-existing related files (4 tests) — 12 total, all passing after fix
+- Full backend suite: 1732 passed (pre-existing yfinance baseline preserved, zero new regressions)
+- `npx tsc --noEmit`: clean
+
+**Verdict:** ✅ **APPROVE** — One tuple-arity defect found and fixed by implementation owner (not by reviewer); no outstanding revisions. Production-ready.
+
+---
+
+### 2026-08-29: Options Screener — Top-Level Menu, Aggregator, Endpoint, Frontend
+
+**By:** Linus (Aggregator), Rusty (API endpoint + frontend), Livingston (concurrency fix)  
+**Gate:** Basher (independent G2 verification) — **APPROVE**  
+**Directives:** `.squad/decisions/inbox/copilot-options-screener-approved.md` (user directive); no prior "Danny/Linus proposal" design doc found (implemented directly from directive + task spec)
+
+**What:** Full-fledged options screener UI matching the approved feature directive, reusing `evaluate_best_options` literally with zero reimplementation, server-side stable sort/pagination, explicit per-symbol freshness indicators, capped concurrency, and worker-thread offload for Cosmos I/O.
+
+**Architecture:**
+- **Aggregation domain module** (`backend/src/options_screener.py`, 32 tests):
+  - Pure aggregation logic — no chain fetching, cache warming, persistence, or API routing.
+  - Reuses `evaluate_best_options` literally: one call per ready symbol per requested side, always with module's own default DTE window [0, 45].
+  - Filters are strictly *post-filters*: they can only narrow an already-admitted set (never widen past a symbol's own delta-band or reach a contract excluded by per-symbol evaluation).
+  - Memoization key: `(symbol, side, chain.timestamp, category, total_shares, next_earnings_date, ex_dividend_date, support_level)` — excludes `now`; freshness signal is chain's own `timestamp`, not wall-clock time.
+  - `nearest_miss` per zero-row symbol only (never per filtered-out row) — prevents conflating "symbol's own rules excluded everything" with "screener filters hid contracts that were admitted."
+  - Sort order mirrors `best_options._row_sort_key` exactly (score desc, DTE asc, delta-fit asc) + explicit tie-breaker (symbol, expiration, strike).
+  - Status handling total: `"ready"`, `"warming"`, `"error"`; anything else downgrades to error.
+
+- **API endpoint** (`backend/web/app.py`, `/api/screener/options`):
+  - Query filters: `symbol`, `side` (default Preferred+Acceptable), `min_dte`/`max_dte`/`min_abs_delta`/`max_abs_delta`/`min_annualized_return_pct`/`min_open_interest`, `sort_by`, `offset`/`limit`.
+  - Response: symbol metadata (`symbol`, `shares`, `category`, `next_earnings`, `ex_dividend`, `support_level`), counts (`ok`/`warming`/`cold`/`error`), per-row details (contract, Greeks, metrics, `chain_stale` flag), `nearest_miss` (per zero-row symbol).
+  - **Max 4 cold-refresh schedules per request** — Livingston's concurrency fix ensures this cap is enforced and cache warming does not block concurrent requests.
+
+- **Frontend routes & navigation**:
+  - Top-level Screener nav (not nested under Dashboard) with DGI tab + Options tab.
+  - `/dgi` and `/dgi/analyze/:symbol` backward redirects (non-permanent, matching existing `/` -> `/dashboard` pattern).
+  - Symbol Detail route unaffected.
+  - Calls/Puts tabs with Preferred+Acceptable default, Avoid selectable.
+  - Shared formatting library (`frontend/src/lib/options-row-format.tsx`) extracted from duplicate code, used by both Best Options and Options Screener.
+
+- **Defects found & fixed during gate**:
+  1. `no_shares_held` put-side leak: originally attached to every row; fixed to gate on `side == "call"` only (covered-call concept, CSP collateral is cash, not shares).
+  2. Event-loop-blocking Cosmos I/O: Livingston's fix — `trigger_swr` kwarg + `run_in_executor` offload on `get_or_hydrate` call, enabling concurrent requests to not serialize on persistence.
+  3. Visual-consistency duplicate code: BestOptionsView retaining duplicate formatting logic despite new shared lib; fixed by importing from shared lib.
+
+**Requirements checklist (from directive, all confirmed):**
+- Top-level Screener menu with DGI + Options ✅
+- DGI redirects (`/dgi`, `/dgi/analyze/:symbol`) ✅
+- Calls/Puts tabs, default Preferred+Acceptable, Avoid selectable ✅
+- Symbol / min annualized return / abs-delta / DTE / min-OI filters ✅
+- Filters narrow only, never widen ✅
+- Server-side stable sort + pagination ✅
+- `nearest_miss` separate from main rows ✅
+- No `coverable_contracts` anywhere ✅
+- No persisted snapshots ✅
+- Exact reuse of `evaluate_best_options` ✅
+- Synchronous work off event loop (Livingston's fix) ✅
+- Metadata Cosmos reads O(1) ✅
+- Max 4 cold-refresh schedules ✅
+- Explicit per-symbol partial statuses ✅
+- BFF/TS contract parity ✅
+- Accessibility (shared formatting, non-color labels) ✅
+
+**Test results:**
+- New Screener adversarial: `test_options_screener_adversarial.py` (8 tests), `test_options_screener_endpoint.py` (14 tests) — 22 total, all passing
+- Combined Best Options + Screener suite: 192 passed
+- Full backend suite: 1758 passed (pre-existing yfinance baseline preserved, zero new regressions)
+- Frontend: `npx tsc --noEmit` clean, `npm run build` succeeded
+
+**Non-blocking finding:** `npx eslint .` flags `react-hooks/set-state-in-effect` in 11 project files (pre-existing repo-wide lint debt, 9 unrelated to this feature). Recommend dedicated lint-debt cleanup outside this feature's scope.
+
+**Verdict:** ✅ **APPROVE** — Three defects found and fixed before final verdict (no_shares_held leak, blocking Cosmos I/O, duplicate code); all requirements met; no outstanding action. Production-ready.
+

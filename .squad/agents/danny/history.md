@@ -286,3 +286,210 @@ recommended ownership).
 (§2A and amended §4.1/§4.2) and
 `.squad/decisions/inbox/danny-best-options-delta-filter-correction.md`. Defect 1 only —
 Defect 2 stands as rejected until its own owner revises it.
+
+### 2026-08-29 (later still) — Best Options: 45d DTE alignment + `coverable_contracts` removal (design review, no implementation)
+
+Decision: `.squad/decisions/inbox/danny-best-options-45d-design.md` (accepted). User
+directive: align Best Options' DTE window to the agents' 45-day cap and remove the
+coverable-contract calculation/field entirely.
+
+**Boundary was verified, not assumed.** The agents' cap is `DTE <= 45` — inclusive, window
+`[0, 45]` — confirmed identically across `rule_evaluator._dte_cap_rule`
+(`status = STATUS_PASS if dte <= 45 else STATUS_FAIL`), every CC/CSP instruction file, the
+earnings-gate skill, and the supervisor instructions. `best_options.py` already carries this
+exact number as `SYSTEM_DTE_CAP = 45`; the bug was that the page's *default window*
+(`DEFAULT_DTE_MAX = 49`) never actually equaled the cap it claims to mirror — a four-day
+silent divergence between "the page that audits the agents" and "the agents."
+
+**Key design call: alignment is about the default, not about removing the override.** The
+endpoint's explicit `dte_max` query override (up to `le=60`) stays untouched, and so does the
+`exceeds_system_dte_cap` flag — both become unreachable under an unmodified request once the
+default equals 45, but remain live and meaningful the instant a caller explicitly widens the
+window. Removing the override entirely would have quietly narrowed the page's own stated
+purpose (being *evidence* for the alerting-regression complaint) under cover of an unrelated
+directive. Named, not assumed.
+
+**`no_shares_held` kept; `coverable_contracts` did not survive the semantics test.** The two
+looked coupled (`no_shares_held = coverable_contracts == 0`) but only one carries information
+no other field can reconstruct without it: `no_shares_held` is a distinct disclosure
+("can't cover even one contract") read by exactly one UI element (the page's banner) and
+computable directly from `total_shares` without exposing the derived count. Ruling: recompute
+it inline (`max(total_shares, 0) < 100`), delete the `coverable` intermediate and the
+`coverable_contracts` key entirely — not defaulted to `null`, not renamed, gone.
+
+**Load-bearing test coupling found during the surface sweep, named up front so it isn't
+discovered the hard way during implementation:** `test_best_options_endpoint.py` has an
+endpoint-vs-direct-call parity test that calls the live endpoint with no query overrides (so
+it exercises whatever the *default* is) and diffs the result against a direct
+`evaluate_best_options(..., dte_max=49, ...)` call. Changing the endpoint's default to 45
+without also updating that literal turns the test into a silent no-op that compares two
+different windows and could still report green. Same category of coupling in
+`test_best_options_adversarial.py`: the `TestDteWindowBoundaries` suite's own boundary values
+(49/50) must move to (45/46), and its `exceeds_system_dte_cap` tests must gain an explicit
+`dte_max=60` override since a bare DTE-46 contract no longer merely gets flagged under the
+new default — it's excluded from the window before the flag logic ever runs. The test file's
+separate `_evaluate()` helper default (also hardcoded `49`, independent of production's
+constant) needs a deliberate, documented decision either way rather than being left to
+silently disagree with the new production default.
+
+**Ownership, matching this feature's established split:** Linus = `best_options.py` +
+`test_best_options.py`. Rusty = endpoint (`web/app.py`) + both frontend files
+(`types/best-options.ts`, `BestOptionsView.tsx`) + `test_best_options_endpoint.py`.
+Livingston = `test_best_options_frontend_contract.py` (the cross-seam contract test, his
+standing role on this feature). Basher = `test_best_options_adversarial.py` + reviewer gate,
+with an explicit named must-not-regress list: zero remaining `coverable_contracts`
+occurrences (grep, not just green tests), `no_shares_held` semantics unchanged, the
+endpoint/direct-call parity test actually exercising the new default, and
+`exceeds_system_dte_cap` proven reachable under an explicit override (not orphaned).
+
+**Named non-surface, checked and confirmed empty:** `docs/*.md` has zero references to Best
+Options' DTE window or `coverable_contracts` — no documentation debt from this change.
+`test_options_chain_dte_filter.py` tests the generic, reusable DTE-filter primitive with its
+own arbitrary test values and is explicitly out of scope — flagged so a future implementer
+doesn't mistake it for a Best-Options-specific surface and touch it unnecessarily.
+
+### 2026-08-29 (later still) — Best Options: remove user-facing architecture/process commentary (design review, no implementation)
+
+Decision: `.squad/decisions/inbox/danny-best-options-copy-removal-design.md` (accepted).
+User directive: strip determinism/no-LLM/agent-comparison commentary from the page's own
+copy, keep the page itself purely informational.
+
+**Full sweep, not a spot-fix.** Grepped `frontend/src`, `backend/src`, `backend/web` for the
+directive's named phrases and equivalents. Found four true user-facing hits: the design's
+own original §6 "standing caption" in `BestOptionsParams.tsx` (the exact target text,
+verbatim); the page H1 subtitle in `BestOptionsView.tsx` ("... deterministic, no LLM in this
+path" — only the trailing clause is commentary, the factual "DTE window and delta bands"
+description in front of the dash stays); and `best_options.py`'s `iv_rank_note` field, whose
+final sentence ("The agent path evaluates it against a model-supplied value...") is the same
+class of agent-internals commentary even though the field's first two sentences are
+legitimate, actionable product information and must stay. Two more hits (a JSDoc comment and
+a type-file header comment) are developer-facing source documentation, never rendered — out
+of scope, confirmed rather than assumed, since "user-facing" is the directive's own boundary.
+
+**Judgment call, written down so it isn't re-litigated:** `thresholds_source` /
+`skill_reference` (backend source file paths shown in the details panel) look adjacent to
+"architecture commentary" but are not — they are the parameter-provenance disclosure the
+original design made *mandatory*, independently protected by its own standing reviewer-gate
+rule in `.squad/decisions.md` ("a permanent addition to the Best Options reviewer gate").
+Same reasoning kept the `exceeds_system_dte_cap` flag's "Beyond agents' 45d cap" label and
+the DTE field's "(agent cap {system_cap}d)" annotation — both are data-driven facts tied to
+the just-ratified 45d-alignment decision, not commentary about how any system decides.
+Removing either under this directive's cover would have quietly clawed back a different,
+still-binding decision.
+
+**Test surface is small and precisely bounded.** Exactly one existing assertion touches the
+affected string (`test_best_options_adversarial.py:852`, substring `"not enforced"`), and it
+survives the trim unchanged — verified by reading the assertion, not by assuming the trim was
+safe. Added one negative assertion so the removed clause can't silently reappear.
+
+**Ownership:** Linus = the one backend string (`best_options.py`'s `iv_rank_note`). Rusty =
+both frontend components (`BestOptionsParams.tsx`, `BestOptionsView.tsx`). Basher = the new
+test assertion plus a grep-based reviewer gate — confirming absence of the four phrases *and*
+presence of the deliberately-kept disclosures, so the gate can't be satisfied by an
+over-broad strip that also deletes legitimate substance.
+
+### 2026-08-29 (later still) — Supervisor/Alpha execution traces: focused design review (no implementation)
+
+Decision: `.squad/decisions/inbox/danny-supervisor-alpha-traces-design.md` (accepted).
+Trigger: `.squad/decisions/inbox/copilot-supervisor-alpha-traces.md` — user directive to
+persist complete, separate execution traces for Supervisor and Alpha, not just their parsed
+`supervisor_view`/`alpha_view` fields on the activity document.
+
+**The gap, confirmed by reading the code, not inferred from the trigger's own framing.**
+`_record_trace` is called at exactly 4 sites (`analysis`, `assessment`, `roll`,
+`plan_monitor`) — all primary-decision phases. `_run_supervisor_review` and
+`_run_alpha_review` never call it at all; both wrap their entire body in one broad
+`try/except Exception: logger.warning(...); return None`, so a raised exception or an
+unparseable/invalid response leaves zero trace of the raw prompt, raw response, or failure
+reason anywhere in CosmosDB — only a console log line. 11 call sites (7 supervisor, 4
+alpha) invoke these two methods across `run_symbol_agent` and `run_position_monitor`.
+
+**Key design call: trace-recording has to move *inside* `_run_supervisor_review`/
+`_run_alpha_review`, in a `try/finally`, not stay at the call site.** The call site only
+ever sees the already-swallowed `None` return — it has no access to the prompt that was
+built, the raw response (if any), or the specific reason a `None` came back. Moving the
+`_record_trace(...)` call into a `finally` block (with `instructions`/`message`/
+`response_text`/`error`/`supervisor_data` all initialized to `None` *before* the `try:`, so
+the `finally` can safely reference them even on a pre-`agent.run()` crash) is the only shape
+that satisfies "record prompt/raw response/errors including parse failures and exceptions."
+Every existing early `return None` branch inside the parsing logic must also set a specific
+`error` string first (`"no_parseable_json"`, `"missing_required_fields:{...}"`,
+`"invalid_challenge_strength:{...}"`/`"invalid_opportunity_strength:{...}"`, or the
+exception's `f"{type}: {msg}"`) — today those branches silently return `None` with nothing
+but a log line explaining why.
+
+**Correlation model, two fields, deliberately not one.** `run_id` — a fresh `uuid4()`
+minted once at the top of each per-symbol decision function, before any phase runs — groups
+every trace belonging to one decision cycle. I rejected reusing the activity document's own
+`id` as the correlator: it's only known after `write_activity` succeeds, which would couple
+the trace layer's ability to correlate to the data layer's write succeeding, and it fights
+the trigger's own "separate trace records" framing. `parent_trace_id` is a flat, one-hop
+pointer to the actual trace-document id of the phase that causally precedes it (not the
+run's root generically) — for Supervisor/Alpha specifically, that's the `roll` phase's trace
+id when a roll happened this cycle, else `assessment`/`analysis`'s, because Supervisor/Alpha
+audit the decision that was actually made, and when a roll occurred that decision is the
+roll's. Mechanically this means `_record_trace` must stop being a void function — it now
+returns the trace `id` it generated (or `None` if disabled/failed, so a suppressed trace can
+never produce a dangling parent reference), and `_run_position_assessment` /
+`_run_roll_management` each gain one new tuple-return element so their trace ids can be
+threaded downstream.
+
+**`agent_type` naming ruling — reuse the primary agent_type, never invent a new one.**
+Confirmed by reading `_run_supervisor_review`/`_run_alpha_review`: `_AGENT_TYPE_MAP` remaps
+`open_call_monitor`/`open_put_monitor` to `open_call`/`open_put` *only* to pick the right
+instructions file — that remapped variable must never leak into the trace's `agent_type`
+field. Keeping the original, unmapped `agent_type` means the existing `enabled_types`
+per-agent-type capture toggle (Settings → Agent Logs) governs a whole pipeline's tracing —
+primary phase and its reviews together — with zero new settings surface. `phase` gains two
+new literal values (`"supervisor"`, `"alpha"`) — there's no central enum anywhere in this
+codebase for phase names, so this needed no schema change. Confirmed directly in both
+`AgentLogsView.tsx` and `[trace_id]/page.tsx` that neither hardcodes a phase allowlist —
+Supervisor/Alpha rows render with **zero required frontend code changes**.
+
+**Relation to `alpha_run`, and why I added a new field instead of extending it.**
+`alpha_run.status` on the activity document already says *whether* Alpha ran/was
+forced/failed — it has never said *why* a failure failed. Rather than denormalizing the new
+trace's `error` text into `alpha_run` (which would duplicate observability detail into the
+hot-path activity document and create two disagreeing sources of truth), I'm adding one new,
+same-named join key — `run_id` — directly onto the activity document, in both success and
+error write paths, so any activity (not just failed ones) can be cross-referenced to its
+full trace set with one field.
+
+**Explicitly ruled: no trace for skipped reviews.** A trace's entire purpose is to record
+what a model call did; the three existing skip paths (`buy_tracker`, calm-WAIT non-forced,
+`incomplete_quote_wait`) never call a model at all. I rejected writing a synthetic "skipped"
+trace doc for table-parity — it would populate `model`/`duration_seconds`/`response_text`
+with meaningless nulls and create a second, disagreeing home for a fact (`alpha_run.status`)
+that already has exactly one authoritative home today.
+
+**Named but explicitly out of scope, so it isn't silently rediscovered later.** (1) Model
+completeness: `model` is often `None` at these call sites even though `_get_client` silently
+resolves a real deployment (`model or self._default_model`) — I'm requiring the fix
+(`resolved_model`) for the two *new* Supervisor/Alpha sites since it's directly the field
+this design is asked to complete, but the same gap exists at the 4 pre-existing
+`_record_trace` sites and I'm leaving those alone, named as a trivial recommended follow-up.
+(2) `backend/scripts/provision_cosmosdb.sh`'s custom indexing policy (meant to exclude large
+blob paths from indexing) is applied to the wrong container — hardcoded `$CONTAINER_NAME`
+(`"symbols"`), never reassigned to `$TRACES_CONTAINER` — so `agent_traces` runs under
+Cosmos's default index-everything policy today. Pre-existing, affects every trace phase
+equally, not introduced or worsened by this design — flagged, not fixed, here.
+
+**Reused verbatim, confirmed unnecessary to change:** the 90-day `AGENT_TRACE_TTL_SECONDS`
+TTL (inherited automatically — Supervisor/Alpha traces go through the same
+`write_agent_trace` into the same container), and the `agent_traces` container's partition
+key / lack of any DDL change (Cosmos is schemaless; `run_id`/`parent_trace_id` are just two
+new optional document properties). Trace volume roughly doubles-to-triples per decision
+cycle when Supervisor/Alpha run — the two already-existing levers (per-agent-type capture
+toggle, manual purge endpoint) are sufficient; no new retention/size mechanism is needed.
+
+**Ownership, matching this codebase's established split:** Rusty owns
+`backend/src/agent_runner.py` (the runner-logic restructuring) plus the frontend TS types.
+Livingston owns `backend/src/cosmos_db.py` (his "CosmosDB document round-trips: schema
+fidelity" remit exactly) plus its own cross-seam round-trip test. Basher owns a new
+adversarial test file plus the reviewer gate, with a named must-not-regress list: all 11
+call sites thread `cosmos`/`run_id`/`parent_trace_id` (grep, not test-count alone), zero
+trace writes for the three skip paths, the model-completeness fix actually resolves `None`,
+and the four existing tests that already monkeypatch `_record_trace`
+(`test_force_alpha_execution.py`, `test_open_call_zero_quote.py`,
+`test_buy_tracker_normalization.py`, `test_zero_free_agent_chain.py`) stay green unmodified.
+Linus is not involved — no strategy/instructions-file surface is touched by this design.

@@ -734,3 +734,242 @@ override surface; `main.py`'s cron sweep still passes
 `test_force_alpha_execution.py` (34/34 pass) and the full suite excluding
 the two known-unrelated yfinance files (1655/1655 pass, suite grew by 5
 tests from concurrent agent work since the last check — all green).
+
+## Watchlist — Zero covered-calls display fix (2026-08-29T15:30)
+
+Per `.squad/decisions/inbox/copilot-watchlist-zero-covered-calls.md`:
+in the Symbols/Watchlist table's "In Calls" column
+(`frontend/src/components/SymbolsTable.tsx`), when a symbol has >=100
+effective shares (accounts for the in-flight inline-edit optimistic value)
+and `in_calls === 0`, render `0` instead of `-`; symbols with <100 shares
+and no open calls keep `-`; any nonzero `in_calls` value is unchanged
+(one-line ternary change, no other columns touched).
+
+No backend change needed: `in_calls` is already computed as a plain
+`0`-or-more int by `_compute_symbols_overview` in `backend/web/app.py`
+(`sum(100 for p in active if p.get("type") == "call")`) — the zero case
+was already reaching the frontend correctly; only the display fallback
+needed the shares-eligibility branch.
+
+Test note: neither the frontend (no jest/vitest/playwright configured —
+`package.json` has no test script or test deps at all) nor the backend
+(`_compute_symbols_overview` has no existing test file) has test
+infrastructure covering this code path, so per "only run tests that
+already exist" I did not introduce a new test runner for a one-line
+presentational change; validated via `tsc --noEmit`, `eslint` on the
+touched file, and a full `npm run build` (all clean).
+
+## Best Options — 45D default alignment + coverable_contracts removal + architecture-copy cleanup (2026-08-29T15:44)
+
+Per `.squad/decisions/inbox/danny-best-options-45d-design.md` and
+`danny-best-options-copy-removal-design.md` (my owned rows only —
+Linus/Basher/Livingston own their own files, confirmed via `git status`
+before editing):
+
+* `backend/web/app.py`: `dte_max` Query default `49 -> 45` (inclusive,
+  matches the agents' own `DTE <= 45` cap). Took Danny's optional
+  tech-debt recommendation: imported `DEFAULT_DTE_MIN`/`DEFAULT_DTE_MAX`
+  from `src.best_options` at module top-level instead of re-declaring a
+  second `45` literal, so the endpoint can never drift from the
+  calculator's own default again. `le=60` (the explicit-override ceiling)
+  untouched, per design §2 (override path is out of scope).
+* `backend/tests/test_best_options_endpoint.py`: updated the
+  `Query(default=...)` comment to 45; deleted the stale
+  `coverable_contracts == 3` assert (field no longer exists — Linus
+  already removed it from `best_options.py`'s response, confirmed via
+  `git diff`); fixed the endpoint/direct-call parity test's direct
+  `evaluate_best_options(..., dte_max=49, ...)` to `dte_max=45` so it
+  actually exercises the new default instead of two independently-widened
+  windows that happened to still agree.
+* `frontend/src/types/best-options.ts`: deleted `coverable_contracts?:
+  number | null` and its doc comment; rewrote `no_shares_held`'s comment
+  to define it directly ("true when the held share count is below one
+  full lot (100 shares)") instead of in terms of the now-deleted field.
+* `frontend/src/components/BestOptionsView.tsx`: deleted the "Coverable
+  contracts" badge block; trimmed the H1 subtitle to drop "— deterministic,
+  no LLM in this path" (kept the factual clause describing what the table
+  shows). Left the JSDoc above the component and the file-header comment
+  in `best-options.ts` untouched — both developer-facing, out of scope
+  per Danny's design (never rendered to a user).
+* `frontend/src/components/BestOptionsParams.tsx`: deleted the italic
+  "Deterministic screen of the option chain — not an agent decision. The
+  agents additionally apply catalyst and technical judgement." caption
+  block in full. Left the `thresholds_source`/`skill_reference`
+  provenance disclosure, the `exceeds_system_dte_cap` "Beyond agents' 45d
+  cap" label, the DTE field's "(agent cap {system_cap}d)" annotation, and
+  the staleness/earnings-gate explainer text untouched — all factual
+  disclosures, not architecture commentary, per Danny's explicit §2
+  carve-out.
+
+Confirmed by repo-wide grep: zero remaining occurrences of
+`coverable_contracts` in `frontend/src` or the files I own in `backend/`;
+zero remaining occurrences of "no LLM in this path" / "not an agent
+decision" / "agents additionally apply" / "model-supplied value" in any
+rendered frontend surface (the one surviving hit,
+`best-options.ts`'s file-header comment, is source-only, confirmed
+out of scope by design).
+
+Validation: targeted backend suite (`test_best_options.py`,
+`test_best_options_adversarial.py`, `test_best_options_endpoint.py`,
+`test_category_params.py`, `test_options_chain_dte_filter.py`) — 168
+passed. `npx tsc --noEmit` clean. `npx eslint` on the three touched
+frontend files — pre-existing, unrelated `react-hooks/set-state-in-effect`
+error on `BestOptionsView.tsx`'s original mount-effect `load()` call
+(confirmed identical on the file before any of my edits via `git stash`);
+no new lint errors introduced by this change. `npm run build` succeeded
+end-to-end.
+
+## 2026-08-29 (later) — Supervisor/Alpha execution tracing (run_id/parent_trace_id correlation)
+
+Per `.squad/decisions/inbox/danny-supervisor-alpha-traces-design.md` (ACCEPTED). My
+ownership row: `backend/src/agent_runner.py` (all instrumentation), trace-facing frontend
+types, and the new orchestration-level test file. Did not touch `cosmos_db.py` (Livingston,
+already landed independently — `write_agent_trace` honors caller `id`, `list_agent_traces`
+projects `run_id`/`parent_trace_id`, confirmed matching the design exactly, no action
+needed), `supervisor_instructions.py`/`alpha_instructions.py` (no Linus surface — orchestration
+only, confirmed by design), or the frontend trace-viewer components (design confirms
+`AgentLogsView.tsx`/`[trace_id]/page.tsx` render `phase`/generic fields dynamically with no
+hardcoded allowlist — zero changes needed there).
+
+* `_record_trace`: added `run_id`/`parent_trace_id` params, mints its own `trace_id =
+  str(uuid4())`, includes `id`/`run_id`/`parent_trace_id` in the written doc, changed return
+  type to `Optional[str]` (the written doc's `id` on success, `None` on disabled/no-cosmos/
+  write-failure) so callers can thread a real, existing document id into a child trace's
+  `parent_trace_id` rather than a value that might not resolve.
+* `_run_supervisor_review`/`_run_alpha_review`: restructured per the design's exact required
+  shape — `cosmos`/`run_id`/`parent_trace_id` kwargs; `instructions`/`message`/`response_text`/
+  `error`/`supervisor_data`(`alpha_data`) initialized to `None` before `try:`; `resolved_model
+  = model or self._default_model` computed once (model-completeness fix, scoped only to these
+  two methods per the design — the same latent gap at the 4 pre-existing call sites is named
+  but explicitly out of scope); every early `return None` branch now sets an enumerated
+  `error` string first (`no_parseable_json`, `missing_required_fields:{...}`,
+  `invalid_challenge_strength:{...}`/`invalid_opportunity_strength:{...}`, or the exception's
+  `f"{type(exc).__name__}: {exc}"`); `_record_trace` moved into a `finally:` block so a raised
+  exception or an unparseable response is captured too, not silently lost to the log stream.
+  The trace's `agent_type` is always the method's own unmapped parameter — the internal
+  `_AGENT_TYPE_MAP` remap (`open_call_monitor`→`open_call` etc.) is used only to select the
+  instructions file and never leaks into the trace, preserving the existing per-agent-type
+  `enabled_types` toggle's coverage of the whole pipeline for free.
+* `run_symbol_agent`/`run_position_monitor`: each mints one `run_id = str(uuid4())` before its
+  own `try:`. `run_symbol_agent` captures the analysis trace's id and threads
+  `parent_trace_id=analysis_trace_id` into all 5 of its Supervisor/Alpha call sites.
+  `run_position_monitor` tracks a `final_phase_trace_id` local (starts at
+  `assessment_trace_id`, reassigned to `roll_trace_id` only if Phase 2 actually completes) and
+  threads it into all 6 of its call sites — 11 total across both functions, matching the
+  design's own confirmed count exactly. `_run_position_assessment`'s return extended to a
+  4-tuple (`+ assessment_trace_id`) and `_run_roll_management`'s to a 3-tuple (`+
+  roll_trace_id`). `activity_payload["run_id"] = run_id` set unconditionally before all 3
+  `cosmos.write_activity(...)` calls (both functions' success paths plus both functions' own
+  `except Exception` error-activity writes) — a same-name join key onto the activity document,
+  not a duplicated/renamed alias, so a reader can filter the trace list by `run_id` and see
+  every phase of one decision cycle. No synthetic "skipped" trace is ever written for the
+  three named skip paths (`buy_tracker`, calm-WAIT non-forced Alpha, `incomplete_quote_wait`)
+  — this falls out naturally since a skip means the review method is simply never called, no
+  extra guard code needed.
+* `frontend/src/types/agent-traces.ts`: added `run_id?: string; parent_trace_id?: string;` to
+  both `AgentTraceRow` and `AgentTraceDetail` for discoverability (both interfaces already had
+  a catch-all/optional-field pattern, so this is type-safety polish, not a functional
+  requirement — matches the design's own framing).
+* **Regression found and fixed, directly caused by my own change**: extending
+  `_run_position_assessment`/`_run_roll_management`'s return arity broke two pre-existing test
+  files' fixture fakes that still returned the old 3-tuple/2-tuple shape
+  (`test_force_alpha_execution.py`'s `_monitor_runner_fixture`,
+  `test_open_call_zero_quote.py`'s inline fakes) — both are named in the design's own §11
+  reviewer-gate list as required to "remain green unmodified," an assumption that held for
+  every other change but not this one. Fixed by appending a trailing sentinel trace-id value
+  to each fake's return tuple (mechanical, no assertion logic touched) — confirmed this is
+  the minimal fix by re-running both files clean afterward.
+* New test file `backend/tests/test_agent_trace_supervisor_alpha.py` (design item #5, my
+  ownership): deliberately complementary to, not duplicative of, Basher's
+  `test_agent_trace_adversarial.py` (which already exists and covers the per-method
+  adversarial surface — full-field capture, every enumerated error string, the
+  `enabled_types` toggle, tracing-failure isolation, unmapped `agent_type`, and the three
+  skip paths, 25/25 passing against my implementation unmodified). My 4 tests instead prove
+  the *pipeline-level* wiring item #5 also asks for: `run_id` consistency between the
+  activity document and every phase traced that cycle, and `parent_trace_id` chaining
+  correctly for the single-agent path (`analysis`→supervisor/alpha), the 2-phase path without
+  a roll (`assessment`→supervisor/alpha), and the 2-phase path with a roll
+  (`assessment`→`roll`→supervisor/alpha, explicitly asserting it does *not* fall back to the
+  stale assessment id).
+
+Validation: `python3 -m py_compile src/agent_runner.py` clean. Combined targeted suite —
+`test_force_alpha_execution.py`, `test_open_call_zero_quote.py`,
+`test_buy_tracker_normalization.py`, `test_zero_free_agent_chain.py` (design's reviewer-gate
+list), `test_agent_trace_adversarial.py` (Basher's), `test_cosmos_agent_trace_roundtrip.py`
+(Livingston's), and my new `test_agent_trace_supervisor_alpha.py` — 94 passed. Full
+`backend/tests/` sweep — 1732 passed; the 11 failures + 16 errors present are entirely in
+`test_yfinance_data_provider.py`/`test_yfinance_technicals_dividend_availability.py`,
+confirmed pre-existing and unrelated by reproducing the identical failure set against
+unmodified `HEAD` (no agent_runner.py/tracing changes present). `npx tsc --noEmit` clean on
+the frontend after the type additions.
+
+Recovered from a live-multi-agent working-tree hazard mid-task: a `git stash`/`stash pop`
+attempt during triage surfaced a merge conflict because `.squad/agents/linus/history.md` was
+being concurrently rewritten on disk by Linus's own agent process between the stash and the
+pop. Resolved by restoring every other stashed file explicitly via `git checkout stash@{0} --
+<path>` one at a time, deliberately excluding `linus/history.md` so Linus's newer, already-
+in-progress content on disk was never overwritten or lost, then dropping the stash. Verified
+afterward that no file's content regressed (full targeted suite re-run clean, `py_compile`
+clean, `git status` matched expectations with no accidental staged changes left behind).
+
+## 2026-08-29: Options Screener (backend + frontend)
+
+Implemented `.squad/decisions/inbox/copilot-options-screener-approved.md` end to end. Backend:
+added `GET /api/screener/options` to `backend/web/app.py` reusing Linus's already-complete,
+already-tested pure aggregator (`src/options_screener.py::evaluate_options_screener`) and, through
+it, `src/best_options.py::evaluate_best_options` — verbatim, no scoring/gating/admission logic
+touched. New helpers: `_build_screener_symbol_inputs` (batches `list_symbols()` +
+`get_calendar_events()` into O(1) queries regardless of symbol count — proven by fakes that
+deliberately omit the N-per-symbol calendar methods entirely, so any accidental per-symbol call
+would fail loudly rather than silently pass; caps new `schedule_background_refresh` calls at 4/
+request via `_SCREENER_MAX_COLD_WARMS_PER_REQUEST`) and `_resort_screener_rows` (presentation-layer
+re-sort only — see decision doc for the full sort/dir design). `evaluate_options_screener` itself
+runs via `run_in_executor` to stay off the event loop; `schedule_background_refresh` calls stay on
+the event-loop thread (confirmed requirement — cannot be called from executor workers).
+
+Found and fixed two real bugs during implementation: (1) `no_shares_held` was being attached to
+both call AND put rows — it's a covered-call-only concept in `best_options.py` (a CSP's collateral
+is cash, never shares); fixed to only set it when `side=="call"`. Caught by Basher's adversarial
+test `TestNoSharesHeldPutSideDefect`. (2) Initially named my chain-level cache-TTL freshness signal
+`row["stale"]`, which would have silently clobbered `best_options.py`'s own pre-existing per-contract
+quote-level `stale` field — renamed to `row["chain_stale"]` before it shipped.
+
+Second occurrence of a live concurrent-file-edit hazard with Basher: `backend/tests/
+test_options_screener_endpoint.py` was overwritten mid-task by Basher's own concurrent process
+(his adversarial suite, different fixtures). Handled by treating his version as authoritative
+(reviewer-owned test file) rather than reverting it, running it against my implementation, using
+it to find bug (1) above, and leaving his file's own internal issues (a `NameError` typo, one
+fixture with 0 admitted rows) untouched since it's his file to fix. Final state: his 14 tests, all
+passing against my `app.py`.
+
+Frontend: added a `Screener` dropdown to `TopNav.tsx` (DGI + Options) replacing the standalone
+`/dgi` link; moved both DGI pages to `/screener/dgi/*` via `git mv` (zero content changes needed);
+added `/dgi` and `/dgi/analyze/:symbol` redirects in `next.config.ts`; updated the two internal
+`router.push('/dgi/analyze/...')` call sites. Built the new `/screener/options` page and its
+`OptionsScreenerView.tsx` client component (Calls/Puts tabs, MultiSelect-based preferences/symbols
+filters, debounced numeric range filters built from scratch — no existing debounce precedent in
+this app — sortable column headers, pagination, partial-status header for warming/cold/error
+symbols, nearest-miss detail, rows linking out to Symbol Detail's own Best Options page rather than
+duplicating its drill-down). Extracted `ColorBadge`/`GateBadge`/flag-and-number formatters out of
+`BestOptionsView.tsx` into a new shared `frontend/src/lib/options-row-format.tsx` so both views
+share one colour/format implementation (visual-consistency directive) — pure extraction, no
+behaviour change to `BestOptionsView.tsx`. Added `frontend/src/types/screener.ts` and the BFF proxy
+`frontend/src/app/api/screener/options/route.ts` (thin passthrough, matching the existing
+`/api/symbols/[symbol]/best-options` route's exact pattern).
+
+Interpretive calls (sort/dir as presentation-layer re-sort, ok/warming/cold/error status
+taxonomy, no_shares_held/chain_stale field placement, MultiSelect "0 selected == all" applied to
+the new Preferences filter, shared-formatter extraction, no react-query) recorded in
+`.squad/decisions/inbox/rusty-options-screener-implementation.md`.
+
+Validation: backend — `test_options_screener.py`, `test_options_screener_endpoint.py`,
+`test_best_options.py`, `test_best_options_endpoint.py` — 84 passed. Frontend — `npx tsc --noEmit`
+clean; `npm run build` clean (new `/screener/options` and `/api/screener/options` routes present,
+old `/dgi` route gone, redirects wired); targeted `eslint` on every changed/new file shows exactly
+one pre-existing-pattern violation (`react-hooks/set-state-in-effect` on the initial-mount
+`useEffect(() => { load() }, [load])` fetch idiom) — confirmed via `git stash` that this identical
+rule already fires on unmodified `BestOptionsView.tsx` and, per a full `npm run lint` baseline run,
+on ~11 other pre-existing files across the app (`GlobalChatView.tsx`, `PositionsTable.tsx`,
+`RecentActivities.tsx`, `SymbolChat.tsx`, `SymbolInfoModal.tsx`, etc.) — a known, already-broken
+baseline unrelated to this task. My new file follows the identical established idiom for
+consistency rather than deviating unilaterally; not a regression I introduced.

@@ -586,3 +586,96 @@ changes landed. Investigated on the live tree, not a cached snapshot:
   dashboard CC/CSP buttons force; forced runs don't consume the prolonged-WAIT cooldown; legacy
   missing `alpha_run` metadata stays conservative (not forced); incomplete-quote/buy_tracker
   skips remain safe and recorded; no force-only Telegram send.
+
+## Options Screener aggregation module (backend/src/options_screener.py) — new pure module
+
+Approved directive: `.squad/decisions/inbox/copilot-options-screener-approved.md` (top-level
+Screener menu, Options tab aggregating Best Options across all symbols, server-side
+filters/sort/pagination, default preference Preferred+Acceptable, no persisted snapshots,
+explicit per-symbol warming/error/freshness states, capped cold-chain warming concurrency —
+warming/concurrency is the cache/API layer's job, out of my surface). **No separate
+"Danny/Linus proposal" design doc exists for this feature** — grepped `.squad/decisions.md`
+and every agent `history.md` for "options screener"/"screener"; only unrelated pre-existing
+DGI-screener hits. Implemented directly from the approved directive plus the task's own
+detailed spec, and recorded that gap plus every non-obvious interpretive call in
+`.squad/decisions/inbox/linus-options-screener-design.md` for team visibility, per this
+agent's established pattern (same as the force-alpha D1/D2 "task prompt is authoritative"
+precedent).
+
+- **Reuse discipline**: `evaluate_options_screener` calls `best_options.evaluate_best_options`
+  literally, once per ready symbol/side, always with that module's own default DTE window
+  (`DEFAULT_DTE_MIN`/`DEFAULT_DTE_MAX`, currently 0/45) — the screener's own `min_dte`/
+  `max_dte`/`min_abs_delta`/`max_abs_delta` are strictly post-filters on rows a symbol's own
+  category rules already admitted; they are never passed into `evaluate_best_options` as a
+  wider or narrower window, and can only narrow, never widen, what a symbol's own delta band
+  already let through. `category_key` and each side's delta-band midpoint are pulled straight
+  from that per-symbol result's own `parameters.category.value`/`parameters.thresholds`, not
+  re-derived via `resolve_category`/`thresholds_for` — zero second source of truth.
+- **Row filters implemented**: preference/label (default `{"Preferred","Acceptable"}`, reusing
+  `best_options._COLOR_LABELS`'s vocabulary via each row's own already-computed `label`),
+  symbol allowlist (case-insensitive `.strip().upper()`, matching the `dgi_screener.py`/
+  `cosmos_db.py` convention), `min_annualized_return_pct`, `min_abs_delta`/`max_abs_delta`,
+  `min_dte`/`max_dte`, `min_open_interest`. **Null-metric policy (deliberate, tested
+  explicitly)**: a `None` value on a row's filtered metric fails any bound actually set on
+  that axis (can't confirm a minimum is met -> excluded) but passes through untouched when no
+  filter is set on that axis at all — symmetric across all four numeric filters, matching
+  `best_options.py`'s own "absence is not zero" philosophy.
+- **`nearest_miss` placement rule**: surfaced per side only for a symbol whose own
+  `evaluate_best_options` call admitted **zero** rows (`section["total"] == 0`), tagged with
+  that symbol (and its category). A symbol that *did* have admitted rows which the screener's
+  own filters subsequently hid entirely is NOT reported via `nearest_miss` — that's "filtered
+  to zero, as requested," a different fact from "your category rules found nothing," and
+  conflating them would mislead a caller into thinking a widened filter might reveal a
+  contract that was never admitted in the first place. Both branches have explicit tests.
+- **Sorting**: mirrors `best_options._row_sort_key` exactly (score desc, DTE asc, then
+  category-relative delta fit asc — `|abs_delta - midpoint|` using *that row's own symbol's
+  own side's own category* delta-band midpoint via an external `symbol -> midpoint` lookup, not
+  a field injected onto the row, keeping the row schema identical to `best_options.py`'s own
+  contract) plus an explicit total tie-breaker (`symbol`, then `expiration`, then `strike`)
+  that `best_options.py`'s own single-symbol sort key didn't need but this multi-symbol
+  aggregation does, since Python's stable-sort guarantee alone would otherwise leave ordering
+  dependent on `symbol_inputs`' input order. Verified with a same-score/DTE/delta fixture
+  across two different symbols and a reversed-input-order fixture (`test_options_screener.py`
+  `TestDeterministicOrdering`).
+- **Memoization** (opt-in, caller-supplied `dict`, never module-global state — preserves
+  purity and testability): key is `(symbol, side, chain["timestamp"], category, total_shares,
+  next_earnings_date, ex_dividend_date, support_level)` — **deliberately excludes `now`**. The
+  freshness signal is the chain's own `timestamp` (stamped by the cache layer whenever content
+  actually changes), not wall-clock call time; the screener's own `generated_at` is always
+  freshly stamped from the current call's `now` regardless of memo hit/miss. Accepted, bounded
+  edge case documented in the module docstring: a memoized entry's nested `stale_quote` flag
+  reflects the `now` in effect the first time that key was computed, not the current request —
+  low-value given the 24h staleness threshold, and re-warming stale chains promptly is the
+  cache layer's job, not this module's. Verified each key component (chain timestamp, category,
+  total_shares, next_earnings_date, ex_dividend_date, support_level) independently busts the
+  memo, and that `now` alone does NOT (via a monkeypatched call-counter on
+  `evaluate_best_options`), while `generated_at` still changes on a memo hit.
+- **Pagination**: independent `offset`/`limit`/`total_matching`/`returned`/`has_more` per side;
+  `offset`/`limit` clamped to `>= 0` defensively rather than raising (total-function style,
+  matching `best_options.py`'s own posture) — no hard cap on `limit` imposed here, since
+  reasonable page-size ceilings are the caller/API layer's concern, not a pure domain
+  constraint; `best_options.py`'s own `_MAX_ROWS_PER_SIDE = 400` already bounds how many rows
+  a single symbol can ever contribute in the first place.
+- **Symbol status handling** (total by construction): `"ready"`/`"warming"`/`"error"` are the
+  only recognised statuses; anything else — or a `"ready"` entry with no usable `chain` dict —
+  is downgraded to `"error"` with a synthesised message rather than raising or silently
+  vanishing. `"warming"`/`"error"` symbols are recorded in the top-level `symbols` summary and
+  skipped entirely for row computation (no `evaluate_best_options` call made for them).
+- **Calls/Puts separation**: rows from the two sides are never merged; `side="call"`/`"put"`
+  makes the unrequested side a cheap empty placeholder (mirroring
+  `evaluate_best_options`'s own side-skipping), `side="both"` (default) populates both
+  independently with their own filters/sort/pagination/`nearest_miss`.
+- **Tests** (`tests/test_options_screener.py`, new file, 26 tests): filter intersection
+  (combined filters only narrow, never widen; global delta window can't reach past a symbol's
+  own category band), deterministic ordering (default sort, input-order independence, explicit
+  tie-breaker), null-metric behavior (`open_interest`/`annualized_return_pct` both tested
+  present-filter-set-excludes vs. filter-unset-passes-through), memoization (hit/miss call
+  counting via monkeypatch, each key component's invalidation, `now`-does-not-invalidate),
+  pagination (slicing, `has_more`, offset-beyond-total, negative-input clamping), nearest_miss
+  placement (zero-row vs. filtered-to-zero), symbol status handling (warming/error/bogus
+  status/missing chain), side handling (call-only placeholder, both-sides independence), and
+  byte-stable results (`json.dumps(..., sort_keys=True)` equality across repeated calls).
+- **Test runs**: `test_options_screener.py` alone — 32 passed. Combined with
+  `test_best_options.py` — 59 passed. Full targeted sweep (`test_best_options.py` +
+  `test_best_options_adversarial.py` + `test_category_params.py` +
+  `test_options_screener.py`) — 180 passed, 0 regressions.
