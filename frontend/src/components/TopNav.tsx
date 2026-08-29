@@ -9,6 +9,7 @@ import {
   Banknote,
   MessageSquare,
   Search,
+  ListFilter,
   LineChart,
   CalendarDays,
   ClipboardList,
@@ -30,6 +31,10 @@ const DROPDOWNS: Record<string, Item[]> = {
     { href: "/symbols", label: "Watchlist", icon: LineChart },
     { href: "/symbols/calendar", label: "Calendar", icon: CalendarDays },
     { href: "/plans", label: "Action Plans", icon: ClipboardList },
+  ],
+  Screener: [
+    { href: "/screener/dgi", label: "DGI", icon: Search },
+    { href: "/screener/options", label: "Options", icon: ListFilter },
   ],
   Settings: [
     { href: "/settings/config", label: "Configuration", icon: Settings },
@@ -61,6 +66,7 @@ export function TopNav() {
   const dashboardActive = pathname === "/" || isActive(pathname, "/dashboard");
   const symbolsActive =
     isActive(pathname, "/symbols") || isActive(pathname, "/plans");
+  const screenerActive = isActive(pathname, "/screener");
   const settingsActive = isActive(pathname, "/settings");
 
   // Close the mobile panel on route change (state-adjust-during-render pattern).
@@ -97,9 +103,7 @@ export function TopNav() {
           <Link href="/chat" className={navClass(isActive(pathname, "/chat", true))}>
             <MessageSquare size={16} className="shrink-0" /> Chat
           </Link>
-          <Link href="/dgi" className={navClass(isActive(pathname, "/dgi"))}>
-            <Search size={16} className="shrink-0" /> DGI Screener
-          </Link>
+          <Dropdown label="Screener" items={DROPDOWNS.Screener} active={screenerActive} pathname={pathname} />
 
           <Dropdown label="Settings" items={DROPDOWNS.Settings} active={settingsActive} pathname={pathname} />
 
@@ -133,7 +137,7 @@ export function TopNav() {
             <MobileSection label="Symbols" items={DROPDOWNS.Symbols} pathname={pathname} />
             <MobileLink href="/economics" label="Economics" icon={Banknote} active={isActive(pathname, "/economics")} />
             <MobileLink href="/chat" label="Chat" icon={MessageSquare} active={isActive(pathname, "/chat", true)} />
-            <MobileLink href="/dgi" label="DGI Screener" icon={Search} active={isActive(pathname, "/dgi")} />
+            <MobileSection label="Screener" items={DROPDOWNS.Screener} pathname={pathname} />
             <MobileSection label="Settings" items={DROPDOWNS.Settings} pathname={pathname} />
           </div>
         </div>

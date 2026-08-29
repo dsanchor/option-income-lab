@@ -11,6 +11,7 @@ import warnings
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from uuid import uuid4
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", message=r".*experimental.*")
@@ -1187,12 +1188,23 @@ class AgentRunner:
                       user_message=None, response_text=None, model=None,
                       skills=None, parsed=None, is_alert=None, phase=None,
                       duration_seconds=None, error=None, extra=None,
-                      run_trigger=None, force_alpha=None) -> None:
-        """Persist a full agent execution trace (best-effort, never raises)."""
+                      run_trigger=None, force_alpha=None,
+                      run_id=None, parent_trace_id=None) -> Optional[str]:
+        """Persist a full agent execution trace (best-effort, never raises).
+
+        Returns the trace document's ``id`` when the write actually
+        succeeded, else ``None`` (tracing disabled for this agent_type,
+        cosmos unavailable, or the write itself failed) -- callers use
+        this to thread ``parent_trace_id`` into a causally-dependent
+        child trace without ever pointing at a document that doesn't
+        exist.
+        """
         try:
             if cosmos is None or not self._trace_enabled(cosmos, agent_type):
-                return
+                return None
+            trace_id = str(uuid4())
             trace = {
+                "id": trace_id,
                 "agent_type": agent_type,
                 "symbol": symbol or "_",
                 "model": model,
@@ -1210,6 +1222,11 @@ class AgentRunner:
                 # did the caller request forced Alpha review?
                 "run_trigger": run_trigger,
                 "force_alpha": bool(force_alpha) if force_alpha is not None else None,
+                # Supervisor/Alpha tracing design (2026-08-29): correlates
+                # every trace written during one decision cycle, and links
+                # a review trace back to the phase whose decision it audited.
+                "run_id": run_id,
+                "parent_trace_id": parent_trace_id,
             }
             if isinstance(parsed, dict):
                 trace["confidence"] = parsed.get("confidence")
@@ -1222,9 +1239,11 @@ class AgentRunner:
                     trace["activity_summary"] = str(summ)[:300]
             if extra:
                 trace["extra"] = extra
-            cosmos.write_agent_trace(trace)
+            written = cosmos.write_agent_trace(trace)
+            return trace_id if written is not None else None
         except Exception as exc:
             logger.debug("Trace record skipped for %s/%s: %s", symbol, agent_type, exc)
+            return None
 
     # ------------------------------------------------------------------
     # Prolonged WAIT detection
@@ -1311,13 +1330,28 @@ class AgentRunner:
         previous_context: str,
         agent_type: str,
         model: str = None,
+        *,
+        cosmos=None,
+        run_id: str = None,
+        parent_trace_id: str = None,
     ) -> dict | None:
         """Run a supervisor agent to audit the primary decision.
 
         Creates a separate agent instance with supervisor instructions.
         Returns the parsed supervisor_view dict, or None on failure.
         The supervisor MUST NEVER block the primary decision flow.
+
+        Full-fidelity execution trace (prompt/raw response/parsed output/
+        model/duration/error) is recorded in a ``finally`` block so a
+        failure or unparseable response is captured too, not just a
+        success (Supervisor/Alpha tracing design, 2026-08-29). Tracing
+        itself can never affect the return value -- ``_record_trace`` is
+        bulletproof by construction.
         """
+        symbol = activity_payload.get("symbol", "?")
+        instructions = message = response_text = error = supervisor_data = None
+        resolved_model = model or self._default_model
+        start = time.time()
         try:
             activity_str = activity_payload.get("activity", "SELL")
             decision_type = activity_str.upper()
@@ -1356,7 +1390,7 @@ Provide your supervisor audit in the JSON format specified above."""
 
             logger.info(
                 "Supervisor review completed for %s — response length=%d",
-                activity_payload.get("symbol", "?"), len(response_text),
+                symbol, len(response_text),
             )
             logger.debug(
                 "Supervisor first 500 chars: %s", response_text[:500],
@@ -1393,12 +1427,14 @@ Provide your supervisor audit in the JSON format specified above."""
 
             if supervisor_data is None:
                 logger.warning("Supervisor returned no parseable JSON")
+                error = "no_parseable_json"
                 return None
 
             required = {"challenge_strength", "counter_arguments", "net_assessment"}
             missing = required - set(supervisor_data.keys())
             if missing:
                 logger.warning("Supervisor JSON missing fields: %s", missing)
+                error = f"missing_required_fields:{sorted(missing)}"
                 return None
 
             # Derive one_liner if the LLM omitted it
@@ -1411,24 +1447,42 @@ Provide your supervisor audit in the JSON format specified above."""
             strength = str(supervisor_data.get("challenge_strength", "")).upper()
             if strength not in ("WEAK", "MODERATE", "STRONG"):
                 logger.warning("Supervisor invalid challenge_strength: %s", strength)
+                error = f"invalid_challenge_strength:{strength}"
                 return None
             supervisor_data["challenge_strength"] = strength
 
             logger.info(
                 "Supervisor audit for %s: strength=%s one_liner=%s",
-                activity_payload.get("symbol", "?"),
+                symbol,
                 strength,
                 str(supervisor_data.get("one_liner", ""))[:80],
             )
             return supervisor_data
 
-        except Exception:
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
             logger.warning(
                 "Supervisor review failed for %s — original decision unaffected",
-                activity_payload.get("symbol", "?"),
+                symbol,
                 exc_info=True,
             )
             return None
+        finally:
+            self._record_trace(
+                cosmos,
+                agent_type=agent_type,
+                symbol=symbol,
+                system_prompt=instructions,
+                user_message=message,
+                response_text=response_text,
+                model=resolved_model,
+                parsed=supervisor_data if isinstance(supervisor_data, dict) else None,
+                phase="supervisor",
+                duration_seconds=round(time.time() - start, 2),
+                error=error,
+                run_id=run_id,
+                parent_trace_id=parent_trace_id,
+            )
 
     # ------------------------------------------------------------------
     # Alpha Advisor — aggressive perspective (Phase 3b)
@@ -1441,13 +1495,26 @@ Provide your supervisor audit in the JSON format specified above."""
         previous_context: str,
         agent_type: str,
         model: str = None,
+        *,
+        cosmos=None,
+        run_id: str = None,
+        parent_trace_id: str = None,
     ) -> dict | None:
         """Run an alpha advisor agent for aggressive perspective.
 
         Creates a separate agent instance with alpha advisor instructions.
         Returns the parsed alpha_view dict, or None on failure.
         The alpha advisor MUST NEVER block the primary decision flow.
+
+        Full-fidelity execution trace (prompt/raw response/parsed output/
+        model/duration/error) is recorded in a ``finally`` block, mirroring
+        `_run_supervisor_review` exactly (Supervisor/Alpha tracing design,
+        2026-08-29).
         """
+        symbol = activity_payload.get("symbol", "?")
+        instructions = message = response_text = error = alpha_data = None
+        resolved_model = model or self._default_model
+        start = time.time()
         try:
             activity_str = activity_payload.get("activity", "SELL")
             decision_type = activity_str.upper()
@@ -1486,7 +1553,7 @@ Provide your alpha advisor analysis in the JSON format specified above."""
 
             logger.info(
                 "Alpha review completed for %s — response length=%d",
-                activity_payload.get("symbol", "?"), len(response_text),
+                symbol, len(response_text),
             )
             logger.debug(
                 "Alpha first 500 chars: %s", response_text[:500],
@@ -1535,6 +1602,7 @@ Provide your alpha advisor analysis in the JSON format specified above."""
                     "Alpha Advisor returned no parseable JSON. "
                     "First 800 chars: %s", response_text[:800],
                 )
+                error = "no_parseable_json"
                 return None
 
             required = {"opportunity_strength", "alternative", "relaxed_parameter"}
@@ -1547,6 +1615,7 @@ Provide your alpha advisor analysis in the JSON format specified above."""
                     alpha_data.setdefault("parameter_detail", "")
                     missing.discard("relaxed_parameter")
                 if missing:
+                    error = f"missing_required_fields:{sorted(missing)}"
                     return None
 
             # Derive one_liner if the LLM omitted it
@@ -1560,25 +1629,43 @@ Provide your alpha advisor analysis in the JSON format specified above."""
             strength = str(alpha_data.get("opportunity_strength", "")).upper()
             if strength not in ("NONE", "MODERATE", "STRONG"):
                 logger.warning("Alpha Advisor invalid opportunity_strength: %s", strength)
+                error = f"invalid_opportunity_strength:{strength}"
                 return None
             alpha_data["opportunity_strength"] = strength
 
             logger.info(
                 "Alpha Advisor for %s: opportunity=%s relaxed=%s one_liner=%s",
-                activity_payload.get("symbol", "?"),
+                symbol,
                 strength,
                 alpha_data.get("relaxed_parameter", "none"),
                 str(alpha_data.get("one_liner", ""))[:80],
             )
             return alpha_data
 
-        except Exception:
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
             logger.warning(
                 "Alpha review failed for %s — original decision unaffected",
-                activity_payload.get("symbol", "?"),
+                symbol,
                 exc_info=True,
             )
             return None
+        finally:
+            self._record_trace(
+                cosmos,
+                agent_type=agent_type,
+                symbol=symbol,
+                system_prompt=instructions,
+                user_message=message,
+                response_text=response_text,
+                model=resolved_model,
+                parsed=alpha_data if isinstance(alpha_data, dict) else None,
+                phase="alpha",
+                duration_seconds=round(time.time() - start, 2),
+                error=error,
+                run_id=run_id,
+                parent_trace_id=parent_trace_id,
+            )
 
     def _build_market_data_block(self, data: dict, symbol: str, exchange: str,
                                 options_chain_text: str = None) -> str:
@@ -1742,6 +1829,12 @@ Provide your alpha advisor analysis in the JSON format specified above."""
 
         analysis_ts = datetime.now(timezone.utc).strftime(TIMESTAMP_FORMAT)
         run_start = time.time()
+        # Correlates every trace written during this one decision cycle
+        # (analysis phase plus any supervisor/alpha reviews it spawns) --
+        # minted before the try: block so it's available even if the
+        # cycle fails before producing an activity (Supervisor/Alpha
+        # tracing design, 2026-08-29).
+        run_id = str(uuid4())
 
         try:
             # Context injection from CosmosDB
@@ -1925,6 +2018,11 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                 enrichment_data=buy_tracker_evidence,
             )
 
+            # Join key for the trace layer (Supervisor/Alpha tracing
+            # design §5) -- lets a reader navigate from a failed/forced
+            # `alpha_run` on this activity to every model call behind it.
+            activity_payload["run_id"] = run_id
+
             # Write activity to CosmosDB (unified write path)
             dec_doc = cosmos.write_activity(
                 symbol=symbol,
@@ -1934,7 +2032,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
             )
 
             # ── Execution trace (observability, best-effort) ──────────
-            self._record_trace(
+            analysis_trace_id = self._record_trace(
                 cosmos,
                 agent_type=agent_type,
                 symbol=symbol,
@@ -1949,6 +2047,8 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                 duration_seconds=round(time.time() - run_start, 2),
                 run_trigger=run_trigger,
                 force_alpha=force_alpha,
+                run_id=run_id,
+                parent_trace_id=None,
             )
 
             # ── Supervisor/Alpha reviews (skip for agent types without playbooks) ──
@@ -1984,6 +2084,9 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                             previous_context=previous_context,
                             agent_type=agent_type,
                             model=supervisor_model,
+                            cosmos=cosmos,
+                            run_id=run_id,
+                            parent_trace_id=analysis_trace_id,
                         ),
                         self._run_alpha_review(
                             activity_payload=activity_payload,
@@ -1991,6 +2094,9 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                             previous_context=previous_context,
                             agent_type=agent_type,
                             model=alpha_model,
+                            cosmos=cosmos,
+                            run_id=run_id,
+                            parent_trace_id=analysis_trace_id,
                         ),
                     )
                     # An alert always runs Alpha on its own merits — never
@@ -2014,6 +2120,9 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                                 previous_context=previous_context,
                                 agent_type=agent_type,
                                 model=supervisor_model,
+                                cosmos=cosmos,
+                                run_id=run_id,
+                                parent_trace_id=analysis_trace_id,
                             ),
                             self._run_alpha_review(
                                 activity_payload=activity_payload,
@@ -2021,6 +2130,9 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                                 previous_context=previous_context,
                                 agent_type=agent_type,
                                 model=alpha_model,
+                                cosmos=cosmos,
+                                run_id=run_id,
+                                parent_trace_id=analysis_trace_id,
                             ),
                         )
                         # Only forced when it ran *purely* because of
@@ -2042,6 +2154,9 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                             previous_context=previous_context,
                             agent_type=agent_type,
                             model=supervisor_model,
+                            cosmos=cosmos,
+                            run_id=run_id,
+                            parent_trace_id=analysis_trace_id,
                         )
                         alpha_view = None
                         print(f"Logged activity")
@@ -2132,6 +2247,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                     "exchange": exchange,
                     "timestamp": analysis_ts,
                     "is_alert": False,
+                    "run_id": run_id,
                 },
                 timestamp=analysis_ts,
             )
@@ -2239,14 +2355,19 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
         agent_type: str = None,
         run_trigger: str = "scheduled",
         force_alpha: bool = False,
-    ) -> Tuple[str, Optional[Dict], Optional[Dict]]:
+        run_id: str = None,
+    ) -> Tuple[str, Optional[Dict], Optional[Dict], Optional[str]]:
         """Run Phase 1 — position assessment agent.
 
         Returns:
-            (response_text, activity_json, handoff_json)
+            (response_text, activity_json, handoff_json, assessment_trace_id)
             - activity_json is set when agent outputs a standard activity (WAIT).
             - handoff_json is set when agent outputs an action_needed (ROLL).
             Exactly one of activity_json / handoff_json will be non-None on success.
+            - assessment_trace_id is this phase's own trace document id (or
+              None if tracing was disabled/failed) -- the pipeline entry
+              point for the monitor path, so its parent_trace_id is always
+              None.
         """
         health_section = ""
         if health_metrics:
@@ -2292,7 +2413,7 @@ Analyze the position risk and output your response in the required JSON format. 
         result = await agent.run(message)
         response_text = result.text or str(result)
 
-        self._record_trace(
+        assessment_trace_id = self._record_trace(
             cosmos,
             agent_type=agent_type or f"open_{position_type}_monitor",
             symbol=symbol,
@@ -2305,6 +2426,8 @@ Analyze the position risk and output your response in the required JSON format. 
             duration_seconds=round(time.time() - _phase1_start, 2),
             run_trigger=run_trigger,
             force_alpha=force_alpha,
+            run_id=run_id,
+            parent_trace_id=None,
         )
 
         logger.info(
@@ -2320,11 +2443,11 @@ Analyze the position risk and output your response in the required JSON format. 
         # Try handoff first (action_needed), then standard activity
         handoff_json = self._try_extract_handoff_json(response_text)
         if handoff_json is not None:
-            return response_text, None, handoff_json
+            return response_text, None, handoff_json, assessment_trace_id
 
         # Standard activity (WAIT path)
         activity_json = self._try_extract_json(response_text)
-        return response_text, activity_json, None
+        return response_text, activity_json, None, assessment_trace_id
 
     # ------------------------------------------------------------------
     # Phase 2: Roll Management
@@ -2344,12 +2467,17 @@ Analyze the position risk and output your response in the required JSON format. 
         agent_type: str = None,
         run_trigger: str = "scheduled",
         force_alpha: bool = False,
-    ) -> Tuple[str, Optional[Dict]]:
+        run_id: str = None,
+        parent_trace_id: str = None,
+    ) -> Tuple[str, Optional[Dict], Optional[str]]:
         """Run Phase 2 — roll management agent.
 
         Receives the Phase 1 handoff payload and the full filtered options
-        chain.  Returns (response_text, json_data) following the same
-        activity schema as the original single-agent output.
+        chain.  Returns (response_text, json_data, roll_trace_id) --
+        response_text/json_data following the same activity schema as the
+        original single-agent output; roll_trace_id is this phase's own
+        trace document id (or None), with parent_trace_id pointing back at
+        the assessment phase that preceded it.
         """
         phase1_text = json.dumps(handoff_json, indent=2)
 
@@ -2377,7 +2505,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
         response_text = result.text or str(result)
 
         json_data = self._try_extract_json(response_text)
-        self._record_trace(
+        roll_trace_id = self._record_trace(
             cosmos,
             agent_type=agent_type or "position_monitor",
             symbol=full_symbol,
@@ -2391,6 +2519,8 @@ Output your activity in the required JSON format. Use the timestamp above in you
             duration_seconds=round(time.time() - _phase2_start, 2),
             run_trigger=run_trigger,
             force_alpha=force_alpha,
+            run_id=run_id,
+            parent_trace_id=parent_trace_id,
         )
 
         logger.info(
@@ -2403,7 +2533,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
         )
         print(f"Phase 2 response: {response_text[:200]}...")
 
-        return response_text, json_data
+        return response_text, json_data, roll_trace_id
 
     @staticmethod
     def _build_position_snapshot_data(
@@ -2567,6 +2697,11 @@ Output your activity in the required JSON format. Use the timestamp above in you
 
         analysis_ts = datetime.now(timezone.utc).strftime(TIMESTAMP_FORMAT)
         run_start = time.time()
+        # Correlates every trace written during this one decision cycle
+        # (assessment, optional roll, plus any supervisor/alpha reviews)
+        # -- minted before the try: block, same rationale as
+        # run_symbol_agent (Supervisor/Alpha tracing design, 2026-08-29).
+        run_id = str(uuid4())
 
         try:
             # Context injection from CosmosDB (filtered by position)
@@ -2666,7 +2801,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
             except Exception:
                 pass
 
-            response_text, activity_json, handoff_json = await self._run_position_assessment(
+            response_text, activity_json, handoff_json, assessment_trace_id = await self._run_position_assessment(
                 name=name,
                 instructions=assessment_instructions,
                 symbol=symbol,
@@ -2685,7 +2820,14 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 agent_type=agent_type,
                 run_trigger=run_trigger,
                 force_alpha=force_alpha,
+                run_id=run_id,
             )
+            # Tracks the trace id of whichever phase produced the FINAL
+            # activity payload this cycle, for Supervisor/Alpha's
+            # parent_trace_id -- reassigned to the roll phase's trace id
+            # below only if Phase 2 actually runs (Supervisor/Alpha
+            # tracing design §2).
+            final_phase_trace_id = assessment_trace_id
 
             if position_type == "call":
                 if handoff_json is not None:
@@ -2755,7 +2897,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         position_type, symbol_category
                     ) if symbol_category else ""
 
-                    phase2_response, phase2_json = await self._run_roll_management(
+                    phase2_response, phase2_json, roll_trace_id = await self._run_roll_management(
                         name=name,
                         roll_instructions=roll_instructions,
                         handoff_json=handoff_json,
@@ -2768,10 +2910,15 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         agent_type=agent_type,
                         run_trigger=run_trigger,
                         force_alpha=force_alpha,
+                        run_id=run_id,
+                        parent_trace_id=assessment_trace_id,
                     )
                     # Use Phase 2 output as the final result
                     response_text = phase2_response
                     json_data = phase2_json
+                    # Phase 2 ran -- Supervisor/Alpha now audit ITS
+                    # decision, not the assessment's (design §2).
+                    final_phase_trace_id = roll_trace_id
 
                     # Validate Phase 2 produced usable JSON
                     if json_data is None or "activity" not in (json_data or {}):
@@ -3003,6 +3150,10 @@ Output your activity in the required JSON format. Use the timestamp above in you
             else:
                 activity_payload["rule_evaluation"] = assessment_eval
 
+            # Join key for the trace layer (Supervisor/Alpha tracing
+            # design §5) -- see run_symbol_agent for the full rationale.
+            activity_payload["run_id"] = run_id
+
             # Write activity to CosmosDB (unified write path)
             dec_doc = cosmos.write_activity(
                 symbol=symbol,
@@ -3030,6 +3181,9 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         previous_context=previous_context,
                         agent_type=agent_type,
                         model=supervisor_model,
+                        cosmos=cosmos,
+                        run_id=run_id,
+                        parent_trace_id=final_phase_trace_id,
                     ),
                     self._run_alpha_review(
                         activity_payload=activity_payload,
@@ -3037,6 +3191,9 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         previous_context=previous_context,
                         agent_type=agent_type,
                         model=alpha_model,
+                        cosmos=cosmos,
+                        run_id=run_id,
+                        parent_trace_id=final_phase_trace_id,
                     ),
                 )
                 # An alert/roll always runs Alpha on its own merits — never
@@ -3141,6 +3298,9 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         previous_context=previous_context,
                         agent_type=agent_type,
                         model=supervisor_model,
+                        cosmos=cosmos,
+                        run_id=run_id,
+                        parent_trace_id=final_phase_trace_id,
                     )
                     alpha_view = None
                     print(f"Logged activity")
@@ -3154,6 +3314,9 @@ Output your activity in the required JSON format. Use the timestamp above in you
                             previous_context=previous_context,
                             agent_type=agent_type,
                             model=supervisor_model,
+                            cosmos=cosmos,
+                            run_id=run_id,
+                            parent_trace_id=final_phase_trace_id,
                         ),
                         self._run_alpha_review(
                             activity_payload=activity_payload,
@@ -3161,6 +3324,9 @@ Output your activity in the required JSON format. Use the timestamp above in you
                             previous_context=previous_context,
                             agent_type=agent_type,
                             model=alpha_model,
+                            cosmos=cosmos,
+                            run_id=run_id,
+                            parent_trace_id=final_phase_trace_id,
                         ),
                     )
                     # Only forced when it ran purely because of force_alpha
@@ -3181,6 +3347,9 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         previous_context=previous_context,
                         agent_type=agent_type,
                         model=supervisor_model,
+                        cosmos=cosmos,
+                        run_id=run_id,
+                        parent_trace_id=final_phase_trace_id,
                     )
                     alpha_view = None
                     print(f"Logged activity")
@@ -3248,6 +3417,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                     "position_id": position_id,
                     "timestamp": analysis_ts,
                     "is_alert": False,
+                    "run_id": run_id,
                 },
                 timestamp=analysis_ts,
             )

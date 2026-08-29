@@ -168,7 +168,7 @@ class TestQueryParamValidation:
         assert resp.status_code == 400
 
     def test_dte_max_beyond_endpoint_hard_cap_is_rejected_by_query_validation(self, client_and_cosmos):
-        # `dte_max: int = Query(default=49, ge=0, le=60)` -- FastAPI's own
+        # `dte_max: int = Query(default=45, ge=0, le=60)` -- FastAPI's own
         # validation, not app code; 61 must never reach the handler.
         client, fake_cosmos = client_and_cosmos
         fake_cosmos.symbols["TEST"] = {"enrichment": {"category": "balanced"}, "total_shares": 0}
@@ -239,7 +239,6 @@ class TestWarmCacheFullTable:
         assert body["symbol"] == "TEST"
         assert len(body["calls"]["rows"]) == 1
         assert len(body["puts"]["rows"]) == 1
-        assert body["calls"]["coverable_contracts"] == 3  # 300 shares // 100
 
     def test_endpoint_parameters_match_a_direct_evaluate_best_options_call_on_same_chain(
         self, client_and_cosmos, monkeypatch
@@ -269,7 +268,7 @@ class TestWarmCacheFullTable:
         direct_result = evaluate_best_options(
             stored_chain, side="both", category="high_yield", total_shares=0,
             next_earnings_date=earn, ex_dividend_date=ex_div, support_level=None,
-            dte_min=0, dte_max=49, now=_real_now(),
+            dte_min=0, dte_max=45, now=_real_now(),
         )
         # `parameters.evaluated_at` legitimately differs (each call reads
         # wall-clock time independently, microseconds apart) -- every

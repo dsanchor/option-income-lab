@@ -11,6 +11,13 @@ export interface AgentTraceRow {
   activity_summary?: string;
   confidence?: string;
   activity?: string;
+  /** Correlates every trace written during one decision cycle (analysis/
+   * assessment/roll plus any supervisor/alpha reviews it spawned). */
+  run_id?: string;
+  /** Trace id of the phase that causally precedes this one within the
+   * same run_id (e.g. a supervisor/alpha review's parent is the phase
+   * whose decision it audited). `undefined` for a pipeline entry point. */
+  parent_trace_id?: string;
 }
 
 export interface AgentTypeMeta {
@@ -44,6 +51,8 @@ export interface AgentTraceDetail {
   parsed?: unknown;
   extra?: unknown;
   timestamp?: string;
+  run_id?: string;
+  parent_trace_id?: string;
   [key: string]: unknown;
 }
 

@@ -467,10 +467,12 @@ def _monitor_runner_fixture(
                     "underlying_price": 410.0,
                     "reason": "Rolling out for more premium.",
                 },
+                None,
             )
         return (
             "SUMMARY: MSFT | WAIT",
             _monitor_assessment_handoff(),
+            None,
             None,
         )
 
@@ -482,7 +484,7 @@ def _monitor_runner_fixture(
         activity.setdefault("current_expiration", EXPIRATION)
         activity.setdefault("underlying_price", 410.0)
         activity.setdefault("reason", "Rolling out for more premium.")
-        return "SUMMARY: MSFT | ROLL_OUT open call", activity
+        return "SUMMARY: MSFT | ROLL_OUT open call", activity, None
 
     async def fake_supervisor(**kwargs):
         state["supervisor_calls"] += 1

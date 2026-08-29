@@ -339,7 +339,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
                 </td>
                 <td className="px-4 py-3 text-right font-mono">
                   <span className={effectiveShares > 0 && r.in_calls >= effectiveShares ? "text-accent-orange" : ""}>
-                    {r.in_calls > 0 ? r.in_calls : "—"}
+                    {r.in_calls > 0 ? r.in_calls : effectiveShares >= 100 ? "0" : "—"}
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right font-mono">{r.put_exposure > 0 ? `$${usd(r.put_exposure)}` : "—"}</td>

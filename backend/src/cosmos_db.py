@@ -1554,19 +1554,27 @@ class CosmosDBService:
         Expected keys (all optional except symbol/agent_type):
             symbol, agent_type, model, phase, system_prompt, user_message,
             response_text, skills (list), parsed (dict), is_alert (bool),
-            duration_seconds (float), error (str), extra (dict).
+            duration_seconds (float), error (str), extra (dict), run_id (str),
+            parent_trace_id (str).
+
+        Honors a caller-supplied `id` (e.g. `AgentRunner._record_trace` minting
+        its own `trace_id` up front so it can be threaded into a child trace's
+        `parent_trace_id` before the write even happens); falls back to a
+        freshly generated UUID when the caller doesn't supply one, exactly as
+        before -- fully backward compatible with any existing/future caller
+        that never passes `id`.
         """
         container = self._ensure_agent_traces_container()
         if container is None:
             return None
         try:
             doc = {
-                "id": str(uuid4()),
+                "id": trace.get("id") or str(uuid4()),
                 "doc_type": "agent_trace",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "ttl": self.AGENT_TRACE_TTL_SECONDS,
                 "symbol": trace.get("symbol") or "_",
-                **{k: v for k, v in trace.items() if k != "symbol"},
+                **{k: v for k, v in trace.items() if k not in ("symbol", "id")},
             }
             return container.create_item(doc)
         except Exception as exc:
@@ -1602,7 +1610,8 @@ class CosmosDBService:
             query = (
                 "SELECT c.id, c.symbol, c.agent_type, c.model, c.phase, "
                 "c.is_alert, c.duration_seconds, c.timestamp, c.error, "
-                "c.activity_summary, c.confidence, c.activity "
+                "c.activity_summary, c.confidence, c.activity, "
+                "c.run_id, c.parent_trace_id "
                 f"FROM c WHERE {where} ORDER BY c.timestamp DESC OFFSET 0 LIMIT @limit"
             )
             params.append({"name": "@limit", "value": int(limit)})

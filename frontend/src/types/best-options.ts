@@ -174,11 +174,10 @@ export interface BestOptionsSide {
    * (design §4.1/§7). Never silently dropped from the response, only from
    * `rows`: still the candidate pool for `nearest_miss`. */
   excluded_by_delta_band: number;
-  /** Call-side only (`total_shares // 100`); `null` on the put side and on
-   * a call section that wasn't requested (design §5 "capital" row). */
-  coverable_contracts?: number | null;
-  /** Call-side only: true when `coverable_contracts === 0` -- the page-level
-   * banner condition (design §5), never a per-row flag. */
+  /** Call-side only: true when the held share count is below one full lot
+   * (100 shares) -- the page-level "0 shares held" banner condition
+   * (design §5), never a per-row flag. `null` on the put side and on a
+   * call section that wasn't requested. */
   no_shares_held?: boolean | null;
 }
 

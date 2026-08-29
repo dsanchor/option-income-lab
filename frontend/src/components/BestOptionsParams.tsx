@@ -45,10 +45,6 @@ export default function BestOptionsParams({ parameters }: { parameters: BestOpti
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h2 className="text-lg font-semibold">Analysis Parameters</h2>
-          <p className="mt-0.5 text-xs italic text-text-muted">
-            Deterministic screen of the option chain — not an agent decision. The agents
-            additionally apply catalyst and technical judgement.
-          </p>
         </div>
         <span className="shrink-0 rounded-[var(--radius-pill)] border border-border bg-bg-input px-2 py-1 text-[11px] text-text-muted">
           Evaluated {fmtDate(parameters.evaluated_at)} · schema v{parameters.schema_version}

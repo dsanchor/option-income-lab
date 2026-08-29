@@ -25,6 +25,18 @@ never present on the frontend type or read anywhere in the UI, and the
 page's own "0 shares held" banner checked a per-row flag that
 `best_options.py` never sets (`no_shares_held` is section-level only,
 design §5's "capital" row) so it could never render (D3).
+
+2026-08-29 follow-up (`.squad/decisions/inbox/danny-best-options-45d-design.md`,
+ACCEPTED, superseding the original design's `[0, 49]` default window):
+the default DTE window moved to `[0, 45]` inclusive to match the agents'
+own hard cap (`rule_evaluator._dte_cap_rule`'s `DTE <= 45`,
+`best_options.SYSTEM_DTE_CAP`), and `coverable_contracts` was removed
+entirely (from domain output, API contract, frontend type, and UI) --
+`no_shares_held` is preserved as an independent, section-level boolean
+computed directly from `total_shares`, not derived from the now-deleted
+count. This file's `coverable_contracts` assertions are removed
+accordingly, and a new test class below locks the `[0, 45]` inclusive
+default boundary at the same real cache+evaluator+endpoint seam.
 """
 from __future__ import annotations
 
@@ -177,10 +189,14 @@ class TestParametersNestedPerSide:
 
 
 class TestSectionLevelTransparencyFields:
-    """`excluded_by_delta_band` (both sides) and `coverable_contracts`/
-    `no_shares_held` (call side only) are the count-metadata transparency
-    surface the binding visual-consistency/excluded-contracts directive
-    requires the UI to expose (Basher D3)."""
+    """`excluded_by_delta_band` (both sides) and `no_shares_held` (call
+    side only) are the count-metadata transparency surface the binding
+    visual-consistency/excluded-contracts directive requires the UI to
+    expose (Basher D3). `coverable_contracts` itself was removed by the
+    2026-08-29 45d-alignment design -- must not appear anywhere in the
+    response, on either side -- while `no_shares_held` remains and is
+    now computed directly from `total_shares`, independent of the
+    deleted count."""
 
     def test_excluded_by_delta_band_present_both_sides(self, client_and_cosmos, monkeypatch):
         client, fake_cosmos = client_and_cosmos
@@ -193,7 +209,7 @@ class TestSectionLevelTransparencyFields:
         assert isinstance(body["calls"]["excluded_by_delta_band"], int)
         assert isinstance(body["puts"]["excluded_by_delta_band"], int)
 
-    def test_coverable_contracts_and_no_shares_held_are_call_only(self, client_and_cosmos, monkeypatch):
+    def test_no_shares_held_is_call_only_and_coverable_contracts_absent(self, client_and_cosmos, monkeypatch):
         client, fake_cosmos = client_and_cosmos
         fake_cosmos.symbols["CONTRACT"] = {"enrichment": {"category": "balanced"}, "total_shares": 300}
         cache = _make_cache(monkeypatch, _sample_chain())
@@ -201,14 +217,16 @@ class TestSectionLevelTransparencyFields:
         set_options_chain_cache(cache)
 
         body = client.get("/api/symbols/CONTRACT/best-options").json()
-        assert body["calls"]["coverable_contracts"] == 3  # 300 shares // 100
         assert body["calls"]["no_shares_held"] is False
         # Never on the put section -- a per-row `no_shares_held` flag would be
         # the wrong place to look for this (the old, broken UI check).
-        assert "coverable_contracts" not in body["puts"]
         assert "no_shares_held" not in body["puts"]
         for row in body["calls"]["rows"]:
             assert "no_shares_held" not in row["flags"]
+        # `coverable_contracts` was removed entirely -- must not survive on
+        # either side, not as a value, not as a null placeholder.
+        assert "coverable_contracts" not in body["calls"]
+        assert "coverable_contracts" not in body["puts"]
 
     def test_zero_shares_sets_no_shares_held_true(self, client_and_cosmos, monkeypatch):
         client, fake_cosmos = client_and_cosmos
@@ -218,5 +236,85 @@ class TestSectionLevelTransparencyFields:
         set_options_chain_cache(cache)
 
         body = client.get("/api/symbols/CONTRACT/best-options").json()
-        assert body["calls"]["coverable_contracts"] == 0
         assert body["calls"]["no_shares_held"] is True
+        assert "coverable_contracts" not in body["calls"]
+
+
+class TestDefaultDteWindowAlignedTo45:
+    """`.squad/decisions/inbox/danny-best-options-45d-design.md` (ACCEPTED):
+    the default DTE window is `[0, 45]` inclusive -- matching the agents'
+    own hard cap (`rule_evaluator._dte_cap_rule`'s `DTE <= 45`) -- not
+    `[0, 49]`. Exercised at the real cache+evaluator+endpoint seam (no
+    query params supplied, i.e. the actual default a caller gets), not
+    via a white-box unit call, since `app.py`'s own `Query(default=...)`
+    is a second, independently-editable source of truth for this number
+    (Rusty's surface) and only the real endpoint proves the two stay in
+    sync.
+
+    Fixture strikes/DTEs below were empirically verified (not assumed)
+    against the real evaluator: a 109-strike call at DTE 45 and DTE 46
+    both land in the "balanced" category's call delta band, isolating
+    the DTE boundary itself as the only variable that can explain either
+    contract's presence or absence.
+    """
+
+    def _dte_boundary_chain(self, symbol="CONTRACT"):
+        return {
+            "symbol": symbol,
+            "timestamp": "2026-08-29T11:00:00Z",
+            "underlying_price": 100.0,
+            "calls": {
+                _exp_key(45): {"109.0": _contract(bid=0.6, ask=0.7, strike=109.0)},
+                _exp_key(46): {"109.0": _contract(bid=0.6, ask=0.7, strike=109.0)},
+            },
+            "puts": {_exp_key(20): {"96.0": _contract(bid=1.0, ask=1.05, strike=96.0)}},
+        }
+
+    def test_default_window_reports_0_to_45_inclusive(self, client_and_cosmos, monkeypatch):
+        client, fake_cosmos = client_and_cosmos
+        fake_cosmos.symbols["CONTRACT"] = {"enrichment": {"category": "balanced"}, "total_shares": 300}
+        cache = _make_cache(monkeypatch, self._dte_boundary_chain())
+        cache.get_or_load("CONTRACT")
+        set_options_chain_cache(cache)
+
+        body = client.get("/api/symbols/CONTRACT/best-options").json()
+        assert body["parameters"]["dte"] == {
+            "min": 0, "max": 45, "source": "default",
+            "system_cap": 45, "timezone": "America/New_York",
+        }
+
+    def test_dte_45_included_dte_46_entirely_absent_by_default(self, client_and_cosmos, monkeypatch):
+        client, fake_cosmos = client_and_cosmos
+        fake_cosmos.symbols["CONTRACT"] = {"enrichment": {"category": "balanced"}, "total_shares": 300}
+        cache = _make_cache(monkeypatch, self._dte_boundary_chain())
+        cache.get_or_load("CONTRACT")
+        set_options_chain_cache(cache)
+
+        body = client.get("/api/symbols/CONTRACT/best-options").json()
+        rows = body["calls"]["rows"]
+        assert [r["dte"] for r in rows] == [45]  # 45 is IN the default window...
+        # ...46 is not merely filtered from the visible rows -- it never
+        # reaches evaluation at all under the default window: not a row,
+        # not the nearest-miss, not counted in excluded_by_delta_band.
+        assert body["calls"]["nearest_miss"]["dte"] == 45
+        assert body["calls"]["excluded_by_delta_band"] == 0
+
+    def test_dte_46_reachable_and_flagged_only_via_explicit_override(self, client_and_cosmos, monkeypatch):
+        client, fake_cosmos = client_and_cosmos
+        fake_cosmos.symbols["CONTRACT"] = {"enrichment": {"category": "balanced"}, "total_shares": 300}
+        cache = _make_cache(monkeypatch, self._dte_boundary_chain())
+        cache.get_or_load("CONTRACT")
+        set_options_chain_cache(cache)
+
+        body = client.get("/api/symbols/CONTRACT/best-options?dte_max=60").json()
+        assert body["parameters"]["dte"] == {
+            "min": 0, "max": 60, "source": "query",
+            "system_cap": 45, "timezone": "America/New_York",
+        }
+        rows_by_dte = {r["dte"]: r for r in body["calls"]["rows"]}
+        assert set(rows_by_dte) == {45, 46}
+        # The explicit-override path preserves `exceeds_system_dte_cap` as a
+        # live, reachable flag (design §2) -- it only ever fires once a
+        # caller has deliberately widened past the agents' own 45d cap.
+        assert "exceeds_system_dte_cap" not in rows_by_dte[45]["flags"]
+        assert "exceeds_system_dte_cap" in rows_by_dte[46]["flags"]

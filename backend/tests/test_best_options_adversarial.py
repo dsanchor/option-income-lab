@@ -118,6 +118,17 @@ def _chain(*, calls=None, puts=None, symbol="TEST", underlying_price=100.0, time
 def _evaluate(chain, *, side="call", category="balanced", total_shares=0,
               next_earnings_date=None, ex_dividend_date=None, support_level=None,
               dte_min=0, dte_max=49, now=NOW):
+    # NOTE (danny-best-options-45d-design.md item #9, option (a)): this
+    # helper's own dte_max=49 default is a test-file-local fixture width,
+    # deliberately wider than production's DEFAULT_DTE_MAX (45 as of this
+    # revision) so existing wide-window test cases (e.g. the DTE=49
+    # premium-scaling parametrize case below) keep exercising a window
+    # that reaches 49 without every caller needing an explicit override.
+    # It is passed through to `evaluate_best_options` as an explicit
+    # `dte_max` argument every time, so it is never "the default" as far
+    # as production's own `dte_source` field is concerned -- it is
+    # unaffected by, and does not silently drift from, the production
+    # default, which is exactly why this is safe to leave unchanged.
     return evaluate_best_options(
         chain, side=side, category=category, total_shares=total_shares,
         next_earnings_date=next_earnings_date, ex_dividend_date=ex_dividend_date,
@@ -177,9 +188,14 @@ def _bid_ask_for_raw_score(
 # ---------------------------------------------------------------------------
 
 class TestDteWindowBoundaries:
-    """Default window is [0, 49] inclusive (`DEFAULT_DTE_MIN`/`_MAX`).
+    """Default window is [0, 45] inclusive (`DEFAULT_DTE_MIN`/`_MAX`) --
+    aligned to the agents' own hard DTE cap (`danny-best-options-45d-design.md`).
     `SYSTEM_DTE_CAP` (45) is a *separate*, informational boundary (the
-    `exceeds_system_dte_cap` flag never removes a row or changes colour)."""
+    `exceeds_system_dte_cap` flag never removes a row or changes colour) --
+    it now equals the default window's own upper edge, so under an
+    unmodified (no-override) request it can never fire; it remains
+    reachable, and meaningful, the moment a caller explicitly widens
+    `dte_max` past 45."""
 
     def test_dte_zero_is_included(self):
         chain = _chain(calls={_exp_key(0): {"100.0": _contract(strike=100.0)}})
@@ -187,15 +203,29 @@ class TestDteWindowBoundaries:
         assert len(result["calls"]["rows"]) == 1
         assert result["calls"]["rows"][0]["dte"] == 0
 
-    def test_dte_49_is_included(self):
-        chain = _chain(calls={_exp_key(49): {"100.0": _contract(strike=100.0)}})
-        result = _evaluate(chain)
+    def test_dte_45_is_included(self):
+        # Explicit dte_max=45: `_evaluate`'s own bare default stays 49
+        # (deliberately test-fixture-local, see `_evaluate`'s docstring
+        # note above) -- this module-level unit test isolates the [0,45]
+        # WINDOW BOUNDARY itself, which behaves identically whether the
+        # window arrives via an explicit override or production's own
+        # `_safe_int(dte_max, DEFAULT_DTE_MAX)` fallback (the module does
+        # not branch on *how* lo_dte/hi_dte were resolved, only on their
+        # values). The distinct claim "the live endpoint's un-overridden
+        # default is actually 45" is verified separately, end-to-end, in
+        # `test_best_options_endpoint.py` (Rusty's ownership).
+        chain = _chain(calls={_exp_key(45): {"100.0": _contract(strike=100.0)}})
+        result = _evaluate(chain, dte_max=45)
         assert len(result["calls"]["rows"]) == 1
-        assert result["calls"]["rows"][0]["dte"] == 49
+        assert result["calls"]["rows"][0]["dte"] == 45
 
-    def test_dte_50_is_excluded_by_default_window(self):
-        chain = _chain(calls={_exp_key(50): {"100.0": _contract(strike=100.0)}})
-        result = _evaluate(chain)
+    def test_dte_46_is_excluded_by_default_window(self):
+        # Same rationale as test_dte_45_is_included above: explicit
+        # dte_max=45 isolates the window-boundary behavior at this
+        # module's unit-test layer; the endpoint's own un-overridden
+        # default is separately locked in test_best_options_endpoint.py.
+        chain = _chain(calls={_exp_key(46): {"100.0": _contract(strike=100.0)}})
+        result = _evaluate(chain, dte_max=45)
         assert result["calls"]["rows"] == []
         assert result["calls"]["total"] == 0
         # Excluded entirely by the DTE filter (never reaches this module),
@@ -210,14 +240,23 @@ class TestDteWindowBoundaries:
         assert result["calls"]["total"] == 0
 
     def test_dte_45_does_not_carry_exceeds_system_dte_cap_flag(self):
+        # Explicit dte_max=60 override: under the new default, a bare
+        # DTE=45 contract sits exactly on the window's own upper edge --
+        # this test is about the FLAG boundary (dte > SYSTEM_DTE_CAP),
+        # not the window boundary (covered above), so it widens the
+        # window explicitly to isolate the flag's own semantics.
         chain = _chain(calls={_exp_key(45): {"100.0": _contract(strike=100.0)}})
-        result = _evaluate(chain)
+        result = _evaluate(chain, dte_max=60)
         row = result["calls"]["rows"][0]
         assert "exceeds_system_dte_cap" not in row["flags"]
 
     def test_dte_46_carries_exceeds_system_dte_cap_flag_but_still_scores(self):
+        # Under the new default, DTE=46 is excluded from the window
+        # entirely (see test_dte_46_is_excluded_by_default_window above)
+        # and never reaches the flag logic at all -- an explicit
+        # dte_max=60 override is required to even observe a DTE=46 row.
         chain = _chain(calls={_exp_key(46): {"100.0": _contract(strike=100.0)}})
-        result = _evaluate(chain)
+        result = _evaluate(chain, dte_max=60)
         row = result["calls"]["rows"][0]
         assert "exceeds_system_dte_cap" in row["flags"]
         # Informational only (design F10-style flag): does not null the
@@ -229,7 +268,7 @@ class TestDteWindowBoundaries:
         # dte_max is caller-controlled; the DEFAULT window excludes 50, but
         # an explicit wider request (as the endpoint's own query-param
         # validation permits, up to its own cap) must still include it --
-        # 49 is a DEFAULT boundary, not a hardcoded ceiling in this module.
+        # 45 is a DEFAULT boundary, not a hardcoded ceiling in this module.
         chain = _chain(calls={_exp_key(50): {"100.0": _contract(strike=100.0)}})
         result = _evaluate(chain, dte_max=60)
         assert len(result["calls"]["rows"]) == 1
@@ -850,6 +889,12 @@ class TestNoLlmOrIvRankEnforcementSurface:
         params = _evaluate(chain, category="aristocrat")["parameters"]
         assert params["iv_rank_enforced"] is False
         assert "not enforced" in params["iv_rank_note"].lower()
+        # danny-best-options-copy-removal-design.md item 3: the trailing
+        # "the agent path evaluates it against a model-supplied value..."
+        # clause is architecture/agent-internals commentary and must be
+        # removed from this user-facing note; this is a negative
+        # assertion so the removed clause cannot silently reappear.
+        assert "model-supplied" not in params["iv_rank_note"].lower()
 
     def test_a_high_scoring_row_is_never_penalized_for_missing_iv_rank_data(self):
         # aristocrat category has iv_rank_min=None (never applicable);

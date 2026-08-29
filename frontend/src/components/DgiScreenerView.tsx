@@ -361,7 +361,7 @@ export default function DgiScreenerView({ entries }: { entries: DgiEntry[] }) {
 
   function goAnalyze() {
     const sym = analyze.trim().toUpperCase();
-    if (sym) router.push(`/dgi/analyze/${encodeURIComponent(sym)}`);
+    if (sym) router.push(`/screener/dgi/analyze/${encodeURIComponent(sym)}`);
   }
 
   const COLS: { col: string; label: string; sortable: boolean }[] = [

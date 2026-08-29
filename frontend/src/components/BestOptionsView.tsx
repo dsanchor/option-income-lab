@@ -1,82 +1,15 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, AlertTriangle, XCircle, RefreshCw, Trophy } from "lucide-react";
+import { RefreshCw, Trophy } from "lucide-react";
 import BestOptionsParams from "@/components/BestOptionsParams";
-import { preferenceStyle, preferenceRowTint } from "@/lib/badges";
+import { preferenceRowTint } from "@/lib/badges";
+import { ColorBadge, GateBadge, flagLabel, fmtNum, fmtPct, fmtExpiration, fmtTime } from "@/lib/options-row-format";
 import type {
-  BestOptionColor,
   BestOptionRow,
   BestOptionsResponse,
   BestOptionsSide,
 } from "@/types/best-options";
-
-const COLOR_ICON: Record<BestOptionColor, typeof CheckCircle2> = {
-  green: CheckCircle2,
-  yellow: AlertTriangle,
-  red: XCircle,
-};
-
-// Human labels for backend flags (design §4/§5). Colour is never derived from
-// these — they render as neutral badges alongside the backend's own `color`/`label`.
-const FLAG_LABELS: Record<string, string> = {
-  earnings_date_unknown: "Earnings date unknown",
-  stale_quote: "Stale quote",
-  very_short_dte: "Very short DTE (<7d)",
-  exceeds_system_dte_cap: "Beyond agents' 45d cap",
-  below_category_floor: "Below category premium floor",
-  ex_div_within_dte: "Ex-dividend within DTE",
-  no_shares_held: "No shares held",
-  below_support: "Strike at/below support",
-  insufficient_data: "Insufficient data for a score",
-};
-
-function flagLabel(flag: string): string {
-  return FLAG_LABELS[flag] ?? flag.replace(/_/g, " ");
-}
-
-function fmtNum(v: number | null | undefined, digits = 2): string {
-  return typeof v === "number" && isFinite(v) ? v.toFixed(digits) : "—";
-}
-function fmtPct(v: number | null | undefined, digits = 2): string {
-  return typeof v === "number" && isFinite(v) ? `${v.toFixed(digits)}%` : "—";
-}
-function fmtExpiration(v: string): string {
-  return v && v.length === 8 ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}` : v;
-}
-function fmtTime(v: string | null): string {
-  if (!v) return "—";
-  const d = new Date(v);
-  return isNaN(d.getTime()) ? v : d.toLocaleString();
-}
-
-/** Colour + icon + text label, never colour alone (design §4.4). */
-function ColorBadge({ color, label }: { color: BestOptionColor; label: string }) {
-  const Icon = COLOR_ICON[color] ?? AlertTriangle;
-  const style = preferenceStyle(color);
-  return (
-    <span
-      className="inline-flex items-center gap-1 whitespace-nowrap rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs font-medium"
-      style={{ color: style.color, background: style.bg, borderColor: style.border }}
-    >
-      <Icon aria-hidden="true" size={13} />
-      {label}
-    </span>
-  );
-}
-
-function GateBadge({ label, status }: { label: string; status: string }) {
-  const tone = status === "pass" ? "green" : status === "unknown" ? "yellow" : "red";
-  const style = preferenceStyle(tone);
-  return (
-    <span
-      className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide"
-      style={{ color: style.color, background: style.bg, borderColor: style.border }}
-    >
-      {label}: {status}
-    </span>
-  );
-}
 
 function RowDetails({ row }: { row: BestOptionRow }) {
   const compEntries = Object.entries(row.components ?? {});
@@ -177,12 +110,6 @@ function OptionsTable({
           <span className="text-text-muted">Excluded by delta band:</span>{" "}
           <span className="font-mono">{data.excluded_by_delta_band}</span>
         </span>
-        {side === "call" && data.coverable_contracts != null && (
-          <span>
-            <span className="text-text-muted">Coverable contracts:</span>{" "}
-            <span className="font-mono">{data.coverable_contracts}</span>
-          </span>
-        )}
       </div>
 
       {noSharesHeld && (
@@ -370,7 +297,7 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
             <Trophy size={22} className="text-accent-orange" aria-hidden /> {symbol} Best Options
           </h1>
           <p className="text-sm text-text-muted">
-            Every option within the configured DTE window and delta bands — deterministic, no LLM in this path.
+            Every option within the configured DTE window and delta bands.
           </p>
         </div>
         <button

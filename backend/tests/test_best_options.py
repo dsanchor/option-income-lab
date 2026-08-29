@@ -267,7 +267,7 @@ class TestCallVsPutAsymmetries:
         assert result["calls"]["rows"][0]["collateral"] is None
         assert result["puts"]["rows"][0]["collateral"] == 90.0 * 100.0
 
-    def test_coverable_contracts_and_no_shares_held_are_call_only(self):
+    def test_no_shares_held_is_call_only(self):
         chain = _chain(calls={_exp_key(20): _bucket(
             _contract(bid=1.0, ask=1.1, iv=0.25, delta=0.30, oi=500, strike=110.0)
         )})
@@ -276,8 +276,8 @@ class TestCallVsPutAsymmetries:
             next_earnings_date=None, ex_dividend_date=None, support_level=None,
             dte_min=0, dte_max=49, now=NOW,
         )
-        assert result["calls"]["coverable_contracts"] == 2
         assert result["calls"]["no_shares_held"] is False
+        assert "coverable_contracts" not in result["calls"]
         assert "coverable_contracts" not in result["puts"]
 
     def test_no_shares_held_true_when_zero_shares(self):
@@ -289,8 +289,8 @@ class TestCallVsPutAsymmetries:
             next_earnings_date=None, ex_dividend_date=None, support_level=None,
             dte_min=0, dte_max=49, now=NOW,
         )
-        assert result["calls"]["coverable_contracts"] == 0
         assert result["calls"]["no_shares_held"] is True
+        assert "coverable_contracts" not in result["calls"]
 
 
 class TestExcludedByDeltaBandSchema:
@@ -448,7 +448,7 @@ class TestParameterProvenance:
         default_result = evaluate_best_options(
             chain, side="call", category="balanced", total_shares=0,
             next_earnings_date=None, ex_dividend_date=None, support_level=None,
-            dte_min=0, dte_max=49, now=NOW,
+            dte_min=0, dte_max=45, now=NOW,
         )
         query_result = evaluate_best_options(
             chain, side="call", category="balanced", total_shares=0,

@@ -3,14 +3,14 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-/** Inline "analyze another symbol" search that navigates to /dgi/analyze/{symbol}. */
+/** Inline "analyze another symbol" search that navigates to /screener/dgi/analyze/{symbol}. */
 export default function DgiAnalyzeSearch() {
   const router = useRouter();
   const [value, setValue] = useState("");
 
   function go() {
     const s = value.trim().toUpperCase();
-    if (s) router.push(`/dgi/analyze/${encodeURIComponent(s)}`);
+    if (s) router.push(`/screener/dgi/analyze/${encodeURIComponent(s)}`);
   }
 
   return (

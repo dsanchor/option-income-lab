@@ -87,11 +87,11 @@ LIQUIDITY_DEFAULTS: Dict[str, float] = {
 }
 
 # Default DTE window (design §4.1/§7). Exposed publicly so the FastAPI
-# endpoint (Rusty's layer) imports these instead of re-declaring "49"
+# endpoint (Rusty's layer) imports these instead of re-declaring "45"
 # independently — a second source of truth for the window this module's
 # own provenance block reports against.
 DEFAULT_DTE_MIN = 0
-DEFAULT_DTE_MAX = 49
+DEFAULT_DTE_MAX = 45
 
 # The agents' own hard DTE cap (rule_evaluator._dte_cap_rule's "DTE <= 45").
 # rule_evaluator has no public constant for it (an inline literal there);
@@ -627,10 +627,12 @@ def _evaluate_side(
     }
     if side == "call":
         # Section 5: capital is a page/section-level banner, not a per-row
-        # field — total_shares is symbol-wide, not per-contract.
-        coverable = max(_safe_int(total_shares), 0) // 100
-        result["coverable_contracts"] = coverable
-        result["no_shares_held"] = coverable == 0
+        # field — total_shares is symbol-wide, not per-contract. Computed
+        # directly from total_shares (no derived contract-count
+        # intermediate — `coverable_contracts` was removed per the
+        # 2026-08-29 45d/no-coverable directive; this boolean's truth
+        # value never depended on exposing that count).
+        result["no_shares_held"] = max(_safe_int(total_shares), 0) < 100
     return result
 
 
@@ -742,7 +744,6 @@ def evaluate_best_options(
                 "nearest_miss": {"available": False, "reason": "side_not_requested"},
             }
             if s == "call":
-                sections[s]["coverable_contracts"] = None
                 sections[s]["no_shares_held"] = None
 
     atm_iv = _atm_iv(calls_bucket, puts_bucket, spot, now, today_et)
@@ -790,9 +791,7 @@ def evaluate_best_options(
         "iv_rank_enforced": False,
         "iv_rank_note": (
             "IV Rank is not observable from yfinance (see backend/src/volatility.py). "
-            "It is NOT enforced here. The agent path evaluates it against a "
-            "model-supplied value, so an agent WAIT citing IV Rank may not "
-            "correspond to anything measurable."
+            "It is NOT enforced here."
         ),
         "dte": {
             "min": lo_dte, "max": hi_dte, "source": dte_source,

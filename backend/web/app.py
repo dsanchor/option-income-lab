@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 
 from src.cosmos_db import is_watchlist_paused
 from src.scheduler_registry import _MAX_TASK_DURATION_SECONDS
+from src.best_options import DEFAULT_DTE_MIN, DEFAULT_DTE_MAX
 
 try:
     import yfinance as yf
@@ -2858,8 +2859,8 @@ async def api_symbol_best_options(
      request: Request,
      symbol: str,
      side: str = Query(default="both"),
-     dte_min: int = Query(default=0, ge=0),
-     dte_max: int = Query(default=49, ge=0, le=60),
+     dte_min: int = Query(default=DEFAULT_DTE_MIN, ge=0),
+     dte_max: int = Query(default=DEFAULT_DTE_MAX, ge=0, le=60),
      support_level: Optional[float] = Query(default=None),
 ):
      """Deterministic "Best Options" screen (Danny's 2026-08-29 design,
@@ -2970,12 +2971,343 @@ async def api_symbol_best_options(
      return JSONResponse(result)
 
 
+# ===========================================================================
+# REST API — Options Screener (Rusty's plumbing around Linus's pure
+# aggregator `src.options_screener.evaluate_options_screener`; design:
+# `.squad/decisions/inbox/copilot-options-screener-approved.md`)
+# ===========================================================================
+
+_SCREENER_MAX_COLD_WARMS_PER_REQUEST = 4
+# Generous sentinel for "fetch effectively everything the aggregator has
+# already filtered" when re-sorting by a non-default column below — a
+# real ceiling (400 rows/symbol/side, `best_options._MAX_ROWS_PER_SIDE`)
+# already bounds how large this can ever get, this is just comfortably
+# above any realistic total across the whole symbol universe.
+_SCREENER_UNBOUNDED_FETCH_LIMIT = 100_000
+
+# Presentation-layer sort keys only — re-ordering rows the aggregator
+# already scored/gated/paginated, never a re-derivation of score, colour,
+# or admission. "default" is the aggregator's own canonical order (score
+# desc, DTE asc, category-relative delta fit asc) and is passed straight
+# through untouched, no re-sort performed.
+_SCREENER_SORT_FIELDS = {
+     "default": None,
+     "annualized_return_pct": lambda r: r.get("annualized_return_pct"),
+     "premium_pct": lambda r: r.get("premium_pct"),
+     "dte": lambda r: r.get("dte"),
+     "open_interest": lambda r: r.get("open_interest"),
+     "abs_delta": lambda r: r.get("abs_delta"),
+     "symbol": lambda r: r.get("symbol"),
+}
+
+
+def _resort_screener_rows(rows: list, sort_field: str, direction: str) -> list:
+     """Re-orders already-filtered, already-scored rows by a caller-chosen
+     column. A stable sort; missing values on the chosen field always sort
+     last regardless of `direction` (never let an absent metric look like
+     "best" just because direction flipped)."""
+     getter = _SCREENER_SORT_FIELDS[sort_field]
+     reverse = direction == "desc"
+     if sort_field == "symbol":
+         return sorted(rows, key=lambda r: getter(r) or "", reverse=reverse)
+
+     def key(row):
+         value = getter(row)
+         if value is None:
+             return (1, 0.0)
+         numeric = float(value)
+         return (0, -numeric if reverse else numeric)
+
+     return sorted(rows, key=key)
+
+
+def _build_screener_symbol_inputs(cosmos, cache, symbol_filter):
+     """Assemble per-symbol `evaluate_options_screener` inputs with the
+     minimum Cosmos/cache work possible, per the approved directive
+     ("batch list symbols/calendar data rather than 3N Cosmos queries").
+
+     One `list_symbols()` call and one `get_calendar_events()` call cover
+     every symbol (vs. one plus two per-symbol queries each); calendar
+     events are grouped in Python into the earliest future
+     earnings/ex-dividend date per symbol, mirroring what
+     `get_next_earnings_date`/`get_next_calendar_event_date` compute one
+     symbol at a time.
+
+     Cold chains are capped at `_SCREENER_MAX_COLD_WARMS_PER_REQUEST` new
+     background refreshes per request — beyond that cap a cold symbol is
+     reported as `"cold"` (not actively being warmed by this request) so a
+     page full of never-fetched symbols cannot fan out an unbounded
+     refresh storm; it will be warmed by a later request/poll instead.
+
+     Returns `(symbol_inputs, status_detail)`: `symbol_inputs` uses only
+     the aggregator's own three statuses (`ready`/`warming`/`error`);
+     `status_detail` is the richer `ok`/`warming`/`cold`/`error` per-symbol
+     diagnostic list the API response surfaces for its partial-status
+     header and per-row stale/error badges — the aggregator itself never
+     sees this finer distinction.
+
+     Livingston (integration fix): this function performs the whole
+     `list_symbols`/`get_calendar_events`/per-symbol-hydrate read is
+     synchronous, real Cosmos/persistence I/O (`OptionsChainStore.hydrate`
+     issues a blocking `query_items` call on a true cache miss) — across a
+     many-symbol watchlist that is exactly the "bounded/sequential in a
+     worker thread" work the approved directive calls for, so the caller
+     runs this whole function via `loop.run_in_executor`, off the request's
+     event loop. Because of that, this function must never itself call
+     `cache.schedule_background_refresh`/rely on `get_or_hydrate`'s in-line
+     SWR trigger — both go through `asyncio.create_task`, which requires a
+     running loop on *this* (executor worker) thread and would silently
+     no-op there. Instead it only *decides* which symbols need warming
+     (applying the same `_SCREENER_MAX_COLD_WARMS_PER_REQUEST` cap to cold
+     misses, uncapped for stale-but-present hits, matching the SWR contract
+     every other `get_or_hydrate` caller already gets) and returns them in
+     `to_warm` for the caller to actually schedule back on the event loop.
+     """
+     docs = cosmos.list_symbols()
+     if symbol_filter is not None:
+         docs = [d for d in docs if (d.get("symbol") or "").strip().upper() in symbol_filter]
+
+     today = datetime.now(timezone.utc).date().isoformat()
+     earnings_by_symbol: Dict[str, str] = {}
+     ex_div_by_symbol: Dict[str, str] = {}
+     for ev in cosmos.get_calendar_events():
+         sym = (ev.get("symbol") or "").strip().upper()
+         date_val = ev.get("date")
+         if not sym or not date_val or date_val < today:
+             continue
+         bucket = ev.get("type")
+         target = earnings_by_symbol if bucket == "earnings" else (
+             ex_div_by_symbol if bucket == "ex_dividend" else None
+         )
+         if target is None:
+             continue
+         if target.get(sym) is None or date_val < target[sym]:
+             target[sym] = date_val
+
+     symbol_inputs = []
+     status_detail = []
+     to_warm: List[str] = []
+     warms_scheduled = 0
+     for doc in docs:
+         symbol = (doc.get("symbol") or "").strip().upper()
+         if not symbol:
+             continue
+         enrichment = doc.get("enrichment") or {}
+         category = enrichment.get("category")
+         total_shares = int(doc.get("total_shares", 0) or 0)
+         next_earnings_date = earnings_by_symbol.get(symbol)
+         ex_dividend_date = ex_div_by_symbol.get(symbol)
+         common = {
+             "symbol": symbol, "category": category, "total_shares": total_shares,
+             "next_earnings_date": next_earnings_date, "ex_dividend_date": ex_dividend_date,
+         }
+
+         chain_json = cache.get_or_hydrate(symbol, trigger_swr=False)
+         if chain_json is None:
+             if warms_scheduled < _SCREENER_MAX_COLD_WARMS_PER_REQUEST:
+                 to_warm.append(symbol)
+                 warms_scheduled += 1
+                 status_detail.append({"symbol": symbol, "status": "warming"})
+             else:
+                 status_detail.append({"symbol": symbol, "status": "cold"})
+             symbol_inputs.append({**common, "status": "warming"})
+             continue
+
+         try:
+             chain = json.loads(chain_json) if isinstance(chain_json, str) else chain_json
+         except (TypeError, ValueError) as e:
+             error_msg = f"Cached option chain unreadable: {e}"
+             status_detail.append({"symbol": symbol, "status": "error", "error": error_msg})
+             symbol_inputs.append({**common, "status": "error", "error": error_msg})
+             continue
+
+         stale = cache.is_stale(symbol)
+         if stale:
+             to_warm.append(symbol)
+         status_detail.append({
+             "symbol": symbol, "status": "ok",
+             "stale": stale,
+             "chain_timestamp": chain.get("timestamp") if isinstance(chain, dict) else None,
+         })
+         # `support_level` has no deterministic source in this codebase
+         # today (same finding as the single-symbol endpoint above) —
+         # always None across a many-symbol screener, never a single
+         # shared value that would make sense for every symbol at once.
+         symbol_inputs.append({**common, "status": "ready", "chain": chain, "support_level": None})
+
+     return symbol_inputs, status_detail, to_warm
+
+
+@app.get("/api/screener/options")
+async def api_screener_options(
+     request: Request,
+     side: str = Query(default="call"),
+     symbols: Optional[str] = Query(default=None),
+     preferences: Optional[str] = Query(default=None),
+     min_annualized_return_pct: Optional[float] = Query(default=None),
+     min_abs_delta: Optional[float] = Query(default=None, ge=0, le=1),
+     max_abs_delta: Optional[float] = Query(default=None, ge=0, le=1),
+     dte_min: int = Query(default=0, ge=0),
+     dte_max: int = Query(default=45, ge=0, le=60),
+     min_open_interest: Optional[float] = Query(default=None, ge=0),
+     sort: str = Query(default="default"),
+     sort_dir: str = Query(default="desc", alias="dir"),
+     offset: int = Query(default=0, ge=0),
+     limit: int = Query(default=100, ge=1, le=500),
+):
+     """Options Screener aggregation across every symbol (approved
+     directive: `.squad/decisions/inbox/copilot-options-screener-approved.md`).
+
+     Reuses `src.options_screener.evaluate_options_screener` and, through
+     it, `src.best_options.evaluate_best_options` verbatim — this endpoint
+     assembles per-symbol inputs (batched Cosmos reads, non-blocking cache
+     warming, per §above) and runs the aggregator off the event loop; it
+     never re-derives scoring, gating, or colour. Zero LLM calls are
+     reachable from this endpoint. On an entirely cold cache this still
+     answers 200 immediately (per-symbol `warming`/`cold` statuses in the
+     response), never hanging on a live provider fetch.
+     """
+     if side not in ("call", "put"):
+         return JSONResponse({"error": "side must be one of: call, put"}, status_code=400)
+     if dte_min > dte_max:
+         return JSONResponse({"error": "dte_min must be <= dte_max"}, status_code=400)
+     if min_abs_delta is not None and max_abs_delta is not None and min_abs_delta > max_abs_delta:
+         return JSONResponse({"error": "min_abs_delta must be <= max_abs_delta"}, status_code=400)
+     if sort not in _SCREENER_SORT_FIELDS:
+         return JSONResponse(
+             {"error": f"sort must be one of: {', '.join(_SCREENER_SORT_FIELDS)}"}, status_code=400,
+         )
+     if sort_dir not in ("asc", "desc"):
+         return JSONResponse({"error": "dir must be one of: asc, desc"}, status_code=400)
+
+     try:
+         cosmos = _get_cosmos(request)
+     except RuntimeError as e:
+         return JSONResponse({"error": str(e)}, status_code=503)
+
+     symbol_filter = None
+     if symbols is not None:
+         symbol_filter = {s.strip().upper() for s in symbols.split(",") if s.strip()}
+     preference_list = None
+     if preferences is not None:
+         preference_list = [p.strip() for p in preferences.split(",") if p.strip()]
+
+     from src.options_chain_cache import get_options_chain_cache
+
+     cache = get_options_chain_cache()
+     # `_build_screener_symbol_inputs` issues real, synchronous Cosmos/
+     # persistence I/O (list_symbols, get_calendar_events, and a hydrate
+     # read per cold symbol) — across a many-symbol watchlist that would
+     # otherwise block this request's event loop for every other request
+     # sharing it. Offloaded here to a single worker thread (bounded,
+     # sequential inside it — never a thread per symbol); the function
+     # itself never schedules refreshes (it can't safely reach
+     # `asyncio.create_task` off the event loop), so `to_warm` is applied
+     # back here, on the loop, once the executor call returns.
+     loop = asyncio.get_event_loop()
+     symbol_inputs, status_detail, to_warm = await loop.run_in_executor(
+         None, _build_screener_symbol_inputs, cosmos, cache, symbol_filter,
+     )
+     for warm_symbol in to_warm:
+         cache.schedule_background_refresh(warm_symbol)
+
+     try:
+         from src.options_screener import evaluate_options_screener
+     except ImportError as e:
+         logger.error("Options screener: aggregator module not available yet: %s", e)
+         return JSONResponse({"error": "Options Screener is not available yet"}, status_code=503)
+
+     # A non-default sort needs every matching row in hand before it can be
+     # re-ordered and re-paginated here — the aggregator's own offset/limit
+     # pagination is only valid against its own canonical order.
+     resorting = sort != "default"
+     fetch_offset = 0 if resorting else offset
+     fetch_limit = _SCREENER_UNBOUNDED_FETCH_LIMIT if resorting else limit
+
+     try:
+         result = await asyncio.get_event_loop().run_in_executor(
+             None,
+             lambda: evaluate_options_screener(
+                 symbol_inputs,
+                 now=datetime.now(timezone.utc),
+                 side=side,
+                 preferences=preference_list,
+                 symbols=sorted(symbol_filter) if symbol_filter is not None else None,
+                 min_annualized_return_pct=min_annualized_return_pct,
+                 min_abs_delta=min_abs_delta,
+                 max_abs_delta=max_abs_delta,
+                 min_dte=dte_min,
+                 max_dte=dte_max,
+                 min_open_interest=min_open_interest,
+                 offset=fetch_offset,
+                 limit=fetch_limit,
+             ),
+         )
+     except Exception as e:
+         logger.exception("Options screener evaluation failed")
+         return JSONResponse({"error": str(e)}, status_code=500)
+
+     section = result["calls"] if side == "call" else result["puts"]
+     rows = section["rows"]
+     pagination = section["pagination"]
+
+     if resorting:
+         rows = _resort_screener_rows(rows, sort, sort_dir)
+         total_matching = pagination["total_matching"]
+         rows = rows[offset: offset + limit]
+         pagination = {
+             "offset": offset, "limit": limit,
+             "total_matching": total_matching,
+             "returned": len(rows),
+             "has_more": (offset + len(rows)) < total_matching,
+         }
+
+     # Per-row enrichment owned at this layer, not the aggregator's: a flat
+     # multi-symbol table has no natural home for `best_options.py`'s own
+     # single-symbol section-level `no_shares_held` banner, so it is
+     # surfaced per CALL row instead (never put rows -- `no_shares_held` is
+     # a covered-call-only concept in `best_options.py` itself: a
+     # cash-secured put's collateral is cash, never shares, and that
+     # module's own `sections["put"]["no_shares_held"]` is always `None`),
+     # reusing that module's exact `< 100 shares` rule (the same threshold
+     # already used for the Watchlist's open-calls column). `chain_stale`
+     # is this request's own cache-TTL freshness
+     # check for the row's symbol -- deliberately a different key from the
+     # row's existing `stale` (`best_options.py`'s own per-contract
+     # quote-level staleness flag, already present on every row): the two
+     # answer different questions ("is this contract's own quote old" vs
+     # "is the whole cached chain for this symbol due for a refresh") and
+     # must never collide. Neither changes a row's colour or admission,
+     # presentation only.
+     shares_by_symbol = {i["symbol"]: i.get("total_shares", 0) for i in symbol_inputs}
+     stale_by_symbol = {d["symbol"]: d.get("stale", False) for d in status_detail if d["status"] == "ok"}
+     for row in rows:
+         if side == "call":
+             row["no_shares_held"] = shares_by_symbol.get(row["symbol"], 0) < 100
+         row["chain_stale"] = stale_by_symbol.get(row["symbol"], False)
+
+     counts = {"ok": 0, "warming": 0, "cold": 0, "error": 0}
+     for d in status_detail:
+         counts[d["status"]] = counts.get(d["status"], 0) + 1
+
+     return JSONResponse({
+         "schema_version": result["schema_version"],
+         "generated_at": result["generated_at"],
+         "side": side,
+         "filters": {**result["filters"], "sort": sort, "dir": sort_dir, "offset": offset, "limit": limit},
+         "symbols": {"total": len(status_detail), "counts": counts, "detail": status_detail},
+         "rows": rows,
+         "nearest_miss": section["nearest_miss"],
+         "pagination": pagination,
+     })
+
+
 @app.get("/api/debug/agent-chain/{symbol}")
 async def api_debug_agent_chain(request: Request, symbol: str,
-                                 option_type: str = Query(default="call"),
-                                 strike: float = Query(default=None),
-                                 expiration: str = Query(default=None),
-                                 roll_type: str = Query(default=None)):
+                                  option_type: str = Query(default="call"),
+                                  strike: float = Query(default=None),
+                                  expiration: str = Query(default=None),
+                                  roll_type: str = Query(default=None)):
     """Return the exact options chain text that agents receive, with all pipeline filters applied."""
     try:
         cosmos = _get_cosmos(request)

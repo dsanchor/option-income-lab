@@ -426,7 +426,7 @@ class OptionsChainCache:
             # from get_or_load_async, but fail safe rather than crash).
             os_lock.release()
 
-    def get_or_hydrate(self, symbol: str) -> Optional[str]:
+    def get_or_hydrate(self, symbol: str, *, trigger_swr: bool = True) -> Optional[str]:
         """Non-blocking cache accessor for interactive callers that must
         never wait on a provider fetch (Danny's 2026-08-29 Best Options
         design, F6): returns a memory hit, else a persistence hydrate,
@@ -451,10 +451,23 @@ class OptionsChainCache:
         existing convention — the hydrated entry is already marked
         immediately stale-eligible (D3) and will be picked up as such on
         its own next access.
+
+        ``trigger_swr=False`` (Options Screener, Livingston) lets a batch
+        caller that offloads this method to a worker thread pool skip that
+        in-line SWR trigger: `_schedule_background_refresh` calls
+        `asyncio.create_task`, which requires a running loop on *this*
+        calling thread — silently no-op'ing otherwise (by design, see its
+        docstring), which would make the trigger a no-op on a plain
+        executor thread anyway. Such a caller should check `is_stale()`
+        itself on a hit and call `schedule_background_refresh()` back on
+        its own event-loop thread instead, preserving the exact same
+        unbounded, per-symbol-locked SWR contract every other caller gets
+        for free. Every existing caller keeps the default (`True`),
+        unchanged.
         """
         cached = self.get(symbol)
         if cached is not None:
-            if self.is_stale(symbol):
+            if trigger_swr and self.is_stale(symbol):
                 self._schedule_background_refresh(symbol)
             return cached
 

@@ -233,6 +233,7 @@ def _runner_fixture(monkeypatch, data):
             "SUMMARY: MSFT | CLOSE | $0 buyback | 100% fully realized",
             None,
             _assessment_handoff(),
+            None,
         )
 
     async def fake_roll_management(**kwargs):
@@ -248,7 +249,7 @@ def _runner_fixture(monkeypatch, data):
             "risk_flags": ["close_for_profit"],
             "reason": "Valid positive ask confirms the profit close.",
         }
-        return "SUMMARY: MSFT | CLOSE open call", activity
+        return "SUMMARY: MSFT | CLOSE open call", activity, None
 
     async def fake_supervisor(**kwargs):
         return None

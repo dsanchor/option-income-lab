@@ -13,6 +13,20 @@ const nextConfig: NextConfig = {
         destination: "/dashboard",
         permanent: false,
       },
+      // DGI moved under the new "Screener" nav grouping alongside Options
+      // (`.squad/decisions/inbox/copilot-options-screener-approved.md`) —
+      // not permanent, matching the "/" -> "/dashboard" convention above,
+      // since this is an in-app reorg rather than a canonical URL change.
+      {
+        source: "/dgi",
+        destination: "/screener/dgi",
+        permanent: false,
+      },
+      {
+        source: "/dgi/analyze/:symbol",
+        destination: "/screener/dgi/analyze/:symbol",
+        permanent: false,
+      },
     ];
   },
 };
