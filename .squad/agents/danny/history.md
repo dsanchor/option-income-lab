@@ -493,3 +493,328 @@ and the four existing tests that already monkeypatch `_record_trace`
 (`test_force_alpha_execution.py`, `test_open_call_zero_quote.py`,
 `test_buy_tracker_normalization.py`, `test_zero_free_agent_chain.py`) stay green unmodified.
 Linus is not involved — no strategy/instructions-file surface is touched by this design.
+
+### 2026-08-29 (later still) — Best Options scheduled precompute + shared in-memory cache: focused design review (no implementation)
+
+Decision: `.squad/decisions/inbox/danny-best-options-scheduler-design.md` (accepted).
+Three directives folded into one design: `copilot-best-options-scheduled-memory-cache.md`
+(precompute per symbol, share one cached result across Symbol Detail and the Options
+Screener, Settings config, Mon-Fri hourly at :05 from 10:05 to 23:05),
+`copilot-best-options-symbol-refresh-only.md` (a per-symbol Refresh button on Symbol Detail
+only, never on the Screener), and `copilot-options-screener-precomputed-only.md` (the
+Screener never computes on request; it shows `N of X loaded`).
+
+**Timezone was determined from the code, not from the config comments — and the config was
+found to be lying.** `scheduler.timezone: "UTC"` in `config.yaml` is read by *nothing*: the
+only other occurrence of that key in the repo is `Config.timezone`, which does not read
+config at all but *reports* `datetime.now().astimezone().tzinfo`. Every cron in this system
+is evaluated by `croniter(expr, _now_local())` where `_now_local()` is
+`datetime.now().astimezone()` — the container's system timezone, full stop. The "(UTC)"
+comments scattered through `config.yaml` are assertions about the deployment's `TZ`, not
+about anything the scheduler enforces. Exact expression ruled: **`5 10-23 * * 1-5`**,
+verified against the repo's own croniter (14 weekday fires, 10:05..23:05, weekends skipped,
+Fri 23:05 -> Mon 10:05). I explicitly refused to add a per-task timezone: that is a new
+cross-cutting scheduler capability, it would make this one task disagree with the ten
+already registered, and smuggling it in under a feature directive is exactly the kind of
+scope creep the design review exists to catch.
+
+**The structural finding that makes the whole design cheap: one `side="both"` envelope
+serves both consumers byte-for-byte.** Read of `evaluate_best_options` confirms each side's
+section is produced independently by `_evaluate_side`, and every *shared* field
+(`parameters.thresholds` for both sides, `atm_iv` computed from both buckets,
+`parameters.chain.*` counts) is derived over both DTE-filtered buckets regardless of the
+requested `side`. So `evaluate_best_options(side="both")["calls"]` is identical to
+`evaluate_best_options(side="call")["calls"]` — a "both" result is a strict superset. That,
+plus the fact that the Screener already hard-codes `dte 0..45`/`support_level=None` and the
+Symbol Detail UI sends only `?side=both` (`BestOptionsView.tsx:248`), means the canonical
+shape is a *constant*, not a cache-key dimension. Key is the normalized symbol alone;
+category/shares/calendar are recorded as *inputs* for drift disclosure, never as key
+dimensions (a per-category entry would just be a cache of stale alternatives nobody asked
+for). Pinned by a required side-equivalence test — it is load-bearing.
+
+**`:00` vs `:05` needed no coordination mechanism at all, and I confirmed why rather than
+adding one.** `TaskRegistry._worker_loop` is a *single* worker thread draining one
+`queue.Queue` strictly sequentially (dequeue -> sub-thread -> `join(1800)` -> next). Two
+registered tasks can never run concurrently in the scheduler process, so the chain refresh
+enqueued at `:00` and the precompute enqueued at `:05` are ordered by the queue, not the
+clock — if the chain job overruns five minutes the precompute simply waits its turn and
+still runs after it. The five-minute gap is headroom, not a guarantee, and does not need to
+be. I explicitly ruled *against* an inter-task dependency ("wait for options_chain"):
+blocking inside a job for another job on the same single worker is a guaranteed deadlock.
+The one real residual race is disclosed, not locked: `/api/trigger/options_chain` spawns its
+own raw thread *outside* the registry (bypassing its overlap guard, watchdog and `last_run`
+bookkeeping — a pre-existing defect I flagged but did not fix), so a manual chain refresh can
+straddle a precompute cycle; each entry's own `chain_timestamp` makes exactly that visible
+per symbol.
+
+**Atomic batch replacement AND per-symbol update — the refresh-button directive forces
+both, and one rule reconciles them: the snapshot map is always replaced copy-on-write,
+never mutated in place.** A full cycle builds a fresh dict in a local and publishes it with
+one guarded assignment; a single-symbol refresh publishes `{**old, sym: new}`. Consumers
+must take the snapshot reference *exactly once per request* — that is the entire point of
+atomicity, so a Screener request iterating 200 symbols can't show 40 from generation N and
+160 from N+1 without saying so. Retention ruled explicitly: a symbol that fails in cycle N+1
+**carries its cycle-N envelope forward** with `status="stale"` and its original
+`generation`/`computed_at` intact — a transient Cosmos or provider hiccup must never empty a
+page that worked sixty minutes ago.
+
+**Key call on invalidation: detect and disclose, never chase.** I rejected event-driven
+invalidation hooks in every mutation path (symbol edit, position change, calendar sync) —
+too many write surfaces, too easy to miss one, and a missed hook fails *silently*, which is
+strictly worse than visible staleness. Drift is instead reported per request under a hard
+constraint I imposed: **zero added Cosmos queries.** Both handlers already have `category`
+and `total_shares` in hand (`sym_doc` for the 404 guard; `list_symbols()` for the batch), so
+those are free — and the two calendar lookups Symbol Detail does today (plus the Screener's
+whole `get_calendar_events()` scan) exist *only* to feed the evaluator and are deleted on
+the cache-hit path. Calendar drift therefore goes undetected until the next cycle: the right
+trade for two Cosmos round-trips per page load, forever, against a field that changes a
+handful of times a year and self-corrects within the hour.
+
+**The sharpest hazard, and it is currently safe only by accident of good style.** Today's
+memo is per-request, so in-place mutation of a row is invisible; a process-wide cache makes
+every such mutation permanent and cross-request. Audited every write path and found the
+existing code already copy-correct — `options_screener` does `tagged = dict(row)` and
+`dict(nearest_miss)` before tagging, `web/app.py`'s `row["no_shares_held"]`/`["chain_stale"]`
+land on those copies, and filtering/sorting/pagination build new lists throughout
+(`sorted(...)`, comprehensions, slices — no in-place `.sort()`, no slice assignment
+anywhere). That accident must become an enforced invariant: envelopes are read-only after
+publication, per-request metadata is attached by constructing a new outer dict
+(`{**envelope, "cache": {...}}`, never `envelope["cache"] = ...`), per-row enrichment
+requires a shallow copy first, and **no deep copy anywhere** — at 400 rows x 2 sides x N
+symbols it would cost more than the evaluation this design exists to eliminate.
+
+**"No request computation" written so it is testable rather than aspirational.** No
+*implicit* request — page load, poll, navigation, filter, sort, pagination — may reach
+`evaluate_best_options`. Exactly two explicit, response-labelled exceptions survive: the
+per-symbol Refresh action, and a Symbol Detail request carrying a genuinely non-canonical
+query override, which computes live and returns `cache: {"used": false, "reason":
+"non_canonical_parameters"}`. **I kept the override deliberately:** this morning's 45-day
+alignment decision explicitly preserved the `dte_max` override and `exceeds_system_dte_cap`
+on the stated ground that they "remain live and meaningful the instant a caller explicitly
+widens the window" — deleting that path under cover of an unrelated caching directive would
+have quietly clawed back a still-binding decision. The UI never sends those params, so the
+exception is unreachable from normal use. Corresponding acceptance test: monkeypatch
+`evaluate_best_options` to *raise*, and both canonical endpoints must still answer 200 with
+full rows.
+
+**Chain warming kept on one endpoint and removed from the other, deliberately asymmetric.**
+Symbol Detail's cold-chain path still calls `schedule_background_refresh` — one
+explicitly-requested symbol is bounded and user-intent-driven, it is pre-existing behavior
+with a passing test, and a chain fetch is not a *scoring* computation. The Screener's
+request-side warming is deleted outright (`_SCREENER_MAX_COLD_WARMS_PER_REQUEST`, `to_warm`,
+the whole cap): fanning out N warms from one aggregate request is precisely what that cap
+existed to contain, and the chain scheduler already covers the whole universe at `:00`.
+
+**Multi-process limitation stated, not softened, because it is the real cost of this
+phase.** `run.py`'s default is genuinely one process (uvicorn single worker + scheduler
+daemon thread), so the module singleton really is shared — but `--web-only`/`--scheduler-only`
+as two processes, `--workers N>1`, or any replica set breaks it *silently and completely*,
+and unlike `OptionsChainCache` there is **no persistence tier to rehydrate from**. That
+asymmetry is the headline limitation. Mitigation for this phase is diagnosability:
+`GET /api/health/best-options` reports `status:"empty"`/`generation:0`, which is exactly the
+split-process signature.
+
+**Load-bearing test coupling named up front so it isn't hit mid-implementation.** There is
+**no scheduler-registry test file anywhere in `backend/tests/`** — the new adversarial suite
+builds its harness from scratch, nothing to extend. `test_best_options_endpoint.py`'s
+cold-cache test asserts *exact dict equality* on the warming body, so adding `reason`/
+`next_run` breaks it; its `TestWarmCacheFullTable` pair warms only the *chain* cache and will
+now get `warming`; and its endpoint-vs-direct parity test pops only `evaluated_at`, so a
+cached envelope (computed at cycle time, not request time) turns it into a flaky
+two-different-`now` comparison. Worst of all,
+`test_options_screener_cache_concurrency.py`'s entire premise — "does cold-miss warming still
+fire from the executor thread" — is *retired* by this design and needs deliberate rework, not
+a mechanical patch.
+
+**Ownership, with one deliberate split to keep boundaries clean:** the cycle body lives in
+its own new module `best_options_precompute.py` (Livingston — Cosmos/chain-cache/evaluator
+seam, his standing remit) separate from the scheduler bridge in `main.py` (Rusty), which
+makes the cycle independently testable without standing up a registry. Linus owns the pure
+`best_options_cache.py` and the surgical `options_screener.py` change (`memo` -> caller-
+supplied `precomputed`). Livingston owns `web/app.py` end to end. Rusty owns all frontend
+plus `config.yaml`. Basher owns the new adversarial suite, the concurrency-file rework, and
+a grep-based reviewer gate. `best_options.py` itself is **not touched** — the evaluator stays
+pure and its output is what gets cached.
+
+### 2026-08-29 (same review, addendum) — Best Options targeted Refresh: blocking design found unsafe and superseded
+
+Directive: `.squad/decisions/inbox/copilot-best-options-symbol-refresh-only.md` (Refresh
+button on Symbol Detail → Best Options only; recompute and atomically replace that symbol's
+shared entry; duplicate/in-flight protection; visible status; nothing on the Screener).
+Design updated in place: `.squad/decisions/inbox/danny-best-options-scheduler-design.md` §9b.
+
+**I had this wrong the first time and the code caught it.** My initial §9b had the handler
+`await chain_cache.refresh(symbol)` inline and return the fresh envelope, reasoning that
+"blocking for a few seconds is correct UX for an explicit single-symbol action." Reading
+`OptionsChainCache` disproved the "few seconds" premise: `refresh()` applies **no timeout of
+any kind** — the 90s `_REFRESH_SYMBOL_TIMEOUT` belongs to `refresh_all`'s thread pool
+(`future.result(timeout=...)`), not to `refresh()` — and it holds the symbol's OS lock across
+both provider fetches *and* the Cosmos shard write. A hung provider socket hangs the awaiting
+request for as long as the socket hangs. Worse, the obvious fix is explicitly forbidden by a
+frozen contract: `schedule_background_refresh`'s own docstring states no cancellation or
+timeout may be layered around a refresh because it "would abandon that lock/write rather than
+make the caller more responsive — the exact hazard the accepted design calls out for why
+`get_or_hydrate` itself must never wrap `get_or_load_async` in `asyncio.wait_for`."
+`wait_for(shield(...))` would technically survive (only the waiter gives up, the fetch
+continues), but inventing new timeout semantics on a deliberately timeout-free seam to serve
+a button is not a trade worth making.
+
+**Accepted instead: non-blocking POST, status on the existing GET.** The directive's own
+words ("visible status") are poll-shaped, so this is not a compromise. `POST
+/api/symbols/{symbol}/best-options/refresh` returns immediately with
+`refreshing`/`already_refreshing`; the work runs on an `asyncio.create_task` background task
+that awaits the unbounded refresh exactly as that seam requires — an unbounded fetch now
+costs a background task rather than a hung client. Status rides on the `cache` block of the
+GET the page already polls (`refreshing`, `refresh_started_at`, `refresh_completed_at`,
+`refresh_error`); no second status surface invented. **The GET keeps serving the previous
+entry throughout — a refresh in progress never blanks the table.**
+
+**Does targeted refresh also refresh the chain? Yes — and this was the load-bearing call.**
+Recompute-only was rejected on the evaluator's own contract: `evaluate_best_options` is pure
+and "identical input produces byte-identical output," so against an unchanged chain and
+unchanged inputs a recompute-only Refresh returns a byte-identical envelope differing only in
+`evaluated_at`. The button would visibly do nothing. The staleness a user reacts to when
+pressing Refresh is the *chain's* age, not the evaluator's. I also rejected a
+skip-if-not-stale heuristic: the chain TTL is 1800s, so for the first 30 minutes after every
+`:00` cycle — most of the time — Refresh would silently degrade into exactly the
+recompute-only case just rejected. Predictable beats clever: always fetch. One symbol, and
+the in-flight guard (not a TTL heuristic) is what bounds abuse.
+
+**Chain refresh best-effort, recompute mandatory.** Two reasons the recompute must still run
+when the fetch fails: (1) category/`total_shares`/calendar can have drifted since the last
+cycle — that is precisely the drift case §6 detects but deliberately does not auto-correct,
+and Refresh is its sanctioned remedy, fixable by recompute alone; (2) an explicit user action
+must never leave the entry *worse* than it was, so the recompute proceeds against
+last-known-good, `refresh_error` is reported, and the status is never downgraded below its
+previous value.
+
+**Duplicate protection and an asyncio footgun solved by one structure.** The per-symbol
+in-flight registry holds the `asyncio.Task` — `chain_cache.refresh()` already dedupes the
+*fetch* on one loop, but that covers neither the evaluate-and-publish step nor a concurrent
+full cycle. Holding a strong reference also fixes the classic fire-and-forget hazard where a
+task nobody references can be garbage-collected mid-flight; `_schedule_background_refresh` in
+the chain cache has exactly that shape today (pre-existing, flagged not fixed). Removal in a
+`finally` so a crashing task can never wedge a symbol as permanently "refreshing."
+
+**Precedence stated rather than fenced.** A targeted refresh and a full cycle run on
+different threads (request loop vs. registry worker) and can overlap. **No ordering fence:
+last writer wins**, both publications carry `computed_at` so the winner is observable rather
+than inferred. The window is seconds, both results are current, and a fence would add
+cross-thread coupling to prevent an outcome that is not actually wrong.
+
+**Ownership boundary sharpened by this directive:** the in-flight registry holds live
+`asyncio.Task` objects, so it must **not** sit in Linus's `best_options_cache.py`, which is
+specified as a pure data structure. Linus exposes only the `replace_symbol()` copy-on-write
+primitive and stores refresh state as plain data; Livingston owns the task registry and the
+orchestration in `best_options_precompute.py`, keeping every asyncio concern behind one
+owner. Rusty owns the button, its `cache.refreshing`-driven disabled state, and the new BFF
+POST route.
+
+**New gate items:** no `asyncio.wait_for`/`asyncio.timeout`/cancellation layered around
+`chain_cache.refresh()` anywhere in new code; the background task is always stored in the
+in-flight registry (never a bare discarded `create_task`); and the Screener has no refresh
+control *and no reachable refresh endpoint* — grep the API surface too, not just the
+component, since the instinct when adding a row-level action is to mirror it into the
+aggregate table. Regression test named explicitly for the rejected reading: a Refresh against
+a chain whose contents changed must yield a *different* envelope.
+
+### 2026-08-29 (same review, second addendum) — Options Screener strictly precomputed-only: N-of-X contract pinned
+
+Directive: `.squad/decisions/inbox/copilot-options-screener-precomputed-only.md`. Design
+updated in place: `danny-best-options-scheduler-design.md` §11b (rewritten as a full contract),
+§12.8 (new readiness test cluster), §13 (Rusty gains `types/screener.ts`).
+
+**Strengthened my own draft to zero chain-cache coupling.** I had kept a live
+`chain_cache.is_stale(symbol)` call to populate each row's `chain_stale`, reasoning it was a
+cheap in-memory lock read and therefore not "hydration." Dropped it: the entry already stores
+`chain_stale_at_compute` from cycle time, which is both cheaper *and more correct* — it
+describes the chain as of the evaluation the row actually came from, not as of an unrelated
+later moment. The endpoint now references the option-chain cache **not at all**, which converts
+a judgement call ("is `is_stale()` really hydration?") into an absolute, greppable gate. Worth
+recording as a pattern: when a rule's boundary requires arguing about an edge case, look for
+the variant that removes the edge case entirely.
+
+**`X` honours the `symbols=` whitelist; `N` is filter-invariant.** X = `list_symbols()`
+intersected with the explicit whitelist when supplied — reporting "3 of 200 loaded" when the
+caller asked for three symbols would be nonsense, and `filters.symbols` already echoes which
+case applies. But X and N are untouched by `preferences`/metric filters/`sort`/pagination.
+**The key ruling: a symbol that is loaded but whose rows are all filtered out still counts
+toward N.** Otherwise the readiness number drifts every time the user touches a filter,
+conflating "not computed yet" with "nothing of yours matched." That is the exact conflation
+`options_screener.py`'s own docstring already refuses to make for `nearest_miss` ("that would
+conflate 'your category rules found nothing' with 'you asked for a narrower view than what
+exists,' which are different facts") — same principle, same module, applied one level up.
+Regression test: identical snapshot, wide vs. deliberately over-narrow filters, `loaded`/`total`
+unchanged while `pagination.total_matching` moves.
+
+**Stale entries count toward N — and the labelling that earns it is discharged concretely.**
+The directive permits it "only if design clearly labels age/status." Excluding them would be
+the worse lie: they have usable envelopes and *do* contribute rows, so a header calling them
+"not loaded" while their rows sit on screen is a direct contradiction. Labelling on three
+surfaces: `loaded` decomposed into `loaded_fresh` + `loaded_stale` (a first-class number, not
+something inferred from the detail list); per-symbol `status`/`generation`/`computed_at`/
+`chain_timestamp` (age as a timestamp, not an adjective); and a per-row `entry_stale`.
+
+**Three staleness channels now coexist and must never be merged** — named explicitly because
+collapsing two of them is the obvious mistake: `stale` (this contract's quote older than 24h,
+`best_options.py`'s own per-contract flag), `chain_stale` (the whole chain was past its refresh
+TTL, now sourced from `entry.chain_stale_at_compute`), and the new `entry_stale` (this symbol's
+result is carried forward from an older cycle). Test: one fixture where all three take
+independent values on a single row.
+
+**Retired `cold`/`warming`, kept the distinction where it is actually useful.** With no
+request-side hydration there is exactly one not-ready state, so the existing
+`counts: {ok, warming, cold, error}` is replaced rather than extended — keeping two dead keys to
+avoid touching a frontend that has to change anyway (to render `N of X loaded`) would be false
+compatibility. The `chain_cold` vs `precompute_pending` distinction survives per-symbol in
+`detail[].reason` for diagnostics but deliberately **not** as a top-level count: it is not
+actionable from this page, since the Screener has no refresh control, and splitting the counter
+would ask users to distinguish two states they cannot act on differently.
+
+**Exact UX copy written into the design so it is assertable rather than improvised**, reusing
+the existing amber `role="status"` banner per the standing visual-consistency directive. Two
+edge cases named that a naive implementation gets wrong: `X == 0` must read "No symbols
+configured", never `0 of 0 loaded`; and the readiness line renders **always** when `X > 0`,
+including at `N == X` — a number that only appears when something is wrong teaches users to
+distrust its absence. The headline requirement: `N == 0` is a first-class, explicitly-worded
+state, never a generic "no results match your filters" empty table. Conflating an unpopulated
+cache with an over-narrow filter is the single worst failure mode this directive exists to
+prevent, and it is exactly what the current empty-table path would do if left alone.
+
+**Invariants promoted to tests:** `loaded + pending + error == total` and
+`loaded == loaded_fresh + loaded_stale`, over every fixture including the empty one; plus an
+assertion that the row `symbol` set is a subset of the loaded set (no pending/error symbol ever
+contributes a row).
+
+### 2026-08-29 — BEFORE Design Review ceremony (revalidation)
+
+Revalidated the accepted Best Options precompute design against HEAD e3a20a2. All 7 key assumptions confirmed (registry count, price_forecast reschedule pattern, screener call sites, frontend query params, new-file clean slate, test breakage targets, no conflicting dirty state). Produced ceremony summary with dependency graph: Linus first → Livingston + Rusty parallel → Basher gate. Output: `.squad/decisions/inbox/danny-best-options-scheduler-resume-review.md`.
+
+**Learning:** When resuming a multi-session initiative, re-checking source-level assumptions (line numbers, function signatures, import paths) against the exact HEAD commit catches drift that a design doc alone cannot. The 10 → 10 registry count and the `app.py:4595` reschedule call both confirmed — but either could have changed between sessions.
+
+## 2026-08-29T18:23:00Z — Best Options Scheduled Precompute: BEFORE Design Review (revalidation)
+
+**Ceremony:** BEFORE Design Review, formal revalidation against HEAD e3a20a2
+
+**Result:** ✅ Design CONFIRMED — no conflicts found, implementation authorized to proceed in parallel across 4 ownership slices
+
+**Verified against committed code:**
+- Scheduler registry: 10 tasks registered, single worker loop ✅
+- Reschedule pattern: price_forecast model followed ✅
+- options_screener.py structure: clean surgical change possible ✅
+- Frontend contracts: BestOptionsView & OptionsScreenerView ready ✅
+- No conflicting in-flight changes ✅
+
+**Binding directives (3, all incorporated into design):**
+1. Precompute per symbol on scheduler, shared cache, Settings config, cron "5 10-23 * * 1-5"
+2. Manual Refresh on Symbol Detail ONLY, no refresh on Screener
+3. Screener never computes missing entries, shows "N of X loaded"
+
+**Ownership slices authorized:**
+- Linus (Quant): Cache module + screener update
+- Livingston (Integration): Precompute cycle + validation
+- Rusty (Frontend): Scheduler bridge + UI
+- Basher (Review): Gate oversight
+
+**Key decision:** No per-task timezone capability — design correctly ruled out, inherits container TZ semantics from existing 10 tasks.
+

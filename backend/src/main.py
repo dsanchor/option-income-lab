@@ -72,7 +72,7 @@ def _now_local():
 
 class OptionsAgentScheduler:
     """Main scheduler for cron-based options agent execution."""
-    
+
     def __init__(self):
         self.running = True
         self.alive = False  # Health flag — True while scheduler loop is active
@@ -85,14 +85,14 @@ class OptionsAgentScheduler:
         self._last_heartbeat = 0  # epoch for periodic heartbeat log
         self._heartbeat_interval = 600  # heartbeat every 10 minutes
         self.registry = TaskRegistry()  # Centralized task registry
-    
+
     def reschedule(self, new_cron: str):
         """Update cron expression. The run loop will pick it up on next iteration."""
         self.config.cron_expression = new_cron
         task = self.registry.get_task("monitor_agents")
         if task:
             task._cron_changed = True
-    
+
     def reschedule_summary(self, new_cron: str):
         """Update summary agent cron expression. The run loop will pick it up on next iteration."""
         self.registry.reschedule("summary_agent", new_cron, self.config)
@@ -100,15 +100,15 @@ class OptionsAgentScheduler:
     def reschedule_plan_monitor(self, new_cron: str):
         """Update plan monitor cron expression. The run loop will pick it up on next iteration."""
         self.registry.reschedule("plan_monitor", new_cron, self.config)
-    
+
     def reschedule_options_chain(self, new_cron: str):
         """Update options chain scheduler cron expression. The run loop will pick it up on next iteration."""
         self.registry.reschedule("options_chain", new_cron, self.config)
-    
+
     def reschedule_dgi_screener(self, new_cron: str):
         """Update DGI screener cron expression. The run loop will pick it up on next iteration."""
         self.registry.reschedule("dgi_screener", new_cron, self.config)
-    
+
     def reschedule_portfolio_enrichment(self, new_cron: str):
         """Update portfolio enrichment cron expression."""
         self.registry.reschedule("portfolio_enrichment", new_cron, self.config)
@@ -120,12 +120,12 @@ class OptionsAgentScheduler:
     def reschedule_calendar(self, new_cron: str):
         """Update calendar sync cron expression. The run loop will pick it up on next iteration."""
         self.registry.reschedule("calendar_sync", new_cron, self.config)
-    
+
     def setup(self):
         """Initialize configuration, CosmosDB, and agent runner."""
         print("Loading configuration...")
         self.config = Config()
-        
+
         print("Initializing CosmosDB service...")
         self.cosmos = CosmosDBService(
             endpoint=self.config.cosmosdb_endpoint,
@@ -140,7 +140,7 @@ class OptionsAgentScheduler:
             if k not in ('ai', 'azure', 'gemini', 'cosmosdb')
         }
         merged_settings = self.cosmos.merge_defaults(settings_defaults)
-        
+
         # Update Config object with merged settings from CosmosDB (CosmosDB takes precedence)
         if merged_settings:
             for key, value in merged_settings.items():
@@ -158,16 +158,16 @@ class OptionsAgentScheduler:
             plan_monitor_model=self.config.plan_monitor_model,
             function_llms=self.config.function_llm_configs(),
         )
-        
+
         print(f"Scheduler configured with cron: {self.config.cron_expression}")
         print(f"System timezone: {self.config.timezone}")
-        
+
         # Log summary agent configuration
         summary_config = self.config.config.get('summary_agent', {})
         summary_enabled = summary_config.get('enabled', True)
         summary_cron = summary_config.get('cron', '0 8 * * *')
         summary_activity_count = summary_config.get('activity_count', 3)
-        
+
         print(f"\nSummary Agent Configuration:")
         print(f"  Enabled: {summary_enabled}")
         if summary_enabled:
@@ -188,24 +188,24 @@ class OptionsAgentScheduler:
             print(f"  Model: {plan_monitor_model}")
         else:
             print(f"  Status: Disabled in config")
-        
+
         # Log options chain scheduler configuration
         options_chain_config = self.config.config.get('options_chain_scheduler', {})
         options_chain_enabled = options_chain_config.get('enabled', True)
         options_chain_cron = options_chain_config.get('cron', '0 * * * *')
-        
+
         print(f"\nOptions Chain Scheduler Configuration:")
         print(f"  Enabled: {options_chain_enabled}")
         if options_chain_enabled:
             print(f"  Cron: {options_chain_cron}")
         else:
             print(f"  Status: Disabled in config")
-        
+
         # Log DGI screener configuration
         dgi_config = self.config.config.get('dgi_screener', {})
         dgi_enabled = dgi_config.get('enabled', True)
         dgi_cron = dgi_config.get('cron', '0 6 * * 1-5')
-        
+
         print(f"\nDGI Screener Configuration:")
         print(f"  Enabled: {dgi_enabled}")
         if dgi_enabled:
@@ -248,18 +248,18 @@ class OptionsAgentScheduler:
             print(f"  Cron: {dps_cron}")
         else:
             print(f"  Status: Disabled in config")
-    
+
     def run_all_agents(self):
         """Execute all agents (bridges async to sync for scheduler)."""
         _run_async(self._run_all_agents_async())
-    
+
     async def _run_all_agents_async(self):
         """Execute all agents asynchronously."""
         now_tz = _now_local()
         print(f"\n{'#'*70}")
         print(f"# Starting scheduled agent run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'#'*70}\n")
-        
+
         cosmos = self.cosmos
         ctx = self.context_provider
         runner = self.runner
@@ -288,28 +288,28 @@ class OptionsAgentScheduler:
                     )
             except Exception as e:
                 print(f"ERROR running {agent_name}: {str(e)}")
-        
+
         now_tz = _now_local()
         print(f"\n{'#'*70}")
         print(f"# Completed scheduled agent run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'#'*70}\n")
-    
+
     def run_summary_agent_job(self):
         """Execute summary agent (bridges async to sync for scheduler)."""
         _run_async(self._run_summary_agent_async())
-    
+
     async def _run_summary_agent_async(self):
         """Run summary agent if enabled in config."""
         summary_config = self.config.config.get('summary_agent', {})
         if not summary_config.get('enabled', True):
             print("⏭️  Summary agent disabled in config")
             return
-        
+
         now_tz = _now_local()
         print(f"\n{'='*70}")
         print(f"📊 Summary Agent - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'='*70}\n")
-        
+
         activity_count = summary_config.get('activity_count', 3)
         max_age_hours = summary_config.get('max_activity_age_hours', 24)
         await self.runner.run_summary_agent(
@@ -375,53 +375,53 @@ class OptionsAgentScheduler:
                 print(f"  ✗ {symbol} | {title or plan_id}: {e}")
 
         print(f"\nPlan Monitor Complete: {success} success, {errors} errors, {len(plans)} plans processed")
-    
+
     def run_options_chain_fetch_job(self):
         """Execute options chain fetch job (bridges async to sync for scheduler)."""
         _run_async(self._run_options_chain_fetch_async())
-    
+
     async def _run_options_chain_fetch_async(self):
         """Refresh options chain cache for all symbols (yfinance + TradingView merge)."""
         options_chain_config = self.config.config.get('options_chain_scheduler', {})
         if not options_chain_config.get('enabled', True):
             print("⏭️  Options chain scheduler disabled in config")
             return
-        
+
         from .options_chain_cache import get_options_chain_cache
-        
+
         now_tz = _now_local()
         print(f"\n{'~'*70}")
         print(f"📈 Options Chain Cache Refresh - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'~'*70}\n")
-        
+
         symbols = self.cosmos.list_symbols()
         symbol_names = [s["symbol"] for s in symbols]
-        
+
         print(f"Refreshing options chain cache for {len(symbol_names)} symbols...")
-        
+
         cache = get_options_chain_cache()
         stats = await cache.refresh_all(symbol_names)
-        
+
         print(f"\n{'~'*70}")
         print(f"Options Chain Cache Refresh Complete: {stats['success']} success, {stats['errors']} errors")
         print(f"{'~'*70}\n")
-    
+
     def run_dgi_screener_job(self):
         """Execute DGI screener (bridges async to sync for scheduler)."""
         _run_async(self._run_dgi_screener_async())
-    
+
     async def _run_dgi_screener_async(self):
         """Run DGI screener if enabled in config."""
         dgi_config = self.config.config.get('dgi_screener', {})
         if not dgi_config.get('enabled', True):
             print("⏭️  DGI Screener disabled in config")
             return
-        
+
         now_tz = _now_local()
         print(f"\n{'+'*70}")
         print(f"🔍 DGI Screener - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'+'*70}\n")
-        
+
         try:
             result = await run_dgi_screener(self.config, self.cosmos)
             print(f"DGI Screener complete: {result.get('total_screened', 0)} screened, "
@@ -618,15 +618,37 @@ class OptionsAgentScheduler:
                     pass
 
         print(f"\nCalendar Sync Complete: {updated} events updated, {errors} errors, {len(symbols)} symbols processed")
-    
+
+    def run_best_options_precompute_job(self):
+        """Execute Best Options precompute (SYNCHRONOUS, no _run_async wrapper)."""
+        task_config = self.config.config.get('best_options_scheduler', {})
+        if not task_config.get('enabled', True):
+            print("⏭️  Best Options Precompute disabled in config")
+            return
+
+        from .best_options_precompute import run_best_options_precompute
+
+        now_tz = _now_local()
+        print(f"\n{'📋'*35}")
+        print(f"📋 Best Options Precompute - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"{'📋'*35}\n")
+
+        try:
+            result = run_best_options_precompute(self.cosmos)
+            print(f"Best Options Precompute complete: {result.get('ok', 0)} ok, "
+                  f"{result.get('stale', 0)} stale, {result.get('error', 0)} errors, "
+                  f"{result.get('warming', 0)} warming")
+        except Exception as e:
+            print(f"ERROR during Best Options Precompute: {e}")
+
     def signal_handler(self, sig, frame):
         """Handle graceful shutdown on Ctrl+C."""
         print("\n\nShutdown signal received. Stopping scheduler...")
         self.running = False
-    
+
     def _reload_config_from_cosmos(self):
         """Reload settings from CosmosDB and detect cron changes.
-        
+
         This method is called periodically to pick up configuration changes
         made through the web UI without requiring a scheduler restart.
         """
@@ -634,18 +656,18 @@ class OptionsAgentScheduler:
             cosmos_settings = self.cosmos.get_settings()
             if not cosmos_settings:
                 return
-            
+
             # Handle main monitor agents cron (special case, not in registry)
             scheduler_settings = cosmos_settings.get('scheduler', {})
             new_cron = scheduler_settings.get('cron')
-            
+
             if new_cron and new_cron != self.config.cron_expression:
                 self.config.cron_expression = new_cron
                 task = self.registry.get_task("monitor_agents")
                 if task:
                     task._cron_changed = True
                     print(f"✓ Config reloaded from CosmosDB: monitor cron changed to {new_cron}")
-            
+
             # Reload all registered tasks via the registry
             self.registry.reload_from_cosmos(self.config, cosmos_settings)
 
@@ -655,15 +677,15 @@ class OptionsAgentScheduler:
             self.runner.set_function_llms(
                 self.config.function_llm_configs()
             )
-                
+
         except Exception as e:
             # Don't crash the scheduler on config reload errors
             print(f"⚠️  Error reloading config from CosmosDB: {e}")
 
-    
+
     def run(self, install_signals=True):
         """Main execution loop using cron expression.
-        
+
         Args:
             install_signals: Install SIGINT/SIGTERM handlers. Set to False when
                  running inside a thread (signals can only be set in the main thread).
@@ -671,11 +693,11 @@ class OptionsAgentScheduler:
         if install_signals:
             signal.signal(signal.SIGINT, self.signal_handler)
             signal.signal(signal.SIGTERM, self.signal_handler)
-        
+
         self.setup()
-        
+
         now_tz = _now_local()
-        
+
         # Register all tasks in the registry
         self.registry.register(
             "monitor_agents",
@@ -757,25 +779,38 @@ class OptionsAgentScheduler:
             self.run_price_forecast_job,
             has_extra_config=False,
         )
-        
+        self.registry.register(
+            "best_options",
+            "Best Options Precompute",
+            "best_options_scheduler",
+            "5 10-23 * * 1-5",
+            self.run_best_options_precompute_job,
+            has_extra_config=True,  # run_on_startup
+        )
+
         # Store config reference for registry's handle_cron_changes
         self.registry.set_config(self.config)
-        
+
         # Initialize all registered tasks (including monitor_agents)
         # Note: monitor_agents uses self.config.cron_expression as its cron source
         self.registry.initialize_all(self.config, now_tz)
-        
+
+        # Startup catch-up for best_options if enabled
+        best_options_config = self.config.config.get('best_options_scheduler', {})
+        if best_options_config.get('run_on_startup', True) and best_options_config.get('enabled', True):
+            self.registry.trigger_task_now("best_options", run_trigger="startup")
+
         # Display initial schedule
         self.registry.display_schedule()
-        
+
         # Track when we last reloaded config
         self._last_config_reload = time.time()
-        
+
         print("Press Ctrl+C to stop\n")
-        
+
         self.alive = True
         self._last_heartbeat = time.time()
-        
+
         while self.running:
           try:
             # Heartbeat — periodic log to confirm scheduler is alive
@@ -791,22 +826,22 @@ class OptionsAgentScheduler:
             if current_time - self._last_config_reload >= self._config_reload_interval:
                 self._reload_config_from_cosmos()
                 self._last_config_reload = current_time
-            
+
             # Handle cron changes for all registered tasks (including monitor_agents)
             self.registry.handle_cron_changes(now_tz)
-            
+
             now_tz = _now_local()
-            
+
             # Execute all registered tasks that are due (no separate monitor_agents path)
             self.registry.execute_due_tasks(now_tz)
-            
+
             time.sleep(1)
           except Exception as e:
             print(f"❌ SCHEDULER LOOP ERROR (recovering): {e}")
             import traceback
             traceback.print_exc()
             time.sleep(5)  # Brief pause before retrying
-        
+
         self.alive = False
         self.registry.shutdown()
         print("Scheduler stopped. Goodbye!")
@@ -819,7 +854,7 @@ def main():
     print(" Using Microsoft Agent Framework + yfinance")
     print("="*70)
     print()
-    
+
     try:
         scheduler = OptionsAgentScheduler()
         scheduler.run()

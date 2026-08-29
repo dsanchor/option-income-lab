@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw, Trophy } from "lucide-react";
 import BestOptionsParams from "@/components/BestOptionsParams";
+import ContractValidationAction from "@/components/ContractValidationAction";
 import { preferenceRowTint } from "@/lib/badges";
 import { ColorBadge, GateBadge, flagLabel, fmtNum, fmtPct, fmtExpiration, fmtTime } from "@/lib/options-row-format";
 import type {
@@ -74,12 +75,14 @@ function NearestMissPanel({ nearestMiss }: { nearestMiss: BestOptionsSide["neare
   );
 }
 
-const TABLE_COLS = 12;
+const TABLE_COLS = 13;
 
 function OptionsTable({
+  symbol,
   side,
   data,
 }: {
+  symbol: string;
   side: "call" | "put";
   data: BestOptionsSide;
 }) {
@@ -148,6 +151,7 @@ function OptionsTable({
                 <th className="border-b border-border px-2 py-1 text-right">OI</th>
                 <th className="border-b border-border px-2 py-1 text-right">Score</th>
                 <th className="border-b border-border px-2 py-1 text-left">Flags</th>
+                <th className="border-b border-border px-2 py-1 text-left" title="Validate contract — advisory only, no auto-order">Validate</th>
               </tr>
             </thead>
             <tbody>
@@ -203,6 +207,22 @@ function OptionsTable({
                           ))}
                         </div>
                       </td>
+                      <td className="px-2 py-1 text-left">
+                        <ContractValidationAction
+                          symbol={symbol}
+                          side={side}
+                          strike={row.strike}
+                          expiration={row.expiration}
+                          source="best_options"
+                          displayedSnapshot={{
+                            color: row.color,
+                            score: row.score,
+                            premium_pct: row.premium_pct,
+                            annualized_return_pct: row.annualized_return_pct,
+                          }}
+                          compact
+                        />
+                      </td>
                     </tr>
                     {open && (
                       <tr className="border-b border-border/40">
@@ -224,7 +244,8 @@ function OptionsTable({
 
 type ViewState =
   | { kind: "loading" }
-  | { kind: "warming"; retryAfter: number }
+  | { kind: "unavailable"; reason: string; nextRun?: string | null }
+  | { kind: "warming"; retryAfter: number; reason?: string; nextRun?: string | null }
   | { kind: "error"; message: string }
   | { kind: "ok"; data: BestOptionsResponse };
 
@@ -237,9 +258,13 @@ type ViewState =
  * Cold-cache handling (design §7/F6): a `{status: "warming"}` 200 response renders
  * an explicit warming state with automatic retry (backend-supplied `retry_after`)
  * plus a manual "Retry now" affordance — never a hang, never treated as an error.
+ *
+ * Precomputed-only handling: `{status: "unavailable"}` renders the explicit
+ * "not yet precomputed" state with next_run timestamp.
  */
 export default function BestOptionsView({ symbol }: { symbol: string }) {
   const [state, setState] = useState<ViewState>({ kind: "loading" });
+  const [refreshing, setRefreshing] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
@@ -253,9 +278,13 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
         setState({ kind: "error", message: body?.error || `HTTP ${res.status}` });
         return;
       }
+      if (body?.status === "unavailable") {
+        setState({ kind: "unavailable", reason: body.reason || "Not available", nextRun: body.next_run });
+        return;
+      }
       if (body?.status === "warming") {
         const retryAfter = typeof body.retry_after === "number" ? body.retry_after : 15;
-        setState({ kind: "warming", retryAfter });
+        setState({ kind: "warming", retryAfter, reason: body.reason, nextRun: body.next_run });
         return;
       }
       if (body?.error) {
@@ -263,8 +292,10 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
         return;
       }
       setState({ kind: "ok", data: body as BestOptionsResponse });
+      setRefreshing(false);
     } catch (err) {
       setState({ kind: "error", message: err instanceof Error ? err.message : "Failed to load Best Options" });
+      setRefreshing(false);
     }
   }, [symbol]);
 
@@ -280,6 +311,21 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
     setState({ kind: "loading" });
     load();
   }, [load]);
+
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetch(`/api/symbols/${encodeURIComponent(symbol)}/best-options/refresh`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      // Start polling for updates
+      setTimeout(load, 2000);
+    } catch (err) {
+      console.error("Refresh failed:", err);
+      setRefreshing(false);
+    }
+  }, [symbol, load]);
 
   useEffect(() => {
     if (state.kind !== "warming") return;
@@ -302,18 +348,46 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
         </div>
         <button
           type="button"
-          onClick={retry}
-          disabled={state.kind === "loading"}
+          onClick={state.kind === "ok" && !refreshing ? refresh : retry}
+          disabled={state.kind === "loading" || (refreshing && state.kind === "ok")}
           className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border border-border bg-bg-input px-3 py-1.5 text-xs text-text-muted transition hover:bg-bg-hover disabled:opacity-50"
         >
-          <RefreshCw aria-hidden="true" size={13} className={state.kind === "loading" ? "animate-spin" : ""} /> Refresh
+          <RefreshCw aria-hidden="true" size={13} className={(state.kind === "loading" || refreshing) ? "animate-spin" : ""} />
+          {state.kind === "ok" ? "Refresh" : "Retry"}
         </button>
       </div>
+
+      {state.kind === "ok" && (
+        <div className="rounded-[var(--radius)] border border-accent-blue/40 bg-accent-blue/10 px-3 py-2 text-xs text-accent-blue">
+          🔍 <strong>Contract Validation</strong> — Click Validate to run an exact-contract agent review (Supervisor + Alpha). Advisory only; positions are never created automatically.
+        </div>
+      )}
 
       {state.kind === "loading" && (
         <div className="rounded-[var(--radius)] border border-border bg-bg-card px-4 py-12 text-center text-text-muted">
           <div className="mb-2 text-2xl">⏳</div>
           Loading…
+        </div>
+      )}
+
+      {state.kind === "unavailable" && (
+        <div role="status" className="space-y-3 rounded-[var(--radius)] border border-accent-blue/40 bg-accent-blue/10 px-4 py-8 text-center">
+          <div className="text-2xl" aria-hidden>
+            ⏸️
+          </div>
+          <p className="font-medium text-accent-blue">Best Options not yet precomputed</p>
+          <p className="text-xs text-text-muted">
+            {state.reason}
+            {state.nextRun && ` Next scheduled processing: ${state.nextRun}.`}
+          </p>
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={refreshing}
+            className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] bg-accent-blue px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+          >
+            <RefreshCw aria-hidden="true" size={13} className={refreshing ? "animate-spin" : ""} /> Refresh Now
+          </button>
         </div>
       )}
 
@@ -324,8 +398,9 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
           </div>
           <p className="font-medium text-accent-orange">Warming up the option chain cache…</p>
           <p className="text-xs text-text-muted">
-            No data cached yet for {symbol} — a background refresh has started. Retrying automatically in{" "}
+            {state.reason || `No data cached yet for ${symbol} — a background refresh has started.`} Retrying automatically in{" "}
             {state.retryAfter}s.
+            {state.nextRun && ` Next scheduled processing: ${state.nextRun}.`}
           </p>
           <button
             type="button"
@@ -353,8 +428,8 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
       {state.kind === "ok" && (
         <>
           <BestOptionsParams parameters={state.data.parameters} />
-          <OptionsTable side="call" data={state.data.calls} />
-          <OptionsTable side="put" data={state.data.puts} />
+          <OptionsTable symbol={symbol} side="call" data={state.data.calls} />
+          <OptionsTable symbol={symbol} side="put" data={state.data.puts} />
         </>
       )}
     </div>

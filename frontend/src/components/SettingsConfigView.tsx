@@ -203,6 +203,9 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
       pf_vol_source: cfg.pf_vol_source,
       pf_trend_window: cfg.pf_trend_window,
       pf_trend_window_long: cfg.pf_trend_window_long,
+      best_options_enabled: cfg.best_options_enabled,
+      best_options_cron: cfg.best_options_cron,
+      best_options_run_on_startup: cfg.best_options_run_on_startup,
       plan_monitor_enabled: cfg.plan_monitor_enabled,
       plan_monitor_cron: cfg.plan_monitor_cron,
       telegram_enabled: cfg.telegram_enabled,
@@ -586,6 +589,39 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
             lastIso={cfg.pf_last_run_iso}
             next={cfg.pf_next_run}
             nextIso={cfg.pf_next_run_iso}
+          />
+        </TaskCard>
+
+        {/* Best Options Precompute */}
+        <TaskCard title="Best Options Precompute" runStatus={<RunStatus id="best_options" endpoint="/api/trigger/best_options" />}>
+          <Toggle
+            checked={cfg.best_options_enabled}
+            onChange={(v) => set("best_options_enabled", v)}
+            label="Enable Best Options precompute"
+            hint="Precomputes Best Options for all symbols on a schedule. Symbol Detail and Options Screener consume the shared cached results."
+          />
+          <label className={labelCls}>Cron Expression</label>
+          <input
+            className={inputCls}
+            value={cfg.best_options_cron}
+            onChange={(e) => set("best_options_cron", e.target.value)}
+            placeholder="5 10-23 * * 1-5"
+            spellCheck={false}
+          />
+          <small className={hintCls}>
+            Default: <code>5 10-23 * * 1-5</code> = Hourly at :05, 10:05–23:05, weekdays
+          </small>
+          <Toggle
+            checked={cfg.best_options_run_on_startup}
+            onChange={(v) => set("best_options_run_on_startup", v)}
+            label="Run catch-up cycle on startup"
+            hint="One full cycle when the scheduler starts, before waiting for the first scheduled run."
+          />
+          <RunTimes
+            last={cfg.best_options_last_run}
+            lastIso={cfg.best_options_last_run_iso}
+            next={cfg.best_options_next_run}
+            nextIso={cfg.best_options_next_run_iso}
           />
         </TaskCard>
 

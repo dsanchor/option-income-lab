@@ -66,6 +66,7 @@ export interface ScreenerOptionRow {
   stale: boolean;
   no_shares_held?: boolean;
   chain_stale: boolean;
+  entry_stale?: boolean;
 }
 
 /** Per zero-row *symbol* (never per filtered-out row) explaining why that
@@ -92,20 +93,27 @@ export interface ScreenerNearestMiss {
  * refreshes/request) from one left cold because that cap was already reached
  * (`cold`, will warm on a later request/poll) -- both map to the aggregator's
  * single "warming" status internally, but the UI's partial-status header needs
- * the distinction. */
-export type ScreenerSymbolStatus = "ok" | "warming" | "cold" | "error";
+ * the distinction. DEPRECATED after precomputed-only refactor: replaced by
+ * loaded/pending readiness summary. */
+export type ScreenerSymbolStatus = "ok" | "pending" | "error";
 
 export interface ScreenerSymbolDetail {
   symbol: string;
   status: ScreenerSymbolStatus;
-  stale?: boolean;
+  generation?: number;
+  computed_at?: string | null;
   chain_timestamp?: string | null;
+  reason?: string | null;
   error?: string;
 }
 
 export interface ScreenerSymbolsSummary {
   total: number;
-  counts: Record<ScreenerSymbolStatus, number>;
+  loaded: number;
+  loaded_fresh: number;
+  loaded_stale: number;
+  pending: number;
+  error: number;
   detail: ScreenerSymbolDetail[];
 }
 
@@ -145,6 +153,13 @@ export interface ScreenerOptionsResponse {
   rows: ScreenerOptionRow[];
   nearest_miss: ScreenerNearestMiss[];
   pagination: ScreenerPagination;
+  cache?: {
+    generation?: number;
+    computed_at?: string | null;
+    trigger?: string;
+    truncated?: boolean;
+    next_run?: string | null;
+  };
 }
 
 export interface ScreenerErrorResponse {

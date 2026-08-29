@@ -161,6 +161,8 @@ function ActivityRow({ item, onClick }: { item: ActivityItem; onClick: () => voi
   const showSupervisor =
     act === "WAIT" && sv && (sv.challenge_strength === "MODERATE" || sv.challenge_strength === "STRONG");
   const showAlpha = act === "WAIT" && item.alpha_view;
+  const isValidation = item.validation_source != null;
+  const validationSourceLabel = item.validation_source === "best_options" ? "Best Options" : item.validation_source === "options_screener" ? "Screener" : null;
 
   return (
     <div
@@ -175,10 +177,35 @@ function ActivityRow({ item, onClick }: { item: ActivityItem; onClick: () => voi
       )}
       {showAlpha && <span title={`Alpha Advisor: ${item.alpha_view!.one_liner ?? ""}`}>🧠</span>}
       <Pill style={activityStyle(item.activity)}>{item.activity || "N/A"}</Pill>
+      {validationSourceLabel && (
+        <Pill
+          style={{ color: "var(--accent-blue)", bg: "var(--accent-blue-bg)", border: "var(--accent-blue-border)" }}
+          title={`Contract validated from ${validationSourceLabel}`}
+        >
+          {validationSourceLabel}
+        </Pill>
+      )}
+      {isValidation && item.validation_status && (
+        <Pill
+          style={
+            item.validation_status === "approved"
+              ? { color: "var(--accent-green)", bg: "var(--accent-green-bg)", border: "var(--accent-green-border)" }
+              : item.validation_status === "review_incomplete"
+              ? { color: "var(--accent-orange)", bg: "var(--accent-orange-bg)", border: "var(--accent-orange-border)" }
+              : { color: "var(--accent-red)", bg: "var(--accent-red-bg)", border: "var(--accent-red-border)" }
+          }
+          title={`Validation status: ${item.validation_status}`}
+        >
+          {item.validation_status === "approved" ? "✓ Approved" : item.validation_status === "review_incomplete" ? "⏸ Review incomplete" : "✗ Error"}
+        </Pill>
+      )}
       <span className="text-text-muted">{item._agent_label}</span>
       <strong>{item.symbol}</strong>
       {item.strike != null && item.strike !== "" && (
         <span className="font-mono text-text-muted">${item.strike}</span>
+      )}
+      {item.expiration && (
+        <span className="font-mono text-xs text-text-muted">{item.expiration}</span>
       )}
       {item.confidence != null && item.confidence !== "" && (
         <Pill style={confidenceStyle(item.confidence)}>{String(item.confidence)}</Pill>

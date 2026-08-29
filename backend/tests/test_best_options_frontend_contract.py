@@ -39,7 +39,7 @@ accordingly, and a new test class below locks the `[0, 45]` inclusive
 default boundary at the same real cache+evaluator+endpoint seam.
 """
 from __future__ import annotations
-
+import json
 from datetime import date, datetime, timedelta, timezone
 
 from starlette.testclient import TestClient
@@ -144,7 +144,7 @@ class TestParametersNestedPerSide:
         cache.get_or_load("CONTRACT")  # warm synchronously before any request
         set_options_chain_cache(cache)
 
-        resp = client.get("/api/symbols/CONTRACT/best-options")
+        resp = client.get("/api/symbols/CONTRACT/best-options?support_level=100.0")
         assert resp.status_code == 200
         params = resp.json()["parameters"]
 
@@ -179,7 +179,7 @@ class TestParametersNestedPerSide:
         cache.get_or_load("CONTRACT")  # warm synchronously before any request
         set_options_chain_cache(cache)
 
-        params = client.get("/api/symbols/CONTRACT/best-options").json()["parameters"]
+        params = client.get("/api/symbols/CONTRACT/best-options?support_level=100.0").json()["parameters"]
         # These are exactly the accessor chains BestOptionsParams.tsx evaluates.
         assert isinstance(params["thresholds"]["call"]["delta_lo"], float)
         assert isinstance(params["thresholds"]["put"]["delta_hi"], float)
@@ -205,7 +205,7 @@ class TestSectionLevelTransparencyFields:
         cache.get_or_load("CONTRACT")  # warm synchronously before any request
         set_options_chain_cache(cache)
 
-        body = client.get("/api/symbols/CONTRACT/best-options").json()
+        body = client.get("/api/symbols/CONTRACT/best-options?support_level=100.0").json()
         assert isinstance(body["calls"]["excluded_by_delta_band"], int)
         assert isinstance(body["puts"]["excluded_by_delta_band"], int)
 
@@ -216,7 +216,7 @@ class TestSectionLevelTransparencyFields:
         cache.get_or_load("CONTRACT")  # warm synchronously before any request
         set_options_chain_cache(cache)
 
-        body = client.get("/api/symbols/CONTRACT/best-options").json()
+        body = client.get("/api/symbols/CONTRACT/best-options?support_level=100.0").json()
         assert body["calls"]["no_shares_held"] is False
         # Never on the put section -- a per-row `no_shares_held` flag would be
         # the wrong place to look for this (the old, broken UI check).
@@ -235,7 +235,7 @@ class TestSectionLevelTransparencyFields:
         cache.get_or_load("CONTRACT")  # warm synchronously before any request
         set_options_chain_cache(cache)
 
-        body = client.get("/api/symbols/CONTRACT/best-options").json()
+        body = client.get("/api/symbols/CONTRACT/best-options?support_level=100.0").json()
         assert body["calls"]["no_shares_held"] is True
         assert "coverable_contracts" not in body["calls"]
 
@@ -277,7 +277,7 @@ class TestDefaultDteWindowAlignedTo45:
         cache.get_or_load("CONTRACT")
         set_options_chain_cache(cache)
 
-        body = client.get("/api/symbols/CONTRACT/best-options").json()
+        body = client.get("/api/symbols/CONTRACT/best-options?support_level=100.0").json()
         assert body["parameters"]["dte"] == {
             "min": 0, "max": 45, "source": "default",
             "system_cap": 45, "timezone": "America/New_York",
@@ -290,7 +290,7 @@ class TestDefaultDteWindowAlignedTo45:
         cache.get_or_load("CONTRACT")
         set_options_chain_cache(cache)
 
-        body = client.get("/api/symbols/CONTRACT/best-options").json()
+        body = client.get("/api/symbols/CONTRACT/best-options?support_level=100.0").json()
         rows = body["calls"]["rows"]
         assert [r["dte"] for r in rows] == [45]  # 45 is IN the default window...
         # ...46 is not merely filtered from the visible rows -- it never
@@ -318,3 +318,124 @@ class TestDefaultDteWindowAlignedTo45:
         # caller has deliberately widened past the agents' own 45d cap.
         assert "exceeds_system_dte_cap" not in rows_by_dte[45]["flags"]
         assert "exceeds_system_dte_cap" in rows_by_dte[46]["flags"]
+
+
+class TestCacheMetadataOnCanonicalRequest:
+    """Precomputed-only semantics (Livingston's endpoint rewire): a canonical
+    request (`side=both`, default DTE, `support_level=None`) returns cache
+    metadata when a precomputed entry exists, or a warming/unavailable state
+    when it doesn't. Non-canonical overrides compute live with
+    `cache.used=false`.
+
+    Design: `.squad/decisions/inbox/danny-best-options-scheduler-design.md` §11a.
+    """
+
+    def test_canonical_request_with_precomputed_entry_has_cache_metadata(self, client_and_cosmos, monkeypatch):
+        """Canonical request with a cache hit includes cache metadata."""
+        client, fake_cosmos = client_and_cosmos
+        fake_cosmos.symbols["CONTRACT"] = {"enrichment": {"category": "balanced"}, "total_shares": 300}
+
+        # Pre-populate Best Options cache
+        from src.best_options_cache import get_best_options_cache, set_best_options_cache, BestOptionsCache
+        from src.best_options import evaluate_best_options
+
+        cache = _make_cache(monkeypatch, _sample_chain())
+        cache.get_or_load("CONTRACT")
+        set_options_chain_cache(cache)
+
+        # Evaluate and cache
+        chain_json = cache.get_or_hydrate("CONTRACT")
+        chain = json.loads(chain_json)
+        envelope = evaluate_best_options(
+            chain, side="both", category="balanced", total_shares=300,
+            next_earnings_date=None, ex_dividend_date=None, support_level=None,
+            dte_min=0, dte_max=45, now=datetime.now(timezone.utc),
+        )
+
+        best_cache = BestOptionsCache()
+        best_cache.publish_snapshot({
+            "generation": 1,
+            "entries": {
+                "CONTRACT": {
+                    "symbol": "CONTRACT",
+                    "status": "ok",
+                    "envelope": envelope,
+                    "generation": 1,
+                    "computed_at": "2026-08-29T10:00:00Z",
+                    "chain_timestamp": "2026-08-29T09:00:00Z",
+                    "chain_stale_at_compute": False,
+                    "inputs": {"category": "balanced", "total_shares": 300, "next_earnings_date": None, "ex_dividend_date": None},
+                    "error": None,
+                    "reason": None,
+                    "refreshing": False,
+                    "refresh_started_at": None,
+                    "refresh_completed_at": None,
+                    "refresh_error": None,
+                    "chain_refresh_error": None,
+                }
+            },
+            "cycle_started_at": "2026-08-29T10:00:00Z",
+            "cycle_finished_at": "2026-08-29T10:00:10Z",
+            "cycle_duration_seconds": 10.0,
+            "trigger": "scheduled",
+            "truncated": False,
+            "counts": {"ok": 1, "stale": 0, "error": 0, "warming": 0},
+        })
+        set_best_options_cache(best_cache)
+
+        # Canonical request
+        resp = client.get("/api/symbols/CONTRACT/best-options")
+        assert resp.status_code == 200
+        body = resp.json()
+
+        assert "cache" in body
+        cache_meta = body["cache"]
+        assert cache_meta["used"] is True
+        assert cache_meta["generation"] == 1
+        assert cache_meta["entry_status"] == "ok"
+        assert cache_meta["computed_at"] == "2026-08-29T10:00:00Z"
+        assert cache_meta["chain_timestamp"] == "2026-08-29T09:00:00Z"
+        assert isinstance(cache_meta["chain_stale"], bool)
+        assert isinstance(cache_meta["inputs_drift"], list)
+        assert cache_meta["refreshing"] is False
+
+    def test_non_canonical_request_computes_live_with_cache_used_false(self, client_and_cosmos, monkeypatch):
+        """Non-canonical request (explicit dte_max override) computes live."""
+        client, fake_cosmos = client_and_cosmos
+        fake_cosmos.symbols["CONTRACT"] = {"enrichment": {"category": "balanced"}, "total_shares": 300}
+        cache = _make_cache(monkeypatch, _sample_chain())
+        cache.get_or_load("CONTRACT")
+        set_options_chain_cache(cache)
+
+        # Non-canonical: dte_max=30 (not default 45)
+        resp = client.get("/api/symbols/CONTRACT/best-options", params={"dte_max": 30})
+        assert resp.status_code == 200
+        body = resp.json()
+
+        assert "cache" in body
+        cache_meta = body["cache"]
+        assert cache_meta["used"] is False
+        assert cache_meta["reason"] == "non_canonical_parameters"
+
+    def test_canonical_request_cache_miss_returns_warming(self, client_and_cosmos, monkeypatch):
+        """Canonical request with no cache entry returns status=warming."""
+        client, fake_cosmos = client_and_cosmos
+        fake_cosmos.symbols["CONTRACT"] = {"enrichment": {"category": "balanced"}, "total_shares": 300}
+
+        # Chain is present but Best Options cache is empty
+        cache = _make_cache(monkeypatch, _sample_chain())
+        cache.get_or_load("CONTRACT")
+        set_options_chain_cache(cache)
+
+        from src.best_options_cache import BestOptionsCache, set_best_options_cache
+        best_cache = BestOptionsCache()  # Empty
+        set_best_options_cache(best_cache)
+
+        resp = client.get("/api/symbols/CONTRACT/best-options")
+        assert resp.status_code == 200
+        body = resp.json()
+
+        assert body["status"] == "warming"
+        assert body["symbol"] == "CONTRACT"
+        assert body["retry_after"] == 15
+        assert body["reason"] == "precompute_pending"

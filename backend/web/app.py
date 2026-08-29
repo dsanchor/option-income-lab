@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 from croniter import croniter
-from fastapi import FastAPI, Request, Query
+from fastapi import FastAPI, Request, Query, Body
 
 from src.market_hours import is_us_market_open
 from fastapi.responses import JSONResponse
@@ -486,7 +486,7 @@ def _format_time(dt: datetime) -> str:
     """Format datetime in the system local timezone."""
     if dt is None:
         return ""
-    
+
     try:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -533,7 +533,7 @@ async def init_cosmos(app_instance):
             app_instance.state.cosmos_error = None
             logger.info("CosmosDB initialized successfully: %s, database=%s",
                         endpoint, database)
-            
+
             # Merge config.yaml defaults into CosmosDB (first-run seed + new keys)
             settings_defaults = {
                 k: v for k, v in config.items()
@@ -2863,20 +2863,22 @@ async def api_symbol_best_options(
      dte_max: int = Query(default=DEFAULT_DTE_MAX, ge=0, le=60),
      support_level: Optional[float] = Query(default=None),
 ):
-     """Deterministic "Best Options" screen (Danny's 2026-08-29 design,
-     `.squad/decisions/inbox/danny-best-options-design.md`): every contract
-     on the requested side whose expiration falls within [dte_min, dte_max]
-     days, scored and coloured by the pure, no-I/O, no-LLM
-     ``src.best_options.evaluate_best_options``. Zero LLM calls are
-     reachable from this endpoint (design acceptance gate #1).
+     """Best Options for Symbol Detail — precomputed-by-default
+     (`.squad/decisions/inbox/danny-best-options-scheduler-design.md` §11a).
 
-     On a cold cache this never blocks the event loop waiting on a live
-     yfinance/TradingView fetch (design finding F6): ``get_or_hydrate``
-     only ever returns a memory hit, a persistence hydrate, or ``None`` — a
-     true miss schedules a background refresh and this responds with an
-     explicit HTTP 200 warming state (not a 503 — the BFF collapses
-     non-2xx into a generic error, and "warming, retry shortly" is a real
-     UI state, not a failure) instead of hanging or erroring.
+     **Canonical request** (`side="both"`, `dte_min=0`, `dte_max=45`,
+     `support_level=None`) returns the shared precomputed cache entry,
+     never computes. On cache miss with chain present: `status="warming"`,
+     `retry_after=15`, `reason="precompute_pending"`. On cache miss with
+     chain cold: same, plus kicks off a background chain refresh (Symbol
+     Detail cold-path warming, still preserved per §11a).
+
+     **Non-canonical override** (explicit `dte_min`/`dte_max`/`support_level`
+     or `side != "both"`) computes live and returns `cache: {"used": false,
+     "reason": "non_canonical_parameters"}`. This preserves the deliberate
+     45-day alignment decision's "override survives" ruling (§9c).
+
+     Zero LLM calls. On a cold cache, never blocks on a live yfinance fetch.
      """
      if side not in ("call", "put", "both"):
          return JSONResponse(
@@ -2897,6 +2899,126 @@ async def api_symbol_best_options(
      if not sym_doc:
          return JSONResponse({"error": f"Symbol {sym_upper} not found"}, status_code=404)
 
+     # Check if canonical parameters (precomputed path)
+     is_canonical = (
+         side == "both"
+         and dte_min == DEFAULT_DTE_MIN
+         and dte_max == DEFAULT_DTE_MAX
+         and support_level is None
+     )
+
+     if is_canonical:
+         # Precomputed path
+         from src.best_options_cache import get_best_options_cache
+         from src.options_chain_cache import get_options_chain_cache
+
+         best_cache = get_best_options_cache()
+         chain_cache = get_options_chain_cache()
+
+         entry = best_cache.get_entry(sym_upper)
+
+         if entry and entry.get("status") in ("ok", "stale"):
+             # Cache hit
+             envelope = entry.get("envelope")
+             if not envelope:
+                 return JSONResponse(
+                     {"status": "unavailable", "symbol": sym_upper,
+                      "error": "Entry envelope missing"}, status_code=200,
+                 )
+
+             # Compute inputs_drift (compare cached inputs to current)
+             cached_inputs = entry.get("inputs") or {}
+             category = (sym_doc.get("enrichment") or {}).get("category")
+             total_shares = int(sym_doc.get("total_shares", 0) or 0)
+             next_earnings_date = cosmos.get_next_earnings_date(sym_upper)
+             ex_dividend_date = cosmos.get_next_calendar_event_date(sym_upper, "ex_dividend")
+
+             inputs_drift = []
+             if cached_inputs.get("category") != category:
+                 inputs_drift.append("category")
+             if cached_inputs.get("total_shares") != total_shares:
+                 inputs_drift.append("total_shares")
+             if cached_inputs.get("next_earnings_date") != next_earnings_date:
+                 inputs_drift.append("next_earnings_date")
+             if cached_inputs.get("ex_dividend_date") != ex_dividend_date:
+                 inputs_drift.append("ex_dividend_date")
+
+             # Get next_run from scheduler (if available)
+             scheduler = getattr(request.app.state, "scheduler", None)
+             next_run_iso = None
+             if scheduler:
+                 task = scheduler.registry.get_task("best_options")
+                 if task:
+                     next_run_iso = task.next_run.isoformat() if task.next_run else None
+
+             # Build cache metadata
+             cache_meta = {
+                 "used": True,
+                 "generation": entry.get("generation"),
+                 "entry_status": entry.get("status"),
+                 "computed_at": entry.get("computed_at"),
+                 "chain_timestamp": entry.get("chain_timestamp"),
+                 "chain_stale": chain_cache.is_stale(sym_upper),
+                 "inputs_drift": inputs_drift,
+                 "next_run": next_run_iso,
+                 "refreshing": entry.get("refreshing", False),
+                 "refresh_started_at": entry.get("refresh_started_at"),
+                 "refresh_completed_at": entry.get("refresh_completed_at"),
+                 "refresh_error": entry.get("refresh_error"),
+                 "chain_refresh_error": entry.get("chain_refresh_error"),
+             }
+
+             return JSONResponse({**envelope, "cache": cache_meta})
+
+         # Cache miss
+         if entry and entry.get("status") == "error":
+             # Permanent error
+             scheduler = getattr(request.app.state, "scheduler", None)
+             next_run_iso = None
+             if scheduler:
+                 task = scheduler.registry.get_task("best_options")
+                 if task:
+                     next_run_iso = task.next_run.isoformat() if task.next_run else None
+
+             return JSONResponse({
+                 "status": "unavailable",
+                 "symbol": sym_upper,
+                 "error": entry.get("error"),
+                 "reason": entry.get("reason"),
+                 "cache": {
+                     "used": True,
+                     "generation": entry.get("generation"),
+                     "entry_status": "error",
+                     "computed_at": entry.get("computed_at"),
+                     "next_run": next_run_iso,
+                 },
+             }, status_code=200)
+
+         # No entry or warming — check if chain is present
+         chain_json = chain_cache.get_or_hydrate(sym_upper, trigger_swr=False)
+         if chain_json is None:
+             # Chain cold — schedule background refresh (Symbol Detail cold-path, §11a)
+             chain_cache.schedule_background_refresh(sym_upper)
+             reason = "chain_cold"
+         else:
+             reason = "precompute_pending"
+
+         scheduler = getattr(request.app.state, "scheduler", None)
+         next_run_iso = None
+         if scheduler:
+             task = scheduler.registry.get_task("best_options")
+             if task:
+                 next_run_iso = task.next_run.isoformat() if task.next_run else None
+
+         return JSONResponse({
+             "status": "warming",
+             "symbol": sym_upper,
+             "retry_after": 15,
+             "reason": reason,
+             "next_run": next_run_iso,
+         }, status_code=200)
+
+     # Non-canonical path: compute live
      from src.options_chain_cache import get_options_chain_cache
 
      cache = get_options_chain_cache()
@@ -2963,11 +3085,12 @@ async def api_symbol_best_options(
              {"error": str(e), "symbol": sym_upper}, status_code=500,
          )
 
-     # `evaluate_best_options` already returns the full response envelope
-     # (symbol/status/schema_version/parameters/calls/puts) per Danny's
-     # design; return it verbatim rather than re-wrapping it, since a
-     # re-wrap would let `chain.get("symbol")` silently win over
-     # `sym_upper` on key collision.
+     # Add cache metadata showing this was NOT from the shared cache
+     result["cache"] = {
+         "used": False,
+         "reason": "non_canonical_parameters",
+     }
+
      return JSONResponse(result)
 
 
@@ -3155,17 +3278,21 @@ async def api_screener_options(
      offset: int = Query(default=0, ge=0),
      limit: int = Query(default=100, ge=1, le=500),
 ):
-     """Options Screener aggregation across every symbol (approved
-     directive: `.squad/decisions/inbox/copilot-options-screener-approved.md`).
+     """Options Screener — precomputed-only (binding directive
+     `.squad/decisions/inbox/copilot-options-screener-precomputed-only.md`).
 
-     Reuses `src.options_screener.evaluate_options_screener` and, through
-     it, `src.best_options.evaluate_best_options` verbatim — this endpoint
-     assembles per-symbol inputs (batched Cosmos reads, non-blocking cache
-     warming, per §above) and runs the aggregator off the event loop; it
-     never re-derives scoring, gating, or colour. Zero LLM calls are
-     reachable from this endpoint. On an entirely cold cache this still
-     answers 200 immediately (per-symbol `warming`/`cold` statuses in the
-     response), never hanging on a live provider fetch.
+     **Strictly precomputed:** never evaluates and never hydrates on request.
+     Reads the shared in-memory Best Options cache only. Only symbols with
+     an already-precomputed result contribute rows. Readiness is always
+     stated as **`N of X loaded`**; whenever `N < X`, the response and UI
+     carry a warning to wait for the next scheduled cycle.
+
+     **Zero chain-cache coupling** — this endpoint references the option-chain
+     cache not at all (§11b enforcement gate). Every row comes from a
+     precomputed envelope's already-computed `chain_stale_at_compute`.
+
+     Zero LLM calls. Never blocks, never hydrates, never warms. Always
+     returns HTTP 200 immediately.
      """
      if side not in ("call", "put"):
          return JSONResponse({"error": "side must be one of: call, put"}, status_code=400)
@@ -3192,24 +3319,45 @@ async def api_screener_options(
      if preferences is not None:
          preference_list = [p.strip() for p in preferences.split(",") if p.strip()]
 
-     from src.options_chain_cache import get_options_chain_cache
+     from src.best_options_cache import get_best_options_cache
 
-     cache = get_options_chain_cache()
-     # `_build_screener_symbol_inputs` issues real, synchronous Cosmos/
-     # persistence I/O (list_symbols, get_calendar_events, and a hydrate
-     # read per cold symbol) — across a many-symbol watchlist that would
-     # otherwise block this request's event loop for every other request
-     # sharing it. Offloaded here to a single worker thread (bounded,
-     # sequential inside it — never a thread per symbol); the function
-     # itself never schedules refreshes (it can't safely reach
-     # `asyncio.create_task` off the event loop), so `to_warm` is applied
-     # back here, on the loop, once the executor call returns.
-     loop = asyncio.get_event_loop()
-     symbol_inputs, status_detail, to_warm = await loop.run_in_executor(
-         None, _build_screener_symbol_inputs, cosmos, cache, symbol_filter,
-     )
-     for warm_symbol in to_warm:
-         cache.schedule_background_refresh(warm_symbol)
+     best_cache = get_best_options_cache()
+     snapshot = best_cache.snapshot()
+     precomputed_entries = snapshot.get("entries") or {}
+
+     # Build precomputed envelope map for the aggregator
+     precomputed_envelopes = {}
+     for sym, entry in precomputed_entries.items():
+         if entry.get("status") in ("ok", "stale"):
+             envelope = entry.get("envelope")
+             if envelope:
+                 precomputed_envelopes[sym] = envelope
+
+     # Compute X (total configured universe, filtered by symbols= if supplied)
+     docs = cosmos.list_symbols()
+     if symbol_filter is not None:
+         docs = [d for d in docs if (d.get("symbol") or "").strip().upper() in symbol_filter]
+
+     # Build symbol_inputs for the aggregator (precomputed-only path)
+     # The aggregator needs: symbol, status ("ready"|"warming"|"error")
+     # For "ready" symbols, the `precomputed` parameter provides the envelope
+     symbol_inputs = []
+     for doc in docs:
+         symbol = (doc.get("symbol") or "").strip().upper()
+         if not symbol:
+             continue
+
+         entry = precomputed_entries.get(symbol)
+         if entry and entry.get("status") in ("ok", "stale") and entry.get("envelope"):
+             # Ready
+             symbol_inputs.append({"symbol": symbol, "status": "ready"})
+         elif entry and entry.get("status") == "error":
+             # Error
+             error_msg = entry.get("error", "Precompute error")
+             symbol_inputs.append({"symbol": symbol, "status": "error", "error": error_msg})
+         else:
+             # Warming or absent
+             symbol_inputs.append({"symbol": symbol, "status": "warming"})
 
      try:
          from src.options_screener import evaluate_options_screener
@@ -3241,6 +3389,7 @@ async def api_screener_options(
                  min_open_interest=min_open_interest,
                  offset=fetch_offset,
                  limit=fetch_limit,
+                 precomputed=precomputed_envelopes,
              ),
          )
      except Exception as e:
@@ -3262,44 +3411,255 @@ async def api_screener_options(
              "has_more": (offset + len(rows)) < total_matching,
          }
 
-     # Per-row enrichment owned at this layer, not the aggregator's: a flat
-     # multi-symbol table has no natural home for `best_options.py`'s own
-     # single-symbol section-level `no_shares_held` banner, so it is
-     # surfaced per CALL row instead (never put rows -- `no_shares_held` is
-     # a covered-call-only concept in `best_options.py` itself: a
-     # cash-secured put's collateral is cash, never shares, and that
-     # module's own `sections["put"]["no_shares_held"]` is always `None`),
-     # reusing that module's exact `< 100 shares` rule (the same threshold
-     # already used for the Watchlist's open-calls column). `chain_stale`
-     # is this request's own cache-TTL freshness
-     # check for the row's symbol -- deliberately a different key from the
-     # row's existing `stale` (`best_options.py`'s own per-contract
-     # quote-level staleness flag, already present on every row): the two
-     # answer different questions ("is this contract's own quote old" vs
-     # "is the whole cached chain for this symbol due for a refresh") and
-     # must never collide. Neither changes a row's colour or admission,
-     # presentation only.
-     shares_by_symbol = {i["symbol"]: i.get("total_shares", 0) for i in symbol_inputs}
-     stale_by_symbol = {d["symbol"]: d.get("stale", False) for d in status_detail if d["status"] == "ok"}
+     # Per-row enrichment (no shares check, chain_stale from cached entry)
+     shares_by_symbol = {(doc.get("symbol") or "").strip().upper(): int(doc.get("total_shares", 0) or 0) for doc in docs}
+     stale_by_symbol = {sym: entry.get("chain_stale_at_compute", False) for sym, entry in precomputed_entries.items()}
+
      for row in rows:
          if side == "call":
              row["no_shares_held"] = shares_by_symbol.get(row["symbol"], 0) < 100
          row["chain_stale"] = stale_by_symbol.get(row["symbol"], False)
 
-     counts = {"ok": 0, "warming": 0, "cold": 0, "error": 0}
-     for d in status_detail:
-         counts[d["status"]] = counts.get(d["status"], 0) + 1
+     # Build status summary (X and N per §11b)
+     total_symbols = len(docs)  # X: configured universe (filtered by symbols=)
+     symbols_ready = sum(1 for si in symbol_inputs if si["status"] == "ready")  # N: usable cache entries
+     symbols_warming = sum(1 for si in symbol_inputs if si["status"] == "warming")
+     symbols_error = sum(1 for si in symbol_inputs if si["status"] == "error")
+
+     counts = {
+         "total": total_symbols,
+         "loaded": symbols_ready,
+         "loaded_fresh": sum(1 for e in precomputed_entries.values() if e.get("status") == "ok"),
+         "loaded_stale": sum(1 for e in precomputed_entries.values() if e.get("status") == "stale"),
+         "pending": symbols_warming,
+         "error": symbols_error,
+     }
+
+     # Next run from scheduler
+     scheduler = getattr(request.app.state, "scheduler", None)
+     next_run_iso = None
+     if scheduler:
+         task = scheduler.registry.get_task("best_options")
+         if task:
+             next_run_iso = task.next_run.isoformat() if task.next_run else None
 
      return JSONResponse({
          "schema_version": result["schema_version"],
          "generated_at": result["generated_at"],
          "side": side,
          "filters": {**result["filters"], "sort": sort, "dir": sort_dir, "offset": offset, "limit": limit},
-         "symbols": {"total": len(status_detail), "counts": counts, "detail": status_detail},
+         "symbols": {"counts": counts, "next_run": next_run_iso},
          "rows": rows,
          "nearest_miss": section["nearest_miss"],
          "pagination": pagination,
      })
+
+
+# ===========================================================================
+# REST API — Best Options Single-Symbol Refresh
+# ===========================================================================
+
+@app.post("/api/symbols/{symbol}/best-options/refresh")
+async def api_symbol_best_options_refresh(request: Request, symbol: str):
+    """Targeted single-symbol Best Options refresh (Symbol Detail Refresh
+    button, §9b). Forces a chain refresh (best-effort), then runs the
+    evaluator and publishes one entry atomically.
+
+    Non-blocking POST: returns 202 Accepted with a task status. Client
+    polls GET /api/symbols/{symbol}/best-options for `cache.refreshing` to
+    become false and the new result to appear.
+
+    In-flight protection: duplicate requests for the same symbol return 409.
+    """
+    try:
+        cosmos = _get_cosmos(request)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+
+    sym_upper = symbol.upper()
+    sym_doc = cosmos.get_symbol(sym_upper)
+    if not sym_doc:
+        return JSONResponse({"error": f"Symbol {sym_upper} not found"}, status_code=404)
+
+    from src.best_options_precompute import refresh_symbol, _symbol_refresh_tasks
+
+    # Check if already in flight
+    async with _refresh_tasks_lock if '_refresh_tasks_lock' in dir() else asyncio.Lock():
+        if sym_upper in _symbol_refresh_tasks:
+            existing_task = _symbol_refresh_tasks[sym_upper]
+            if not existing_task.done():
+                return JSONResponse(
+                    {"message": "Refresh already in progress", "symbol": sym_upper},
+                    status_code=409,
+                )
+
+    # Start refresh (non-blocking)
+    asyncio.create_task(refresh_symbol(sym_upper, cosmos))
+
+    return JSONResponse({"message": "Refresh started", "symbol": sym_upper}, status_code=202)
+
+
+@app.post("/api/trigger/best_options")
+async def api_trigger_best_options(request: Request):
+    """Manual full-cycle Best Options precompute trigger (Settings Run Now,
+    §7). Enqueues the task in the scheduler's worker queue.
+
+    Returns 200 immediately; the cycle runs asynchronously on the scheduler
+    worker thread.
+    """
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None:
+        return JSONResponse({"error": "Scheduler not available"}, status_code=503)
+
+    task = scheduler.registry.get_task("best_options")
+    if task is None:
+        return JSONResponse({"error": "Best Options task not registered"}, status_code=404)
+
+    # Enqueue the task (scheduler registry pattern)
+    scheduler.registry.enqueue_task("best_options")
+
+    return JSONResponse({"message": "Best Options precompute triggered"})
+
+
+@app.get("/api/health/best-options")
+async def api_health_best_options(request: Request):
+    """Best Options cache health observability (§5). Always returns HTTP 200
+    — an empty cache is non-fatal by design (post-restart, or split-process
+    before first cycle).
+
+    Returns the snapshot metadata (generation, cycle timing, truncated flag,
+    status counts) plus readiness state.
+    """
+    from src.best_options_cache import get_best_options_cache
+
+    cache = get_best_options_cache()
+    snapshot = cache.snapshot()
+
+    generation = snapshot.get("generation", 0)
+    if generation == 0:
+        status = "empty"
+        message = "Cache never populated (post-restart or pre-first-cycle)"
+    else:
+        status = "ok"
+        message = None
+
+    # Get scheduler next run
+    scheduler = getattr(request.app.state, "scheduler", None)
+    next_run_iso = None
+    if scheduler:
+        task = scheduler.registry.get_task("best_options")
+        if task:
+            next_run_iso = task.next_run.isoformat() if task.next_run else None
+
+    return JSONResponse({
+        "status": status,
+        "message": message,
+        "generation": generation,
+        "cycle_started_at": snapshot.get("cycle_started_at"),
+        "cycle_finished_at": snapshot.get("cycle_finished_at"),
+        "cycle_duration_seconds": snapshot.get("cycle_duration_seconds"),
+        "trigger": snapshot.get("trigger"),
+        "truncated": snapshot.get("truncated", False),
+        "counts": snapshot.get("counts", {}),
+        "next_run": next_run_iso,
+    })
+
+
+@app.post("/api/best-options/validate")
+async def api_best_options_validate(
+    request: Request,
+    symbol: str = Body(...),
+    side: str = Body(...),
+    strike: float = Body(...),
+    expiration: str = Body(...),
+    source: str = Body(...),
+    displayed_snapshot: Optional[dict] = Body(None),
+):
+    """Start exact-contract validation (Best Option Validate flow).
+
+    Asynchronous POST returning 202 Accepted with run_id for status polling.
+
+    Args:
+        symbol: Ticker symbol
+        side: "call" or "put"
+        strike: Exact strike price
+        expiration: ISO expiration date (YYYY-MM-DD)
+        source: "best_options" or "options_screener"
+        displayed_snapshot: Optional snapshot of displayed data
+
+    Returns:
+        202 Accepted: {status: "accepted", run_id, started_at, status_url}
+        409 Conflict: {status: "duplicate", run_id, started_at}
+        429 Too Many Requests: {status: "max_concurrency", retry_after}
+        400 Bad Request: {status: "error", message}
+    """
+    try:
+        cosmos = _get_cosmos(request)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+
+    # Get agent runner
+    from src.agent_runner import AgentRunner
+    from src.context import ContextProvider
+    from src.contract_validation_integration import start_validation
+
+    # Initialize agent runner (reuse app state if available)
+    agent_runner = getattr(request.app.state, "agent_runner", None)
+    if agent_runner is None:
+        # Create a new one
+        llm_config = {"provider": "azure"}  # Will use environment vars
+        agent_runner = AgentRunner(
+            llm=llm_config,
+            model="gpt-5.4-mini",
+            telegram_notifier=None,
+        )
+
+    context_provider = ContextProvider(cosmos)
+
+    # Start validation
+    result = await start_validation(
+        symbol=symbol,
+        side=side,
+        strike=strike,
+        expiration=expiration,
+        source=source,
+        displayed_snapshot=displayed_snapshot,
+        cosmos=cosmos,
+        agent_runner=agent_runner,
+        context_provider=context_provider,
+    )
+
+    # Map status to HTTP status code
+    if result["status"] == "accepted":
+        return JSONResponse(result, status_code=202)
+    elif result["status"] == "duplicate":
+        return JSONResponse(result, status_code=409)
+    elif result["status"] == "max_concurrency":
+        return JSONResponse(result, status_code=429)
+    else:  # error
+        return JSONResponse(result, status_code=400)
+
+
+@app.get("/api/best-options/validate/{run_id}")
+async def api_best_options_validate_status(request: Request, run_id: str):
+    """Get contract validation status (polling endpoint).
+
+    Returns:
+        200 OK: {status: "in_progress"|"completed"|"not_found", ...}
+    """
+    try:
+        cosmos = _get_cosmos(request)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+
+    from src.contract_validation_integration import get_validation_status
+
+    result = await get_validation_status(run_id, cosmos)
+
+    if result["status"] == "not_found":
+        return JSONResponse(result, status_code=404)
+
+    return JSONResponse(result)
 
 
 @app.get("/api/debug/agent-chain/{symbol}")
@@ -3485,7 +3845,7 @@ async def api_debug_agent_chain(request: Request, symbol: str,
 @app.get("/api/symbols/{symbol}/fetch-preview")
 async def api_fetch_preview(request: Request, symbol: str):
     """Fetch raw market data for a symbol and return as JSON.
-    
+
     Always forces a fresh fetch (debug endpoint).
     """
     try:
@@ -3738,7 +4098,7 @@ async def api_delete_activity(request: Request, activity_id: str):
 @app.post("/api/activities/{activity_id}/chat")
 async def api_activity_chat(request: Request, activity_id: str):
     """Chat endpoint for discussing a specific activity with an LLM.
-    
+
     Provides LIVE context: current option chain (filtered for position),
     current technical analysis, the historical activity record, and linked position.
     """
@@ -3747,19 +4107,19 @@ async def api_activity_chat(request: Request, activity_id: str):
         body = await request.json()
         user_message = body.get("message", "").strip()
         history = body.get("history", [])
-        
+
         if not user_message:
             return JSONResponse({"error": "Message cannot be empty"}, status_code=400)
-        
+
         # Load activity and related data
         cosmos = _get_cosmos(request)
         activity = cosmos.get_activity_by_id(activity_id)
         if not activity:
             return JSONResponse({"error": "Activity not found"}, status_code=404)
-        
+
         symbol = activity.get("symbol", "")
         position_id = activity.get("position_id")
-        
+
         # Load position from symbol config
         position_data = "(no linked position)"
         sym_doc = cosmos.get_symbol(symbol)
@@ -3768,11 +4128,11 @@ async def api_activity_chat(request: Request, activity_id: str):
             matched = [p for p in positions if p.get("position_id") == position_id]
             if matched:
                 position_data = json.dumps(matched[0], indent=2, default=str)
-        
+
         # Get CURRENT option chain
         from src.options_chain_cache import get_options_chain_cache
         from src.options_chain_filters import filter_options_chain_for_position
-        
+
         chain_data = "(option chain unavailable)"
         try:
             cache = get_options_chain_cache()
@@ -3788,7 +4148,7 @@ async def api_activity_chat(request: Request, activity_id: str):
             # applied after).
             from src.options_chain_cache import apply_agent_view
             chain_dict = apply_agent_view(chain_dict)
-            
+
             # Filter for position if we have one
             if sym_doc and position_id and matched:
                 pos = matched[0]
@@ -3796,7 +4156,7 @@ async def api_activity_chat(request: Request, activity_id: str):
                 option_type = pos.get("type", "").upper()
                 if strike:
                     filtered_chain = filter_options_chain_for_position(
-                        chain_dict, 
+                        chain_dict,
                         current_strike=strike,
                         option_type=option_type,
                         num_strikes=10
@@ -3810,7 +4170,7 @@ async def api_activity_chat(request: Request, activity_id: str):
         except Exception as e:
             logger.warning("Failed to load option chain for %s: %s", symbol, e)
             chain_data = f"(option chain unavailable: {e})"
-        
+
         # Get CURRENT technical analysis (best-effort — never fatal to the chat)
         technical_data = "(technical analysis unavailable)"
         try:
@@ -3820,7 +4180,7 @@ async def api_activity_chat(request: Request, activity_id: str):
 
             # Query most recent technical_analysis doc
             doc = cosmos.get_latest_technical_analysis(symbol)
-            
+
             if doc:
                 ts = doc.get("timestamp", "unknown")
                 analysis = doc.get("analysis", "")
@@ -3842,7 +4202,7 @@ async def api_activity_chat(request: Request, activity_id: str):
         except Exception as e:
             logger.warning("Failed to load technical analysis for %s: %s", symbol, e, exc_info=True)
             technical_data = f"(technical analysis unavailable: {e})"
-        
+
         # Build conversation history string
         conversation_str = "(none)"
         if history:
@@ -3852,7 +4212,7 @@ async def api_activity_chat(request: Request, activity_id: str):
                 content = turn.get("content", "")
                 lines.append(f"{role.upper()}: {content}")
             conversation_str = "\n\n".join(lines)
-        
+
         # Build the complete prompt with exact headers
         message = f"""=== AGENT DECISION (historical, exact — what the agents actually decided) ===
 {json.dumps(activity, indent=2, default=str)}
@@ -3871,7 +4231,7 @@ Technical Analysis:
 
 === USER QUESTION ===
 {user_message}"""
-        
+
         # Call LLM via Agent Framework
         from agent_framework import Agent
         from src.llm import create_async_chat_client
@@ -3888,12 +4248,12 @@ Technical Analysis:
             name="ActivityChat",
             instructions=get_activity_chat_instructions()
         )
-        
+
         result = await agent.run(message)
         answer = result.text or str(result)
-        
+
         return JSONResponse({"answer": answer})
-        
+
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
@@ -3928,40 +4288,43 @@ def _build_settings_config_context(
     scheduler_tasks = []
     if scheduler and hasattr(scheduler, "registry"):
         scheduler_tasks = scheduler.registry.get_all_task_metadata()
-    
+
     # Build task lookup for backward compatibility with existing template variables
     tasks_by_name = {t["name"]: t for t in scheduler_tasks}
-    
+
     # Telegram settings (not scheduler-related)
     telegram_cfg = config.get("telegram", {})
     telegram_enabled = telegram_cfg.get("enabled", False)
     telegram_bot_token = telegram_cfg.get("bot_token", "")
     telegram_chat_id = telegram_cfg.get("chat_id", "")
-    
+
     # Resolve env vars for display
     if telegram_bot_token.startswith("${"):
         telegram_bot_token = _resolve_env(telegram_bot_token)
     if telegram_chat_id.startswith("${"):
         telegram_chat_id = _resolve_env(telegram_chat_id)
-    
+
     # Extract per-task extra config (for tasks with has_extra_config=True)
     summary_cfg = config.get("summary_agent", {})
     summary_activity_count = summary_cfg.get("activity_count", 3)
-    
+
     dgi_cfg = config.get("dgi_screener", {})
     dgi_top_n = dgi_cfg.get("top_n", 40)
     dgi_symbols = dgi_cfg.get("symbols", "")
-    
+
     banner_cfg = config.get("banner_agent", {})
     banner_max_items = banner_cfg.get("max_items", 10)
-    
+
+    best_options_cfg = config.get("best_options_scheduler", {})
+    best_options_run_on_startup = best_options_cfg.get("run_on_startup", True)
+
     # Helper to resolve last_run from Cosmos when in-memory value is None
     # (makes last_run restart-durable by falling back to persisted timestamps)
     def get_persisted_last_run(task_name: str) -> str:
         """Resolve last_run from CosmosDB for a task when in-memory value is None."""
         if not cosmos:
             return ""
-        
+
         try:
             if task_name == "monitor_agents":
                 # Monitoring: most recent activity timestamp
@@ -3970,7 +4333,7 @@ def _build_settings_config_context(
                     timestamp_str = all_activities[0].get("timestamp", "")
                     if timestamp_str:
                         return timestamp_str
-            
+
             elif task_name == "summary_agent":
                 # Summary: most recent agent_notes timestamp from symbol configs
                 symbols = cosmos.list_symbols()
@@ -3983,20 +4346,20 @@ def _build_settings_config_context(
                                 timestamps.append(note["timestamp"])
                 if timestamps:
                     return max(timestamps)
-            
+
             elif task_name == "dgi_screener":
                 # DGI: most recent last_updated from dgi_top entries
                 dgi_entries = cosmos.get_dgi_top()
                 timestamps = [e.get("last_updated", "") for e in dgi_entries if e.get("last_updated")]
                 if timestamps:
                     return max(timestamps)
-            
+
             elif task_name == "banner_agent":
                 # Banner: generated_at from dashboard_banner doc
                 banner_doc = cosmos.get_banner()
                 if banner_doc and banner_doc.get("generated_at"):
                     return banner_doc["generated_at"]
-            
+
             elif task_name == "plan_monitor":
                 # Plan Monitor: most recent plan note timestamp
                 plans = cosmos.get_plans()
@@ -4009,18 +4372,18 @@ def _build_settings_config_context(
                                 timestamps.append(note["timestamp"])
                 if timestamps:
                     return max(timestamps)
-            
+
             elif task_name == "options_chain":
                 # Options Chain: no persisted timestamp available (in-memory only)
                 return ""
-            
+
             elif task_name == "calendar_sync":
                 # Calendar: most recent updated_at from calendar events
                 events = cosmos.get_calendar_events()
                 timestamps = [e.get("updated_at", "") for e in events if e.get("updated_at")]
                 if timestamps:
                     return max(timestamps)
-            
+
             elif task_name == "portfolio_enrichment":
                 # Portfolio Enrichment: most recent updated_at from enriched symbol configs
                 symbols = cosmos.list_symbols()
@@ -4034,12 +4397,25 @@ def _build_settings_config_context(
                             timestamps.append(ts)
                 if timestamps:
                     return max(timestamps)
-        
+
+            elif task_name == "best_options":
+                # Best Options: cycle_finished_at from the cache snapshot
+                try:
+                    from src.best_options_cache import get_best_options_cache
+                    cache = get_best_options_cache()
+                    snapshot = cache.snapshot()
+                    cycle_finished = snapshot.get("cycle_finished_at")
+                    if cycle_finished:
+                        return cycle_finished
+                except Exception:
+                    pass
+                return ""
+
         except Exception as exc:
             logger.warning("Failed to resolve persisted last_run for %s: %s", task_name, exc)
-        
+
         return ""
-    
+
     # Helper to format timestamps for display
     def fmt_time(iso_str):
         if not iso_str:
@@ -4049,7 +4425,7 @@ def _build_settings_config_context(
             return _format_time(dt)
         except Exception:
             return iso_str
-    
+
     # Helper to get raw ISO timestamp (for client-side relative time calculations)
     def to_iso(iso_str):
         """Return normalized ISO string with timezone, or empty string."""
@@ -4061,7 +4437,7 @@ def _build_settings_config_context(
             return dt.astimezone(timezone.utc).isoformat()
         except Exception:
             return ""
-    
+
     # Unified helper to get last_run (prefers in-memory, falls back to persisted)
     def resolve_last_run(task_name: str, in_memory_last_run: str) -> str:
         """Resolve last_run: prefer in-memory, else persisted from Cosmos."""
@@ -4070,7 +4446,7 @@ def _build_settings_config_context(
         # Fall back to persisted timestamp
         persisted = get_persisted_last_run(task_name)
         return fmt_time(persisted)
-    
+
     # Unified helper to get raw last_run ISO (for client-side relative time)
     def resolve_last_run_iso(task_name: str, in_memory_last_run: str) -> str:
         """Resolve last_run as ISO string: prefer in-memory, else persisted from Cosmos."""
@@ -4079,7 +4455,7 @@ def _build_settings_config_context(
         # Fall back to persisted timestamp
         persisted = get_persisted_last_run(task_name)
         return to_iso(persisted)
-    
+
     # Build backward-compatible individual task variables for template
     # (Until template is refactored to use scheduler_tasks loop)
     monitoring = tasks_by_name.get("monitor_agents", {})
@@ -4089,7 +4465,7 @@ def _build_settings_config_context(
     monitoring_next_run = fmt_time(monitoring.get("next_run"))
     monitoring_last_run_iso = resolve_last_run_iso("monitor_agents", monitoring.get("last_run"))
     monitoring_next_run_iso = to_iso(monitoring.get("next_run"))
-    
+
     summary = tasks_by_name.get("summary_agent", {})
     summary_enabled = summary.get("enabled", True)
     summary_cron = summary.get("cron", "0 8 * * *")
@@ -4097,7 +4473,7 @@ def _build_settings_config_context(
     summary_next_run = fmt_time(summary.get("next_run"))
     summary_last_run_iso = resolve_last_run_iso("summary_agent", summary.get("last_run"))
     summary_next_run_iso = to_iso(summary.get("next_run"))
-    
+
     plan_monitor = tasks_by_name.get("plan_monitor", {})
     plan_monitor_enabled = plan_monitor.get("enabled", True)
     plan_monitor_cron = plan_monitor.get("cron", "0 4,16 * * 1-5")
@@ -4105,7 +4481,7 @@ def _build_settings_config_context(
     plan_monitor_next_run = fmt_time(plan_monitor.get("next_run"))
     plan_monitor_last_run_iso = resolve_last_run_iso("plan_monitor", plan_monitor.get("last_run"))
     plan_monitor_next_run_iso = to_iso(plan_monitor.get("next_run"))
-    
+
     options_chain = tasks_by_name.get("options_chain", {})
     options_chain_enabled = options_chain.get("enabled", True)
     options_chain_cron = options_chain.get("cron", "0 * * * *")
@@ -4113,7 +4489,7 @@ def _build_settings_config_context(
     options_chain_next_run = fmt_time(options_chain.get("next_run"))
     options_chain_last_run_iso = resolve_last_run_iso("options_chain", options_chain.get("last_run"))
     options_chain_next_run_iso = to_iso(options_chain.get("next_run"))
-    
+
     dgi = tasks_by_name.get("dgi_screener", {})
     dgi_enabled = dgi.get("enabled", True)
     dgi_cron = dgi.get("cron", "0 6 * * 1-5")
@@ -4121,7 +4497,7 @@ def _build_settings_config_context(
     dgi_next_run = fmt_time(dgi.get("next_run"))
     dgi_last_run_iso = resolve_last_run_iso("dgi_screener", dgi.get("last_run"))
     dgi_next_run_iso = to_iso(dgi.get("next_run"))
-    
+
     banner = tasks_by_name.get("banner_agent", {})
     banner_enabled = banner.get("enabled", True)
     banner_cron = banner.get("cron", "0 5 * * *")
@@ -4129,7 +4505,7 @@ def _build_settings_config_context(
     banner_next_run = fmt_time(banner.get("next_run"))
     banner_last_run_iso = resolve_last_run_iso("banner_agent", banner.get("last_run"))
     banner_next_run_iso = to_iso(banner.get("next_run"))
-    
+
     calendar = tasks_by_name.get("calendar_sync", {})
     calendar_enabled = calendar.get("enabled", True)
     calendar_cron = calendar.get("cron", "0 5 * * 1-5")
@@ -4137,7 +4513,7 @@ def _build_settings_config_context(
     calendar_next_run = fmt_time(calendar.get("next_run"))
     calendar_last_run_iso = resolve_last_run_iso("calendar_sync", calendar.get("last_run"))
     calendar_next_run_iso = to_iso(calendar.get("next_run"))
-    
+
     pe = tasks_by_name.get("portfolio_enrichment", {})
     pe_enabled = pe.get("enabled", True)
     pe_cron = pe.get("cron", "0 9-17 * * 1-5")
@@ -4145,6 +4521,14 @@ def _build_settings_config_context(
     pe_next_run = fmt_time(pe.get("next_run"))
     pe_last_run_iso = resolve_last_run_iso("portfolio_enrichment", pe.get("last_run"))
     pe_next_run_iso = to_iso(pe.get("next_run"))
+
+    best_options = tasks_by_name.get("best_options", {})
+    best_options_enabled = best_options.get("enabled", True)
+    best_options_cron = best_options.get("cron", "5 10-23 * * 1-5")
+    best_options_last_run = resolve_last_run("best_options", best_options.get("last_run"))
+    best_options_next_run = fmt_time(best_options.get("next_run"))
+    best_options_last_run_iso = resolve_last_run_iso("best_options", best_options.get("last_run"))
+    best_options_next_run_iso = to_iso(best_options.get("next_run"))
 
     pf = tasks_by_name.get("price_forecast", {})
     pf_enabled = pf.get("enabled", True)
@@ -4158,7 +4542,7 @@ def _build_settings_config_context(
     pf_vol_source = _pf_cfg.get("vol_source", "iv_hv")
     pf_trend_window = _pf_cfg.get("trend_window", 20)
     pf_trend_window_long = _pf_cfg.get("trend_window_long", 40)
-    
+
     return {
         "request": request,
         "saved": saved or [],
@@ -4219,6 +4603,13 @@ def _build_settings_config_context(
         "pe_next_run": pe_next_run,
         "pe_last_run_iso": pe_last_run_iso,
         "pe_next_run_iso": pe_next_run_iso,
+        "best_options_enabled": best_options_enabled,
+        "best_options_cron": best_options_cron,
+        "best_options_run_on_startup": best_options_run_on_startup,
+        "best_options_last_run": best_options_last_run,
+        "best_options_next_run": best_options_next_run,
+        "best_options_last_run_iso": best_options_last_run_iso,
+        "best_options_next_run_iso": best_options_next_run_iso,
         "pf_enabled": pf_enabled,
         "pf_cron": pf_cron,
         "pf_last_run": pf_last_run,
@@ -4249,7 +4640,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
     if new_cron:
         try:
             croniter(new_cron)
-            
+
             # Update CosmosDB first
             if cosmos:
                 cosmos_settings = _load_settings_from_cosmos(cosmos) or {}
@@ -4257,7 +4648,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
                 cosmos_settings["scheduler"]["cron"] = new_cron
                 cosmos_settings["scheduler"]["enabled"] = monitoring_enabled
                 _save_settings_to_cosmos(cosmos, cosmos_settings)
-            
+
             # Also update config.yaml for backward compat
             config = _load_config()
             config.setdefault("scheduler", {})
@@ -4287,7 +4678,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
         if telegram_chat_id:
             cosmos_settings["telegram"]["chat_id"] = telegram_chat_id
         _save_settings_to_cosmos(cosmos, cosmos_settings)
-    
+
     # Also update config.yaml for backward compat
     config = _load_config()
     config.setdefault("telegram", {})
@@ -4308,7 +4699,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
         summary_activity_count = max(1, min(10, summary_activity_count))  # Clamp to 1-10
     except ValueError:
         summary_activity_count = 3
-    
+
     # Validate cron if provided
     if summary_cron:
         try:
@@ -4321,7 +4712,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
                 cosmos_settings["summary_agent"]["cron"] = summary_cron
                 cosmos_settings["summary_agent"]["activity_count"] = summary_activity_count
                 _save_settings_to_cosmos(cosmos, cosmos_settings)
-            
+
             # Also update config.yaml for backward compat
             config = _load_config()
             config.setdefault("summary_agent", {})
@@ -4330,7 +4721,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
             config["summary_agent"]["activity_count"] = summary_activity_count
             _write_config(config)
             saved.append("Summary agent")
-            
+
             # Notify scheduler of change
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
@@ -4370,7 +4761,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
     # Options chain scheduler settings
     options_chain_enabled = form.get("options_chain_enabled") == "true"
     options_chain_cron = str(form.get("options_chain_cron", "0 * * * *")).strip()
-    
+
     # Validate cron if provided
     if options_chain_cron:
         try:
@@ -4382,7 +4773,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
                 cosmos_settings["options_chain_scheduler"]["enabled"] = options_chain_enabled
                 cosmos_settings["options_chain_scheduler"]["cron"] = options_chain_cron
                 _save_settings_to_cosmos(cosmos, cosmos_settings)
-            
+
             # Also update config.yaml for backward compat
             config = _load_config()
             config.setdefault("options_chain_scheduler", {})
@@ -4390,7 +4781,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
             config["options_chain_scheduler"]["cron"] = options_chain_cron
             _write_config(config)
             saved.append("Options chain scheduler")
-            
+
             # Notify scheduler of change
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
@@ -4409,7 +4800,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
         dgi_top_n = max(1, min(500, dgi_top_n))
     except ValueError:
         dgi_top_n = 40
-    
+
     if dgi_cron:
         try:
             croniter(dgi_cron)
@@ -4421,7 +4812,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
                 cosmos_settings["dgi_screener"]["symbols"] = dgi_symbols
                 cosmos_settings["dgi_screener"]["top_n"] = dgi_top_n
                 _save_settings_to_cosmos(cosmos, cosmos_settings)
-            
+
             config = _load_config()
             config.setdefault("dgi_screener", {})
             config["dgi_screener"]["enabled"] = dgi_enabled
@@ -4430,7 +4821,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
             config["dgi_screener"]["top_n"] = dgi_top_n
             _write_config(config)
             saved.append("DGI screener")
-            
+
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
                 scheduler.reschedule_dgi_screener(dgi_cron)
@@ -4447,7 +4838,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
         banner_max_items = max(3, min(20, banner_max_items))
     except ValueError:
         banner_max_items = 10
-    
+
     if banner_cron:
         try:
             croniter(banner_cron)
@@ -4458,7 +4849,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
                 cosmos_settings["banner_agent"]["cron"] = banner_cron
                 cosmos_settings["banner_agent"]["max_items"] = banner_max_items
                 _save_settings_to_cosmos(cosmos, cosmos_settings)
-            
+
             config = _load_config()
             config.setdefault("banner_agent", {})
             config["banner_agent"]["enabled"] = banner_enabled
@@ -4466,7 +4857,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
             config["banner_agent"]["max_items"] = banner_max_items
             _write_config(config)
             saved.append("Banner agent")
-            
+
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
                 scheduler.reschedule_banner(banner_cron)
@@ -4527,6 +4918,37 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
             if scheduler is not None:
                 scheduler.reschedule_portfolio_enrichment(pe_cron)
                 scheduler.registry.update_task_enabled("portfolio_enrichment", pe_enabled, scheduler.config)
+        except (ValueError, KeyError):
+            pass
+
+    # Best Options scheduler settings
+    best_options_enabled = form.get("best_options_enabled") == "true"
+    best_options_cron = str(form.get("best_options_cron", "5 10-23 * * 1-5")).strip()
+    best_options_run_on_startup = form.get("best_options_run_on_startup") == "true"
+
+    if best_options_cron:
+        try:
+            croniter(best_options_cron)
+            if cosmos:
+                cosmos_settings = _load_settings_from_cosmos(cosmos) or {}
+                cosmos_settings.setdefault("best_options_scheduler", {})
+                cosmos_settings["best_options_scheduler"]["enabled"] = best_options_enabled
+                cosmos_settings["best_options_scheduler"]["cron"] = best_options_cron
+                cosmos_settings["best_options_scheduler"]["run_on_startup"] = best_options_run_on_startup
+                _save_settings_to_cosmos(cosmos, cosmos_settings)
+
+            config = _load_config()
+            config.setdefault("best_options_scheduler", {})
+            config["best_options_scheduler"]["enabled"] = best_options_enabled
+            config["best_options_scheduler"]["cron"] = best_options_cron
+            config["best_options_scheduler"]["run_on_startup"] = best_options_run_on_startup
+            _write_config(config)
+            saved.append("Best Options scheduler")
+
+            scheduler = getattr(request.app.state, "scheduler", None)
+            if scheduler is not None:
+                scheduler.registry.reschedule("best_options", best_options_cron, scheduler.config)
+                scheduler.registry.update_task_enabled("best_options", best_options_enabled, scheduler.config)
         except (ValueError, KeyError):
             pass
 
@@ -5887,7 +6309,7 @@ def _run_all_agents_sequentially(scheduler, status: dict, run_trigger: str = "ma
 @app.get("/api/scheduler/tasks")
 async def get_scheduler_tasks(request: Request):
     """Get metadata for all scheduled tasks (unified endpoint).
-    
+
     Returns: list of {name, display_name, config_key, enabled, cron, last_run, next_run, has_extra_config}
     """
     scheduler = getattr(request.app.state, "scheduler", None)
@@ -5895,7 +6317,7 @@ async def get_scheduler_tasks(request: Request):
         return JSONResponse(
             {"error": "Scheduler not running"},
             status_code=503)
-    
+
     tasks = scheduler.registry.get_all_task_metadata()
     return JSONResponse({"tasks": tasks})
 
@@ -5903,7 +6325,7 @@ async def get_scheduler_tasks(request: Request):
 @app.post("/api/scheduler/tasks/{task_name}/run")
 async def run_scheduler_task_now(request: Request, task_name: str):
     """Manually trigger a scheduled task (Run Now button).
-    
+
     Returns: {"success": bool, "message": str}
     """
     scheduler = getattr(request.app.state, "scheduler", None)
@@ -5911,10 +6333,10 @@ async def run_scheduler_task_now(request: Request, task_name: str):
         return JSONResponse(
             {"error": "Scheduler not running"},
             status_code=503)
-    
+
     # Run in background thread to avoid blocking
     result = {"success": False, "message": "Starting task..."}
-    
+
     def _run_in_background():
         nonlocal result
         # Corrected trigger contract (copilot-force-alpha-semantics-superseded.md):
@@ -5929,18 +6351,18 @@ async def run_scheduler_task_now(request: Request, task_name: str):
         result.update(scheduler.registry.trigger_task_now(
             task_name, run_trigger="manual", force_alpha=False,
         ))
-    
+
     thread = threading.Thread(target=_run_in_background, daemon=True)
     thread.start()
     thread.join(timeout=1.0)  # Wait up to 1s for quick feedback
-    
+
     return JSONResponse(result)
 
 
 @app.post("/api/scheduler/tasks/{task_name}/cron")
 async def update_scheduler_task_cron(request: Request, task_name: str):
     """Update a task's cron expression (live reschedule).
-    
+
     Body: {"cron": "0 14 * * *"}
     Returns: {"success": bool, "message": str}
     """
@@ -5949,7 +6371,7 @@ async def update_scheduler_task_cron(request: Request, task_name: str):
         return JSONResponse(
             {"error": "Scheduler not running"},
             status_code=503)
-    
+
     try:
         body = await request.json()
         new_cron = body.get("cron")
@@ -5957,14 +6379,14 @@ async def update_scheduler_task_cron(request: Request, task_name: str):
             return JSONResponse(
                 {"success": False, "message": "Missing 'cron' field in request body"},
                 status_code=400)
-        
+
         scheduler.registry.reschedule(task_name, new_cron, scheduler.config)
-        
+
         # Persist to CosmosDB
         task = scheduler.registry.get_task(task_name)
         if task and scheduler.cosmos:
             scheduler.cosmos.save_settings({task.config_key: {"cron": new_cron}})
-        
+
         return JSONResponse({"success": True, "message": f"Cron updated to {new_cron}"})
     except Exception as e:
         logger.exception(f"Error updating cron for {task_name}")
@@ -5976,7 +6398,7 @@ async def update_scheduler_task_cron(request: Request, task_name: str):
 @app.post("/api/scheduler/tasks/{task_name}/enabled")
 async def update_scheduler_task_enabled(request: Request, task_name: str):
     """Toggle a task's enabled state.
-    
+
     Body: {"enabled": true}
     Returns: {"success": bool, "message": str}
     """
@@ -5985,7 +6407,7 @@ async def update_scheduler_task_enabled(request: Request, task_name: str):
         return JSONResponse(
             {"error": "Scheduler not running"},
             status_code=503)
-    
+
     try:
         body = await request.json()
         enabled = body.get("enabled")
@@ -5993,18 +6415,18 @@ async def update_scheduler_task_enabled(request: Request, task_name: str):
             return JSONResponse(
                 {"success": False, "message": "Missing 'enabled' field in request body"},
                 status_code=400)
-        
+
         success = scheduler.registry.update_task_enabled(task_name, bool(enabled), scheduler.config)
         if not success:
             return JSONResponse(
                 {"success": False, "message": f"Task '{task_name}' not found"},
                 status_code=404)
-        
+
         # Persist to CosmosDB
         task = scheduler.registry.get_task(task_name)
         if task and scheduler.cosmos:
             scheduler.cosmos.save_settings({task.config_key: {"enabled": bool(enabled)}})
-        
+
         status = "enabled" if enabled else "disabled"
         return JSONResponse({"success": True, "message": f"Task {status}"})
     except Exception as e:
@@ -6130,7 +6552,7 @@ async def api_dgi_top(request: Request):
 @app.post("/api/chat/fetch-symbol")
 async def fetch_symbol_data(request: Request):
     """Fetch market data for a symbol without saving to database.
-    
+
     Uses cache by default.  Pass ``"refresh": true`` in the JSON body
     to force a fresh fetch.
     """
@@ -6139,33 +6561,33 @@ async def fetch_symbol_data(request: Request):
     market = body.get("market", "").strip().upper()
     option_type = body.get("option_type", "").strip().lower()
     force_refresh = body.get("refresh", False)
-    
+
     if not symbol or not market:
         return JSONResponse(
             {"error": "Symbol and market are required"},
             status_code=400
         )
-    
+
     if option_type not in ("call", "put"):
         return JSONResponse(
             {"error": "Option type must be 'call' or 'put'"},
             status_code=400
         )
-    
+
     try:
         provider = getattr(request.app.state, "yf_provider", None)
         if provider is None:
             return JSONResponse({"error": "Data provider not initialized"}, status_code=503)
 
         data = await provider.fetch_all(symbol, force_refresh=force_refresh)
-            
+
         return JSONResponse({
             "symbol": symbol,
             "market": market,
             "option_type": option_type,
             "data": data,
         })
-            
+
     except Exception as e:
         logger.error("Error fetching symbol data: %s", e, exc_info=True)
         return JSONResponse(
@@ -6181,13 +6603,13 @@ async def chat_api(request: Request):
     mode = body.get("mode", "portfolio")
     symbol_data = body.get("symbol_data")
     first_analysis = body.get("first_analysis", False)
-    
+
     if not messages and not first_analysis:
         return JSONResponse({"error": "No messages provided"},
                             status_code=400)
 
     context_parts: List[str] = []
-    
+
     # Build context based on mode
     if mode == "portfolio":
         selected_agents = body.get("selected_agents")
@@ -6339,7 +6761,7 @@ async def chat_api(request: Request):
             "based on this data.\n\n"
             f"Portfolio context:\n{context_text}"
         )
-    
+
     elif mode == "quick-analysis":
         # Quick analysis mode using fetched symbol data
         if not symbol_data:
@@ -6347,51 +6769,51 @@ async def chat_api(request: Request):
                 {"error": "Symbol data required for quick analysis mode"},
                 status_code=400
             )
-        
+
         symbol = symbol_data.get("symbol", "?")
         market = symbol_data.get("market", "?")
         option_type = symbol_data.get("option_type", "call")
         data = symbol_data.get("data", {})
-        
+
         # Build context from fetched data
         context_parts.append(f"Symbol: {market}:{symbol}\n")
-        
+
         if "overview" in data and data["overview"]:
             context_parts.append("=== OVERVIEW PAGE ===")
             context_parts.append(data["overview"])
-        
+
         if "technicals" in data and data["technicals"]:
             context_parts.append("\n=== TECHNICALS PAGE ===")
             context_parts.append(data["technicals"])
-        
+
         if "forecast" in data and data["forecast"]:
             context_parts.append("\n=== FORECAST PAGE ===")
             context_parts.append(data["forecast"])
-        
+
         if "dividends" in data and data["dividends"]:
             context_parts.append("\n=== DIVIDENDS ===")
             context_parts.append(data["dividends"])
-        
+
         if "options_chain" in data and data["options_chain"]:
             from src.yfinance_data_provider import OPTIONS_CHAIN_SCHEMA_DESCRIPTION
             context_parts.append("\n=== OPTIONS CHAIN ===")
             context_parts.append(OPTIONS_CHAIN_SCHEMA_DESCRIPTION)
             context_parts.append(data["options_chain"])
-        
+
         context_text = "\n\n".join(context_parts)
-        
+
         # For first analysis, use conversational chat instructions (not monitoring agent JSON output)
         if first_analysis:
             import sys
             sys.path.insert(0, str(PROJECT_ROOT / "src"))
-            
+
             if option_type == "call":
                 from open_call_chat_instructions import TV_OPEN_CALL_CHAT_INSTRUCTIONS
                 instructions = TV_OPEN_CALL_CHAT_INSTRUCTIONS
             else:  # put
                 from open_put_chat_instructions import TV_OPEN_PUT_CHAT_INSTRUCTIONS
                 instructions = TV_OPEN_PUT_CHAT_INSTRUCTIONS
-            
+
             system_prompt = f"{instructions}\n\n{context_text}"
         else:
             # Normal chat mode after first analysis
@@ -6401,7 +6823,7 @@ async def chat_api(request: Request):
                 "the stock's price, technicals, earnings, dividends, and options. Avoid JSON or structured output — talk naturally.\n\n"
                 f"Market Data:\n{context_text}"
             )
-    
+
     else:
         return JSONResponse(
             {"error": f"Invalid mode: {mode}"},
@@ -6443,12 +6865,12 @@ async def chat_api(request: Request):
 
 
 
-async def _build_symbol_context(symbol: str, cosmos, 
+async def _build_symbol_context(symbol: str, cosmos,
                                 preferences: dict = None,
                                 force_refresh: bool = False,
                                 provider=None) -> dict:
     """Build context data for a symbol (CosmosDB + yfinance).
-    
+
     Args:
         symbol: Stock symbol
         cosmos: CosmosDB client
@@ -6465,7 +6887,7 @@ async def _build_symbol_context(symbol: str, cosmos,
             'positions': True,
             'activities': True
         }
-    
+
     context_parts: List[str] = []
     symbol_doc = None
     exchange = "NYSE"
@@ -6578,12 +7000,12 @@ def _build_symbol_system_prompt(symbol: str, exchange: str,
 @app.post("/api/symbols/{symbol}/chat/context")
 async def symbol_chat_context(request: Request, symbol: str):
     """Pre-fetch all heavy context (CosmosDB + market data) for a symbol.
-    
+
     Pass ``"refresh": true`` in the JSON body to bypass the cache.
     """
     symbol = symbol.upper()
     cosmos = getattr(request.app.state, "cosmos", None)
-    
+
     # Get preferences from request body
     try:
         body = await request.json()

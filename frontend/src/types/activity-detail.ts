@@ -114,6 +114,13 @@ export interface ActivityDoc {
   supervisor_view?: SupervisorView | null;
   alpha_view?: AlphaView | null;
   rule_evaluation?: RuleEvaluation | null;
+  // Contract validation fields (backend/src/contract_validation_integration.py)
+  run_id?: string | null;
+  validation_status?: "approved" | "review_incomplete" | "error" | null;
+  validation_source?: "best_options" | "options_screener" | null;
+  primary_trace_id?: string | null;
+  supervisor_trace_id?: string | null;
+  alpha_trace_id?: string | null;
   [k: string]: unknown;
 }
 

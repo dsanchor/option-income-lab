@@ -87,6 +87,14 @@ export interface SettingsConfig {
   pf_last_run_iso: string;
   pf_next_run_iso: string;
 
+  best_options_enabled: boolean;
+  best_options_cron: string;
+  best_options_run_on_startup: boolean;
+  best_options_last_run: string;
+  best_options_next_run: string;
+  best_options_last_run_iso: string;
+  best_options_next_run_iso: string;
+
   plan_monitor_enabled: boolean;
   plan_monitor_cron: string;
   plan_monitor_last_run: string;

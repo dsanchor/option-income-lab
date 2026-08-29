@@ -95,6 +95,11 @@ price_forecast:
   enabled: true
   cron: "0 21 * * 1-5"  # 9 PM weekdays (UTC) — after US market close
 
+best_options_scheduler:
+  enabled: true
+  cron: "5 10-23 * * 1-5"  # Hourly at :05, 10:05–23:05, weekdays (container timezone)
+  run_on_startup: true
+
 # yfinance data provider settings
 yfinance:
   cache_ttl: 300             # Cache TTL in seconds (default: 5 minutes)

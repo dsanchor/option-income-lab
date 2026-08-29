@@ -81,6 +81,7 @@ export interface ActivityItem {
   decision?: string;
   confidence?: number | string;
   strike?: number | string;
+  expiration?: string;
   risk_rating?: number | null;
   assignment_risk?: string | null;
   waiting_for?: string | null;
@@ -91,6 +92,10 @@ export interface ActivityItem {
   rule_evaluation?: RuleEvaluation | null;
   timestamp?: string;
   created_at?: string;
+  // Contract validation fields
+  run_id?: string | null;
+  validation_status?: "approved" | "review_incomplete" | "error" | null;
+  validation_source?: "best_options" | "options_screener" | null;
   [k: string]: unknown;
 }
 

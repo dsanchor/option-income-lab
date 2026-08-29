@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, ListFilter, ChevronLeft, ChevronRight, ArrowUp, ArrowDown } from "lucide-react";
 import MultiSelect, { type MultiSelectOption } from "@/components/MultiSelect";
+import ContractValidationAction from "@/components/ContractValidationAction";
 import { preferenceRowTint } from "@/lib/badges";
 import { ColorBadge, flagLabel, fmtNum, fmtPct, fmtExpiration } from "@/lib/options-row-format";
 import type {
@@ -264,15 +265,37 @@ export default function OptionsScreenerView() {
     [],
   );
 
-  const partialStatus = useMemo(() => {
+  const readinessStatus = useMemo(() => {
     if (state.kind !== "ok") return null;
-    const c = state.data.symbols.counts;
-    if (c.warming === 0 && c.cold === 0 && c.error === 0) return null;
-    const parts: string[] = [];
-    if (c.warming > 0) parts.push(`${c.warming} warming`);
-    if (c.cold > 0) parts.push(`${c.cold} cold (retry shortly)`);
-    if (c.error > 0) parts.push(`${c.error} error`);
-    return parts.join(" · ");
+    const s = state.data.symbols;
+    const total = s.total;
+    const loaded = s.loaded;
+    const loadedFresh = s.loaded_fresh;
+    const loadedStale = s.loaded_stale;
+    const pending = s.pending;
+    const error = s.error;
+    const nextRun = state.data.cache?.next_run;
+
+    if (total === 0) return { level: "info", message: "No symbols configured." };
+    if (loaded === 0 && total > 0) {
+      return {
+        level: "warning",
+        message: `0 of ${total} symbols loaded — No symbols precomputed yet. Results appear after the next scheduled processing cycle${nextRun ? ` (next run ${nextRun})` : ""}.`
+      };
+    }
+    if (loaded < total) {
+      return {
+        level: "warning",
+        message: `${loaded} of ${total} symbols loaded${loadedStale > 0 ? ` (${loadedStale} from an earlier cycle)` : ""} — Showing only precomputed symbols. The remaining ${total - loaded} will be included after the next scheduled processing cycle${nextRun ? ` (next run ${nextRun})` : ""}.`
+      };
+    }
+    if (loaded === total && total > 0) {
+      return {
+        level: "success",
+        message: `${total} of ${total} symbols loaded${loadedStale > 0 ? ` (${loadedStale} from an earlier cycle)` : ""}`
+      };
+    }
+    return null;
   }, [state]);
 
   return (
@@ -425,9 +448,18 @@ export default function OptionsScreenerView() {
         </div>
       </div>
 
-      {partialStatus && (
-        <div role="status" className="rounded-[var(--radius)] border border-accent-orange/40 bg-accent-orange/10 px-3 py-2 text-xs text-accent-orange">
-          Partial results — {partialStatus}. Cold/warming symbols aren&apos;t reflected yet; refresh shortly.
+      {readinessStatus && readinessStatus.level !== "success" && (
+        <div role="status" className={`rounded-[var(--radius)] border px-3 py-2 text-xs ${
+          readinessStatus.level === "warning" ? "border-accent-orange/40 bg-accent-orange/10 text-accent-orange" :
+          readinessStatus.level === "info" ? "border-accent-blue/40 bg-accent-blue/10 text-accent-blue" :
+          "border-border bg-bg-card text-text-muted"
+        }`}>
+          {readinessStatus.message}
+        </div>
+      )}
+      {readinessStatus && readinessStatus.level === "success" && (
+        <div className="rounded-[var(--radius)] border border-border bg-bg-card px-3 py-2 text-xs text-text-muted">
+          {readinessStatus.message}
         </div>
       )}
 
@@ -452,7 +484,12 @@ export default function OptionsScreenerView() {
       )}
 
       {state.kind === "ok" && (
-        <ResultsTable applied={applied} data={state.data} onSort={onSort} onPage={setPage} />
+        <>
+          <div className="rounded-[var(--radius)] border border-accent-blue/40 bg-accent-blue/10 px-3 py-2 text-xs text-accent-blue">
+            🔍 <strong>Contract Validation</strong> — Click Validate to run an exact-contract agent review (Supervisor + Alpha). Advisory only; positions are never created automatically.
+          </div>
+          <ResultsTable applied={applied} data={state.data} onSort={onSort} onPage={setPage} />
+        </>
       )}
     </div>
   );
@@ -469,7 +506,7 @@ function ResultsTable({
   onSort: (field: ScreenerSortField) => void;
   onPage: (offset: number) => void;
 }) {
-  const { rows, nearest_miss: nearestMiss, pagination } = data;
+  const { rows, nearest_miss: nearestMiss, pagination, side } = data;
 
   return (
     <section className="space-y-2">
@@ -496,6 +533,7 @@ function ResultsTable({
                 <th className="border-b border-border px-2 py-1 text-right">Bid/Ask</th>
                 <th className="border-b border-border px-2 py-1 text-right">Score</th>
                 <th className="border-b border-border px-2 py-1 text-left">Flags</th>
+                <th className="border-b border-border px-2 py-1 text-left" title="Validate contract — advisory only, no auto-order">Validate</th>
               </tr>
             </thead>
             <tbody>
@@ -560,6 +598,23 @@ function ResultsTable({
                         </span>
                       ))}
                     </div>
+                  </td>
+                  <td className="px-2 py-1 text-left">
+                    <ContractValidationAction
+                      symbol={row.symbol}
+                      side={side}
+                      strike={row.strike}
+                      expiration={row.expiration}
+                      source="options_screener"
+                      displayedSnapshot={{
+                        color: row.color,
+                        score: row.score,
+                        premium_pct: row.premium_pct,
+                        annualized_return_pct: row.annualized_return_pct,
+                        category: row.category,
+                      }}
+                      compact
+                    />
                   </td>
                 </tr>
               ))}

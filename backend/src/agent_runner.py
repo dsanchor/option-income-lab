@@ -101,7 +101,7 @@ class AgentRunner:
 
     PROLONGED_WAIT_THRESHOLD = 5
     SUPERVISOR_COOLDOWN = 3  # WAITs between repeated supervisor/alpha reviews
-    
+
     def __init__(self, llm: LlmConfig, model: str, telegram_notifier=None,
                  project_endpoint: str = None, api_key: str = None,
                  plan_monitor_model: str = None,
@@ -261,7 +261,7 @@ class AgentRunner:
             f"All other roll economics rules (premium-first policy, tier thresholds, "
             f"earnings constraints, DTE ≤ 45) remain unchanged.\n"
         )
-    
+
     # ── Options chain formatting ────────────────────────────────────────
 
     @staticmethod
@@ -1002,7 +1002,7 @@ class AgentRunner:
 
     def _is_alert(self, response_text: str, json_data: Optional[Dict] = None) -> bool:
         """Check if response indicates an alert.
-        
+
         Rule: Anything that is NOT wait, hold, doing nothing, or skipped is an alert.
         This includes SELL, ROLL_*, CLOSE, and any other action-oriented activities.
         """
@@ -1011,24 +1011,24 @@ class AgentRunner:
             if activity:
                 # If activity is NOT in the non-alert list, it's an alert
                 return activity not in self._NON_ALERT_ACTIVITIES
-        
+
         # Fallback text check - look for non-alert keywords
         upper = response_text.upper()
         # Check if it explicitly states a non-alert activity
         for non_alert in self._NON_ALERT_ACTIVITIES:
             if f"ACTIVITY: {non_alert}" in upper or f'"activity": "{non_alert}"' in upper.replace(" ", ""):
                 return False
-        
+
         # If we find any activity indicator but no non-alert match, assume it's an alert
         if "ACTIVITY:" in upper or '"activity"' in upper:
             return True
-        
+
         # Legacy fallback: check for explicit alert indicators
         return "CLEAR SELL ALERT" in upper or "🚨" in response_text or "ALERT: SELL" in upper
 
     def _extract_alert_enrichment(self, json_data: Optional[Dict]) -> Dict:
         """Extract alert-specific enrichment fields (confidence, risk_flags).
-        
+
         Returns a dict with only alert-enrichment fields present in json_data.
         Per Danny's unified schema: alerts are activities with is_alert=true
         and these additional fields merged in.
@@ -1707,7 +1707,7 @@ Provide your alpha advisor analysis in the JSON format specified above."""
         For CC/open_call: calls only, delta-filtered.
         For CSP/open_put: puts only, delta-filtered.
         For buy_tracker: returns empty string (no options).
-        
+
         For open position monitoring, excludes the EXACT currently-held contract
         (same strike AND expiration) to prevent no-op roll suggestions, BUT
         surfaces the current contract's buyback cost as a labeled reference.
@@ -2001,7 +2001,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
             # Determine if this is an alert (anything NOT wait/hold/do_nothing)
             is_alert = self._is_alert(response_text, activity_payload)
             activity_payload["is_alert"] = is_alert
-            
+
             # If alert, merge alert-enrichment fields into activity payload
             if is_alert:
                 alert_enrichment = self._extract_alert_enrichment(activity_payload)
@@ -3118,7 +3118,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 is_alert = False
             activity_payload["is_alert"] = is_alert
 
-            
+
             # If alert, merge alert-enrichment fields into activity payload
             if is_alert:
                 alert_enrichment = self._extract_alert_enrichment(json_data)
@@ -3161,7 +3161,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 activity_data=activity_payload,
                 timestamp=analysis_ts,
             )
-            
+
             if is_alert:
                 print(f"⚠️ ROLL ALERT logged for {symbol} ${strike} exp {expiration}")
 
@@ -3632,7 +3632,7 @@ Respond in the required JSON format only."""
         max_age_hours: int = 24,
     ):
         """Generate and send daily portfolio summary via Telegram.
-        
+
         Args:
             cosmos: CosmosDBService instance
             telegram_notifier: TelegramNotifier instance
@@ -3643,30 +3643,30 @@ Respond in the required JSON format only."""
                 overview, just without stale specifics (default: 24).
         """
         from .summary_instructions import TV_SUMMARY_INSTRUCTIONS
-        
+
         logger.info("="*70)
         logger.info("Summary Agent - Starting execution")
         logger.info("  Activity count per symbol: %d", activity_count)
         logger.info("  Max activity age (hours): %s", max_age_hours)
-        
+
         # Gate check: skip if Telegram is not enabled
         if telegram_notifier is None:
             logger.info("Summary agent skipped — Telegram notifier not configured")
             print("⏭️  Summary agent skipped — Telegram notifier not configured")
             return
-        
+
         # Check if Telegram is actually enabled via credentials
         creds = telegram_notifier._get_credentials()
         if creds is None:
             logger.info("Summary agent skipped — Telegram notifications disabled")
             print("⏭️  Summary agent skipped — Telegram notifications disabled")
             return
-        
+
         logger.info("Telegram notifier configured - proceeding with summary")
         print("\n" + "="*70)
         print("📊 DAILY PORTFOLIO SUMMARY AGENT")
         print("="*70)
-        
+
         try:
             import json
 
@@ -3831,7 +3831,7 @@ Only includes activities for active (open) positions — closed positions are ex
 Generate your 3-line summaries now. Output plain text only — no JSON, no code blocks.
 Every symbol listed in the portfolio overview MUST appear in the corresponding section, even if there are no recent activities for it.
 """
-            
+
             # Run the agent
             agent = Agent(
                 name="SummaryAgent",
@@ -3839,43 +3839,43 @@ Every symbol listed in the portfolio overview MUST appear in the corresponding s
             )
             print("🤖 Running summary agent...")
             logger.info("Invoking Agent with %d symbols", len(activities_by_symbol))
-            
+
             run_start = time.time()
             response = await agent.run(prompt)
             run_duration = round(time.time() - run_start, 2)
-            
+
             logger.info("Agent response received in %.2fs", run_duration)
-            
+
             # Extract the summary text
             summary_text = response.text.strip()
-            
+
             if not summary_text:
                 logger.warning("Summary agent returned empty response")
                 print("⚠️  Summary agent returned empty response")
                 return
-            
+
             logger.info("Summary text extracted (%d chars)", len(summary_text))
             print(f"✅ Summary generated ({run_duration}s)")
             print("\n" + "-"*70)
             print(summary_text)
             print("-"*70 + "\n")
-            
+
             # Send to Telegram
             print("📤 Sending summary to Telegram...")
             logger.info("Preparing Telegram message...")
             header = "📊 <b>Daily Portfolio Summary</b>\n\n"
             telegram_message = header + "<pre>" + summary_text + "</pre>"
-            
+
             logger.info("Sending message to Telegram (length=%d chars)", len(telegram_message))
             success = telegram_notifier.send_message(telegram_message)
-            
+
             if success:
                 logger.info("Summary sent to Telegram successfully")
                 print("✅ Summary sent to Telegram")
             else:
                 logger.warning("Failed to send summary to Telegram")
                 print("❌ Failed to send summary to Telegram")
-            
+
             # Telemetry (best-effort)
             try:
                 logger.debug("Writing telemetry data to CosmosDB")
@@ -3888,11 +3888,11 @@ Every symbol listed in the portfolio overview MUST appear in the corresponding s
                 logger.debug("Telemetry written successfully")
             except Exception as telem_err:
                 logger.debug("Telemetry write skipped for summary agent: %s", str(telem_err))
-        
+
         except Exception as e:
             logger.error("Summary agent failed: %s", str(e), exc_info=True)
             print(f"❌ Summary agent failed: {str(e)}")
-        
+
         logger.info("Summary Agent - Completed execution")
         logger.info("="*70)
         print("="*70 + "\n")
@@ -4058,3 +4058,333 @@ All market data has been pre-fetched above. Please analyze this data and generat
             logger.debug("Telemetry write skipped for technical analysis agent")
 
         return analysis_text
+
+    async def run_contract_validation(
+        self,
+        symbol: str,
+        side: str,
+        strike: float,
+        expiration: str,
+        evidence_snapshot: dict,
+        cosmos: CosmosDBService,
+        context_provider: ContextProvider,
+        model: str = None,
+        supervisor_model: str = None,
+        alpha_model: str = None,
+    ) -> dict:
+        """Run exact-contract validation for a preselected Best Options contract.
+
+        Validates one specific contract (symbol/side/strike/expiration) using an
+        immutable evidence snapshot assembled by the caller. Infers agent_type
+        strictly from side (call → covered_call, put → cash_secured_put), reuses
+        existing category skill resolution and system instructions, runs primary
+        agent + Supervisor + Alpha under one run_id, and returns a structured
+        result suitable for persistence by the integration layer.
+
+        Fail-closed: a SELL alert is eligible only when primary, Supervisor, and
+        Alpha all complete successfully and approve. Incomplete/invalid reviews
+        return WAIT with validation_status=review_incomplete.
+
+        Args:
+            symbol: Normalized ticker symbol
+            side: "call" or "put"
+            strike: Strike price
+            expiration: Expiration date (YYYY-MM-DD)
+            evidence_snapshot: Immutable evaluated evidence dict containing:
+                - category: str
+                - underlying_price: float
+                - total_shares: int (for calls)
+                - contract_data: dict (bid, ask, delta, iv, oi, etc.)
+                - chain_timestamp: str
+                - next_earnings_date: str | None
+                - ex_dividend_date: str | None
+                - atm_iv: float | None
+                - iv_rank: float | None
+                - market_data_text: str (formatted for agent consumption)
+            cosmos: CosmosDBService instance
+            context_provider: ContextProvider for activity history
+            model: Primary agent model override
+            supervisor_model: Supervisor model override
+            alpha_model: Alpha model override
+
+        Returns:
+            dict: Structured result containing:
+                - symbol: str
+                - agent_type: str ("covered_call" | "cash_secured_put")
+                - side: str
+                - strike: float
+                - expiration: str
+                - activity: str (SELL | WAIT | error state)
+                - is_alert: bool
+                - run_id: str
+                - rule_evaluation: dict | None
+                - primary_trace_id: str | None
+                - supervisor_view: dict | None
+                - supervisor_trace_id: str | None
+                - alpha_view: dict | None
+                - alpha_trace_id: str | None
+                - validation_status: str (approved | review_incomplete | error)
+                - note: str
+                - error: str | None
+                - timestamp: str (ISO UTC)
+
+        Raises:
+            ValueError: Invalid evidence_snapshot structure or missing required fields
+        """
+        # Validate inputs
+        if side not in ("call", "put"):
+            raise ValueError(f"Invalid side: {side}. Must be 'call' or 'put'.")
+
+        required_evidence = {
+            "category", "underlying_price", "contract_data",
+            "market_data_text", "chain_timestamp"
+        }
+        if side == "call":
+            required_evidence.add("total_shares")
+
+        missing = required_evidence - set(evidence_snapshot.keys())
+        if missing:
+            raise ValueError(f"Missing required evidence fields: {missing}")
+
+        # Infer agent_type from side
+        agent_type = "covered_call" if side == "call" else "cash_secured_put"
+
+        # Mint run_id for this validation cycle
+        run_id = str(uuid4())
+        timestamp = datetime.now(timezone.utc).strftime(TIMESTAMP_FORMAT)
+
+        logger.info(
+            "Starting contract validation: symbol=%s, side=%s, strike=%s, exp=%s, run_id=%s",
+            symbol, side, strike, expiration, run_id
+        )
+
+        # Extract evidence
+        category = evidence_snapshot["category"]
+        underlying_price = evidence_snapshot["underlying_price"]
+        contract_data = evidence_snapshot["contract_data"]
+        market_data_text = evidence_snapshot["market_data_text"]
+
+        # Build activity context
+        previous_context = context_provider.get_context(symbol, agent_type, max_entries=2)
+
+        # Get instructions for the mapped agent type
+        from .covered_call_instructions import TV_COVERED_CALL_INSTRUCTIONS
+        from .cash_secured_put_instructions import TV_CASH_SECURED_PUT_INSTRUCTIONS
+
+        base_instructions = TV_COVERED_CALL_INSTRUCTIONS if agent_type == "covered_call" else TV_CASH_SECURED_PUT_INSTRUCTIONS
+
+        # Build validation message
+        cat_key = normalize_category(category).replace("_", " ")
+        message = f"""Validate this exact {side.upper()} contract for {symbol}.
+Category: {cat_key.title()}
+→ Load the **category-params** skill for category-specific thresholds.
+
+Contract to validate:
+- Strike: ${strike}
+- Expiration: {expiration}
+- Underlying: ${underlying_price:.2f}
+
+{market_data_text}
+
+Previous activities for {symbol}:
+{previous_context}
+
+Current UTC timestamp: {timestamp}
+
+Analyze this EXACT contract and output your decision in the required JSON format.
+Use the timestamp above in your JSON output; do NOT generate your own."""
+
+        # Initialize result
+        result = {
+            "symbol": symbol,
+            "agent_type": agent_type,
+            "side": side,
+            "strike": strike,
+            "expiration": expiration,
+            "activity": "WAIT",
+            "is_alert": False,
+            "run_id": run_id,
+            "rule_evaluation": None,
+            "primary_trace_id": None,
+            "supervisor_view": None,
+            "supervisor_trace_id": None,
+            "alpha_view": None,
+            "alpha_trace_id": None,
+            "validation_status": "error",
+            "note": "",
+            "error": None,
+            "timestamp": timestamp,
+        }
+
+        try:
+            # Resolve category-specific skill (reuse existing helper)
+            _category_skill = self._resolve_category_skill(agent_type, category)
+            _skill_names = ["earnings-gate-sell", "data-source", "risk-flags"]
+            if _category_skill:
+                _skill_names.append(_category_skill)
+            _skills = self._get_skills_provider(_skill_names)
+
+            # Run primary agent
+            agent = Agent(
+                client=self._get_client(model or self._default_model, "analysis"),
+                name=f"ContractValidation_{agent_type}",
+                instructions=base_instructions,
+                context_providers=[_skills] if _skills else None,
+            )
+
+            primary_start = time.time()
+            primary_response = await agent.run(message)
+            primary_duration = time.time() - primary_start
+
+            response_text = primary_response.text or str(primary_response)
+
+            # Parse primary response
+            activity_line, activity_data = self._extract_activity_line(symbol, response_text)
+
+            if activity_data is None:
+                result["error"] = "Primary agent returned no parseable JSON"
+                result["note"] = "Validation failed: could not parse agent response"
+                # Record failed primary trace
+                self._record_trace(
+                    cosmos,
+                    agent_type=agent_type,
+                    symbol=symbol,
+                    system_prompt=base_instructions,
+                    user_message=message,
+                    response_text=response_text,
+                    model=model or self._default_model,
+                    parsed=None,
+                    phase="contract_validation",
+                    duration_seconds=primary_duration,
+                    error="no_parseable_json",
+                    run_id=run_id,
+                    parent_trace_id=None,
+                )
+                return result
+
+            # Ensure timestamp in activity_data
+            activity_data["timestamp"] = timestamp
+
+            # Record primary trace
+            primary_trace_id = self._record_trace(
+                cosmos,
+                agent_type=agent_type,
+                symbol=symbol,
+                system_prompt=base_instructions,
+                user_message=message,
+                response_text=response_text,
+                model=model or self._default_model,
+                parsed=activity_data,
+                phase="contract_validation",
+                duration_seconds=primary_duration,
+                error=None,
+                run_id=run_id,
+                parent_trace_id=None,
+            )
+            result["primary_trace_id"] = primary_trace_id
+
+            # Extract activity
+            activity = str(activity_data.get("activity", "WAIT")).upper()
+            result["activity"] = activity
+
+            # Build rule evaluation
+            rule_eval = build_rule_evaluation(
+                agent_type=agent_type,
+                activity_data=activity_data,
+                phase="contract_validation",
+                category=category,
+                enrichment_data=None,
+            )
+            result["rule_evaluation"] = rule_eval
+
+            # Determine if alert
+            is_alert = activity == "SELL"
+            result["is_alert"] = is_alert
+
+            # Run Supervisor review (required)
+            supervisor_view = await self._run_supervisor_review(
+                activity_payload=activity_data,
+                market_data=market_data_text,
+                previous_context=previous_context,
+                agent_type=agent_type,
+                model=supervisor_model or model,
+                cosmos=cosmos,
+                run_id=run_id,
+                parent_trace_id=primary_trace_id,
+            )
+
+            if supervisor_view is None:
+                # Supervisor failed - fail closed
+                result["activity"] = "WAIT"
+                result["is_alert"] = False
+                result["validation_status"] = "review_incomplete"
+                result["note"] = "Validation incomplete: Supervisor review failed"
+                return result
+
+            result["supervisor_view"] = supervisor_view
+            # Supervisor trace_id is recorded by _run_supervisor_review via _record_trace
+            # and returned in supervisor_view - no need to extract it separately
+
+            # Check supervisor approval
+            supervisor_approved = supervisor_view.get("net_assessment", "").upper() == "APPROVE"
+
+            # Run Alpha review (required for validation)
+            alpha_view = await self._run_alpha_review(
+                activity_payload=activity_data,
+                supervisor_view=supervisor_view,
+                market_data=market_data_text,
+                previous_context=previous_context,
+                agent_type=agent_type,
+                model=alpha_model or model,
+                cosmos=cosmos,
+                run_id=run_id,
+                parent_trace_id=primary_trace_id,
+            )
+
+            if alpha_view is None:
+                # Alpha failed - fail closed
+                result["activity"] = "WAIT"
+                result["is_alert"] = False
+                result["validation_status"] = "review_incomplete"
+                result["note"] = "Validation incomplete: Alpha review failed"
+                return result
+
+            result["alpha_view"] = alpha_view
+            # Alpha trace_id is recorded by _run_alpha_review via _record_trace
+
+            # Check alpha approval
+            alpha_approved = alpha_view.get("recommendation", "").upper() == "APPROVE"
+
+            # Fail-closed logic: SELL alert eligible only if all reviews approve
+            if is_alert and supervisor_approved and alpha_approved:
+                result["validation_status"] = "approved"
+                result["note"] = f"Contract validated: {activity}"
+            elif is_alert and not (supervisor_approved and alpha_approved):
+                # Reviews did not approve the SELL - downgrade to WAIT
+                result["activity"] = "WAIT"
+                result["is_alert"] = False
+                result["validation_status"] = "review_incomplete"
+                reviews_status = []
+                if not supervisor_approved:
+                    reviews_status.append("Supervisor did not approve")
+                if not alpha_approved:
+                    reviews_status.append("Alpha did not approve")
+                result["note"] = f"SELL downgraded to WAIT: {'; '.join(reviews_status)}"
+            else:
+                # Primary was WAIT or reviews approved WAIT
+                result["validation_status"] = "approved"
+                result["note"] = f"Contract validated: {activity}"
+
+            logger.info(
+                "Contract validation complete: symbol=%s, activity=%s, validation_status=%s",
+                symbol, result["activity"], result["validation_status"]
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error("Contract validation error for %s: %s", symbol, e, exc_info=True)
+            result["error"] = str(e)
+            result["note"] = f"Validation error: {e}"
+            result["validation_status"] = "error"
+            return result

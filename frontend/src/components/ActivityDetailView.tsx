@@ -179,6 +179,9 @@ export default function ActivityDetailView({ data }: { data: ActivityDetail }) {
   const hasStrikeChange = a.current_strike != null && a.new_strike != null;
   const hasExpChange = a.current_expiration != null && a.new_expiration != null;
 
+  const isValidation = a.validation_source != null;
+  const isApprovedSell = isValidation && a.activity === "SELL" && a.is_alert && a.validation_status === "approved";
+
   return (
     <div className="space-y-6">
       <div className="space-y-2">
@@ -187,6 +190,19 @@ export default function ActivityDetailView({ data }: { data: ActivityDetail }) {
         {data.is_alert && (
           <div className="rounded-[var(--radius)] border border-accent-orange/40 bg-accent-orange/10 px-4 py-2 text-sm text-accent-orange">
             ⚡ This activity triggered an alert
+          </div>
+        )}
+        {isValidation && (
+          <div className="rounded-[var(--radius)] border border-accent-blue/40 bg-accent-blue/10 px-4 py-2 text-sm text-accent-blue">
+            🔍 Contract validated from {a.validation_source === "best_options" ? "Best Options" : "Options Screener"}
+            {a.validation_status === "approved" && " — ✓ Fully approved by Supervisor and Alpha"}
+            {a.validation_status === "review_incomplete" && " — ⏸ Review incomplete (automated order blocked)"}
+            {a.validation_status === "error" && " — ✗ Validation error"}
+          </div>
+        )}
+        {isApprovedSell && (
+          <div className="rounded-[var(--radius)] border border-accent-green/40 bg-accent-green/10 px-4 py-2 text-sm text-accent-green">
+            ✅ This validated SELL is eligible to open a position. <strong>Manual confirmation required</strong> — positions are never created automatically.
           </div>
         )}
         {a.data_error && (
@@ -284,6 +300,8 @@ export default function ActivityDetailView({ data }: { data: ActivityDetail }) {
             activityId={a.id}
             agentType={data.agent_type}
             isAlert={data.is_alert}
+            validationStatus={a.validation_status}
+            validationSource={a.validation_source}
           />
           <Link
             href={`/activities/${encodeURIComponent(a.id)}/chat`}

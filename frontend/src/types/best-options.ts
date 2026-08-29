@@ -188,12 +188,34 @@ export interface BestOptionsResponse {
   parameters: BestOptionsParameters;
   calls: BestOptionsSide;
   puts: BestOptionsSide;
+  cache?: {
+    used: boolean;
+    generation?: number;
+    computed_at?: string;
+    chain_timestamp?: string | null;
+    chain_stale?: boolean;
+    inputs_drift?: string[];
+    refreshing?: boolean;
+    refresh_started_at?: string | null;
+    refresh_completed_at?: string | null;
+    refresh_error?: string | null;
+    reason?: string;
+  };
+}
+
+export interface BestOptionsUnavailableResponse {
+  status: "unavailable";
+  symbol: string;
+  reason: string;
+  next_run?: string | null;
 }
 
 export interface BestOptionsWarmingResponse {
   status: "warming";
   symbol: string;
   retry_after: number;
+  reason?: string;
+  next_run?: string | null;
 }
 
 export interface BestOptionsErrorResponse {
@@ -203,5 +225,6 @@ export interface BestOptionsErrorResponse {
 
 export type BestOptionsApiResponse =
   | BestOptionsResponse
+  | BestOptionsUnavailableResponse
   | BestOptionsWarmingResponse
   | BestOptionsErrorResponse;

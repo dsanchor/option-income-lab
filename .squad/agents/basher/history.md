@@ -2288,3 +2288,55 @@ scoring/threshold reimplementation; no Cosmos/persistence writes in the aggregat
 
 **Verdict: APPROVE (reconfirmed, no changes to re-review).** Same outcome and evidence as the
 15:11Z gate; see that entry and `basher-options-screener-review.md` for full detail.
+
+## 2026-08-29T19:16:30Z — Independent Adversarial Reviewer Gate: Best Options Scheduled Precompute
+
+**Task:** Independent review of Best Options scheduler + cache implementation against Danny's design
+
+**Result:** ✅ APPROVED — All 8 gate requirements satisfied, 62 tests passing (30 cache + 5 integration + 39 screener + 11 endpoint + 11 frontend), zero production defects
+
+**Gate requirements validated:**
+1. ✅ Shared canonical envelope, zero request-time scoring on canonical paths
+2. ✅ Screener precomputed-only with 0/N/X readiness (zero on-request evaluation)
+3. ✅ Symbol Detail Refresh only (Screener refresh explicitly absent)
+4. ✅ Settings TaskCard for scheduler configuration
+5. ✅ Exact cron verified: `5 10-23 * * 1-5` (14 fires/weekday at 10:05-23:05)
+6. ✅ Scheduler registration + config.yaml entry
+7. ✅ Cache immutability + thread safety (RLock, concurrent determinism)
+8. ✅ Test coverage + zero pre-existing regressions
+
+**Critical checks:**
+- Canonical path detection: app.py:2902-2907
+- Zero `evaluate_best_options` on canonical Screener path
+- Precomputed-only guarantee: screener.py:264-279
+- Cache thread safety: 30 concurrent access tests all deterministic
+- Frontend readiness display matches backend snapshot shape
+
+## 2026-08-29T20:22:14Z — Independent Adversarial Reviewer Gate: Exact-Contract Validation
+
+**Task:** Independent review of validation implementation against design
+
+**Result:** ✅ APPROVED — All 12 gate requirements satisfied, 17 tests passing (10 engine + 7 integration), zero production defects
+
+**Gate requirements validated:**
+1. ✅ Exact contract lookup after forced refresh; no fallback
+2. ✅ Evidence validation (zero/crossed/non-finite markets)
+3. ✅ Fail-closed review logic (Supervisor/Alpha failure → WAIT)
+4. ✅ Approved SELL (all reviews pass)
+5. ✅ run_id minting + trace lineage
+6. ✅ No automatic order side-effects
+7. ✅ HTTP response codes (202/409/400/404)
+8. ✅ Contract not found → error activity
+9. ✅ Complete evidence snapshot
+10. ✅ Activity persistence with run_id
+11. ✅ Deduplication of in-flight identical requests
+12. ✅ Concurrent bound (4 concurrent validations)
+
+**Critical checks:**
+- Exact lookup implementation: no adjacent-strike fallback
+- Fail-closed logic: any missing/failed review blocks SELL
+- Deduplication: AsyncIO.Event ensures proper synchronization across event loop
+- Concurrent bound: task queue respects limit, no unbounded spawning
+
+**Session summary:** Both feature batches independently reviewed and approved. Ready for final coordinator commit and production deployment.
+

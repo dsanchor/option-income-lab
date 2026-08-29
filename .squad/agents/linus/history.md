@@ -679,3 +679,90 @@ precedent).
   `test_best_options.py` — 59 passed. Full targeted sweep (`test_best_options.py` +
   `test_best_options_adversarial.py` + `test_category_params.py` +
   `test_options_screener.py`) — 180 passed, 0 regressions.
+
+### 2026-08-29 — Best Options scheduled precompute cache (Linus ownership slice)
+- Implemented `backend/src/best_options_cache.py` (§13 of Danny's design) as a pure,
+  thread-safe in-memory cache for precomputed Best Options envelopes with no Cosmos, no
+  FastAPI, no scheduler imports, and no asyncio.Task objects stored. Cache key is the
+  normalized symbol alone (one canonical `side="both"` envelope serves both Symbol Detail and
+  Screener). Entry shape: `{symbol, status, envelope, generation, computed_at, chain_timestamp,
+  chain_stale_at_compute, inputs, error, reason, refreshing, refresh_started_at,
+  refresh_completed_at, refresh_error, chain_refresh_error}`. Snapshot shape: `{generation,
+  entries, cycle_started_at, cycle_finished_at, cycle_duration_seconds, trigger, truncated,
+  counts}`.
+- **Atomic copy-on-write publish**: `publish_snapshot()` replaces the entire snapshot in a
+  single guarded assignment (full-cycle path). `replace_symbol()` builds a new snapshot with
+  `{**old.entries, symbol: new_entry}`, preserving every other entry's object identity and
+  never advancing `generation` (single-symbol Refresh path, §9b of design). Readers take the
+  snapshot reference exactly once per request and read everything from that one object —
+  atomicity is what prevents mid-iteration generation jumps.
+- **Carry-forward on failure** (§3 of design): a symbol that fails during cycle N+1 retains
+  its cycle-N entry with `status` downgraded to `"stale"`, its original `generation` and
+  `computed_at` intact, and `error`/`reason` populated. A transient provider hiccup never
+  blanks a working page. A symbol that has never succeeded is `status="error"` (or `"warming"`
+  when the cause is a not-yet-fetched chain) with `envelope=None`.
+- **Module singleton** (mirrors `options_chain_cache.py`'s pattern verbatim):
+  `get_best_options_cache()` / `set_best_options_cache(cache_or_None)`. Single module-level
+  `threading.Lock` guards singleton access; each cache instance has its own `threading.RLock`
+  guarding the `_snapshot` attribute. Test-only reset hook via `set_best_options_cache(None)`.
+- **Immutability contract** (enforced via documented discipline, not runtime checks): all
+  published envelopes, entries, and snapshots are read-only after publication. No handler may
+  write into them (§7 of design). Per-request metadata is attached by constructing a new outer
+  dict `{**envelope, "cache": {...}}`, never `envelope["cache"] = ...`. Per-row enrichment
+  requires a shallow copy first. No deep copy anywhere (at 400 rows × 2 sides × N symbols it
+  would cost more than the evaluation this design exists to eliminate).
+- **Surgical options_screener.py update**: added `precomputed` parameter to
+  `evaluate_options_screener()` and `_evaluate_symbol()`. When a `precomputed` envelope is
+  present for a symbol, it is returned directly and `evaluate_best_options` is never called.
+  A `status="ready"` entry with neither a `precomputed` envelope nor a usable `chain` is
+  downgraded to `"error"` with a synthesised message — reusing the module's existing
+  "ready but no usable chain" downgrade idiom rather than inventing a second failure
+  convention. The direct-`chain` path stays for the module's own tests and independent reuse.
+- **Tests**: `backend/tests/test_best_options_cache.py` (new, 30 tests): module singleton
+  (get/set/reset), initial state (empty, generation 0), publish_snapshot (atomic replacement,
+  generation advance, is_empty), replace_symbol (single-symbol update, object identity
+  preservation, generation unchanged, trigger, counts recomputation, normalization), get_entry
+  (present/absent, normalization), thread safety (snapshot read concurrent with publish,
+  replace_symbol concurrent with reads, module singleton get), copy-on-write semantics (no
+  mutation of old snapshot entries, no mutation of caller-supplied snapshot), status counts
+  (reflect entry statuses, replace_symbol updates correctly), immutability contract (published
+  entry not modified, snapshot entries map not mutated), carry-forward scenarios (stale entry
+  preserves generation and computed_at). Added `TestPrecomputedParameter` class to
+  `backend/tests/test_options_screener.py` (7 new tests): precomputed envelope used directly
+  when present (call-counter via monkeypatch proves evaluate_best_options never called),
+  byte-for-byte envelope returned, ready-without-precomputed-or-chain downgrades to error,
+  ready-with-precomputed-but-no-chain succeeds, ready-with-chain-but-no-precomputed computes
+  live, precomputed normalizes symbol keys (entry symbol normalized to match precomputed map
+  keys), partial coverage only affects covered symbols. All existing screener tests (32 tests)
+  pass unchanged — the `precomputed` parameter is strictly additive and backward-compatible.
+- **Test runs**: `test_best_options_cache.py` — 30 passed. `test_options_screener.py` — 39
+  passed (32 existing + 7 new). Combined — 69 passed, 0 regressions.
+- **Pattern to reuse**: when adding a cache with atomic copy-on-write semantics, always
+  provide both a full-cycle `publish_snapshot()` primitive (one atomic swap) and a
+  single-entry `replace_symbol()` primitive (builds new snapshot with `{**old.entries, sym:
+  new_entry}`). The latter's generation-unchanged behavior is load-bearing for distinguishing
+  "completed full cycle" from "targeted refresh." Thread-safe read access is a single lock
+  grab to copy a reference, never held across I/O or evaluation. Immutability is cheaper than
+  deep copying when the data structure is large; enforce it via code review and grep gates,
+  not runtime guards.
+
+## 2026-08-29T18:27:00Z — Best Options Cache Implementation (Ownership Slice 1)
+
+**Task:** Pure in-memory cache module + surgical options_screener update
+
+**Scope:** Implement section 13 of Danny's accepted design — thread-safe in-memory cache for shared Best Options envelope
+
+**Result:** ✅ COMPLETE — 69 tests passing (30 cache unit + 7 screener integration + 32 pre-existing), zero regressions
+
+**Implementation:**
+- `best_options_cache.py` (NEW): Entry/Snapshot shapes, atomic COW publish, module singleton, RLock per instance, zero external dependencies
+- `options_screener.py` (SURGICAL): Added `precomputed` parameter, returns cached envelope directly when present
+- Test coverage: Thread safety, COW semantics, immutability contract, carry-forward, symbol normalization
+
+**Key design decisions:**
+- Immutability enforced via discipline (not runtime guards) — documented, code-reviewed
+- Per-symbol OS locks (non-reentrant) for scheduler thread blocking
+- Zero Cosmos/FastAPI/asyncio coupling
+
+**Handoff to Livingston:** Cache module ready for integration into precompute cycle; screener type changes ready for Rusty's frontend
+

@@ -11,17 +11,23 @@ export default function ActivityActions({
   activityId,
   agentType,
   isAlert,
+  validationStatus,
+  validationSource,
 }: {
   symbol: string;
   activityId: string;
   agentType: string;
   isAlert: boolean;
+  validationStatus?: "approved" | "review_incomplete" | "error" | null;
+  validationSource?: "best_options" | "options_screener" | null;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
 
-  const canOpen = isAlert && WATCH_AGENTS.includes(agentType);
+  const isValidation = validationSource != null;
+  const isApprovedValidation = isValidation && validationStatus === "approved" && isAlert;
+  const canOpen = isAlert && (WATCH_AGENTS.includes(agentType) || isApprovedValidation);
   const canRoll = isAlert && MONITOR_AGENTS.includes(agentType);
 
   async function run(
@@ -70,7 +76,9 @@ export default function ActivityActions({
                 "open",
                 `/api/symbols/${encodeURIComponent(symbol)}/positions/from-activity/${encodeURIComponent(activityId)}`,
                 "POST",
-                "Open a position from this alert? This will disable the watchlist.",
+                isValidation
+                  ? "Open a position from this validated contract? This requires manual confirmation and will disable the watchlist."
+                  : "Open a position from this alert? This will disable the watchlist.",
                 "✓ Position opened! Redirecting…",
                 true,
               )

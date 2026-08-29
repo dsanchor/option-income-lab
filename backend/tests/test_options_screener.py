@@ -432,3 +432,136 @@ class TestByteStableResults:
 
     def test_defaults_documented_on_the_public_constant(self):
         assert DEFAULT_PREFERENCES == {"Preferred", "Acceptable"}
+
+
+class TestPrecomputedParameter:
+    """Tests for the precomputed envelope parameter (§7, §13 of design)."""
+
+    def test_precomputed_envelope_used_directly_when_present(self, monkeypatch):
+        import src.options_screener as mod
+        calls_made = []
+        original = mod.evaluate_best_options
+        monkeypatch.setattr(mod, "evaluate_best_options", lambda *a, **k: (calls_made.append(1), original(*a, **k))[1])
+
+        # Build a precomputed envelope
+        from src.best_options import evaluate_best_options
+        envelope = evaluate_best_options(
+            AAA_CHAIN, side="both", category="balanced", total_shares=0,
+            next_earnings_date=None, ex_dividend_date=None, support_level=None,
+            dte_min=0, dte_max=45, now=NOW,
+        )
+        precomputed = {"AAA": envelope}
+
+        # Call screener with precomputed
+        result = evaluate_options_screener(
+            [_ready("AAA", AAA_CHAIN)], side="call", now=NOW, precomputed=precomputed,
+        )
+
+        # evaluate_best_options was never called (precomputed used)
+        assert len(calls_made) == 0
+        assert len(result["calls"]["rows"]) == 2  # AAA has 2 rows
+
+    def test_precomputed_envelope_is_returned_byte_for_byte(self):
+        from src.best_options import evaluate_best_options
+        envelope = evaluate_best_options(
+            AAA_CHAIN, side="both", category="balanced", total_shares=0,
+            next_earnings_date=None, ex_dividend_date=None, support_level=None,
+            dte_min=0, dte_max=45, now=NOW,
+        )
+        precomputed = {"AAA": envelope}
+
+        result = evaluate_options_screener(
+            [_ready("AAA", AAA_CHAIN)], side="call", now=NOW, precomputed=precomputed,
+        )
+
+        # The rows came from the precomputed envelope
+        assert len(result["calls"]["rows"]) == 2
+
+    def test_ready_without_precomputed_or_chain_downgrades_to_error(self):
+        # A "ready" entry with neither precomputed nor chain
+        result = evaluate_options_screener(
+            [{"symbol": "AAA", "status": "ready", "chain": None}],
+            side="call", now=NOW, precomputed=None,
+        )
+
+        assert result["symbols"]["ready"] == 0
+        assert len(result["symbols"]["error"]) == 1
+        assert result["symbols"]["error"][0]["symbol"] == "AAA"
+        assert "precomputed" in result["symbols"]["error"][0]["error"]
+
+    def test_ready_with_precomputed_but_no_chain_succeeds(self):
+        from src.best_options import evaluate_best_options
+        envelope = evaluate_best_options(
+            AAA_CHAIN, side="both", category="balanced", total_shares=0,
+            next_earnings_date=None, ex_dividend_date=None, support_level=None,
+            dte_min=0, dte_max=45, now=NOW,
+        )
+        precomputed = {"AAA": envelope}
+
+        # Entry has no chain, but precomputed envelope is present
+        result = evaluate_options_screener(
+            [{"symbol": "AAA", "status": "ready", "chain": None}],
+            side="call", now=NOW, precomputed=precomputed,
+        )
+
+        assert result["symbols"]["ready"] == 1
+        assert len(result["calls"]["rows"]) == 2
+
+    def test_ready_with_chain_but_no_precomputed_computes_live(self, monkeypatch):
+        import src.options_screener as mod
+        calls_made = []
+        original = mod.evaluate_best_options
+        monkeypatch.setattr(mod, "evaluate_best_options", lambda *a, **k: (calls_made.append(1), original(*a, **k))[1])
+
+        # No precomputed, but chain present
+        result = evaluate_options_screener(
+            [_ready("AAA", AAA_CHAIN)], side="call", now=NOW, precomputed=None,
+        )
+
+        # evaluate_best_options was called once
+        assert len(calls_made) == 1
+        assert len(result["calls"]["rows"]) == 2
+
+    def test_precomputed_normalizes_symbol_keys(self):
+        from src.best_options import evaluate_best_options
+        envelope = evaluate_best_options(
+            AAA_CHAIN, side="both", category="balanced", total_shares=0,
+            next_earnings_date=None, ex_dividend_date=None, support_level=None,
+            dte_min=0, dte_max=45, now=NOW,
+        )
+        # Precomputed map uses normalized uppercase key (as cache does)
+        precomputed = {"AAA": envelope}
+
+        # Entry symbol uses non-normalized format (with spaces, lowercase)
+        result = evaluate_options_screener(
+            [{"symbol": " aaa ", "status": "ready", "chain": None}],
+            side="call", now=NOW, precomputed=precomputed,
+        )
+
+        # Should find the precomputed envelope after normalizing the entry symbol
+        assert result["symbols"]["ready"] == 1
+        assert len(result["calls"]["rows"]) == 2
+
+    def test_precomputed_partial_coverage_only_affects_covered_symbols(self):
+        from src.best_options import evaluate_best_options
+        aaa_envelope = evaluate_best_options(
+            AAA_CHAIN, side="both", category="balanced", total_shares=0,
+            next_earnings_date=None, ex_dividend_date=None, support_level=None,
+            dte_min=0, dte_max=45, now=NOW,
+        )
+        # Only AAA is precomputed, BBB is not
+        precomputed = {"AAA": aaa_envelope}
+
+        result = evaluate_options_screener(
+            [
+                {"symbol": "AAA", "status": "ready", "chain": None},
+                {"symbol": "BBB", "status": "ready", "chain": None},
+            ],
+            side="call", now=NOW, precomputed=precomputed,
+        )
+
+        # AAA succeeds (has precomputed), BBB fails (no precomputed, no chain)
+        assert result["symbols"]["ready"] == 1
+        assert len(result["symbols"]["error"]) == 1
+        assert result["symbols"]["error"][0]["symbol"] == "BBB"
+        assert {r["symbol"] for r in result["calls"]["rows"]} == {"AAA"}

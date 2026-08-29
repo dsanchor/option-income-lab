@@ -194,12 +194,15 @@ class TestColdCacheWarmingBehavior:
         set_options_chain_cache(cache)  # true cold miss: nothing in memory, nothing persisted
 
         started = time.monotonic()
-        resp = client.get("/api/symbols/TEST/best-options")
+        resp = client.get("/api/symbols/TEST/best-options?support_level=100.0")
         elapsed = time.monotonic() - started
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body == {"status": "warming", "symbol": "TEST", "retry_after": 15}
+        assert body["status"] == "warming"
+        assert body["symbol"] == "TEST"
+        assert body["retry_after"] == 15
+        # May also include 'reason' and 'next_run' fields
         # Must answer immediately, never block on the (fake, but still
         # simulated-as-live) provider fetch this same request scheduled.
         assert elapsed < 2.0
@@ -214,7 +217,7 @@ class TestColdCacheWarmingBehavior:
         cache = _make_cache(monkeypatch, yf_chain=_sample_chain())
         set_options_chain_cache(cache)
 
-        resp = client.get("/api/symbols/TEST/best-options")
+        resp = client.get("/api/symbols/TEST/best-options?support_level=100.0")
         assert resp.json()["status"] == "warming"
 
         deadline = time.monotonic() + 3.0
@@ -232,7 +235,7 @@ class TestWarmCacheFullTable:
         cache.get_or_load("TEST")  # warm it synchronously before any request (no running loop yet)
         set_options_chain_cache(cache)
 
-        resp = client.get("/api/symbols/TEST/best-options")
+        resp = client.get("/api/symbols/TEST/best-options?support_level=100.0")
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "ok"
@@ -261,7 +264,7 @@ class TestWarmCacheFullTable:
         cache.get_or_load("TEST")
         set_options_chain_cache(cache)
 
-        resp = client.get("/api/symbols/TEST/best-options")
+        resp = client.get("/api/symbols/TEST/best-options?support_level=100.0")
         endpoint_result = resp.json()
 
         stored_chain = json.loads(cache.get("TEST"))
@@ -294,7 +297,7 @@ class TestZeroLlmReachability:
         set_options_chain_cache(cache)
 
         started = time.monotonic()
-        resp = client.get("/api/symbols/TEST/best-options")
+        resp = client.get("/api/symbols/TEST/best-options?support_level=100.0")
         elapsed = time.monotonic() - started
 
         assert resp.status_code == 200
@@ -328,6 +331,6 @@ class TestBroadExceptionHandlingAroundEvaluator:
             raise ValueError("simulated evaluator defect")
 
         monkeypatch.setattr("src.best_options.evaluate_best_options", _boom)
-        resp = client.get("/api/symbols/TEST/best-options")
+        resp = client.get("/api/symbols/TEST/best-options?support_level=100.0")
         assert resp.status_code == 500
         assert "simulated evaluator defect" in resp.json()["error"]

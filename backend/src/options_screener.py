@@ -251,16 +251,30 @@ def _evaluate_symbol(
     side: str,
     now: datetime,
     memo: Dict[_MemoKey, Dict[str, Any]],
+    precomputed: Optional[Mapping[str, dict]] = None,
 ) -> Dict[str, Any]:
-    """Runs (or reuses a memoized) `evaluate_best_options` call for one
-    ready symbol. Always uses this module's own default DTE window --
-    the screener's `min_dte`/`max_dte` are post-filters, never a wider or
-    narrower window passed into the per-symbol evaluation itself (see
-    module docstring)."""
+    """Runs (or reuses a memoized/precomputed) `evaluate_best_options` call for
+    one ready symbol.
+
+    When `precomputed` is supplied and contains an envelope for this symbol,
+    returns it directly and never calls `evaluate_best_options`. Otherwise,
+    uses this module's own default DTE window -- the screener's `min_dte`/
+    `max_dte` are post-filters, never a wider or narrower window passed into
+    the per-symbol evaluation itself (see module docstring)."""
+    # Precomputed path: return the envelope directly if present
+    if precomputed is not None:
+        normalized = _normalize_symbol(symbol)
+        envelope = precomputed.get(normalized)
+        if envelope is not None:
+            return envelope
+
+    # Memo path: check if we've already computed this exact key
     key = _memo_key(symbol, side, entry)
     cached = memo.get(key)
     if cached is not None:
         return cached
+
+    # Compute path: call evaluate_best_options
     chain = entry.get("chain") or {}
     result = evaluate_best_options(
         chain,
@@ -302,23 +316,31 @@ def evaluate_options_screener(
     offset: int = 0,
     limit: int = 50,
     memo: Optional[Dict[_MemoKey, Dict[str, Any]]] = None,
+    precomputed: Optional[Mapping[str, dict]] = None,
 ) -> Dict[str, Any]:
     """Aggregate `evaluate_best_options` across every ready symbol in
     `symbol_inputs` into one filtered, sorted, paginated view per side.
 
     `symbol_inputs`: one dict per symbol --
       `symbol` (str, required), `status` ("ready"|"warming"|"error",
-      required), `chain` (dict, required when status == "ready"),
+      required), `chain` (dict, optional — required when status == "ready"
+      and `precomputed` does not provide an envelope for that symbol),
       `category` (Optional[str]), `total_shares` (int, default 0),
       `next_earnings_date`/`ex_dividend_date` (Optional[str]),
       `support_level` (Optional[float]), `error` (Optional[str], carried
       through verbatim for "error"-status symbols).
 
+    `precomputed`: Optional mapping of normalized symbol → precomputed
+      `evaluate_best_options` envelope. When present, the envelope is used
+      directly and `evaluate_best_options` is never called. A `status="ready"`
+      entry with neither a `precomputed` envelope nor a `chain` is downgraded
+      to `"error"` with a synthesised message.
+
     Total by construction: an entry with an unrecognised `status`, or a
-    "ready" entry missing a usable `chain`, is downgraded to an `"error"`
-    contribution (with a synthesised message) rather than raising or
-    silently vanishing -- every input symbol is accounted for in the
-    returned `symbols` summary.
+    "ready" entry missing both a precomputed envelope and a usable `chain`,
+    is downgraded to an `"error"` contribution (with a synthesised message)
+    rather than raising or silently vanishing -- every input symbol is
+    accounted for in the returned `symbols` summary.
 
     Returns a dict with `schema_version`, `generated_at`, `filters`
     (echoing the resolved/effective filter values), `symbols` (a status
@@ -363,9 +385,14 @@ def evaluate_options_screener(
             summary["warming"].append(symbol)
             continue
 
-        if status == "ready" and not isinstance(entry.get("chain"), Mapping):
+        # A "ready" entry must have either a precomputed envelope or a usable chain
+        normalized = _normalize_symbol(symbol)
+        has_precomputed = precomputed is not None and normalized in precomputed
+        has_chain = isinstance(entry.get("chain"), Mapping)
+
+        if status == "ready" and not has_precomputed and not has_chain:
             status = "error"
-            entry = {**entry, "error": entry.get("error") or "status is 'ready' but no usable chain was provided"}
+            entry = {**entry, "error": entry.get("error") or "status is 'ready' but no precomputed envelope or usable chain was provided"}
 
         if status == "error":
             summary["error"].append({"symbol": symbol, "error": entry.get("error")})
@@ -373,7 +400,7 @@ def evaluate_options_screener(
 
         summary["ready"] += 1
         for s in sides_to_eval:
-            result = _evaluate_symbol(symbol, entry, side=s, now=now, memo=memo_store)
+            result = _evaluate_symbol(symbol, entry, side=s, now=now, memo=memo_store, precomputed=precomputed)
             section = result.get(_SIDE_BUCKET_KEY[s]) or {}
             category_key = ((result.get("parameters") or {}).get("category") or {}).get("value")
             thresholds_side = ((result.get("parameters") or {}).get("thresholds") or {}).get(s)
