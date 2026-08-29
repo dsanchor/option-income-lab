@@ -6936,3 +6936,2326 @@ implementation already matches this final, explicit instruction with zero furthe
 **Basher's flagged risk is now formally accepted, not just disclosed**: the user has explicitly chosen to
 accept the "stale volume/OI mask a fresh legitimate 0" tradeoff codebase-wide, closing the open item from
 the 2026-08-19 addendum. No future work item remains here.
+
+---
+
+## Best Options + Force Alpha Session (2026-08-29)
+
+**Merged from:** 16 inbox files (Danny, Linus, Livingston, Rusty, Basher, Copilot directives)  
+**Session verdict:** Best Options APPROVED; Force Alpha APPROVED  
+**Merged by:** Scribe at 2026-08-29T12:30:21Z
+
+
+---
+
+# Reviewer verdict -- Best Options adversarial acceptance coverage: **REJECT**
+
+**Date:** 2026-08-29
+**Author:** Basher (Tester/Reviewer)
+**Status:** REJECT -- two independent defects block acceptance; strict lockout applies
+**Traces to:** `.squad/decisions/inbox/danny-best-options-design.md` (ACCEPTED), Linus's
+`.squad/decisions/inbox/linus-best-options-scoring.md`, Livingston's
+`.squad/decisions/inbox/livingston-best-options-cache.md`, Rusty's
+`.squad/decisions/inbox/rusty-best-options-ui.md`
+
+## Test coverage delivered (Basher-owned, no production code touched)
+
+* `backend/tests/test_best_options_adversarial.py` -- new, 88 tests, all passing. Pure
+  evaluator-level adversarial coverage: DTE window boundaries (0/49/50, including the
+  structural finding that every DTE=0 row is unconditionally `insufficient_data`);
+  absolute-delta normalization across all category CC/CSP bands; calls-vs-puts asymmetry;
+  deterministic ordering/tie-breaking (score -> DTE -> delta-distance); exact score/colour
+  boundaries at 39.999/40/64.999/65 via a white-box fixture solver against the evaluator's
+  own component functions; zero/missing bid; missing/invalid Greeks (delta-absent vs
+  `greeks_valid=False`, which route to different `nearest_miss` tiers); stale-chain flag
+  never downgrading colour; earnings gate boundaries (unknown, and known-spanning-expiration
+  exact edge); sparse liquidity (OI=0 shown red vs delta-band exclusion asymmetry); category
+  profile default/provenance; DTE-scaled premium floors; `nearest_miss` correctness for all
+  6 tiers with qualifying rows present; payload/UI-contract invariants; explicit zero
+  IV-Rank/LLM-surface assertions.
+* `backend/tests/test_best_options_endpoint.py` -- new, 11 tests, all passing. Real seam:
+  genuine `OptionsChainCache` + genuine `evaluate_best_options` + real FastAPI endpoint via
+  `TestClient`; only true edges faked (`FakeCosmos`, monkeypatched provider fetchers -- no
+  network, no mutual fakes with Linus's/Livingston's own suites). Covers 404, query-param
+  validation, cold-cache warming (immediate response *and* background-refresh completion),
+  warm-cache full table, endpoint-vs-direct-evaluator parameter consistency (byte-for-byte
+  modulo `evaluated_at`), zero-LLM-reachability, and broad-exception-handling around the
+  evaluator call (a real exception surfaces as 500 with its real message, not a misleading
+  503).
+* Combined Best-Options suite: **224 passed, 0 failed**. Full backend suite: pre-existing
+  11 failures / 16 errors confirmed identical with and without my new files present (not a
+  regression -- unrelated `test_yfinance_data_provider.py` / `test_yfinance_technicals_
+  dividend_availability.py`, order/event-loop-dependent, pass individually in isolation).
+
+## Defect 1 -- undocumented deviation from the ACCEPTED design (row inclusion)
+
+`best_options.py`'s module docstring and `_evaluate_side` document a deliberate
+"interpretive decision... superseding an earlier reading," citing an "explicit
+product-owner instruction (2026-08-29)." Linus's own history corroborates a live
+correction occurred. **`.squad/decisions.md` has zero entries for 2026-08-29 or Best
+Options at all**, and Danny's ACCEPTED design has not been amended to reconcile its own
+literal text with the shipped behaviour. Regardless of whether the behaviour itself is the
+right call, there is no durable, auditable record any future reader could find. This is a
+process/documentation gap that blocks acceptance on its own terms.
+
+## Defect 2 -- frontend/backend `parameters` contract mismatch (live crash risk)
+
+`frontend/src/types/best-options.ts` still types `thresholds`/`thresholds_source`/
+`skill_reference` flat, and `BestOptionsParams.tsx` does
+`parameters.thresholds.delta_lo.toFixed(2)` directly. The real backend
+(`best_options.py` ~L772-786) returns these nested `{"call": {...}, "put": {...}}` --
+necessarily so, since CC/CSP thresholds genuinely differ per category (e.g.
+`premium_min_pct` 0.8 vs 1.0) and the design mandates one shared `parameters` panel for
+`side=both`. Danny's design section 6 example is itself flat/single-sided -- a latent
+ambiguity for the `side=both` case that the backend pass-through resolved in the only
+coherent way -- but the frontend types were authored from that same flat snippet without
+cross-checking the actual runtime shape. Both halves of this mismatch (endpoint pass-through
+and frontend types/component) are Rusty's own deliverable this round. `th.delta_lo` on a
+`{call, put}` object is `undefined`; `.toFixed()` on it throws a `TypeError` the first time
+this page renders -- not an edge case, the primary parameters panel on every load.
+
+## Verdict and lockout
+
+**REJECT.** Per strict lockout, the original author of each defect's artifact may not
+self-revise:
+
+* **D1** (`best_options.py` row-inclusion text/documentation) -- Linus is locked out.
+  Recommended revision owner: **Danny** (design owner) to formally ratify or amend the
+  row-inclusion text and add the missing `decisions.md` entry; if code changes beyond
+  documentation are needed, **Livingston** is the eligible engineering owner (familiar with
+  the evaluator/cache seam, not the author of this deviation).
+* **D2** (`frontend/src/types/best-options.ts` + `BestOptionsParams.tsx`) -- Rusty is
+  locked out. Recommended revision owner: **Livingston**, or a freshly-escalated
+  frontend-capable agent per the reviewer-protocol's "escalate" option, to correct the
+  frontend types to the real nested `{call, put}` shape and update the component's
+  accessors accordingly.
+
+Full findings and methodology detail: `.squad/agents/basher/history.md`, entry
+"2026-08-29: Best Options adversarial acceptance coverage -- final reviewer verdict: REJECT".
+
+## Addendum (2026-08-29, later): visual-consistency directive — inspected, SATISFIED
+
+Per the new binding directive
+(`.squad/decisions/inbox/copilot-directive-20260829T102715+0200.md`), Best Options must reuse
+the Roll Scenarios table's structure/colors/spacing/typography/controls rather than inventing
+a new pattern. This is now a **permanent addition to the Best Options reviewer gate**.
+
+Inspected Rusty's updated `frontend/src/components/BestOptionsView.tsx` and
+`frontend/src/lib/badges.ts` against `frontend/src/components/PositionDetail.tsx`'s Roll
+Scenarios table: confirmed genuine **shared-token** reuse (`ROW_TINT_BG` is the single source
+of the row-tint palette, consumed by both tables — Roll Scenarios itself was refactored to
+read from it rather than Best Options merely visually matching a hardcoded copy), matching
+table structure/typography/spacing (`border-collapse text-xs`, `border-b border-border px-2
+py-1` headers, `border-b border-border/40` rows), an expand/collapse control reusing the same
+▸/▾ + `aria-expanded` idiom already used elsewhere in the app (`PositionsTable.tsx`,
+`options-chain/page.tsx`), and accessible non-color labels preserved (colour always paired
+with an icon + the backend's own text label). **This requirement is satisfied.**
+
+This does not change the standing verdict: **Defect 1 and Defect 2 above remain unresolved**
+and the overall verdict stays **REJECT**, with the same lockout naming (Rusty locked out of
+both D2 and this visual work's own artifact scope; Danny/Livingston for D1; Livingston or a
+fresh frontend-capable agent for D2).
+
+## Final re-review (2026-08-29, after Rusty's "completed" API/frontend integration): **REJECT**
+
+The user directly, explicitly ratified Linus's row-inclusion semantics as binding: "rows are
+all and only contracts satisfying DTE 0-49 and the configured abs(delta) band; excluded
+contracts may appear only in nearest_miss/count metadata." Re-inspected the current tree
+against this and re-ran the full targeted suite.
+
+**Defect 1 — RESOLVED, no longer blocking.** `best_options.py`'s row-inclusion logic
+(`in_band_rows`/`nearest_miss` over the full DTE-window set/`excluded_by_delta_band` count)
+matches the user's own wording exactly. The `.squad/decisions.md` ledger still has no
+dedicated entry for this — recommended as a non-blocking follow-up for Scribe/Danny — but the
+user's direct statement in this session closes the authorization gap for review purposes.
+
+**Defect 2 — STILL PRESENT, STILL BLOCKING.** `frontend/src/types/best-options.ts` still
+types `thresholds`/`thresholds_source`/`skill_reference` flat; the real backend returns them
+nested `{call, put}`. `BestOptionsParams.tsx` still does
+`parameters.thresholds.delta_lo.toFixed(2)` directly — throws `TypeError` on first render, for
+every symbol, every time. `npx tsc --noEmit` passes with 0 errors, which is *expected and not
+reassuring*: the type declaration itself is wrong, so the compiler cannot catch code written
+against it; only comparing the declared type against the real backend payload surfaces this.
+
+**Defect 3 — NEW.** `best_options.py` reports `excluded_by_delta_band` (both sides) and
+`coverable_contracts`/`no_shares_held` (call side) — exactly the "count metadata" the user's
+own directive names as the required transparency surface for excluded contracts. None of
+these three fields exist on the frontend's `BestOptionsSide` type, and none are read anywhere
+in `BestOptionsView.tsx`/`BestOptionsParams.tsx`. Worse, the page's own "0 shares held" banner
+checks `data.rows.some((r) => r.flags.includes("no_shares_held"))` — a per-row flag
+`best_options.py` never sets (`no_shares_held` is section-level only) — so that
+design-mandated disclosure can never render, even when it should.
+
+**Validation:** `python3 -m pytest tests/test_best_options.py tests/test_best_options_adversarial.py tests/test_best_options_endpoint.py tests/test_category_params.py tests/test_options_chain_dte_filter.py tests/test_options_chain_cache.py -q` → **224 passed, 0 failed**. `npx tsc --noEmit` (frontend) → 0 errors (does not exercise D2/D3 — see above).
+
+**Verdict: REJECT.** D2 and D3 both live entirely inside Rusty's own artifacts
+(`frontend/src/types/best-options.ts`, `frontend/src/components/BestOptionsParams.tsx`,
+`frontend/src/components/BestOptionsView.tsx`). Per strict lockout, **Rusty is locked out of
+revising these three files.** Recommended revision owner: **Livingston** (not the author of
+any of the three, already familiar with the Best Options data seam) — correct the three
+thresholds-shaped fields to the real nested `{call, put}` shape, add
+`excluded_by_delta_band`/`coverable_contracts`/`no_shares_held` to the type and to the UI, and
+fix the `no_shares_held` banner to read the section-level field directly. Escalate to a fresh
+frontend-capable agent instead if Livingston lacks sufficient frontend/TS depth — do not
+re-admit Rusty.
+
+The visual-consistency directive remains satisfied and unaffected by this round. Full
+methodology in `.squad/agents/basher/history.md`, entry "2026-08-29 (final integration gate):
+Rusty's 'completed' API/frontend integration re-reviewed — final reviewer verdict: REJECT".
+
+---
+
+## 2026-08-29 (final): Best Options — combined final gate re-run — **APPROVE**
+
+Danny formally ratified the row-inclusion delta-filter semantics in
+`danny-best-options-delta-filter-correction.md` (durable in-place amendment to the design doc,
+§2A + corrected §4.1/4.2) — this closes D1's remaining process gap noted in my prior verdict.
+Livingston independently fixed D2 (flat vs. nested `{call,put}` typing for
+`thresholds`/`thresholds_source`/`skill_reference`, plus an identical-class bug he found
+himself in `premium.basis`) and D3 (added `excluded_by_delta_band`/`coverable_contracts`/
+`no_shares_held` to the frontend type and UI; fixed the dead `no_shares_held` banner to read
+the section-level field). Both independently re-verified this round by reading the actual
+current `frontend/src/types/best-options.ts`, `BestOptionsParams.tsx`, `BestOptionsView.tsx`
+files (not trusting Livingston's own write-up alone), plus his new
+`test_best_options_frontend_contract.py` (5 tests, genuine real-module seam test, not a
+restatement of the bug). Did a full-field sweep of the real `parameters` dict construction in
+`best_options.py` against the frontend interface, key by key — no further undiscovered
+nested-shape mismatches. Roll Scenarios visual-consistency directive re-confirmed intact
+(`ROW_TINT_BG` still the single shared token, consumed by both `PositionDetail.tsx` and
+`BestOptionsView.tsx`). `npx tsc --noEmit` clean (now meaningful, since the types themselves
+are correct this time, not just internally consistent). Test run:
+`test_best_options.py` + `test_best_options_adversarial.py` + `test_best_options_endpoint.py`
++ `test_best_options_frontend_contract.py` + `test_category_params.py` +
+`test_options_chain_dte_filter.py` + `test_options_chain_cache.py` → all green (263 passed
+combined with the three Force Alpha test files run in the same invocation). No IV Rank
+enforcement or test anywhere; no LLM call in this evaluator path.
+
+**Verdict: APPROVE.** No defects found, no revision owner needed. Full methodology in
+`.squad/agents/basher/history.md`, entry "2026-08-29 (later): Final combined reviewer gate —
+Best Options + Force Alpha — separate verdicts".
+
+---
+
+# Basher — Force Alpha final reviewer gate — 2026-08-29
+
+**Author:** Basher (Tester/Reviewer)
+**Scope:** Danny's `danny-force-alpha-design.md`, as corrected by
+`copilot-force-alpha-semantics.md`/`-superseded.md` (final policy: only dashboard CC/CSP
+buttons force Alpha; Settings "Run Now", "Full analysis"/"Run Full", and scheduled runs stay
+due-only), against the live integrated tree touched by Linus (`agent_runner.py` gate/cooldown),
+Rusty (`web/app.py`/`scheduler_registry.py` plumbing + `TriggerButton.tsx`), and Livingston
+(Settings-scoping correction + endpoint-scoping seam test).
+
+## Verdict: **APPROVE**
+
+## Methodology
+
+Every requirement in the review brief was checked by direct code inspection this session, not
+by trusting any agent's inbox write-up or self-reported pass count. Two of the three
+self-reports already disagreed with the task prompt's stated numbers before I ran anything
+(Rusty's own doc: 8 plumbing tests, not "34"; Livingston's cache-correction doc: 4 known-failing
+tests in `test_force_alpha_execution.py` as of his writing) — this made independent
+verification necessary, not optional.
+
+## Corrected test count
+
+| File | Author | Tests | Result (independent run) |
+|---|---|---|---|
+| `test_force_alpha_execution.py` | Linus | 23 | 23 passed |
+| `test_force_alpha_plumbing.py` | Rusty | 8 | 8 passed |
+| `test_trigger_force_alpha_scoping.py` | Livingston | 3 | 3 passed |
+| **Total** | | **34** | **34 passed** |
+
+"93/93" (attributed to Linus in the task prompt) does not match Linus's own file or its
+docstring (23). "34" is the *combined* total across all three authors' files, not "Rusty's
+plumbing count" as phrased — Rusty's own plumbing file is 8. This is a documentation/reporting
+inaccuracy in the inbox trail, not a code defect: the underlying behavior is correct and fully
+tested regardless of which number got attached to which name.
+
+## Requirement-by-requirement verification (direct code reads, this session)
+
+1. **Four agent paths** (`covered_call`, `cash_secured_put`, `open_call_monitor`,
+   `open_put_monitor`): both `agent_runner.py` entry points (`run_symbol_agent`,
+   `run_position_monitor`) gate identically —
+   `run_alpha = is_alert or prolonged_wait or force_alpha`,
+   `forced = force_alpha and not prolonged_wait` (alert/roll branches never marked forced).
+   Verified at all 4 literal call sites.
+2. **buy_tracker exclusion**: `_skip_reviews = agent_type in ("buy_tracker",)`; forced-but-
+   skipped records `alpha_run.status == "skipped_agent_type"`. `run_buy_tracker_analysis`'s
+   real signature has no `run_trigger`/`force_alpha` params — forcing is genuinely inert for it
+   via `_call_agent_func`'s introspection-guarded forwarding, not merely untested.
+3. **incomplete_quote_wait precedence**: `run_position_monitor` — `if incomplete_quote_wait: ...
+   elif prolonged_wait or force_alpha: ...` — forcing is blocked, `alpha_run.status ==
+   "skipped_incomplete_quotes"` recorded.
+4. **409 at-most-one in-flight**: `_acquire_trigger_slot`/`_release_trigger_slot` in
+   `web/app.py`, keyed `(agent_type, symbol-or-"*")`, lock-guarded, released via `finally`
+   (survives the runner raising), stale slots reclaimed after `_MAX_TASK_DURATION_SECONDS`
+   (reused constant, not new).
+5. **Force audit status**: `alpha_run = {"trigger","forced","status"}` persisted at every gate
+   outcome (ok/failed/skipped_agent_type/skipped_incomplete_quotes) in both entry points —
+   confirmed by reading the literal dict-construction code.
+6. **Cooldown neutrality (H1)**: `_detect_prolonged_wait`'s scan breaks only when a review's
+   `alpha_run.forced` is not `True`; forced-only reviews are skipped over (don't reset the
+   cooldown); legacy docs with no `alpha_run` field default to not-forced (still break the
+   scan, preserving old behavior byte-for-byte).
+7. **No force-only Telegram (H2)**: `send_alert` gated on `is_alert` alone;
+   `send_prolonged_wait_alert` gated on `prolonged_wait` alone, in both entry points.
+   `force_alpha` never appears in either notifier's gate condition — a forced-only run cannot
+   reach either notifier call.
+8. **Legacy behavior**: confirmed identical to pre-feature behavior for historical documents
+   (point 6).
+9. **Final dashboard-only-forces policy** (narrower than Danny's original design's "manual ⇒
+   forced" default table and its own D1/D2 proposals — confirmed by reading the literal code,
+   not the narrative): `POST /api/trigger/{agent_type}` defaults `force_alpha=True`
+   (overridable; dashboard `TriggerButton.tsx` always sends `true`); `POST /api/trigger-all`
+   hardcodes `force_alpha=False` with **no override surface**; `POST
+   /api/scheduler/tasks/{task_name}/run` ("Settings Run Now") hardcodes `force_alpha=False`
+   (Livingston's correction — confirmed live in the tree, not just claimed); `main.py`'s cron
+   loop passes `force_alpha=False` explicitly for all four Alpha-eligible agents.
+   `SettingsConfigView.tsx`'s Monitoring Agent card routes to `/api/trigger-all` (grep-
+   confirmed) — there is exactly one due-only "Run Now"/"Full analysis" affordance in the
+   frontend today, consistent with Livingston's finding that a separate
+   `/api/scheduler/tasks/*`-backed button doesn't exist in the UI.
+10. **Auth**: none anywhere in `web/app.py` — matches the design's explicit standing-risk
+    disclosure; not a new gap from this feature.
+
+## Full-suite regression check
+
+`pytest tests/` (backend, full tree) → 1661 passed, 11 failed / 16 errors, all in
+`test_yfinance_data_provider.py` / `test_yfinance_technicals_dividend_availability.py` —
+confirmed pre-existing and unrelated to Force Alpha (same failure set observed and documented
+earlier this session, before any Force Alpha code existed). Zero regressions attributable to
+this feature.
+
+## No defects found. APPROVE. No revision owner needed.
+
+---
+
+### 2026-08-29T10:27:15+02:00: User directive
+**By:** Copilot (via Copilot)
+**What:** Best Options must use colors similar to the Roll Scenarios table and follow that table's general structure, look, and feel.
+**Why:** User request — captured for team memory
+
+---
+
+### 2026-08-29T11:47:47+02:00: Manual Alpha execution semantics corrected
+**By:** Copilot (via Copilot)
+**What:** Only the dashboard CC/CSP buttons force Alpha. Settings "Run Now", "Run Full", and scheduled executions all retain due-only Alpha behavior. This supersedes the earlier decision that Settings "Run Now" would force Alpha.
+**Why:** User correction — captured for team memory
+
+---
+
+### 2026-08-29T11:29:10+02:00: Manual Alpha execution semantics
+**By:** Copilot (via Copilot)
+**What:** Dashboard CC/CSP actions and Settings "Run Now" must force Alpha for the four CC/CSP agents. Scheduled executions and "Full analysis" retain due-only Alpha behavior. Forced runs must not reset or suppress the automatic prolonged-WAIT cooldown.
+**Why:** User decision after architecture review; preserves predictable manual behavior while controlling full-analysis cost and maintaining automatic alerting.
+
+---
+
+# Decision Record — Best Options row inclusion: delta band is a filter, not only a colour gate
+
+**Date:** 2026-08-29T12:01:15+02:00
+**Author:** Danny (Lead)
+**Status:** RATIFIED — durable, supersedes conflicting wording in the original design
+**Supersedes:** `.squad/decisions/inbox/danny-best-options-design.md` sections 4.1 and 4.2
+as originally written (2026-08-29, ACCEPTED). The design document itself has been amended
+in place (new section 2A, plus corrected sections 4.1/4.2 with the original wording kept
+as a marked historical note) — this record is the durable, standalone entry Basher's
+review correctly found missing, and it is what a future reader or `decisions.md` entry
+should cite.
+**Traces to:** `.squad/decisions/inbox/basher-best-options-review.md` (REJECT, Defect 1),
+`.squad/decisions/inbox/linus-best-options-scoring.md` ("Row inclusion — resolved"
+section), `backend/src/best_options.py` module docstring ("Provenance note").
+**Reviewer of record for this artifact:** Basher (Tester/Reviewer) — re-review requested,
+see "What Basher should re-check" below.
+
+## Background
+
+Basher's adversarial review of Best Options (`basher-best-options-review.md`) rejected the
+feature body of work for two defects. This record resolves **Defect 1 only**: "undocumented
+deviation from the ACCEPTED design (row inclusion)." (Defect 2, the frontend `parameters`
+contract mismatch in `frontend/src/types/best-options.ts` / `BestOptionsParams.tsx`, is
+Rusty's/Livingston's surface and is out of scope for this record — Danny has not touched
+any frontend file.)
+
+`backend/src/best_options.py` already implements, and Linus's own decision draft already
+narrates, a same-day correction: the delta band moved from a colour-only gate to a
+row-inclusion filter. That correction was never reconciled against the literal text of the
+ACCEPTED design (`danny-best-options-design.md` sections 4.1/4.2), which is what Basher
+flagged, and `.squad/decisions.md` had zero entries for Best Options at all. This record —
+plus the in-place amendment of the design document (section 2A, and sections 4.1/4.2
+themselves) — closes that gap.
+
+## The corrected semantic rule (binding, effective 2026-08-29)
+
+A side's primary `rows` in the Best Options response must contain **all and only** the
+contracts that satisfy **both**:
+
+1. the requested **DTE window** (default 0..49 days), and
+2. the category/strategy's configured **`abs(delta)` band** (`[delta_lo, delta_hi]`) for
+   that side.
+
+A contract failing either filter is **never** a primary row. It is not thereby erased from
+the response as a whole:
+
+* `nearest_miss` is computed over the **full** DTE-window contract set — in-band and
+  delta-excluded contracts together — so a contract just outside the configured delta band
+  remains the direct, named answer to "why am I not seeing this contract."
+* Each side additionally reports `excluded_by_delta_band`: a count of how many DTE-window
+  contracts the delta filter removed.
+
+Delta itself is, and remains, a **true display filter with real teeth** — not cosmetic.
+`abs(delta)` is displayed as signed delta for context, but the unsigned value is what
+governs inclusion (this record) and what feeds the `delta_fit` score component (design
+section 4.3) for contracts that pass. There is no reading under which a contract outside
+the configured band should appear as a coloured (including red) row in the primary table.
+
+## Why this supersedes the original design wording
+
+The original section 4.1 ("nothing inside the [DTE] window is ever hidden") and section
+4.2 (delta band listed as hard-gate "G2": "failure = red, row still shown") together read,
+taken literally, as if delta band only affected colour. Linus's first implementation
+followed that literal text in good faith and was corrected the same day per an explicit,
+unambiguous product-owner instruction after reviewing that first pass: the displayed chain
+must be filtered by the configured delta range in addition to the DTE window, with only
+contracts surviving both filters shown as primary rows. This record ratifies that
+correction as the design's binding semantics going forward and formally supersedes the
+original section 4.1/4.2 wording — not by deleting it, but by amending the design document
+in place with the corrected text as normative and the original text preserved and marked
+as a superseded historical note (see `danny-best-options-design.md` sections 4.1/4.2 and
+the new section 2A).
+
+## What stays unchanged
+
+* **G1 (tradability)** and **G3 (earnings span)** remain true binary colour gates exactly
+  as originally specified: a failure colours an in-band, in-window row red without
+  removing it.
+* The Layer B scoring formula, weights, colour thresholds (39.999/40/64.999/65), ordering
+  rule, and 400-row truncation cap (design sections 4.3-4.5) are untouched.
+* `filter_options_chain_by_delta` (the existing, wide, non-category-aware function, design
+  finding F2) is still never reused for this filter. The row-inclusion delta-band check
+  goes through `best_options.py`'s own `_gate_delta_band`, using the category's configured
+  band and reading delta only via the `options_chain_view` accessors.
+
+## Ownership and scope of this correction
+
+* **Danny (this record + the design document amendment)** — documentation/design
+  correction only. No production code touched.
+* **Linus** — original author of `best_options.py`'s row-inclusion behaviour and of
+  `linus-best-options-scoring.md`'s account of the correction; locked out of this revision
+  cycle per the reviewer-protocol strict-lockout rule. Not needed here regardless: the
+  evaluator code already implements the corrected semantics and is not being modified by
+  this record.
+* **Livingston / Rusty** — unaffected by this record; Basher's Defect 2 (frontend
+  `parameters` contract mismatch) remains open and unrelated to row-inclusion semantics.
+
+## What Basher should re-check
+
+This record resolves Defect 1 as a pure documentation/process gap:
+
+1. `.squad/decisions/inbox/danny-best-options-design.md` no longer contradicts
+   `best_options.py`'s shipped behaviour — section 2A states the corrected rule up front,
+   and sections 4.1/4.2 carry the corrected normative text with the original wording kept
+   as an explicitly marked, non-normative historical note.
+2. This record exists as the durable, standalone entry for the correction (the artifact
+   Basher's review said was missing), citable independently of the amended design document.
+3. No evaluator code, tests, or frontend files were modified by this record — `Linus`'s
+   `best_options.py`, `Rusty`'s frontend, and `Basher`'s own test suites are exactly as they
+   were when the REJECT verdict was issued.
+
+Re-review target: **`.squad/decisions/inbox/danny-best-options-design.md`** (re-read
+section 2A and the amended sections 4.1/4.2) plus this record. Defect 2 (frontend contract
+mismatch) remains outstanding and is not addressed here.
+
+---
+
+# Design Decision — "Best Options" Analyze Page
+
+**Date:** 2026-08-29
+**Author:** Danny (Lead)
+**Ceremony:** Design Review (auto-triggered: multi-agent task, 2+ agents, shared systems)
+**Participants:** Danny (facilitator), design-critique reviewer; assignments to Linus, Rusty, Livingston, Basher
+**Status:** ACCEPTED — ready for implementation. **Amended 2026-08-29T12:01:15+02:00**
+(row-inclusion semantics, section 2A/4.1/4.2 — see amendment note and
+`.squad/decisions/inbox/danny-best-options-delta-filter-correction.md`, the durable
+decision record superseding this document's original sections 4.1/4.2 wording)
+**Schema version:** `best_options` v1
+
+---
+
+## 1. Problem
+
+The user reports substantially fewer covered-call / cash-secured-put sell alerts over
+the last two months, most noticeably after moving to a smaller model. Today there is
+**no way to tell whether that means "no qualifying contract existed" or "the model
+declined to say so"**, because the only view of candidate quality is the agent's own
+prose verdict.
+
+Requested: a new **Best Options** entry under the Symbol Detail *Analyze* menu showing
+every option in the filtered chain within the near-dated window and the configured delta
+ranges, each row coloured green / yellow / red according to that stock's dividend-category
+profile, with the parameters used for the analysis visibly displayed.
+
+---
+
+## 2. Decision: evaluation approach
+
+**Deterministic in the critical path. LLM strictly additive and out of band.**
+
+Concretely:
+
+* Zero LLM calls are reachable from the `best-options` endpoint. Availability of the page
+  is a function of the option-chain cache alone.
+* An LLM may be invoked only by an explicit, separate user action ("Explain this row"),
+  reusing the existing symbol-chat path. It may **never** rank, gate, colour, filter,
+  reorder, or block render.
+
+### Rationale
+
+1. The stated requirement is *"useful information always available."* Putting a model in
+   the path makes availability a function of Foundry uptime, token budget, and model
+   nondeterminism — which is precisely the failure the user is complaining about.
+2. Every input needed is already deterministic and already normalised through the frozen
+   `options_chain_view` boundary: delta, bid, ask, IV, open interest, strike, expiration,
+   underlying price. Nothing here requires judgement a model is better at.
+3. The category thresholds are **already codified verbatim** from `src/skills/*/SKILL.md`
+   into `rule_evaluator.CATEGORY_THRESHOLDS_CC/CSP`. No model is needed to recall them.
+4. Colour is a threshold-and-rank judgement. A model would return different colours on
+   refresh for identical data. This is a table the user will compare across days;
+   reproducibility is the whole product.
+5. This page's job is to be the *evidence* against which the agent's verdict is checked.
+   Evidence produced by the same class of component it is meant to audit is worthless.
+
+**Non-goal, named explicitly so it is not mistaken for delivered:** this page makes the
+alerting regression *visible*; it does not fix it. The natural follow-on — feeding this
+scorer's top-N as pre-selected candidates into the agents so a small model *ranks* rather
+than *searches* — is out of scope here and should be a separate decision.
+
+---
+
+## 2A. Amendment (2026-08-29): delta band is a row-inclusion filter, not only a colour gate
+
+**This section is a superseding correction to sections 4.1 and 4.2 below, added
+same-day.** It does not reopen the rest of this design; it resolves one specific
+ambiguity that produced two incompatible implementations of the same document.
+
+**Corrected rule, binding:** a side's primary `rows` must contain **all and only** the
+contracts that satisfy *both* of the two user-facing filters — the DTE window (default
+0..49 days) **and** the category/strategy's configured `abs(delta)` band
+(`[delta_lo, delta_hi]`). A contract failing either filter is never a primary row.
+Excluded contracts are not silently dropped from the *response*: they remain the candidate
+pool for `nearest_miss`, and each side reports a count of how many DTE-window contracts the
+delta filter removed (`excluded_by_delta_band`).
+
+**Why this document needed correcting.** Section 4.1's original text ("nothing inside
+the [DTE] window is ever hidden") and section 4.2's original framing of the delta band as
+hard-gate "G2" ("failure = red, row still shown") read, taken literally and in isolation,
+as if the delta band only recoloured a row rather than excluding it from `rows`. Linus's
+first implementation of `best_options.py` followed that literal reading in good faith. It
+was wrong: this page's own problem statement (section 1) asks for a table of "every
+option in the filtered chain within the near-dated window **and the configured delta
+ranges**" — the delta range was always meant as a second inclusion filter alongside DTE,
+not merely a colour input. The product owner confirmed this explicitly and unambiguously
+on 2026-08-29 after reviewing Linus's first pass, and Linus's implementation was
+corrected the same day to match. Basher's adversarial review then correctly flagged that
+this document had not been updated to match the corrected, shipped behaviour, creating
+exactly the kind of silent contradiction between the accepted design and the running code
+that the review gate exists to catch.
+
+**Disposition:** sections 4.1 and 4.2 below are amended in place to state the corrected
+rule as the normative text, with the original wording preserved inline as a marked
+historical note (not deleted, so the record of what changed and why is not lost — this
+document is not an append-only log itself, but the same audit-trail discipline applies).
+Nothing else in this design changes: G1 (tradability) and G3 (earnings span) remain true
+binary colour gates exactly as originally specified; the scoring formula, colour
+thresholds, ordering, and truncation in sections 4.3-4.5 are untouched.
+
+Full account, including Linus's own record of the correction and Basher's rejection that
+prompted this amendment: `.squad/decisions/inbox/linus-best-options-scoring.md` and
+`.squad/decisions/inbox/danny-best-options-delta-filter-correction.md`.
+
+---
+
+## 3. What the review found in the existing code
+
+These are load-bearing facts; implementers must not re-derive them.
+
+| # | Finding | Consequence for this design |
+|---|---------|-----------------------------|
+| F1 | `options_chain_filters.py` has **no DTE filter at all**. `DTE <= 45` exists only as LLM prompt text and as a post-hoc `rule_evaluator._dte_cap_rule`. | A new deterministic DTE filter is required and is useful beyond this feature. |
+| F2 | `filter_options_chain_by_delta` defaults are wide and **not** category-aware (calls `0.15..0.90`, puts `-0.60..-0.15`), reads `contract.get("delta")` **directly** (boundary violation), and **removes** rows. | Must **not** be reused here. Row inclusion still requires the category's own configured `[delta_lo, delta_hi]` band (section 2A/4.1) — never this function's wide, non-category-aware defaults, and never a direct `contract.get("delta")` read. Excluded contracts are never silently dropped from the *response*: they are counted (`excluded_by_delta_band`) and remain the candidate pool for `nearest_miss`. |
+| F3 | `iv_rank` is **not observable**. `volatility.py` documents that yfinance has no IV history. Every `iv_rank` occurrence is LLM prompt example text or LLM output. | `iv_rank_min` in the category thresholds is being compared against an LLM-fabricated number in the agent path. This page must not enforce it, and must say so on screen. |
+| F4 | `premium_pct` is **not** a chain field. It is derived from **bid** at three sites: CC `bid/underlying_price*100`, CSP `bid/strike*100` (`options_chain_filters.py:537-540`, `agent_runner.py:891-899`, SKILL.md). | Use `usable_quote(contract, "bid")`. Never mid. Disagreeing with `rule_evaluator._premium_floor_rule` on the same contract is the worst possible outcome for a trust-restoring page. |
+| F5 | `premium_min_pct` in the SKILL files is explicitly a **30-45 DTE** number ("premium >= 0.8% of stock price for 30-45 DTE"). | Applying it flat across a 0-49 day window is wrong at both ends. Must be DTE-scaled. |
+| F6 | **`get_or_load_async` does NOT raise on a cold miss.** It does `return await self.refresh(symbol)` — a full inline yfinance + TradingView fetch, merge and persist, with no timeout. `OptionsChainNotReadyError` is raised only by the **sync** `get_or_load`. | A `try/except OptionsChainNotReadyError` around the async call is dead code and the request would hang. A new non-blocking cache accessor is required. |
+| F7 | `chain["underlying_price"]` is written by `_refresh_locked` and restored on hydrate. The chain's Greeks were recomputed **against that exact price**. | Take spot from the chain, never from a separate overview fetch, or `delta_fit` desynchronises from `premium_pct`. |
+| F8 | Put deltas are negative (`greeks_calculator`: `norm.cdf(d1) - 1`); `CATEGORY_THRESHOLDS_CSP` bands are positive. | Comparing raw delta against the band empties the put table 100% of the time. `abs()` everywhere, consistently, including inside `delta_fit`. |
+| F9 | `agent_runner._CATEGORY_DELTA_RANGES` and `_resolve_category_skill` key on space-form names ("high yield"); `rule_evaluator` keys on underscore form and aliases both. Stored enrichment is Title+space ("High Yield"). | A latent, currently-dormant divergence. Fix the normaliser only; do **not** stack a cross-agent refactor onto this feature. |
+| F10 | `cosmos.get_next_earnings_date` returns `None` for any unsynced symbol and swallows its exception. `_is_stale` treats absent `quote_asof` as stale by design. | Neither may be allowed to downgrade colour, or entire symbols become permanently non-green and the page reads as broken — the original complaint in a new coat of paint. |
+
+---
+
+## 4. Scoring and colour semantics
+
+Two layers, and the split matters: **safety facts are binary; economics are graded.**
+
+### 4.1 Row inclusion (two filters, applied before scoring) — amended 2026-08-29, see section 2A
+
+A side's `rows` contain **all and only** the contracts on that side that pass **both**:
+
+1. **DTE window** — expiration falls inside the requested window. Default window
+   **0..49 days**, matching the stated requirement.
+2. **Category delta band** — `abs(delta)` falls inside that category/side's configured
+   `[delta_lo, delta_hi]` band (section 4.2's `_gate_delta_band` predicate, F8).
+
+A contract failing either filter never appears in `rows`. It is not thereby erased from the
+response: `nearest_miss` is computed over the full DTE-window set — in-band and excluded
+contracts together (section 4.6) — and each side reports `excluded_by_delta_band`, a count of how
+many DTE-window contracts the delta filter removed.
+
+* `DTE < 7` -> shown if also in-band, flag `very_short_dte`.
+* `DTE > 45` -> shown if also in-band, flag `exceeds_system_dte_cap` (the agents' hard cap;
+  informational here).
+* DTE computed in **America/New_York**, consistent with `expired_shard_grace_days` pruning.
+  Using UTC "today" flips DTE by one after 20:00 ET.
+
+> **Historical note — superseded 2026-08-29, normative text above governs.** This section
+> originally read: *"The table contains every contract on the requested side whose
+> expiration falls in the DTE window... Nothing inside the window is ever hidden,"* with no
+> second filter, on the theory that the delta band (section 4.2's "G2") only affected colour.
+> Linus's first implementation matched that literal text and was corrected the same day per
+> an explicit product-owner instruction (section 2A). Preserved here, not deleted, so a future
+> reader can see exactly what changed and why rather than rediscovering Linus's and
+> Basher's same investigation from scratch.
+
+### 4.2 Layer A — hard gates (binary; failure = red, row still shown) — amended 2026-08-29, see section 2A
+
+Only *safety* facts are binary, and — after the 2026-08-29 amendment — there are now
+**two** true colour gates, not three. The delta band ("G2" below) moved to section 4.1's
+row-inclusion filters: a delta-band failure removes the row entirely rather than merely
+colouring it red. The "G2" label is retained only for continuity with the payload's
+`gates.delta_band` field (section 7), which is still computed per contract — including excluded
+ones, so `nearest_miss` can name a delta-band miss precisely — but it always reads
+`"pass"` on any contract that actually reaches `rows`.
+
+* **G1 tradability** — `is_candidate_eligible(contract, min_open_interest=1)`: usable bid,
+  OI >= 1, Greeks valid. A contract you cannot sell is not a candidate at any price.
+* **G2 delta band** (section 4.1 row-inclusion filter, *not* a colour gate as of the 2026-08-29
+  amendment) — `abs(delta)` inside the category band for the side.
+* **G3 earnings span** — expiration falls after a **known** next earnings date.
+  Unknown earnings date is **not** a gate failure (F10); it is the flag
+  `earnings_date_unknown` and does not affect colour.
+
+Deliberately **not** gates: premium floor (see 4.3), staleness, unknown earnings, IV rank.
+
+### 4.3 Layer B — quality score 0..100
+
+Computed for every row that passes G1-G3. Gate failures get `score: null`, **not 0**
+(absence is not zero — the accumulated-chain rule from the 2026-08-18 decision applies to
+scores too).
+
+The **premium floor is graded, not a gate.** Aristocrats have structurally low IV by
+definition; a binary floor would empty the table for exactly the categories the user cares
+most about, which is the failure mode we are trying to cure.
+
+DTE-scaled thresholds (F5) — echoed per row in the response:
+
+```
+effective_min_pct  = premium_min_pct  * DTE / 30
+effective_wait_pct = premium_wait_pct * DTE / 30
+```
+
+Components, each normalised to `0..1`:
+
+| Component | Weight | Formula |
+|-----------|--------|---------|
+| `annualized_return` | 0.45 | `ann = premium_pct * 365 / DTE`; `floor_ann = premium_min_pct * 365 / 30`; `clamp(ann / floor_ann, 0, 2) / 2` |
+| `cushion` | 0.25 | `sigma = spot * iv * sqrt(DTE/365)`; CC `(strike - spot)/sigma`, CSP `(spot - strike)/sigma`; `clamp(ratio / 1.5, 0, 1)` |
+| `delta_fit` | 0.20 | `1.0` at band midpoint, linear to `0.5` at the band edges (on `abs(delta)`) |
+| `liquidity` | 0.10 | `0.5*clamp(log10(OI+1)/3,0,1) + 0.5*clamp(1 - spread_pct/0.25, 0, 1)`, `spread_pct = (ask-bid)/mid` |
+
+`premium_pct` is `bid / basis * 100` with basis = `underlying_price` for calls and `strike`
+for puts (F4). `spot` is `chain["underlying_price"]` (F7). `iv` is
+`usable_quote(contract, "iv")` — per-contract, from the chain, **no I/O**.
+
+Design notes on the weighting, from the review:
+
+* An earlier draft had `annualized_return` **and** `premium_headroom` — both strictly
+  monotone in `premium_pct`, both saturating at the same point. That put 0.60 of the weight
+  on one axis and destroyed discrimination at the top of the sort, which is the only part
+  of the table anyone reads. `premium_headroom` is **removed**.
+* `cushion` replaces it as a genuinely orthogonal **risk** axis. Without it the score
+  monotonically rewards richer premium, so the greenest rows would systematically be the
+  chase-yield contracts. Expressing distance in units of the contract's *own* implied
+  1-sigma move keeps it comparable across symbols and needs no price history.
+* `vol_richness` (IV/HV) is **removed from the score**. It is symbol-level, so it contributes
+  exactly zero ordering information while moving every row up to 10 points across the colour
+  boundaries — and when null, renormalisation lifts every score ~11%, flipping the whole
+  page's colours based on whether an HV series happened to be fetchable. It also requires
+  price-history I/O, which would break the purity of the scorer. ATM IV *is* computable from
+  the chain alone and is shown in the parameters panel as context.
+
+**Missing-component policy.** A null component is dropped and the remaining weights
+renormalised. The response reports `components_missing` and the effective `weight_basis`
+per row. If more than 50% of the weight is missing, `score` is `null` and the row is yellow
+with flag `insufficient_data`.
+
+### 4.4 Colour
+
+* **red** — any hard gate failed, **or** `premium_pct < effective_wait_pct`, **or** `score < 40`.
+* **yellow** — `40 <= score < 65`, or `score is null` due to `insufficient_data`.
+* **green** — `score >= 65`.
+
+Flags that **never** change colour (F10): `earnings_date_unknown`, `stale_quote`,
+`very_short_dte`, `exceeds_system_dte_cap`, `below_category_floor`, `ex_div_within_dte`,
+`no_shares_held`, `below_support`. They render as badges.
+
+Thresholds and weights are **returned in the payload** (`color_thresholds`, `weights`); the
+UI never owns the semantics. Colour is always paired with an icon and a text label
+(`Preferred` / `Acceptable` / `Avoid`), reusing the `STATUS_META` idiom from
+`RuleEvaluationPanel.tsx`, so the page is usable without colour vision.
+
+### 4.5 Ordering and truncation
+
+A **total** order, defined once and applied before truncation:
+
+1. `score` descending, `null` last
+2. `DTE` ascending
+3. `abs(delta) - band_midpoint` ascending
+
+Cap 400 rows per side after ordering; set `truncated: true`. (An earlier draft sorted by
+score and truncated in the all-null case, which would have dropped exactly the rows the
+empty-result requirement promises to show.)
+
+### 4.6 Always-informative requirement
+
+`nearest_miss` is computed **always**, not only when the table is empty: the contract
+closest to qualifying, which gate or threshold it missed, and by how much
+(e.g. "missed premium floor by 0.12pp at |delta| 0.28, 2026-10-17 $190"). This is the single
+most valuable element of the feature — it is the direct answer to "why am I not getting
+alerts."
+
+This includes contracts excluded from `rows` by the section 4.1 delta-band filter: the candidate
+pool for `nearest_miss` is every DTE-window contract, in-band and excluded alike, so a
+contract just outside the configured delta band remains describable rather than vanishing
+from the response entirely.
+
+---
+
+## 5. Covered call vs cash-secured put
+
+One endpoint, `side` in `{call, put, both}`; default `both` so the parameters panel renders
+once and both tables are pinned to the same chain timestamp.
+
+| | `call` | `put` |
+|---|--------|-------|
+| bucket | `calls` | `puts` |
+| thresholds | `CATEGORY_THRESHOLDS_CC` | `CATEGORY_THRESHOLDS_CSP` |
+| delta | `abs(delta)` vs band | `abs(delta)` vs band (F8) |
+| premium basis | `underlying_price` | `strike` |
+| cushion direction | `strike - spot` | `spot - strike` |
+| capital | `total_shares // 100` coverable contracts; `0` -> page banner `no_shares_held`, table still renders in full | collateral `strike * 100` shown per row |
+| extra flag | `ex_div_within_dte` when an ex-dividend event falls inside DTE and the strike is `<10%` OTM | `below_support` when strike `<=` support level, when a support level is available |
+
+Signed delta is **displayed**; `abs(delta)` is what governs **row inclusion** (section 4.1,
+amended 2026-08-29) and is what is **scored** (`delta_fit`, section 4.3).
+
+---
+
+## 6. Parameter provenance and display
+
+The `parameters` block returned by the endpoint is the single source of truth for the panel
+and **must be the same object the scorer consumed**, not a re-derivation.
+
+```jsonc
+{
+  "schema_version": 1,
+  "evaluated_at": "2026-08-29T08:00:00Z",
+  "category": { "value": "high_yield", "label": "High Yield", "raw": "High Yield",
+                "source": "enrichment.category", "defaulted": false },
+  "thresholds": { "delta_lo": 0.25, "delta_hi": 0.35,
+                  "premium_min_pct": 1.0, "premium_wait_pct": 0.6,
+                  "iv_rank_min": 25 },
+  "thresholds_source": "backend/src/rule_evaluator.py:CATEGORY_THRESHOLDS_CSP",
+  "skill_reference": "backend/src/skills/csp-high-yield/SKILL.md",
+  "iv_rank_enforced": false,
+  "iv_rank_note": "IV Rank is not observable from yfinance (see backend/src/volatility.py). It is NOT enforced here. The agent path evaluates it against a model-supplied value, so an agent WAIT citing IV Rank may not correspond to anything measurable.",
+  "dte": { "min": 0, "max": 49, "source": "default", "system_cap": 45, "timezone": "America/New_York" },
+  "premium": { "basis": "strike", "input_field": "bid",
+               "dte_scaling": "effective_pct = base_pct * DTE / 30" },
+  "liquidity": { "min_open_interest": 1, "max_spread_pct": 0.25 },
+  "underlying": { "price": 187.42, "source": "chain.underlying_price" },
+  "atm_iv": 0.284,
+  "earnings": { "next_earnings_date": null, "source": "cosmos.get_next_earnings_date",
+                "known": false },
+  "chain": { "timestamp": "...", "quote_asof_min": "...", "quote_asof_max": "...",
+             "stale_contracts": 12, "total_contracts": 318 },
+  "weights": { "annualized_return": 0.45, "cushion": 0.25, "delta_fit": 0.20, "liquidity": 0.10 },
+  "color_thresholds": { "green": 65, "yellow": 40 }
+}
+```
+
+Two disclosures are mandatory, not optional:
+
+* **`defaulted: true`** when the category fell back to `balanced`. The user must see when
+  we are guessing about the stock's profile.
+* **`iv_rank_enforced: false` plus the note.** A row that is green here while the last
+  activity said WAIT citing IV Rank is *not* a bug, but it will read as one. The divergence
+  belongs on screen (F3, F10).
+
+The page also carries a standing caption: *"Deterministic screen of the option chain — not
+an agent decision. The agents additionally apply catalyst and technical judgement."*
+
+---
+
+## 7. Files and contracts
+
+### Backend
+
+* **NEW `backend/src/best_options.py`** — pure, no I/O, no LLM, no Cosmos, no FastAPI.
+
+```python
+SCHEMA_VERSION: int
+WEIGHTS: dict
+COLOR_THRESHOLDS: dict
+LIQUIDITY_DEFAULTS: dict
+
+def evaluate_best_options(
+    chain: dict, *, side: str, category: str | None,
+    total_shares: int, next_earnings_date: str | None,
+    ex_dividend_date: str | None, support_level: float | None,
+    dte_min: int, dte_max: int, now: datetime,
+) -> dict
+```
+
+  `underlying_price` and `atm_iv` come from the chain, not from parameters (F7).
+  Every quote/Greek read goes through `usable_quote` / `usable_greek` /
+  `is_candidate_eligible`. Pure, total, deterministic: identical input must produce
+  byte-identical output.
+
+* **NEW `backend/src/category_params.py`** — single normaliser and threshold accessor:
+  `normalize_category(raw) -> str`, `thresholds_for(strategy, category) -> dict`.
+  `rule_evaluator` re-exports its existing public names unchanged so its tests are
+  untouched. `agent_runner._resolve_category_skill` and `_get_category_delta_context` call
+  `normalize_category` (fixing the latent F9 divergence). **`_CATEGORY_DELTA_RANGES` is not
+  deleted in this change** — its values are byte-identical and it feeds live roll-agent
+  prompt text; a cross-agent refactor must not be stacked on top of a new page while an
+  alerting regression is under investigation.
+
+* **NEW `filter_options_chain_by_dte(chain, *, min_dte, max_dte, today_et)`** in
+  `options_chain_filters.py`. Prunes `DTE < 0` (persisted shards live 7 days past expiry
+  by design). Must not read raw contract fields.
+
+* **NEW `OptionsChainCache.get_or_hydrate(symbol) -> str | None`** and public
+  `schedule_background_refresh(symbol)` in `options_chain_cache.py`. `get_or_hydrate`
+  returns memory hit, else persistence hydrate, else `None` — it **never fetches and never
+  blocks**. This is the fix for F6: wrapping `get_or_load_async` in `asyncio.wait_for`
+  would cancel a refresh mid-flight while it holds the symbol lock and is writing Cosmos
+  shards, which is strictly worse.
+
+* **NEW `GET /api/symbols/{symbol}/best-options`** in `backend/web/app.py`.
+  Query: `side` (`call|put|both`, default `both`), `dte_min` (default 0), `dte_max`
+  (default 49, hard max 60).
+  Flow: `get_or_hydrate` -> on `None`, `schedule_background_refresh` and return **HTTP 200**
+  `{"status": "warming", "retry_after": 15, "symbol": ...}`. A 200 warming state is
+  preferred over 503: the BFF collapses non-2xx into a generic error, and "warming, retrying"
+  is a real UI state whereas 503 is an error state.
+  **Do not copy the roll-table endpoint's `except RuntimeError -> 503`** —
+  `OptionsChainNotReadyError` subclasses `RuntimeError`, so that handler also swallows every
+  unrelated `RuntimeError` as a 503.
+
+Response shape:
+
+```jsonc
+{
+  "symbol": "KO", "status": "ok", "schema_version": 1,
+  "parameters": { /* section 6 */ },
+  "calls": { "rows": [], "nearest_miss": {}, "truncated": false, "total": 118,
+             "excluded_by_delta_band": 37 },
+  "puts":  { "rows": [], "nearest_miss": {}, "truncated": false, "total": 124,
+             "excluded_by_delta_band": 41 }
+}
+```
+
+`total` counts contracts in `rows` (i.e. the DTE-window and delta-band intersection, before
+truncation); `excluded_by_delta_band` counts DTE-window contracts the delta-band filter
+removed (section 2A/4.1) and is additive with `total` to recover the full DTE-window contract
+count.
+
+Row shape:
+
+```jsonc
+{
+  "expiration": "20261016", "dte": 48, "strike": 62.5,
+  "bid": 0.84, "ask": 0.91, "mid": 0.875, "iv": 0.213,
+  "delta": -0.281, "abs_delta": 0.281, "open_interest": 1420,
+  "premium_pct": 1.34, "annualized_return_pct": 10.19,
+  "effective_min_pct": 1.6, "effective_wait_pct": 0.96,
+  "collateral": 6250.0,
+  "score": 71, "color": "green", "label": "Preferred",
+  "components": { "annualized_return": 0.83, "cushion": 0.61,
+                  "delta_fit": 0.93, "liquidity": 0.72 },
+  "components_missing": [], "weight_basis": 1.0,
+  "gates": { "tradability": "pass", "delta_band": "pass", "earnings_span": "unknown" },
+  // `gates.delta_band` always reads "pass" here: rows failing it are excluded from
+  // `rows` entirely (section 2A/4.1), not coloured red. It surfaces as "fail" only on a
+  // contract named by `nearest_miss`.
+  "flags": ["earnings_date_unknown"],
+  "quote_asof": "2026-08-29T07:41:11Z", "stale": false
+}
+```
+
+### Frontend
+
+* **NEW** `frontend/src/app/api/symbols/[symbol]/best-options/route.ts` — pure BFF proxy,
+  mirroring the `options-chain` route; must forward query params.
+* **NEW** `frontend/src/app/symbols/[symbol]/best-options/page.tsx`
+* **NEW** `frontend/src/components/BestOptionsView.tsx` (client) and
+  `frontend/src/components/BestOptionsParams.tsx`
+* **NEW** `frontend/src/types/best-options.ts`
+* **EDIT** `frontend/src/components/SymbolActions.tsx` — add
+  `{ href: "best-options", icon: Trophy, label: "Best Options" }` as the first `ANALYZE` entry.
+* **EDIT** `frontend/src/lib/badges.ts` — add `preferenceStyle(color)` reusing `tone()`.
+
+`frontend/AGENTS.md` applies: this is Next.js 16 with breaking changes from common
+training data (route `params` are Promises). **Read `frontend/node_modules/next/dist/docs/`
+before writing frontend code.**
+
+### Tests
+
+* **NEW** `backend/tests/test_best_options.py`
+* **NEW** `backend/tests/test_best_options_endpoint.py`
+* **NEW** `backend/tests/test_category_params.py`
+* **NEW** `backend/tests/test_options_chain_dte_filter.py`
+* **NEW** `backend/tests/test_best_options_integration.py`
+
+---
+
+## 8. Risks and edge cases
+
+1. **Empty or all-red table for aristocrats** — the most likely real outcome, and the reason
+   the premium floor is graded rather than binary. `nearest_miss` is always present.
+2. **Cold chain** — handled by `get_or_hydrate` + 200 warming + client retry with backoff.
+   Never an error banner, never a hang.
+3. **Category silently defaulted to balanced** — surfaced via `defaulted: true` and an
+   amber note.
+4. **`iv_rank_min` unenforceable** — surfaced, not silently dropped.
+5. **Stale quotes served from last-known-good** — badge plus a page-level banner with the
+   `quote_asof` range. Never affects colour (F10).
+6. **Zero `total_shares` for CC** — banner, table still fully rendered.
+7. **Put delta sign** — `abs()` consistently, including inside `delta_fit`. Getting this
+   wrong silently empties the put table with no error.
+8. **Expired / non-standard expirations** — `filter_options_chain_by_dte` prunes `DTE < 0`.
+9. **Payload size** — a liquid name, both sides, 49 DTE is a few hundred rows. Scoring cost
+   is negligible; the payload is the cost. 400 rows/side cap after ordering.
+10. **Green rows contradicting an agent WAIT** — expected and intended; must be explained
+    on screen (section 6), not left to be discovered.
+11. **Timezone** — DTE in America/New_York. UTC would flip DTE by one after 20:00 ET and
+    silently move rows across the `dte_max` boundary.
+12. **Determinism** — same chain in, byte-identical JSON out. Test-enforced.
+
+---
+
+## 9. Assignments
+
+**Linus (Quant Dev)** — owns `backend/src/best_options.py` and
+`backend/src/category_params.py`, plus the semantics of
+`filter_options_chain_by_dte`. Gate predicates, DTE-scaled premium thresholds, the four
+score components, weight renormalisation, colour thresholds, CC/CSP asymmetries, total
+ordering, and `nearest_miss`. Pure functions only: no I/O, no Cosmos, no FastAPI, no LLM.
+Every quote/Greek read must go through the `options_chain_view` accessors.
+
+**Rusty (Agent Dev)** — owns the FastAPI endpoint (request validation, input assembly:
+category, shares, earnings date, ex-dividend, support level; warming response), the
+`normalize_category` adoption in `agent_runner`, and the **entire frontend**: BFF route,
+page, `BestOptionsView`, `BestOptionsParams`, types, the `SymbolActions` menu entry and the
+`badges.ts` helper. Must read the bundled Next.js 16 docs first per `frontend/AGENTS.md`.
+
+**Livingston (Persistence & Integration)** — owns `OptionsChainCache.get_or_hydrate` and
+the public `schedule_background_refresh` (cache lifecycle is his surface), **and** the
+integration test that composes *real* modules across the Linus/Rusty seam: real cache with
+persistence enabled and disabled, real `best_options`, real endpoint. Must assert that the
+`parameters` block echoed in the response is the object the scorer actually consumed, and
+that a cold miss returns a warming response promptly rather than stalling the event loop.
+Assigning this seam an owner **up front** is the direct application of the 2026-08-18
+lesson: unowned seams are where mutual fakes breed.
+
+**Basher (Tester)** — reviewer gate, and author of the adversarial cases: all-null-Greeks
+chain; every contract failing one gate; the category matrix (5 categories x 2 sides x
+underscore / space / Title / None); stale-only chain; put-sign inversion; DTE boundaries
+(exactly 0, 45, 46, 49, 50); `spread_pct` with a null ask; `insufficient_data`
+renormalisation; and a determinism test asserting two runs over identical input are
+byte-identical. Frontend gate is `npm run lint` + `npm run build` — **no frontend test
+runner exists and none is to be added**.
+
+---
+
+## 10. Lead's acceptance gate
+
+Work is not complete until all five hold:
+
+1. **No LLM call is reachable from the endpoint** — proven by a test that patches the LLM
+   client to raise and asserts a full `200` with a populated table.
+2. **No direct `contract.get("bid"/"ask"/"delta"/...)`** anywhere in the new code —
+   grep-verifiable; a violation is review-blocking per the accepted zero-free decision.
+3. **The `parameters` block is the object the scorer consumed**, not a re-derivation.
+4. **`nearest_miss` is populated on every response**, including the all-red case,
+   verified by test.
+5. **No changes to `options_chain_merge.py`, `options_chain_view.py`, or the `refresh_all`
+   watchdog contract** (2026-06-30 decision).
+
+---
+
+# Design Decision — Forced Alpha execution on manual CC/CSP runs
+
+**Date:** 2026-08-29
+**Author:** Danny (Lead)
+**Ceremony:** Design Review (no implementation; architecture + scope ruling)
+**Participants:** Danny (facilitator); assignments to Linus, Rusty, Livingston, Basher
+**Status:** PROPOSED — two user confirmations required before implementation (§12)
+**Contract version:** `run_trigger` / `force_alpha` v1
+
+---
+
+## 1. Problem
+
+The user wants a way to **manually launch the four CC/CSP agents with a guarantee that
+the Alpha Advisor runs during that invocation**. Today Alpha only runs when it happens
+to be "due": on an alert, or on a prolonged-WAIT streak that has also cleared a cooldown.
+On a normal manual run of a symbol that is WAITing calmly, Alpha never executes, so the
+user cannot ask the question "what would Alpha say about this symbol *right now*?"
+
+Their proposal: dashboard CC/CSP buttons always force Alpha; scheduled runs keep the
+current due-only behaviour.
+
+**Note:** `docs/concepts.md:253` already documents Alpha's triggers as "alerts, prolonged
+WAITs, **on-demand**". The on-demand trigger has never existed in code. This work makes
+the documentation true rather than adding a novel concept.
+
+---
+
+## 2. Current behaviour (verified in code, not from memory)
+
+**The four agents in scope** and their runner entry points:
+
+| Agent type | Module | Runner entry |
+|---|---|---|
+| `covered_call` | `backend/src/covered_call_agent.py` | `AgentRunner.run_symbol_agent` |
+| `cash_secured_put` | `backend/src/cash_secured_put_agent.py` | `AgentRunner.run_symbol_agent` |
+| `open_call_monitor` | `backend/src/open_call_monitor_agent.py` | `AgentRunner.run_position_monitor` |
+| `open_put_monitor` | `backend/src/open_put_monitor_agent.py` | `AgentRunner.run_position_monitor` |
+
+`buy_tracker` is a fifth agent that shares the same trigger surfaces but is **excluded by
+design** — `agent_runner.py:1925` sets `_skip_reviews = agent_type in ("buy_tracker",)`,
+so it has no Supervisor and no Alpha. It must stay excluded under forcing.
+
+**Alpha gates today** (four call sites, all inside `agent_runner.py`):
+
+1. `run_symbol_agent`, alert branch (`:1936-1956`) — Supervisor **and** Alpha in parallel.
+2. `run_symbol_agent`, non-alert branch (`:1957-1985`) — Alpha only if
+   `_detect_prolonged_wait(...)` is True; otherwise Supervisor alone and `alpha_view = None`.
+3. `run_position_monitor`, alert/roll branch (`:2921-2955`) and non-alert branch
+   (`:3000-3045`) — same shape, plus `incomplete_quote_wait` forces `prolonged_wait = False`.
+
+`_detect_prolonged_wait` (`:1227-1284`) requires **both** (a) the last
+`PROLONGED_WAIT_THRESHOLD = 5` activities are all non-alert, non-error WAITs, and (b) at
+least `SUPERVISOR_COOLDOWN = 3` WAITs since the last activity carrying an `alpha_view`.
+
+`_run_alpha_review` (`:1419-1563`) is fully non-blocking: every failure path returns
+`None`, never raises. Its result is persisted only when non-null
+(`cosmos.update_activity_field(field="alpha_view")`), so **"Alpha ran and produced nothing
+usable" is indistinguishable from "Alpha never ran"** in the stored document. That gap is
+what makes a "guaranteed execution" claim unverifiable today.
+
+**Manual trigger surfaces today:**
+
+- `POST /api/trigger/{agent_type}` (`backend/web/app.py:5321`) — reads an optional JSON
+  body, currently only `symbol`; spawns `_run_agent_in_background` (`:4961`) on a bare
+  daemon thread. **No in-flight guard whatsoever.**
+- `POST /api/trigger-all` (`:5531`) — sequential run of all five agents
+  (`_FULL_ANALYSIS_AGENT_ORDER`, `:5354`), guarded by `app.state._full_analysis_status`
+  with a 409 on re-entry.
+- `POST /api/scheduler/tasks/{task_name}/run` (`:5428`) → `TaskRegistry.trigger_task_now`
+  (`scheduler_registry.py:307`) — enqueues **only a task name** onto `self._job_queue`;
+  the queue carries no per-invocation payload, and the worker calls the pre-bound
+  `task.job_func()` with no arguments.
+- Frontend: `TriggerButton.tsx` → BFF `frontend/src/app/api/trigger/[name]/route.ts`
+  (already forwards the raw request body verbatim — no BFF change needed for a new field)
+  → used in `DashboardAgentTables.tsx:124` (agent-level) and `:260` (per-symbol row).
+
+The button's `status === "running"` guard resets as soon as the fire-and-forget POST
+returns (~milliseconds), so it is a visual affordance, **not** a concurrency control.
+
+**No authentication or authorization exists anywhere in `backend/web/app.py`.** Every
+trigger endpoint is open to anyone who can reach the port.
+
+---
+
+## 3. Two hazards that any design must handle
+
+These are the substantive findings; the UX choice is secondary to them.
+
+### H1 (critical) — Forced Alpha silently disables scheduled prolonged-WAIT alerting
+
+`_detect_prolonged_wait`'s cooldown loop breaks on the first activity where
+`act.get("alpha_view")` is truthy. If a forced manual run writes an `alpha_view` onto a
+routine WAIT, the cooldown counter resets to zero. The user who manually forces Alpha on a
+symbol every couple of days would **permanently suppress** that symbol's automatic
+prolonged-WAIT Supervisor+Alpha review — and with it the `send_prolonged_wait_alert`
+Telegram notification. The feature intended to surface more opportunity would quietly
+remove the only automatic mechanism that surfaces it.
+
+**Required:** forced Alpha must be *cooldown-neutral*. Persist the trigger alongside the
+view and make the cooldown scan count only **scheduled/due** reviews.
+
+### H2 — Notification blast radius
+
+The Telegram prolonged-WAIT path (`:2033-2049`, `:3062-3079`) is gated on the
+`prolonged_wait` flag, not on `alpha_view` being present. As long as forcing sets a
+*separate* flag and never sets `prolonged_wait = True`, a forced run cannot push
+notifications. This is the correct default: a manual full-watchlist CC run with forcing
+would otherwise fire a Telegram message per symbol with a MODERATE/STRONG Alpha finding.
+Forced results are visible in the UI (the 🧠 icon in `RecentActivities.tsx:175` and
+`DashboardActivity.tsx:163`, the "Alpha Executed" filter at `:117`, and the Alpha panel in
+`ActivityDetailView.tsx:109`) without any push.
+
+**Secondary cost note:** forcing multiplies Alpha calls by the watchlist size. An
+agent-level CC run over N symbols goes from ~0 Alpha calls to N. At `alpha: "gpt-5.4-mini"`
+(`backend/config.yaml:8`) that is acceptable, but it is the reason §5 keeps the escape
+hatch and §7 insists on a real concurrency guard.
+
+---
+
+## 4. Options considered
+
+| # | Option | Pros | Cons |
+|---|---|---|---|
+| **A** | Dashboard CC/CSP buttons hardcode forcing; no API field (user's literal proposal) | Zero new UI; exactly the requested behaviour | Semantics baked into the button; no cheap manual run; API and UI disagree about what a "manual run" means; scripts/curl can't opt in or out |
+| **B** | `force_alpha` in the trigger contract, **defaulted to `true` for manual invocations**; UI keeps one button | Same one-click UX as A; behaviour is explicit and testable at the API; scripted/scheduled callers can opt out; trivially extensible to a settings toggle later | One extra field to plumb through 6 files |
+| **C** | Two buttons: "Run" and "Run + Alpha" | Most explicit; per-click cost control | Doubles the control surface on a table that already has per-row and per-agent buttons; the user has said they want the guarantee by default, so the plain button becomes dead weight |
+| **D** | Global setting "Force Alpha on manual runs" in Settings | One place to change; no per-click decision | Hidden mode — the same button does different things on different days; needs a new settings key, persistence, and a Cosmos round-trip; worse for a behaviour the user wants to be a guarantee |
+| **E** | Alpha-only re-review of an existing activity (no full agent run) | Cheapest; targeted; no duplicate primary decision | Does not satisfy "guaranteed during that invocation" — it reviews a stale decision against stale market data. Genuinely useful, but as a *later* addition |
+
+**Better idea considered and rejected:** making forcing implicit in "any run of a single
+symbol" (i.e. force when `symbol` is present, don't when it's a full sweep). It reads as
+clever cost control but produces a rule nobody can predict from the UI, and the agent-level
+button — the one the user pointed at — would be the one that doesn't force.
+
+---
+
+## 5. Recommendation — Option B, defaulted on
+
+**Adopt Option B with `force_alpha` defaulting to `true` for every manual invocation of
+the four agents.** The dashboard buttons therefore *do* always force Alpha, which is the
+user's requested behaviour — but the forcing lives in the **contract**, not in the button.
+
+Rationale: the user's stated need is a guarantee, and a guarantee that only exists in a
+React click handler is not a guarantee — it cannot be tested at the seam, cannot be used
+from `curl`, and cannot be reasoned about from a stored activity. Making it a request field
+with a manual-default costs one parameter and buys testability, auditability, and an
+escape hatch for cost-sensitive callers, with **no additional clicks for the user**.
+
+Explicit controls (Option C) are *not* safer here. The dangerous outcomes are H1 and H2 —
+both are backend semantics that a second button would not mitigate, and both are addressed
+below regardless of which button the user presses.
+
+---
+
+## 6. Execution-mode contract (v1)
+
+**Two orthogonal concepts. Do not collapse them.**
+
+```
+run_trigger : "scheduled" | "manual"      # provenance — who asked
+force_alpha : bool                        # policy    — run Alpha unconditionally
+```
+
+A boolean is correct, not an enum. The only three states an enum could express are
+`due-only` / `always` / `never`, and `never` is `force_alpha=false` + no due condition,
+which the existing gate already produces. Adding a third state would require a way to
+suppress a due Alpha — nobody has asked for that, and it would silently disable alerting.
+
+**Defaults by call path:**
+
+| Call path | `run_trigger` | `force_alpha` |
+|---|---|---|
+| `main.OptionsAgentScheduler._run_all_agents_async` (cron) | `scheduled` | `false` |
+| `POST /api/trigger/{agent_type}` | `manual` | `true` (body may override) |
+| `POST /api/trigger-all` | `manual` | `true` (body may override) — see §12-D2 |
+| `POST /api/scheduler/tasks/monitor_agents/run` | `scheduled` | `false` — see §12-D1 |
+
+**Runner signature change** (`agent_runner.py`): add `force_alpha: bool = False` to
+`run_symbol_agent` and `run_position_monitor`. Default `False` means every existing caller,
+including the cron path, is byte-for-byte unchanged in behaviour.
+
+**Gate change** — the minimal edit at all four Alpha call sites:
+
+```
+run_alpha = is_alert or prolonged_wait or force_alpha
+```
+
+`force_alpha` must **not** set `prolonged_wait`, must **not** set `is_alert`, and must not
+alter which market-data block is built (`_build_alpha_options_chain` /
+`_build_market_data_block` already run before the branch in the position monitor and can be
+hoisted identically in `run_symbol_agent`).
+
+**Interaction rules, in order of precedence:**
+
+1. `_skip_reviews` wins. `buy_tracker` never runs Alpha, forced or not.
+2. `incomplete_quote_wait` (position monitor) wins. When quotes are degraded the decision
+   is a mechanical WAIT with sanitized prose; feeding that to Alpha invites a
+   recommendation built on absent quotes. Forcing must **not** override it — record
+   `alpha_status = "skipped_incomplete_quotes"` so the skip is visible, not silent.
+3. Otherwise `force_alpha` runs Alpha exactly as the alert path does, in parallel with the
+   Supervisor via the existing `asyncio.gather`.
+
+---
+
+## 7. Concurrency, idempotency, double clicks
+
+`POST /api/trigger/{agent_type}` currently has **no guard** — two clicks start two full
+concurrent sweeps of the same agent, doubling LLM spend and racing two writers onto the
+same symbol's activity stream. Forcing Alpha makes each duplicate materially more
+expensive. **Fixing this is in scope**, because forcing is what turns a latent waste into
+a real cost.
+
+**Design:** an in-flight registry on `app.state`, keyed by `(agent_type, symbol or "*")`,
+guarded by a `threading.Lock`, mirroring the existing `_full_analysis_status` pattern
+(`:5361`) rather than inventing a new one.
+
+- Second request for the same key → **409** with
+  `{"status": "already_running", "agent_type", "symbol", "started_at", "force_alpha"}`.
+- A `"*"` (all-symbols) run blocks new `"*"` runs of the same agent; per-symbol runs of
+  *different* symbols may proceed in parallel — that is existing, working behaviour and
+  narrowing it is out of scope.
+- The key is released in a `finally` block, and carries `started_at` so a crashed thread
+  cannot wedge the key forever: entries older than the scheduler's own
+  `_MAX_TASK_DURATION_SECONDS` (1800s, `scheduler_registry.py:17`) are treated as stale and
+  reclaimed. Reuse that constant; do not introduce a second timeout number.
+- `/api/trigger-all` keeps its own existing 409 guard, unchanged.
+
+**Idempotency:** the 409 *is* the idempotency mechanism. No client-generated request id —
+a manual run is deliberately not idempotent across time (running CC twice an hour apart is
+a legitimate thing to want); it is only non-re-entrant while in flight.
+
+**Frontend:** `TriggerButton` must stop treating any non-`triggered` response as `error`.
+A 409 is a normal outcome and should render a distinct "already running" state
+(with the existing 3s reset), not a red ✗.
+
+---
+
+## 8. Partial failures
+
+Alpha's non-blocking contract is preserved verbatim: `_run_alpha_review` returning `None`
+must never affect the primary decision, the activity write, the Supervisor, or the exit
+status of the run.
+
+But **"forced and failed" must be observable**, otherwise the guarantee is unfalsifiable.
+Persist a small status field on the activity document alongside `alpha_view`:
+
+```
+alpha_run = {
+  "trigger": "scheduled" | "manual",   # what caused Alpha to be attempted
+  "forced":  true | false,             # was it attempted only because of force_alpha
+  "status":  "ok" | "failed" | "skipped_incomplete_quotes" | "skipped_agent_type"
+}
+```
+
+Written whenever Alpha is *attempted or deliberately skipped under forcing* — including
+when the result is `None`, which is precisely the case that is invisible today. `alpha_view`
+itself keeps its current semantics (present only on success), so every existing reader —
+`ActivityDetailView`, `DashboardActivity`, `RecentActivities`, `ApplyRecommendation`,
+`_build_dashboard_tables` — is unaffected and needs no change.
+
+**Multi-symbol partial failure:** a manual agent-level run already continues past a failing
+symbol (each `run_symbol_agent` wraps its body in `try/except`). Unchanged. The run is
+reported as completed; per-symbol outcomes are read from the activity stream, as today.
+
+---
+
+## 9. H1 mitigation — cooldown neutrality (mandatory, not optional)
+
+`_detect_prolonged_wait`'s cooldown loop must change from:
+
+```
+if act.get("alpha_view"): break
+```
+
+to: break only on activities whose Alpha was a **scheduled/due** review — i.e. where
+`alpha_run.forced` is not `true`. Activities written before this change have no
+`alpha_run` field; treat missing metadata as *not forced* (break), which preserves today's
+behaviour exactly for all historical documents and is the conservative direction (it can
+only delay a review, never suppress an alert that would otherwise fire).
+
+Without this change, shipping forced Alpha ships a regression to the alerting path the
+user is already unhappy about — the same complaint that drove the Best Options work.
+
+---
+
+## 10. Confirmations, permissions, audit
+
+- **Confirmations:** none for a single-symbol run. For `/api/trigger-all` with forcing —
+  the most expensive action in the system — the UI should state the cost in the button
+  title/tooltip ("runs all agents over the full watchlist, Alpha forced"). No modal;
+  the 409 guard already prevents the accidental-double-click failure mode. If the user
+  wants a modal there, that is a UI preference, not an architectural requirement.
+- **Permissions:** not applicable — the app has no auth layer at all. This is worth
+  recording explicitly: the concurrency guard in §7 is the *only* protection against an
+  unauthenticated caller looping an expensive forced sweep. Do **not** add an auth
+  mechanism as part of this task; note it as a standing risk.
+- **Audit metadata:** in addition to `alpha_run` (§8), extend the existing execution trace
+  (`_record_trace`, `agent_runner.py:1186`) with `run_trigger` and `force_alpha` so the
+  Agent Traces page can answer "was this a manual forced run?" without inference. Trace
+  writing is already best-effort and never raises — keep it that way.
+- **Observable status:** the trigger endpoint returns
+  `{"status": "triggered", "agent_type", "symbol", "force_alpha": true}` so the caller can
+  confirm the mode it actually got. A polling status endpoint for per-agent runs is **out
+  of scope** — the in-flight registry's 409 payload plus the existing activity stream cover
+  the need, and `/api/trigger-all/status` already exists for the sequential run.
+
+---
+
+## 11. Test cases
+
+**Backend — gate semantics (`agent_runner`), new `backend/tests/test_force_alpha_execution.py`:**
+
+1. `run_symbol_agent`, calm WAIT, `force_alpha=False` → Alpha **not** called (regression
+   lock on today's behaviour).
+2. Same, `force_alpha=True` → Alpha called exactly once; Supervisor still called exactly
+   once; both still run concurrently.
+3. Alert + `force_alpha=True` → Alpha called exactly **once**, not twice (no double-gather).
+4. Prolonged WAIT + `force_alpha=True` → Alpha once; `alpha_run.forced` is `false`
+   (a due review that also happened to be forced is recorded as due, so it correctly
+   resets the cooldown).
+5. `force_alpha=True` never sets `prolonged_wait` → **no** `send_prolonged_wait_alert`,
+   even with a STRONG Alpha finding. Assert on the notifier mock, not on log text.
+6. `force_alpha=True` never sets `is_alert` → no `send_alert`.
+7. `buy_tracker` + `force_alpha=True` → Alpha not called; `alpha_run.status ==
+   "skipped_agent_type"` (or no field, per Linus's chosen minimal shape — pick one and
+   assert it).
+8. `run_position_monitor` with `incomplete_quote_wait=True` + `force_alpha=True` → Alpha
+   not called; `alpha_run.status == "skipped_incomplete_quotes"`.
+9. `_run_alpha_review` returns `None` under forcing → activity still written, Supervisor
+   view still persisted, `alpha_run.status == "failed"`, no exception escapes.
+10. `_run_alpha_review` raises under forcing → same as (9). The primary decision must
+    survive an Alpha exception.
+11. Both `run_symbol_agent` and `run_position_monitor` covered for (2), (5), (9) — the two
+    entry points have independently written gate code and will drift otherwise.
+
+**Backend — cooldown neutrality (H1), same file:**
+
+12. History = 5 WAITs, the most recent carrying `alpha_view` + `alpha_run.forced=true`
+    → `_detect_prolonged_wait` still returns `True` (forced review did not consume the
+    cooldown).
+13. Same but `alpha_run.forced=false` → returns `False` (scheduled review consumed it —
+    today's behaviour preserved).
+14. Same but the activity has `alpha_view` and **no** `alpha_run` field (legacy document)
+    → returns `False` (backward-compatible default).
+
+**Backend — API (`backend/web/app.py`):**
+
+15. `POST /api/trigger/covered_call` with no body → runner invoked with `force_alpha=True`,
+    response echoes `"force_alpha": true`.
+16. Body `{"force_alpha": false}` → runner invoked with `force_alpha=False`.
+17. Body `{"symbol": "AAPL"}` → symbol forwarded **and** `force_alpha=True` (the two fields
+    are independent).
+18. Second identical request while the first is in flight → 409, second runner invocation
+    never happens.
+19. Two per-symbol requests for *different* symbols of the same agent → both proceed.
+20. Key released after completion → a third request succeeds.
+21. Key released after the runner **raises** → a subsequent request still succeeds
+    (guard uses `finally`).
+22. Stale key older than `_MAX_TASK_DURATION_SECONDS` is reclaimed.
+23. `POST /api/trigger/buy_tracker` → accepted, runs, no Alpha (forcing is inert, not an
+    error).
+24. Unknown agent type → still 404 (unchanged).
+25. Cron path: `main._run_all_agents_async` invokes all agents with `force_alpha=False` —
+    a direct regression lock on "scheduled behaviour is untouched".
+
+**Seam / integration (real modules, no mutual fakes):**
+
+26. End-to-end with the real `agent_runner` + real FastAPI route + fake LLM client:
+    a forced manual CC run on one symbol produces an activity document containing both
+    `alpha_view` and `alpha_run.forced=true`, and the dashboard builder renders it
+    unchanged. This test owns the API↔runner seam and is assigned up front (see §13).
+
+**Frontend:** lint + build only. No FE test runner exists and none is to be added.
+Manual check: 409 renders "already running", not an error.
+
+---
+
+## 12. Decisions requiring the user's confirmation (do not implement until answered)
+
+**D1 — Scheduler "Run Now" is deliberately *not* forced.**
+`POST /api/scheduler/tasks/monitor_agents/run` is the "Run Now" button on the Settings
+page's Monitoring Agent card. It routes through `TaskRegistry`, whose job queue carries
+only a task name and whose jobs are pre-bound zero-argument callables. Forcing there means
+threading a payload through the queue and the worker — a change to shared scheduling
+machinery used by ten unrelated tasks, for one flag. Proposal: that button keeps
+**scheduled** semantics ("run the scheduled job now"), and the *dashboard* buttons carry
+**manual/forced** semantics. This means two manual-looking buttons behave differently, and
+that is a user-facing semantic split which must be confirmed, not assumed. If the user
+wants both forced, the registry change becomes part of the task and Linus owns it.
+
+**D2 — Does "Full analysis" (`/api/trigger-all`) force Alpha too?**
+It is manual and invokes the same four agents, so consistency says yes; it is also the
+single most expensive action in the system (five agents × the entire watchlist, one extra
+Alpha call per symbol). Proposal: **yes, force**, for consistency with the rule "manual
+means forced". Confirm, because it is the biggest cost delta in this design.
+
+Both are semantic choices about what a button means. Neither is being silently adopted.
+
+---
+
+## 13. Files and owners
+
+| File | Change | Owner |
+|---|---|---|
+| `backend/src/agent_runner.py` | `force_alpha` param on `run_symbol_agent` + `run_position_monitor`; gate at 4 call sites; `alpha_run` persistence; `_detect_prolonged_wait` cooldown neutrality; `run_trigger`/`force_alpha` in `_record_trace` | **Linus** |
+| `backend/src/covered_call_agent.py`, `cash_secured_put_agent.py`, `open_call_monitor_agent.py`, `open_put_monitor_agent.py` | pass-through `force_alpha` param, default `False` | **Linus** |
+| `backend/src/main.py` (`_run_all_agents_async`) | explicit `force_alpha=False` — scheduled path stays due-only | **Linus** |
+| `backend/src/scheduler_registry.py` | **untouched** unless D1 is answered "force it too" | — |
+| `backend/web/app.py` (`_run_agent_in_background`, `/api/trigger/{agent_type}`, `_run_all_agents_sequentially`, `/api/trigger-all`, new in-flight registry) | parse `force_alpha`, default `true`; concurrency guard + 409 | **Rusty** |
+| `frontend/src/components/TriggerButton.tsx`, `DashboardAgentTables.tsx` | 409 → "already running" state; tooltip stating Alpha is forced | **Rusty** |
+| `frontend/src/app/api/trigger/[name]/route.ts` | **no change** — already forwards the raw body | — |
+| `backend/tests/test_force_alpha_execution.py` (new) | cases 1–25 | **Linus**, adversarial additions by **Basher** |
+| seam/integration test (case 26) | real runner + real route, fake LLM only | **Livingston** (assigned up front, per the 2026-08-18 unowned-seam lesson) |
+| `docs/concepts.md` (§Alpha Advisor, ~L249-302) | document the on-demand trigger that is already claimed at L253; document cooldown neutrality | **Scribe** |
+| review gate | H1 regression, notification blast radius, 409 correctness | **Basher** |
+
+Frontend gate is lint + build only.
+
+---
+
+## 14. Named non-goals
+
+- No change to Alpha's prompt, schema, hard gates, or model.
+- No Alpha-only re-review of an existing activity (Option E) — worth doing later, separate decision.
+- No settings-level toggle (Option D) — the contract in §6 makes adding one later trivial.
+- No auth. The lack of it is recorded as a standing risk, not fixed here.
+- This does not fix the underlying "too few alerts" complaint. It gives the user a way to
+  interrogate Alpha on demand — and, via H1, stops the new feature from making the
+  alerting problem worse.
+
+---
+
+## 15. Resumen para el usuario (ES)
+
+**Qué se propone.** Los botones de CC/CSP del dashboard forzarán siempre la ejecución del
+Alpha Advisor, tal y como pediste. La diferencia con tu propuesta literal es dónde vive esa
+regla: no en el botón, sino en el contrato de la API (`run_trigger: manual` ⇒
+`force_alpha: true`). Para ti no cambia nada — un solo clic, un solo botón — pero la
+garantía queda comprobable, auditable y utilizable desde scripts. Las ejecuciones
+programadas (cron) mantienen exactamente el comportamiento actual: Alpha solo cuando toca.
+
+**Aplica a cuatro agentes:** covered_call, cash_secured_put, open_call_monitor y
+open_put_monitor. `buy_tracker` queda fuera (nunca ha tenido Supervisor ni Alpha).
+
+**Dos hallazgos importantes que la propuesta tal cual habría roto:**
+1. Forzar Alpha reinicia el *cooldown* de la revisión automática de "WAIT prolongado". Si
+   forzaras Alpha a menudo, dejarías de recibir para siempre las alertas automáticas de
+   Telegram de ese símbolo — justo lo contrario de lo que buscas. Se corrige marcando las
+   revisiones forzadas para que no cuenten como cooldown.
+2. Forzar Alpha **no** enviará notificaciones de Telegram. El resultado se ve en el
+   dashboard (icono 🧠, filtro "Alpha Executed", panel de detalle), pero una ejecución
+   manual sobre toda la watchlist no te llenará el móvil de mensajes.
+
+**Además:** hoy el botón de "Run" no tiene ningún control de concurrencia — dos clics
+lanzan dos análisis completos simultáneos. Con Alpha forzado eso cuesta el doble, así que
+se añade un bloqueo: el segundo clic responde "ya se está ejecutando" en vez de duplicar
+el trabajo.
+
+**Dos preguntas que necesitan tu respuesta antes de implementar:**
+1. El botón "Run Now" de la página de Settings (tarjeta Monitoring Agent) va por el
+   planificador. ¿Lo dejamos con semántica *programada* (sin forzar Alpha) y solo fuerzan
+   los botones del dashboard? Eso implica que dos botones que parecen manuales se comportan
+   distinto. Propuesta: sí, dejarlo sin forzar.
+2. "Full analysis" (ejecutar los cinco agentes de golpe): ¿también fuerza Alpha? Es la
+   acción más cara del sistema (una llamada extra de Alpha por símbolo). Propuesta: sí, por
+   coherencia con "manual ⇒ forzado".
+
+---
+
+# Decision Draft -- Best Options: `best_options.py` scoring/gating logic + `category_params.py`
+
+**Date:** 2026-08-29
+**Author:** Linus (Quant Dev)
+**Status:** DRAFT, revised -- implementation complete for my owned surface (`src/best_options.py`,
+`src/category_params.py`, `options_chain_filters.filter_options_chain_by_dte`); ready for
+Basher's adversarial review and Livingston/Rusty's seam integration test.
+**2026-08-29 revision:** item 1 below (row inclusion) was corrected same-day per an explicit
+product-owner instruction, overriding my initial reading. See "Row inclusion -- resolved"
+below; this is now the confirmed, final behaviour, not an open question.
+**Traces to:** `.squad/decisions/inbox/danny-best-options-design.md` (ACCEPTED), section 9
+assignment "Linus (Quant Dev) -- owns `best_options.py`, `category_params.py`, and
+`filter_options_chain_by_dte`'s semantics".
+
+## What changed
+
+* **`backend/src/category_params.py`** (new) -- the single category normaliser and threshold
+  accessor the design calls for to close finding F9 (`agent_runner.py` and `rule_evaluator.py`
+  key categories on different string forms today). `resolve_category`/`normalize_category`/
+  `category_label`/`thresholds_for`. Thresholds are read verbatim from
+  `rule_evaluator.CATEGORY_THRESHOLDS_CC`/`CATEGORY_THRESHOLDS_CSP` -- never redefined here --
+  and cross-checked byte-for-byte against that source in `tests/test_category_params.py`.
+* **`backend/src/options_chain_filters.py`** -- added `filter_options_chain_by_dte`. This is the
+  DTE row-inclusion filter Best Options applies; it drops whole expiration buckets outside
+  `[min_dte, max_dte]`, never individual contracts within a kept bucket. A second, category-aware
+  delta-band row filter is applied separately, locally inside `best_options.py` (see below) --
+  not added to this shared module, since it needs the category thresholds `best_options.py`
+  already resolves.
+* **`backend/src/best_options.py`** (new) -- `evaluate_best_options(...)`, matching the design's
+  frozen section 7 signature exactly. Pure, total, deterministic; zero LLM/Cosmos/FastAPI
+  imports; every quote/Greek read goes through `options_chain_view.contract_view`/
+  `is_candidate_eligible` (grep-verified by a dedicated test, see below).
+
+## Row inclusion -- resolved (2026-08-29)
+
+**Final, confirmed behaviour: row inclusion requires BOTH the DTE window AND the category
+delta band.** A side's primary `rows` contain all and only contracts that are (a) inside the
+requested DTE window and (b) have `abs(delta)` inside that category/side's configured
+`[delta_lo, delta_hi]` band. Contracts failing either filter never appear in `rows`.
+
+What happens to excluded-by-delta contracts:
+
+* They are never silently dropped from the response entirely -- `nearest_miss` is computed
+  over the full DTE-window set (in-band and out-of-band together), so a contract just outside
+  the band remains the direct, named answer to "why am I not seeing this contract" when it is
+  the closest miss.
+* Each side's result additionally reports `excluded_by_delta_band`: a count of how many
+  DTE-window contracts the delta filter removed, for at-a-glance transparency (the `thresholds`
+  block in `parameters` already shows the exact band applied).
+* The delta-band check itself is NOT the wide, non-category-aware, boundary-violating
+  `filter_options_chain_by_delta` finding F2 warns against -- it reuses this module's own
+  `_gate_delta_band` (reads delta only via `options_chain_view` accessors, uses the category's
+  configured band, `abs()`-consistent per F8) as the filter predicate, computed once per
+  contract and reused both for inclusion and for describing exclusions in `nearest_miss`.
+
+**Why this reverses my first pass.** Design section 4.1's literal text ("nothing inside the
+[DTE] window is ever hidden") together with section 4.2's framing of delta band as "Layer A
+gate G2" reads, taken in isolation, as if delta band only coloured a row red rather than
+excluding it -- and finding F2's warning against reusing the *existing* wide delta filter
+reinforced that reading. My first implementation followed that literal text. The task brief
+that assigned this work, however, was explicit that the delta range is a second user-facing
+filter alongside DTE ("retain every option surviving those two user-facing filters"), and the
+product owner confirmed this explicitly and unambiguously after reviewing the first pass:
+the displayed chain must be filtered by the configured delta range, with only contracts
+surviving both filters shown as primary rows, and `nearest_miss`/`excluded_by_delta_band` used
+for the excluded set instead. That confirmation is what this revision implements. **Design
+section 4.1/4.2's wording should be treated as needing a follow-up edit** by Danny to avoid
+the next reader (or Basher, reviewing against the doc rather than this decision) reaching the
+same wrong conclusion I initially did.
+
+Safety gates that remain gates, not filters, on the now-delta-filtered rows: **G1 tradability**
+and **G3 earnings span** still colour an in-band row red (score `null`) without removing it --
+only the delta band moved from "gate" to "filter". Nothing else about section 4.2-4.5's
+colour/score/ordering machinery changed.
+
+## Interpretive decisions (design underspecifies these; recording for Danny/Basher to confirm)
+
+1. **Earnings-span gate direction -- found and fixed a real bug against my own domain
+   convention.** Design section 4.2's one-line description of G3 ("expiration falls after a
+   known next earnings date") reads, taken completely literally, as the *pass* condition. My
+   first implementation took it literally and was wrong: it is the *fail* condition. I caught
+   this by cross-checking against `src/skills/earnings-gate-sell/SKILL.md` -- the established,
+   detailed, already-battle-tested convention in this codebase -- which documents that the risk
+   is a position remaining *open during* earnings, i.e. expiration falling *after* earnings is
+   unsafe. Fixed: G3 now **fails** when `expiration > next_earnings_date` (the position would
+   span the announcement) and **passes** when expiration is on/before it. Unknown earnings date
+   is never a gate failure (design F10) regardless of this fix. Flagging because the design
+   doc's own wording is genuinely ambiguous and someone reading it fast (as I initially did)
+   will implement the reverse of the intended behavior.
+
+2. **`_component_liquidity` requires both halves (open interest *and* full bid/ask/mid) to be
+   computable, or the whole component (not half) is dropped from renormalization.** The design's
+   formula doesn't specify a partial-data fallback; I didn't invent one beyond the literal spec.
+
+3. **`below_category_floor` vs. the red-triggering wait-floor breach are two distinct
+   conditions, both implemented.** `below_category_floor` (`premium_pct < effective_min_pct`,
+   the stricter "preferred" threshold) is purely informational and never changes colour, per
+   design F10's list. Separately, `premium_pct < effective_wait_pct` (the looser threshold) is
+   what actually forces the row red -- I added an explicit `premium_below_wait_floor` flag
+   alongside the colour change for transparency, since the design's prose only illustrates one
+   worked example rather than naming this flag directly.
+
+4. **`nearest_miss`'s tiering algorithm is an original design**, since the spec gives one
+   illustrative example ("missed premium floor by 0.12pp...") rather than a full ranking rule.
+   I implemented a 6-tier deterministic scheme from most- to least-fixable (premium-floor miss
+   nearest a passing score > yellow-band score gap > insufficient scoring data > delta-band
+   gate miss > earnings-span gate fail > tradability gate fail, the least fixable), each tier
+   ranked internally by a quantified gap where one exists. This is the one piece of genuinely
+   new design logic in the file and the part most likely to need adjustment once Basher's
+   adversarial cases exercise it.
+
+5. **`parameters.dte.source` ("default" vs. "query") is inferred, not carried explicitly.** The
+   frozen pure-function signature (`dte_min: int, dte_max: int`, no sentinel) can't distinguish
+   "caller passed the endpoint's own defaults" from "caller explicitly asked for 0/49" -- I
+   report `"default"` only when `(dte_min, dte_max) == (0, 49)` literally. Disclosed limitation,
+   not expected to matter in practice since the endpoint's own defaults are 0/49.
+
+## Note for Rusty (not my file to change)
+
+`best_options.py` exports `DEFAULT_DTE_MIN = 0` / `DEFAULT_DTE_MAX = 49` specifically so
+`web/app.py`'s `Query(default=0, ...)`/`Query(default=49, ...)` can import them instead of
+re-declaring the same two literals a second time. Today `web/app.py` still hardcodes `0`/`49`
+directly in the `Query(...)` decorators -- functionally correct today, but a second source of
+truth for that pair the moment either ever needs to change. Low priority, flagging only.
+
+## Verification
+
+* New focused tests (all green): `tests/test_category_params.py` (33),
+  `tests/test_options_chain_dte_filter.py` (9), `tests/test_best_options.py` (27) -- covering
+  the DTE+delta-band row-inclusion pair (including a mixed in-band/excluded-contract case and
+  the `excluded_by_delta_band` count), the corrected G3 direction (both directions plus the
+  unknown case), green/red colour thresholds, put delta sign handling via `abs()`, CC vs. CSP
+  premium-basis and collateral asymmetries, `coverable_contracts`/`no_shares_held`,
+  `nearest_miss` availability (including the empty-window, all-green, and delta-excluded cases)
+  and tier ordering, total ordering + 400-row truncation, byte-identical determinism on
+  repeated calls, non-mutation of the input chain, a source-grep guard against direct
+  `contract.get("bid"/"ask"/...)` reads, and category/DTE provenance flags.
+* Full backend suite: 1523 passed, 11 failed / 16 errored -- confirmed via `git stash` to be
+  pre-existing async/event-loop failures in `test_yfinance_data_provider.py` /
+  `test_yfinance_technicals_dividend_availability.py`, unrelated to this change and reproducing
+  identically with none of this work applied.
+* Confirmed `web/app.py`'s existing best-options endpoint call already matches this module's
+  frozen signature exactly (`side`, `category`, `total_shares`, `next_earnings_date`,
+  `ex_dividend_date`, `support_level`, `dte_min`, `dte_max`, `now`) and returns the envelope
+  verbatim.
+
+## Test cases recommended for Basher's adversarial pass (not covered above)
+
+* Malformed/partial contracts mid-chain (missing keys entirely, non-numeric strike keys,
+  non-dict bucket values) alongside well-formed ones in the same bucket.
+* Extreme DTE values (`dte_min > dte_max` swap behavior, `dte_max` far beyond `SYSTEM_DTE_CAP`).
+* Category values that collide across aliasing forms in adversarial casing/whitespace
+  combinations beyond the happy-path forms I covered.
+* Concurrent-side (`side="both"`) truncation/nearest_miss independence -- confirming a
+  truncated calls side never influences the puts side's own nearest_miss or ordering.
+* `ex_dividend_date`/`support_level` boundary conditions (exactly on the DTE window edge,
+  exactly at the support level, negative/zero support level).
+* Fuzz/property-style test asserting `evaluate_best_options` never raises for any
+  reasonably-malformed input (only structural type errors on `chain` itself, which already
+  degrades to `{}` rather than raising).
+* Delta-band boundary precision: contracts with `abs(delta)` exactly equal to `delta_lo`/
+  `delta_hi` (inclusive edges) and just outside by a tiny float epsilon, to confirm no
+  off-by-epsilon inclusion/exclusion drift.
+* A DTE-window bucket where every contract is delta-excluded (`rows == []` but
+  `excluded_by_delta_band == total_contracts_in_window`) -- confirming `nearest_miss` still
+  surfaces the closest excluded contract rather than reporting `no_contracts_in_window` (that
+  reason must be reserved for a genuinely empty DTE-window bucket).
+
+---
+
+# Linus — Force Alpha runner/domain execution (implementation report)
+
+Status: implemented, tested, ready for team review.
+Scope: `backend/src/agent_runner.py`, the four thin agent wrapper modules
+(`covered_call_agent.py`, `cash_secured_put_agent.py`, `open_call_monitor_agent.py`,
+`open_put_monitor_agent.py`), `backend/src/main.py` (`_run_all_agents_async` cron loop).
+Explicitly NOT touched: `backend/src/scheduler_registry.py`, `backend/web/app.py`, frontend.
+
+## D1/D2 resolution (as implemented)
+
+Danny's design (`danny-force-alpha-design.md` §12) originally proposed: Settings "Run Now"
+stays scheduled/unforced; trigger-all becomes forced. The task prompt I was given, and the
+confirming `copilot-force-alpha-semantics.md`, both say the opposite in both directions:
+dashboard-triggered runs **and** Settings "Run Now" pass `manual` + `force_alpha=True`;
+scheduled cron **and** trigger-all/"Full analysis" remain `scheduled`/due-only
+(`force_alpha=False`). I treated the task prompt + confirmation note as the final,
+already-decided answer, superseding Danny's original §12 proposal. This is what's implemented
+at the runner level, and I've confirmed (via inspecting `web/app.py`'s diff after the fact)
+that the API layer was wired to match this exact resolution — no gap between layers.
+
+## Contract implemented
+
+`run_symbol_agent(...)` and `run_position_monitor(...)` (and their two internal helpers)
+now accept:
+- `run_trigger: str = "scheduled"` — `"scheduled"` or `"manual"`, pure provenance, never
+  gates Alpha by itself.
+- `force_alpha: bool = False` — requests Alpha run unconditionally for this invocation only.
+
+Gate: `run_alpha = is_alert or prolonged_wait or force_alpha`.
+`forced = force_alpha and not (is_alert or prolonged_wait)` — "forced" means forcing was the
+*sole* reason Alpha ran this time; a review that was independently due (alert or prolonged
+wait) and also happened to be forced is **not** marked forced, and correctly still resets the
+cooldown (deliberate, matches design case 4).
+
+Precedence when several rules could apply (highest wins): `_skip_reviews` (buy_tracker agent
+type has no Alpha playbook) > `incomplete_quote_wait` (position-monitor only — a genuinely
+bad/missing buyback quote blocks Alpha even if forced) > `force_alpha`.
+
+## `alpha_run` activity field (new)
+
+Persisted to Cosmos immediately after the existing `alpha_view` write, same call pattern:
+```
+{"trigger": run_trigger, "forced": bool,
+ "status": "ok" | "failed" | "skipped_agent_type" | "skipped_incomplete_quotes"}
+```
+Written whenever Alpha is attempted for any reason, or deliberately skipped specifically
+because forcing was requested but blocked by a higher-precedence rule. **Not** written on the
+untouched "supervisor alone, nothing due, nothing forced" path — today's document shape is
+byte-identical for the common unforced case.
+
+## H1 fix (mandatory, per design §9): forced reviews no longer consume the due cooldown
+
+`_detect_prolonged_wait`'s cooldown scan previously broke on the first activity carrying
+`alpha_view`, treating any past review as having consumed the cooldown. A forced-but-not-due
+review also carries `alpha_view`, so without this fix, calling force_alpha would silently
+reset/suppress the due prolonged-WAIT alert — exactly what the task said must never happen.
+Fixed: the scan now only breaks when that activity's `alpha_run.forced` is not `True`; forced
+reviews are skipped over (still counted as a plain WAIT toward the threshold, just don't reset
+the cooldown clock). Legacy activities with no `alpha_run` field at all are conservatively
+treated as **not forced**, preserving old behavior exactly for historical documents.
+
+## H2 (Telegram): unaffected by construction
+
+`send_alert`/`send_prolonged_wait_alert` gates remain exactly `if is_alert...`/
+`if prolonged_wait...`. Forcing adds a third OR-branch only to "should Alpha run", never to
+"should Telegram fire". Confirmed by reading the code, not just by test — there was no
+alert/notification logic near the new branch to accidentally trip.
+
+## Test coverage vs. design §11 (25 cases + seam)
+
+Implemented and passing in `backend/tests/test_force_alpha_execution.py` (23 tests): cases
+1-14 — both entry points' gate semantics, the two `_detect_prolonged_wait` cooldown-neutrality
+cases (12 due-forced, 13 forced-not-due-doesn't-reset, 14 legacy-missing-metadata), buy_tracker
+skip, incomplete_quote_wait precedence on the monitor path, Alpha-returns-None and
+Alpha-raises-under-forcing, and confirmation of no extra Telegram sends from forcing alone —
+plus supplementary (unnumbered) pass-through tests for the four wrapper modules and `main.py`'s
+cron regression lock.
+
+Out of scope for this file, owned by other agents: cases 15-25 (API-layer request/response
+shape, concurrency/locking, endpoint defaults — Rusty), case 26 (frontend/API seam —
+Livingston). I did not write or duplicate those.
+
+## 2026-08-29 correction — Settings "Run Now" / "Run Full" do NOT force Alpha
+
+**Superseded by:** `.squad/decisions/inbox/copilot-force-alpha-semantics-superseded.md`
+(binding user correction). The "Handoff note" above, and my original history entry, described
+the API layer as wiring Settings "Run Now" to `force_alpha=True`. That policy has been
+corrected: **only the dashboard CC/CSP buttons** pass `run_trigger="manual",
+force_alpha=True`. Settings "Run Now" (single-agent and "Run Full"/`/api/trigger-all`) and all
+scheduled executions must call through with `force_alpha=False` (due-only), same as today's
+pre-feature behavior — `run_trigger` may still be recorded as `"manual"` for provenance, but it
+must never flip the Alpha gate on its own.
+
+**Impact on this file's runner/domain layer: none.** `run_symbol_agent`/`run_position_monitor`
+and the four wrapper modules only expose the generic `run_trigger`/`force_alpha` mechanism —
+they never encode policy about *which caller* passes what. The cooldown-neutrality fix (H1),
+the `alpha_run` audit schema, and the "no force-only Telegram" guarantee (H2) are all
+caller-agnostic and remain correct and unchanged under the corrected policy. `main.py`'s cron
+path already passed `force_alpha=False` explicitly (never needed the fix). No production code
+or test in `backend/tests/test_force_alpha_execution.py` asserts anything about which HTTP
+endpoint maps to which flag value, so nothing here required a change; verified by re-running
+the full 23-test file after this correction landed (still 23 passed).
+
+**Still needs attention from the API owner (not mine to fix):** `backend/tests/
+test_force_alpha_plumbing.py` and `backend/tests/test_trigger_force_alpha_scoping.py` (both
+outside my ownership) currently assert the old, now-superseded policy in places (e.g. Settings
+"Run Now"/monitoring-agent button forcing Alpha) — those need updating to match the corrected
+decision, alongside the `web/app.py` endpoint defaults themselves.
+
+## Handoff note (already resolved, no action needed)
+
+At the time I made the scope decision not to touch `scheduler_registry.py`/`web/app.py`
+myself (reasoning: that's framework/API plumbing, outside "own runner/domain execution only"
+and my charter's "does NOT own framework plumbing"), I flagged this as something the API owner
+would still need to wire. Checking the working tree after finishing my part, the API owner had
+already implemented this concurrently: `TaskRegistry.trigger_task_now`/`_worker_loop` in
+`scheduler_registry.py` now thread arbitrary `job_kwargs` through to each task's `job_func`,
+filtered via `inspect.signature` so tasks that don't declare `run_trigger`/`force_alpha` are
+unaffected; `web/app.py`'s dashboard/"Run Now" endpoints call
+`trigger_task_now(task_name, run_trigger="manual", force_alpha=True)`, while "Full analysis"/
+trigger-all keeps `force_alpha=False`. I verified the kwarg names and value semantics used
+there match this runner-level contract exactly (`run_trigger` "scheduled"|"manual",
+`force_alpha` bool) — no integration gap between the two layers. No further action needed on
+my side.
+
+---
+
+# Decision Draft -- Best Options: `get_or_hydrate` + public `schedule_background_refresh`
+
+**Date:** 2026-08-29
+**Author:** Livingston (Persistence & Integration)
+**Status:** DRAFT -- implementation complete for my owned surface; seam integration test deferred (Linus's `best_options.py` / Rusty's endpoint not yet present in the tree)
+**Traces to:** `.squad/decisions/inbox/danny-best-options-design.md` section 7/9 (ACCEPTED), assignment "Livingston (Persistence & Integration) -- owns `OptionsChainCache.get_or_hydrate` and the public `schedule_background_refresh`"
+
+## What changed
+
+`backend/src/options_chain_cache.py` gains two new public methods on `OptionsChainCache`, additive only --
+nothing existing was renamed, removed, or had its behavior changed:
+
+* **`get_or_hydrate(symbol) -> str | None`** -- the new non-blocking accessor F6 calls for. Returns a memory
+  hit (still triggering the pre-existing stale-while-revalidate background refresh if that entry is past
+  its TTL -- same trigger `get_or_load_async` already uses), else a persistence-store hydrate (no provider
+  I/O), else `None`. A true cold/missing cache never falls through to `refresh()` here -- that is the
+  entire point versus `get_or_load`/`get_or_load_async`, which both do fetch on a true cold miss (the latter
+  unconditionally, per F6's own finding). `get_or_hydrate` cannot block on a provider or on another thread's
+  in-flight refresh; the only I/O is the identical in-memory read / persistence hydrate the two existing
+  accessors already perform on a miss.
+* **`schedule_background_refresh(symbol) -> None`** -- public, thin wrapper around the existing internal
+  `_schedule_background_refresh` (previously used only for the SWR path from inside `get_or_load_async`).
+  Same non-blocking try-acquire of the symbol's OS lock, same at-most-one-refresh-in-flight-per-symbol
+  guarantee, same fire-and-forget `asyncio.create_task`. No new locking primitive was introduced -- reusing
+  the existing one was deliberate: introducing a second lock/mechanism for "the same symbol, a different
+  call site" is exactly the kind of latent divergence F9 warns about elsewhere in this design.
+
+**Explicitly not done, per the design and my charter's boundaries:**
+
+* No `asyncio.wait_for`/timeout/cancellation wraps the scheduled refresh anywhere in this change. The
+  design calls this out directly (section 7): cancelling mid-flight would abandon the symbol's OS lock while
+  it is possibly mid-Cosmos-shard-write, which is strictly worse than a caller seeing a "warming" state and
+  retrying. A regression test (`test_slow_inflight_refresh_completes_uninterrupted_no_timeout_added`) pins
+  this: a deliberately slow patched fetch still lands its persistence write with no interference.
+* `refresh_all` (the scheduler watchdog, 2026-06-30 decision) is untouched -- no line inside it was read or
+  modified, and every existing `TestRefreshAllWatchdogRegression` test still passes unmodified.
+* No change to `options_chain_merge.py`, `options_chain_view.py`, or any accepted-market-semantics code --
+  outside this charter's boundaries and not needed for this surface.
+* `best_options.py` / `category_params.py` (Linus) and the FastAPI endpoint / frontend (Rusty) do not exist
+  in the tree yet -- the real-module seam integration test the design assigns to me ("real cache with
+  persistence enabled and disabled, real `best_options`, real endpoint... parameters block echoed is the
+  object the scorer actually consumed... a cold miss returns a warming response promptly") is not feasible
+  without a mutual fake for the missing side, which is the exact anti-pattern the 2026-08-18 lesson
+  (referenced in my own assignment text) warns against. Deferred until at least one of those lands;
+  flagging here so the seam has a named owner and a named blocker, not a silent gap.
+
+## Tests added
+
+`backend/tests/test_options_chain_cache.py`: two new classes, 10 new tests, composing the real
+`OptionsChainCache` against the existing `_FakeStore` double (same fixture already used for every other
+persistence-lifecycle test in this file, consistent with the file's own stated hermetic convention -- no
+network, no real Cosmos):
+
+* `TestGetOrHydrateCacheStates` (6 tests) -- warm/fresh (no store touch, no schedule), warm-but-stale (stale
+  value still returned immediately, background refresh lands separately), cold-but-persisted (hydrates,
+  zero provider calls), true cold/missing (returns `None`, zero provider calls, under 0.5s), and the
+  P1-style running-event-loop-never-blocks regression (a heartbeat coroutine on the same loop keeps ticking
+  through the cold-miss call).
+* `TestScheduleBackgroundRefreshPublicSurface` (3 tests) -- schedules a refresh that lands and persists;
+  de-duplicates against an already-in-flight refresh for the same symbol (no duplicate fetch); a
+  deliberately slow refresh still completes and persists (no added timeout).
+
+**Test outcome:** `test_options_chain_cache.py` 56/56 (was 46/46 + 10 new). Targeted persistence sweep
+(`test_options_chain_cache.py` + `test_options_chain_store.py` + `test_options_chain_persistence_integration.py`
++ `test_repair_options_chain_shards.py`): 145/145. Full backend suite: 1454 passed, 11 failed, 16 errors --
+all in `test_yfinance_data_provider.py` / `test_yfinance_technicals_dividend_availability.py`, confirmed
+pre-existing and unrelated by reproducing identically on `git stash` (unmodified tree) and in file-isolation
+runs; matches the exact order/network-dependent flakiness already documented multiple times in my own
+history log. `py_compile` clean on both touched files.
+
+## Ask of the team
+
+1. **Linus/Rusty**: once `best_options.py` and/or the FastAPI endpoint exist, ping me -- the real-module
+   seam integration test (my assignment) needs at least the endpoint shape or the pure evaluator's public
+   signature to compose against without a fake standing in for either side.
+2. **Danny/reviewers**: confirm `get_or_hydrate`'s SWR-on-stale-memory-hit behavior (mirroring
+   `get_or_load_async`) is the intended semantics -- the design text only explicitly specifies "memory hit,
+   else hydrate, else None" and doesn't call out the stale case one way or the other. I read F6/section 7
+   as silent-but-consistent with the rest of the cache's existing SWR contract rather than a new decision
+   to litigate; flagging so it's an explicit, reviewable choice rather than an assumption buried in code.
+
+---
+
+# Livingston — Best Options D2/D3 revision, for Basher re-review
+
+**Status:** Revision complete, submitted for re-review. Not self-certified as accepted — Basher owns
+the verdict.
+
+**Traces to:** `.squad/decisions/inbox/basher-best-options-review.md` (REJECT, final re-review), D2 and
+D3. D1 (row-inclusion documentation) was already resolved by the user's direct ratification per Basher's
+same review and is unaffected by this revision.
+
+**Lockout observed:** Rusty is locked out of `frontend/src/types/best-options.ts`,
+`frontend/src/components/BestOptionsParams.tsx`, `frontend/src/components/BestOptionsView.tsx` for this
+cycle. I am the assigned independent revision owner (not the original author of any of the three files,
+and not a co-author with Rusty on this pass — no consultation or coordination with Rusty occurred).
+
+## What was wrong (confirmed against the live payload, not the design doc's flat example)
+
+Called `evaluate_best_options` directly against a minimal fabricated chain and read the actual JSON:
+
+- `parameters.thresholds`, `parameters.thresholds_source`, `parameters.skill_reference` are nested
+  `{"call": ..., "put": ...}` — CC and CSP thresholds genuinely differ per category. The frontend typed
+  all three flat and `BestOptionsParams.tsx` read them flat (`parameters.thresholds.delta_lo.toFixed(2)`),
+  a `TypeError` on first render (Basher D2).
+- `parameters.premium.basis` is **also** nested `{"call": "underlying_price", "put": "strike"}` — the
+  same flat-vs-nested defect class, in the same `parameters` object, just silently rendering
+  `[object Object]` instead of throwing (not called out by name in Basher's review, found during my own
+  live-payload inspection; fixed in the same pass since it is the identical bug).
+- `calls`/`puts` both carry `excluded_by_delta_band: int`; only `calls` carries
+  `coverable_contracts: int | None` / `no_shares_held: bool | None` (never on `puts`). None of the three
+  existed on the frontend type or were read in the UI (Basher D3). The page's "0 shares held" banner
+  checked a per-row flag (`r.flags.includes("no_shares_held")`) the evaluator never sets — it is a
+  section-level field per design §5's "capital" row — so the banner could never have rendered.
+
+## What changed
+
+- **`frontend/src/types/best-options.ts`** — added `BestOptionsThresholdsBySide` /
+  `BestOptionsSourceBySide`; `thresholds` / `thresholds_source` / `skill_reference` / `premium.basis` now
+  typed as the real nested `{call, put}` shape; added `excluded_by_delta_band: number`,
+  `coverable_contracts?: number | null`, `no_shares_held?: boolean | null` to `BestOptionsSide`.
+- **`BestOptionsParams.tsx`** — every accessor for the four affected fields now reads `.call`/`.put`
+  explicitly; the panel shows both CC and CSP threshold sets side by side instead of picking one
+  arbitrarily or crashing.
+- **`BestOptionsView.tsx`** — `no_shares_held` banner now reads the real section-level
+  `data.no_shares_held === true` instead of a per-row flag that never existed. Added visible
+  `excluded_by_delta_band` (both sides) and `coverable_contracts` (call side) stats next to the existing
+  "Shown: X of Y" line.
+
+No evaluator semantics were touched — `backend/src/best_options.py` is unmodified. No Roll Scenarios
+visual tokens were touched — `ROW_TINT_BG`/table structure/typography/spacing/expand-collapse idiom in
+`BestOptionsView.tsx` are unchanged from what Basher already inspected and marked satisfied.
+
+## Validation
+
+- `npx tsc --noEmit` → 0 errors. Necessary but explicitly **not sufficient** on its own — this is exactly
+  how the original mismatch shipped past a clean typecheck the first time (a wrong type just means the
+  compiler never observes the real payload shape).
+- **New real-module seam test**: `backend/tests/test_best_options_frontend_contract.py` (5 tests,
+  independently-authored fixtures — real `OptionsChainCache` + real `evaluate_best_options` + real
+  FastAPI endpoint via `TestClient`, only `FakeCosmos`/provider fetchers faked). Asserts the exact JSON
+  key shape the frontend types must mirror: `thresholds`/`thresholds_source`/`skill_reference`/
+  `premium.basis` all keyed `{call, put}`; `excluded_by_delta_band` present as `int` on both sides;
+  `coverable_contracts`/`no_shares_held` present and correct on `calls` (both the `>0` and the `== 0`
+  case), absent entirely from `puts`; no row ever carries a `no_shares_held` flag. This is the check a
+  TypeScript compile cannot perform.
+- Full targeted run: `test_best_options.py`, `test_best_options_adversarial.py`,
+  `test_best_options_endpoint.py`, `test_best_options_frontend_contract.py`, `test_category_params.py`,
+  `test_options_chain_dte_filter.py`, `test_options_chain_cache.py`,
+  `test_trigger_force_alpha_scoping.py`, `test_force_alpha_plumbing.py` → **240 passed, 0 failed**.
+- `npx eslint` on `best-options.ts` and `BestOptionsParams.tsx` (the two files with substantive logic
+  changes) → clean. `BestOptionsView.tsx` has one pre-existing `react-hooks/set-state-in-effect` finding
+  at its original mount effect (`useEffect(() => { load() }, [load])`) — confirmed by direct inspection
+  that line predates this revision and is untouched by it; unrelated to D2/D3, not fixed here to keep this
+  change surgical.
+- `npx next build` hit an unrelated WSL/OneDrive filesystem `EIO` error scanning `.next/standalone`'s
+  bracketed route folder (`[symbol]`) — an environment limitation on this mount, not a code defect;
+  `tsc`/`eslint` plus the new backend contract test are the meaningful signal for this revision.
+
+## Ask
+
+Re-review D2 and D3 against the above. Ready for Basher's verdict.
+
+---
+
+# Livingston — Force Alpha: Settings/scheduled forcing correction (applied)
+
+**Status:** Correction applied and verified. Supersedes the "NOT READY / not started" framing of
+`livingston-force-alpha-readiness.md` (implementation has since landed from Linus and Rusty).
+
+**Trigger:** User's binding correction — ONLY dashboard CC/CSP (+ monitor) buttons use
+`run_trigger="manual"` + `force_alpha=true`. Settings "Run Now", "Run Full"/`/api/trigger-all`, and
+scheduler cron must all stay due-only (`force_alpha=false`). Authoritative decision doc:
+`copilot-force-alpha-semantics-superseded.md`.
+
+## What was wrong
+
+`backend/web/app.py`'s `run_scheduler_task_now` (`POST /api/scheduler/tasks/{task_name}/run`, docstring:
+"Manually trigger a scheduled task (Run Now button)") hardcoded
+`scheduler.registry.trigger_task_now(task_name, run_trigger="manual", force_alpha=True)`, with a comment
+explicitly citing the original (now-superseded) reading of Danny's design ("Settings Run Now is always a
+manual, forced trigger"). This is a live regression risk: the endpoint has no frontend caller today (the
+real Settings "Run Now" for Monitoring Agent goes through `/api/trigger-all`, which was already correct),
+but it is a directly callable API surface that self-identifies as backing the Settings "Run Now" button,
+and forcing here directly contradicts the corrected semantics.
+
+## What was verified correct and left untouched
+
+- `POST /api/trigger/{agent_type}` — dashboard-only route (only the 5 dashboard agent types are in
+  `AGENT_FUNCTIONS`; every Settings single-purpose task has its own dedicated route registered earlier).
+  Defaults `force_alpha=True`. Correct.
+- `POST /api/trigger-all` (`_run_all_agents_sequentially`) — backs both "Run Full"/"Full analysis" and
+  Settings' Monitoring Agent "Run Now" (confirmed these are the same button/endpoint). Hardcodes
+  `force_alpha=False`. Correct.
+- `main.py`'s cron path (`_run_all_agents_async`) — passes `run_trigger="scheduled", force_alpha=False`
+  explicitly for the four Alpha-eligible agents. Correct.
+- `TriggerButton.tsx` (dashboard-only component) — explicitly sends `force_alpha: true`. Correct.
+- `scheduler_registry.py`'s kwargs-forwarding plumbing (`_worker_loop`/`trigger_task_now`) — caller-agnostic
+  and correct; the bug was entirely in what `web/app.py` chose to pass, not in the registry.
+
+## Fix applied
+
+`backend/web/app.py`: `run_scheduler_task_now` now passes `force_alpha=False` (kept
+`run_trigger="manual"` — a human did click it; only the forcing was wrong). Comment rewritten to cite the
+corrected, current decision doc instead of the superseded one.
+
+## Test coverage added
+
+`backend/tests/test_trigger_force_alpha_scoping.py` (new, 3 tests, real-module seam tests against the
+actual route handlers / scheduler sweep — only outer I/O faked):
+- `TestSettingsRunNowNeverForces` — locks the fixed contract; this is the exact gap Rusty's own
+  `test_force_alpha_plumbing.py` doesn't cover (his registry-level test passes its own kwargs directly and
+  never exercises this route handler's literal default).
+- `TestTriggerAllNeverForces` — locks that `/api/trigger-all`'s sequential sweep never forces any of the
+  5 agents.
+- `TestSchedulerCronNeverForces` — calls the real `OptionsAgentScheduler._run_all_agents_async` with faked
+  agent wrappers; confirms `run_trigger="scheduled", force_alpha=False` for all four Alpha-eligible agents
+  and zero extra kwargs for `buy_tracker`.
+
+All 3 pass. Full targeted regression run (my own cache/store/persistence-integration/repair-script/
+best-options-endpoint suites + these 3 new tests + Rusty's `test_force_alpha_plumbing.py`): 167/167 passed.
+
+## Cross-owner defect found, reported (not fixed — outside my charter)
+
+`tests/test_force_alpha_execution.py` (Linus's/Basher's suite for `agent_runner.py`'s gate/cooldown logic)
+has 4 failing tests, confirmed pre-existing and unrelated to this correction (verified via `git stash` on
+just `web/app.py`):
+- `test_case8_incomplete_quote_wait_force_alpha_true_alpha_skipped`
+- `test_case10_alpha_raises_under_forcing_primary_decision_survives`
+- `test_case13_due_alpha_review_consumes_cooldown_as_before`
+- `test_case14_legacy_alpha_view_without_alpha_run_is_treated_as_not_forced`
+
+These live in `agent_runner.py`'s gate/cooldown/legacy-doc semantics — Linus's owned surface. Flagging for
+Linus/Basher rather than fixing directly (would require redefining Alpha gate semantics, outside my
+charter as Persistence & Integration Engineer).
+
+## Seam test (design case 26) — still deferred
+
+Both `agent_runner.py`'s gate and `web/app.py`'s plumbing have now landed, so a real API↔runner seam test is
+technically composable. Deferring anyway: `agent_runner.py`'s own suite has 4 known-red cases in exactly
+the gate/cooldown/legacy-doc logic such a seam test would need to assert against. Writing one now risks
+encoding a still-unsettled contract as "expected." Will revisit once those 4 cases are green — ping me when
+they are.
+
+---
+
+# Integration Readiness — Forced Alpha execution on manual CC/CSP runs
+
+**Date:** 2026-08-29
+**Author:** Livingston (Persistence & Integration)
+**Status:** NOT READY — implementation has not started; my seam test (design case 26) is blocked pending Linus + Rusty
+**Traces to:** `.squad/decisions/inbox/danny-force-alpha-design.md` (PROPOSED), `.squad/decisions/inbox/copilot-force-alpha-semantics.md` + `.squad/decisions/inbox/copilot-force-alpha-semantics-superseded.md` (user confirmations)
+
+## Which semantics matrix I validated against
+
+Two "semantics" inbox files exist with near-identical timestamps and confusingly overlapping names.
+By file mtime (not just filename), `copilot-force-alpha-semantics-superseded.md` was written **30
+seconds after** `copilot-force-alpha-semantics.md`, and its own text says "This supersedes the earlier
+decision that Settings 'Run Now' would force Alpha." Despite the misleading "-superseded" suffix, it is
+the newer, authoritative correction. I validated against it, not the older file (and not verbatim against
+the semantic summary handed to me in this task's own instructions, which restates the now-superseded
+version — see the discrepancy called out below).
+
+**Final matrix (post-correction):**
+
+| Call path | `run_trigger` | `force_alpha` |
+|---|---|---|
+| Dashboard CC/CSP + monitor buttons (`TriggerButton` → `POST /api/trigger/{agent_type}`, agent-level and per-symbol row) | manual | **true** |
+| Settings "Run Now" (any card) / "Full analysis" / "Run Full" | manual | **false** (due-only) |
+| Scheduler cron (`main._run_all_agents_async`) | scheduled | **false** (due-only, unchanged) |
+
+## Cross-owner defect found in Danny's design itself (reporting, not fixing)
+
+Danny's design's D1 (section 12) is built on a factual premise I could not confirm in the actual
+frontend: that the Settings page's "Monitoring Agent" card "Run Now" button routes through
+`POST /api/scheduler/tasks/{task_name}/run` → `TaskRegistry.trigger_task_now` (`scheduler_registry.py`).
+
+**What the code actually does** (`frontend/src/components/SettingsConfigView.tsx:258`):
+the Monitoring Agent card's `RunStatus` button is wired to `endpoint="/api/trigger-all"` — the exact
+same endpoint as "Full analysis". I confirmed `/api/scheduler/tasks/{task_name}/run` (and its
+`/cron`/`/enabled` siblings) have **zero callers anywhere in `frontend/src`** — `trigger_task_now` is
+reachable today only by a direct API call (curl/script), never by a button in this app. I also confirmed
+there is no separate "Run Full" button anywhere in the frontend distinct from this same Settings control
+— "Full analysis", "Run Full", and "Settings Run Now" all name the one existing
+`/api/trigger-all` affordance.
+
+**Why this matters for implementation:** D1's proposed engineering problem — threading a `force_alpha`
+payload through `TaskRegistry`'s payload-less job queue for a button that doesn't go through it — does
+not exist for the button in question. The corrected semantics ("Settings Run Now" stays due-only) is
+achievable with **zero changes to `scheduler_registry.py`**, simply by giving `/api/trigger-all` its own
+fixed `force_alpha=false` default that does **not** inherit the "manual → true" default `/api/trigger/{agent_type}`
+gets. D2 is likewise settled by the correction: `/api/trigger-all` does not force, full stop — Danny's
+"yes, force, for consistency" recommendation was the thing the user corrected.
+
+One real asymmetry Rusty's implementation must get right: `/api/trigger/{agent_type}` is a **shared**
+endpoint — it also serves every Settings single-purpose task button (`summary_agent`, `banner_agent`,
+`dgi_screener`, `portfolio_enrichment`, `price_forecast`, `plan_monitor`, `options_chain`), none of which
+are among the four CC/CSP agents `agent_runner.py` gates on. Defaulting `force_alpha=true` for that whole
+endpoint is safe and correctly inert for those callers (matches design case 23's "buy_tracker: forcing is
+inert, not an error" reasoning) — flagging only so nobody re-litigates giving this endpoint per-agent-type
+defaults it does not need.
+
+## Current implementation status: not started
+
+`grep -r "force_alpha" backend/src backend/web backend/tests frontend/src` returns zero matches. None of
+`agent_runner.py`, `web/app.py`, `main.py`, `scheduler_registry.py`, or any frontend file has been touched
+for this design yet. I independently re-verified the design's "current behaviour" section 2 against the
+live code (not from memory) and it is accurate as written: the four Alpha gate call sites
+(`agent_runner.py:1925-1985`, `:2921-3079` by line-number proximity), `_detect_prolonged_wait`
+(`:1227-1284`, confirmed the exact `if act.get("alpha_view"): break` H1 bug), the un-guarded
+`POST /api/trigger/{agent_type}` (`web/app.py:5321`, confirmed literally zero in-flight guard), and
+`_MAX_TASK_DURATION_SECONDS = 1800` (`scheduler_registry.py:17`) all match verbatim.
+
+**Also confirmed:** there is no pre-existing regression-test baseline anywhere for the surfaces this
+design touches — no `test_agent_runner.py`, no test file exercising `run_symbol_agent`,
+`run_position_monitor`, `_detect_prolonged_wait`, or `POST /api/trigger/*` at all today. Whatever Linus/
+Basher write in the new `test_force_alpha_execution.py` will be the *first* test coverage of this code,
+not a diff against an existing suite — worth knowing going in, since there is no safety net beyond what
+that new file provides.
+
+## My owned surface: unaffected, nothing to fix
+
+This design does not touch `options_chain_cache.py` or `options_chain_store.py` at all (confirmed via
+`git diff --stat` — those files carry only my earlier Best Options `get_or_hydrate`/
+`schedule_background_refresh` change, untouched since). Re-ran my targeted suite as a sanity check that
+no concurrent work destabilized anything I own:
+`test_options_chain_cache.py` + `test_options_chain_store.py` + `test_options_chain_persistence_integration.py`
++ `test_repair_options_chain_shards.py` + `test_best_options_endpoint.py` (the one place my cache methods
+are consumed by a real caller today): **156/156 passed.** No integration/persistence/concurrency defect
+to fix here — there is no code on my surface for this task yet.
+
+## Seam test (design case 26) — blocked, not skipped
+
+My assignment per Danny's design section 13 ("seam/integration test (case 26) | real runner + real route,
+fake LLM only | Livingston") requires a real `agent_runner.run_symbol_agent`/`run_position_monitor` with
+a real `force_alpha` parameter, and a real `POST /api/trigger/{agent_type}` route with real `force_alpha`
+parsing and the new in-flight registry. Neither exists. Writing it now would mean building a fake stand-in
+for whichever side is missing — the exact "mutual fakes" anti-pattern the 2026-08-18 lesson (cited in the
+design's own text) exists to prevent. Deferred, with a concrete trigger condition below, not silently
+dropped.
+
+**When Linus's and Rusty's changes both land, my seam test will assert, end-to-end through real modules
+(fake LLM client only):**
+1. A real `POST /api/trigger/covered_call` with `{"symbol": "AAPL"}` and no `force_alpha` in the body
+   reaches the real runner with `force_alpha=True`, and the resulting activity document (real Cosmos
+   test double already used elsewhere in this suite) carries both `alpha_view` and
+   `alpha_run.forced=true`.
+2. Two concurrent real HTTP-level requests for the same `(agent_type, symbol)` key: the second gets a
+   real 409 from the real in-flight registry, and the real runner is invoked exactly once — this is a
+   genuine concurrency test (real threads/asyncio tasks racing on the real lock), not a mocked one.
+3. The in-flight key is released via the real `finally` path both on normal completion and on the real
+   runner raising, and a subsequent real request after release succeeds.
+4. Cooldown neutrality end-to-end: a real activity history seeded with 5 WAITs where the most recent
+   carries `alpha_run.forced=true` still yields `_detect_prolonged_wait() == True` through the real
+   method (not a stand-in), and a legacy activity with `alpha_view` but no `alpha_run` field still yields
+   `False` (conservative default) through the same real path.
+5. `/api/trigger-all` real end-to-end still runs with `force_alpha=False` regardless of any call
+   attempting to set it — proving the endpoint-level default asymmetry documented above is enforced, not
+   just intended.
+
+**Ask of the team:** ping me the moment `agent_runner.py`'s `force_alpha` parameter and `web/app.py`'s
+in-flight registry both exist (even in a draft PR) — I'll pick this up immediately rather than poll for it.
+
+---
+
+# Decision -- Best Options: API endpoint + frontend UI
+
+**Date:** 2026-08-29
+**Author:** Rusty (Agent Dev)
+**Status:** COMPLETE -- implementation finished, integrated against Linus's and Livingston's landed modules, validated
+**Traces to:** `.squad/decisions/inbox/danny-best-options-design.md` sections 7/9 (ACCEPTED), assignment "Rusty (Agent Dev) -- owns the FastAPI endpoint, `normalize_category` adoption in `agent_runner.py`, and the entire frontend"
+
+## What changed
+
+**Backend**
+* New `GET /api/symbols/{symbol}/best-options` in `backend/web/app.py` (query: `side` in
+  `call|put|both`, `dte_min`, `dte_max`, optional `support_level`). Validates `side` and
+  `dte_min <= dte_max` with 400s; 404 on unknown symbol; 503 with a clear message if
+  `src.best_options.evaluate_best_options` is not importable (kept as a guarded import
+  throughout the session while Linus was still writing it).
+* Cold-cache handling uses `OptionsChainCache.get_or_hydrate()` only -- never
+  `get_or_load`/`get_or_load_async` -- so the endpoint can never block the event loop on a
+  live provider fetch. A true miss calls the new public `schedule_background_refresh()`
+  and responds `200 {"status": "warming", "symbol": ..., "retry_after": 15}`. This is
+  deliberately a 200, not a 503: the roll-table endpoint's `except RuntimeError: return
+  503` was flagged in Danny's design as the anti-pattern to avoid here, since
+  `OptionsChainNotReadyError` subclasses `RuntimeError` and a matching `except` would
+  silently swallow it; "warming" is a real, user-facing UI state, not a failure, and
+  collapsing it into a generic 503 would strip that distinction from the BFF/client.
+* Input assembly (Rusty's part of the contract): `category` from
+  `symbol_doc.enrichment.category`, `total_shares` from the symbol doc,
+  `next_earnings_date`/`ex_dividend_date` from the existing `cosmos.get_next_earnings_date`
+  / `cosmos.get_next_calendar_event_date(symbol, "ex_dividend")` accessors -- both already
+  deterministic, no new logic invented. `underlying_price`/`atm_iv` are deliberately *not*
+  assembled here; `evaluate_best_options` reads them from inside the cached chain itself
+  (design F7), so they can never desynchronize from the Greeks the chain's own contracts
+  were computed against.
+* **`support_level` decision:** there is no deterministic source for a support/pivot level
+  anywhere in this codebase today -- pivot points are currently LLM-prompt-extracted text
+  only, never a callable technical-analysis function. Rather than invent one (out of
+  charter -- Rusty does not define trading-strategy or technical-analysis logic) or silently
+  omit the field, it is accepted as an **optional** query parameter: the caller (today,
+  nobody; in the future, possibly a deterministic technical-analysis module or the UI
+  itself) may supply it, and omitting it simply disables the `below_support` flag rather
+  than producing a wrong or guessed value.
+* The endpoint returns `evaluate_best_options(...)`'s response envelope verbatim
+  (`symbol`/`status`/`schema_version`/`parameters`/`calls`/`puts` are already all present)
+  rather than re-wrapping it -- avoids a subtle bug where re-wrapping with
+  `{"symbol": sym_upper, **result}` would let `result["symbol"]` (sourced from
+  `chain.get("symbol")`) silently win over `sym_upper` on any casing mismatch.
+* `agent_runner.py`: adopted `category_params.normalize_category(category).replace("_", " ")`
+  in `_resolve_category_skill` and `_get_category_delta_context`, fixing the F9 finding
+  (`"high-yield"` / `"High Yield"` previously fell back silently to `"balanced"`'s delta
+  range instead of resolving to `high_yield`'s). The consuming dicts
+  (`_CATEGORY_SKILL_MAP`, `_CATEGORY_DELTA_RANGES`) are keyed by space-form strings and
+  were left untouched -- only the normalizer was fixed, per instruction to not stack a
+  cross-agent dict refactor on top.
+
+**Frontend**
+* New "Best Options" entry as the **first** item in the Symbol Detail Analyze dropdown
+  (`SymbolActions.tsx`), Trophy icon, routing to `/symbols/[symbol]/best-options`.
+* New BFF route `app/api/symbols/[symbol]/best-options/route.ts` forwards `searchParams`
+  and the upstream HTTP status verbatim (`NextResponse.json(data, {status: res.status})`),
+  following the `positions/.../snapshots` route's pattern rather than
+  `options-chain/route.ts`'s (which throws on any non-2xx and collapses everything to a
+  generic 502) -- necessary because warming (200)/validation-error (400)/not-found
+  (404)/scorer-unavailable (503) must all reach the client as distinguishable states.
+* `BestOptionsView.tsx` renders a `loading` / `warming` / `error` / `ok` state machine:
+  warming shows an explicit banner with an auto-retry timer keyed off the backend's
+  `retry_after`, plus a manual "Retry now" button -- never a silent hang. `ok` renders the
+  parameters panel, then one sortable table per side with per-row expand for score
+  components, thresholds, and staleness.
+* `BestOptionsParams.tsx` renders category/profile (with a "defaulted" badge when
+  `parameters.category.defaulted` is true), delta band, DTE window, premium
+  floor/wait/basis, liquidity floor, underlying price, ATM IV, next earnings, and
+  mandatory disclosure banners for `iv_rank_enforced: false`, unknown earnings, and any
+  stale-contract count -- plus a collapsible footer with the raw weights, colour
+  thresholds, and threshold/skill source strings, so provenance is never hidden behind an
+  extra click for the primary facts.
+* **Semantics ownership:** the frontend never computes or infers a row's colour, label,
+  gate outcome, or nearest-miss explanation -- it renders exactly what the API returned.
+  `ColorBadge` pairs the backend-supplied `color` with an icon (not colour alone) and the
+  backend-supplied text `label`, satisfying the "not color-only" accessibility requirement
+  without the UI inventing its own wording.
+* **Colour-to-CSS mapping:** this codebase has no `--accent-yellow` variable; "yellow"
+  maps to the existing `--accent-orange`, consistent with how WAIT/HOLD states are already
+  coloured elsewhere (`RuleEvaluationPanel`'s `STATUS_META`, `badges.ts`'s `riskStyle`).
+  Added as `preferenceStyle()` in `lib/badges.ts` alongside the existing style helpers.
+* No LLM call exists anywhere in this flow (fetch -> BFF proxy -> render); this satisfies
+  design acceptance gate #1 for the UI surface trivially, by construction.
+
+## Findings surfaced for the team (not fixed here, out of scope for this decision)
+
+* `npm run lint` already fails on `main`/this tree independent of Best Options: 10
+  pre-existing violations of the `react-hooks/set-state-in-effect` rule exist in files
+  this task never touched (`GlobalChatView.tsx`, `PositionsTable.tsx`,
+  `RecentActivities.tsx`, `SymbolChat.tsx`, `SymbolInfoModal.tsx`, `CalendarView.tsx`,
+  ...). Even `options-chain/page.tsx` -- the exact fetch-on-mount pattern this session used
+  as its template -- has the identical violation. `BestOptionsView.tsx` moves its
+  loading-state transition into its manual retry/refresh event handlers rather than the
+  mount effect, but the rule's static analysis still flags the mount effect because it
+  calls an async function that *eventually* calls `setState` post-await -- the same shape
+  every comparable component in the repo already uses. Recommend a repo-wide decision
+  (suppress vs. restructure vs. pin an older `eslint-config-next`) rather than a
+  one-off fix scoped to this feature.
+* A transient, self-resolving false positive was observed mid-session in
+  `tests/test_best_options.py::TestNoDirectContractAccess`: its banned-pattern regex
+  briefly matched literal example text inside `best_options.py`'s own module docstring
+  (not an actual `contract.get(...)` call), most likely because that docstring was
+  mid-edit at the moment this session ran the suite. It was gone by the final full test
+  run (130/130 passing) -- flagging only so the same wording doesn't reappear in a future
+  edit to that docstring.
+
+## Validation
+
+* `python3 -m py_compile` clean on all touched backend files.
+* `pytest tests/test_best_options.py tests/test_category_params.py
+  tests/test_options_chain_dte_filter.py tests/test_options_chain_cache.py
+  tests/test_buy_tracker_normalization.py` -- 130/130 passed.
+* Ad-hoc, non-committed `TestClient` + in-memory `FakeCosmos` smoke script (written,
+  run, then deleted -- deliberately not committed as `test_best_options_endpoint.py` to
+  avoid a filename collision with Basher's expected formal test) exercised, against the
+  real endpoint and the real `evaluate_best_options`: cold-cache -> `warming` response,
+  warm-cache -> full `ok` response with `parameters`/`calls`/`puts` present and populated,
+  `side=bogus` -> 400, unknown symbol -> 404.
+* `npx tsc --noEmit` -- clean, no errors.
+* `npm run build` -- compiled successfully; both new routes
+  (`/api/symbols/[symbol]/best-options`, `/symbols/[symbol]/best-options`) present in the
+  build's route manifest.
+
+## Addendum -- Visual consistency with Roll Scenarios (2026-08-29, same day, follow-up directive)
+
+**Traces to:** `.squad/decisions/inbox/copilot-directive-20260829T102715+0200.md`
+
+Restyled `BestOptionsView.tsx`'s table to match Roll Scenarios
+(`PositionDetail.tsx`'s `RollTableView`) structure, spacing, and typography
+exactly: `border-collapse text-xs`, plain `border-b border-border` header
+rule with no separate card frame around the table, `border-b
+border-border/40` body rows, `px-2 py-1` cell padding.
+
+Row colour treatment now reuses Roll Scenarios' own palette rather than a
+second ad-hoc one: extracted Roll's local `CELL_BG` rgba map into
+`lib/badges.ts` as the shared `ROW_TINT_BG` (byte-identical values -- no
+visual change to Roll Scenarios), added `preferenceRowTint(color)` to map
+Best Options' `green/yellow/red` onto it (`yellow` -> the shared `orange`
+bucket, matching the existing `preferenceStyle` precedent), and updated
+`PositionDetail.tsx` to import `ROW_TINT_BG` instead of declaring its own
+copy. One shared token now backs both tables' background tint.
+
+Accessibility is unchanged: `ColorBadge` (icon + backend-supplied text
+label) still renders in every row: the new background tint is an
+additional visual cue matching Roll Scenarios' look, not a substitute for
+it, so "not colour alone" continues to hold.
+
+`BestOptionsParams.tsx` (the parameters/provenance panel) was deliberately
+left as its own bordered card rather than folded into Roll's compact
+inline stat-line style -- that panel carries ~15 fields plus three
+mandatory disclosure banners per Danny's design §6, which Roll's ~7-field
+inline bar has no equivalent for; matching Roll's *density* there would
+mean dropping required disclosure content, not just its look.
+
+---
+
+### 2026-08-29: Force Alpha — API/scheduler plumbing + trigger UI implementation
+**By:** Rusty (Agent Dev)
+**What:** Implemented the API/frontend plumbing for the explicit
+`run_trigger`/`force_alpha` trigger contract from Danny's design
+(`.squad/decisions/inbox/danny-force-alpha-design.md`), honoring the
+corrected semantics in `copilot-force-alpha-semantics-superseded.md`
+(only the dashboard per-agent trigger route forces Alpha by default;
+Settings "Run Now", "Full analysis", and the cron sweep all stay
+due-only).
+
+**Backend (`backend/web/app.py`):**
+- `POST /api/trigger/{agent_type}` now parses `run_trigger`/`force_alpha`
+  from the request body, defaulting to `manual`/`True` (a caller may
+  override either field). Response body now includes both fields.
+- New in-flight guard keyed by `(agent_type, symbol-or-"*")` on
+  `app.state`: a duplicate request for the same key returns HTTP 409
+  `{"status": "already_running", agent_type, symbol, started_at,
+  force_alpha}` rather than launching a second concurrent (and, when
+  forced, costlier) run. Stale slots are reclaimed after
+  `_MAX_TASK_DURATION_SECONDS` (reused from `scheduler_registry.py`, not a
+  new timeout). Different symbols for the same agent_type are independent
+  keys.
+- New `_call_agent_func` helper forwards `run_trigger`/`force_alpha` to an
+  agent wrapper function only if its signature declares them
+  (introspection-guarded), so this rolled out safely ahead of, and then
+  transparently picked up, Linus's concurrent pass-through work on the 5
+  wrapper functions — `buy_tracker` (which never accepts these kwargs) is
+  unaffected, never errors.
+- `POST /api/trigger-all` ("Full analysis") is hardcoded
+  `run_trigger="manual", force_alpha=False` with no override surface —
+  this call path must always stay due-only per the corrected decision.
+- `POST /api/scheduler/tasks/{task_name}/run` ("Settings Run Now") passes
+  `run_trigger="manual", force_alpha=False` — verified against a
+  concurrent edit already in the tree, matches the corrected decision.
+
+**Scheduler plumbing (`backend/src/scheduler_registry.py`):**
+`TaskRegistry`'s job queue now carries `(task_name, kwargs)` tuples;
+`trigger_task_now` accepts `**job_kwargs`; the worker forwards only the
+kwargs a task's `job_func` signature actually declares. Every registered
+task other than `monitor_agents` is unaffected (none declare
+`force_alpha`/`run_trigger`).
+
+**Frontend (`frontend/src/components/TriggerButton.tsx`):** always sends
+`run_trigger: "manual", force_alpha: true`; a 409 renders a distinct
+"already running" state (not an error); a synchronous ref guard prevents
+double-click races in addition to the server-side 409 guard. No change
+needed to `DashboardAgentTables.tsx` (only renders `TriggerButton`) or
+`SettingsConfigView.tsx` (its Monitoring Agent Run Now already hits the
+now-hardcoded-due-only `/api/trigger-all`).
+
+**Scope boundary honored:** did not touch the Alpha-gating formula,
+cooldown-neutrality (H1), or notification-suppression (H2) logic — all in
+`agent_runner.py`, Linus's file. Did not invent trigger semantics; both
+the D1/D2 reversal and its later correction came from user-confirmed
+decision docs, not from my own judgment.
+
+**Validation:** new `backend/tests/test_force_alpha_plumbing.py` (8 tests,
+API/scheduler plumbing layer only) — all pass; pre-existing
+`tests/test_trigger_force_alpha_scoping.py` (written by another agent,
+locks the corrected per-endpoint semantics matrix) — all 3 pass; full
+`pytest tests/` excluding two known-unrelated/pre-existing yfinance test
+files — 1650 passed; `npx tsc --noEmit` clean; `npx eslint` clean;
+`npm run build` succeeded.
