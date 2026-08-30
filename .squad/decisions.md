@@ -9931,3 +9931,136 @@ Two-phase review: initially rejected Livingston artifact due to error-path data 
 **Status:** ✅ **APPROVED FOR PRODUCTION DEPLOYMENT**
 
 
+
+---
+
+## Decision: Contract Validation Function-Specific Model Routing
+
+**Date:** 2026-08-30  
+**Author:** Rusty (Agent Dev)  
+**Status:** ✅ Implemented & Approved  
+**Category:** Architecture / Model Routing
+
+### Acceptance Contract
+
+Contract validation must NOT have its own model route and must NOT use the global default when the normal function route exists.
+
+**CALL Validation (covered_call):**
+- Primary agent uses **"analysis"** model (same as Following CC)
+- Supervisor uses **"supervisor"** model
+- Alpha uses **"alpha"** model
+
+**PUT Validation (cash_secured_put):**
+- Primary agent uses **"analysis"** model (same as Following CSP)
+- Supervisor uses **"supervisor"** model
+- Alpha uses **"alpha"** model
+
+**Key Requirement:** Reuse existing canonical settings keys and `_get_client` routing conventions. No new contract-validation-specific model setting introduced.
+
+### Root Cause
+
+Best Option contract validation was using the global default model for all three stages (primary, Supervisor, Alpha) instead of the configured function-specific models. Normal watchlist execution correctly used function-specific models because it explicitly passed `model=config.model_for('analysis')`, but the contract validation integration layer passed no model overrides (`model=None`).
+
+`AgentRunner._get_client(model, function_id)` resolved function-specific **providers** but NOT function-specific **models**. When `run_contract_validation` called `_get_client(model=None, function_id="analysis")`, it used the global default model with the "analysis" function's provider.
+
+### Solution
+
+Enhanced `_get_client` to implement three-tier model resolution:
+
+```python
+deployment = (
+    model                                      # 1. Explicit override
+    or self._function_models.get(function_id)  # 2. Function-specific (NEW)
+    or self._default_model                     # 3. Global default fallback
+)
+```
+
+### Infrastructure Added
+
+1. **AgentRunner Storage:** `_function_models: Dict[str, str]` initialized from `function_models=` parameter
+2. **Live Reload:** `AgentRunner.set_function_models(values)` for config updates
+3. **Bootstrap Generation:** `Config.function_model_deployments()` creates per-function model dict
+4. **Startup & Reload:** Both `main.py` and `web/app.py` pass and update function models
+
+### Canonical Function Keys
+
+| Stage | Function Key | Used By |
+|-------|--------------|---------|
+| Primary | `"analysis"` | CALL & PUT validation |
+| Supervisor | `"supervisor"` | All validation types |
+| Alpha | `"alpha"` | All validation types |
+
+**Call sites (agent_runner.py):**
+- Line 4273: `_get_client(model, "analysis")` — Primary validation agent
+- Line 1427: `_get_client(model, "supervisor")` — Supervisor review
+- Line 1590: `_get_client(model, "alpha")` — Alpha review
+
+### Verification
+
+**Regression Tests (91/91 PASS):**
+
+1. ✅ **test_call_validation_uses_analysis_model_not_global_default** — AAPL CALL
+2. ✅ **test_put_validation_uses_analysis_model_not_global_default** — TSLA PUT
+3. ✅ **test_supervisor_and_alpha_use_their_configured_models** — All stages
+4. ✅ **test_changing_global_default_does_not_override_analysis_model** — Stability
+5. ✅ **test_fallback_to_global_default_when_no_analysis_model_configured** — Fallback
+
+**Full Test Results:**
+```
+tests/test_agent_model_settings.py:              26 passed
+tests/test_contract_validation_engine.py:        21 passed (5 new)
+tests/test_contract_validation_integration.py:   18 passed
+tests/test_force_alpha_execution.py:             23 passed
+tests/test_trigger_force_alpha_scoping.py:        3 passed
+─────────────────────────────────────────────────────────────
+TOTAL:                                            91 passed
+```
+
+### Files Changed
+
+1. **backend/src/agent_runner.py** — Model resolution logic + live reload
+2. **backend/src/config.py** — Function model dict generation
+3. **backend/src/main.py** — Bootstrap and reload hooks
+4. **backend/web/app.py** — Settings save hook
+5. **Tests** — Regression test suites
+
+### Fallback Behavior
+
+**When function-specific model IS configured:**
+- Uses configured model for that function
+- Changing global default has NO effect
+- Explicit override still wins
+
+**When function-specific model is NOT configured:**
+- Falls back to global default (preserves existing behavior)
+
+**Explicit overrides (unchanged):**
+- `run_contract_validation(model="gpt-5.5", ...)` still wins
+- Allows per-validation customization
+
+### Team Impact
+
+**For callers:** No changes needed. Implicit function-specific routing works transparently.
+
+**For config:** `ai.models.{function_key}` and per-function overrides now respected uniformly.
+
+**For debugging:** Logs include `function_id` in client creation for traceability.
+
+### Quality Indicators
+
+- ✅ Zero defects detected
+- ✅ Backward compatible (unconfigured functions use global default)
+- ✅ Live reload mechanism proven
+- ✅ Provider routing unchanged
+- ✅ All call sites verified
+
+### Commit
+
+**Hash:** `8cac4bc Use function models for contract validation`  
+**Status:** ✅ Approved for Production
+
+---
+
+**Reviewer:** Basher (Tester & QA)  
+**Date:** 2026-08-30T19:23:19+02:00  
+**Verdict:** ✅ **APPROVED FOR PRODUCTION**
