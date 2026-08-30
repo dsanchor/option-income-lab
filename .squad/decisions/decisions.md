@@ -3451,3 +3451,671 @@ The FOLLOWING dashboard tables (Covered Call, Cash-Secured Put) display the late
 ✅ Implementation complete  
 ✅ Review approved  
 ✅ Ready for production commit (no commit requested in this session)
+### 2026-08-30T18:58:31Z: User directive
+**By:** Copilot (via Copilot)
+**What:** During Best Option contract validation, provide Alpha with the same option-chain market data normally provided to the corresponding CC/CSP agent. Do not apply the Best Options filter or ranking to Alpha's comparison context. Keep the selected contract explicitly identified as the validation target.
+**Why:** User request — captured for team memory
+### 2026-08-30T18:59:37Z: User directive
+**By:** Copilot (via Copilot)
+**What:** Best Option validation returns WAIT or SELL. SELL may use the originally selected contract or a nearby real contract from the normal CC/CSP chain when relaxing only an allowed parameter produces a better fit. The final activity must identify the contract actually selected.
+**Why:** User request — captured for team memory
+# Chain-Aware Best Option Validation — Design Review
+
+**Date:** 2026-08-30
+**Author:** Danny (Lead/Architect)
+**Status:** ACCEPTED
+**Trigger:** User directives `copilot-directive-20260830T185831Z.md` and
+`copilot-directive-20260830T185937Z.md` — supply Alpha with the normal CC/CSP
+option-chain market context (no Best Options filtering); validation returns
+WAIT or SELL, where SELL may use the originally clicked contract *or* a nearby
+real contract found by relaxing exactly one allowed parameter.
+
+---
+
+## §1. Ceremony Summary
+
+### 1.1 Problem Statement
+
+Current contract validation (`run_contract_validation` at `agent_runner.py:4123`)
+has three structural problems this design resolves:
+
+1. **Alpha sees no chain context.** The validation path builds `market_data_text`
+   from a single contract's quote/Greeks (`contract_validation_integration.py:108-138`).
+   Alpha's alternative-finding playbook references "the options chain" but the agent
+   receives none — any alternative it suggests is hallucinated.
+
+2. **Approval checks reference non-existent schema fields.** Line 4394 checks
+   `supervisor_view.get("net_assessment") == "APPROVE"` — Supervisor's schema emits
+   `ORIGINAL_HOLDS` or `RECONSIDER`, never `APPROVE`. Line 4420 checks
+   `alpha_view.get("recommendation") == "APPROVE"` — Alpha's schema emits
+   `opportunity_strength` (STRONG/MODERATE/NONE), never `recommendation`. Both
+   always evaluate `False`, so **every SELL is currently downgraded to WAIT**
+   regardless of review outcome. This is fail-closed (correct direction) but
+   renders the entire review pipeline inert.
+
+3. **No mechanism for Alpha to select an alternative.** The product contract
+   requires SELL to optionally use a nearby real contract when relaxing one
+   parameter produces a better fit. Alpha already has an alternative schema
+   with strike/expiration/premium/delta fields, but nothing validates that the
+   suggested alternative actually exists in the chain.
+
+### 1.2 Design Decisions
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| D1 | Reuse the normal Following CC/CSP chain pipeline (`_build_alpha_options_chain`) for validation Alpha — same `apply_agent_view` → `filter_options_chain_by_type` → `filter_options_chain_by_delta` sequence. Do NOT apply Best Options scoring/ranking. | User directive. Consistent with what Alpha already sees in the normal pipeline. |
+| D2 | Fix Supervisor approval check: `net_assessment == "ORIGINAL_HOLDS"` means approval for the primary decision, not `"APPROVE"`. | Existing latent bug — no schema change, just a code fix. |
+| D3 | Alpha approval for the *requested* contract: `opportunity_strength == "NONE"` means Alpha found no better alternative, which *endorses* the primary's exact-contract decision. | Inverts the current (broken) check. Alpha saying "I can't improve on this" is approval. |
+| D4 | When Alpha suggests an alternative (`opportunity_strength` ∈ {STRONG, MODERATE} with populated strike/expiration/premium/delta), a **deterministic post-Alpha programmatic validation pass** must confirm the alternative is real and safe before SELL. Alpha alone cannot turn a WAIT into SELL. | Architectural tension resolution: fail-closed without a second LLM call. |
+| D5 | Final outcome is exactly WAIT or SELL. No other activity values. | Product contract simplification. |
+| D6 | Deduplication identity adds `mode: "chain_aware"` to the validation key to avoid collision with the existing exact-contract flow during staged rollout. | Backward compatibility. |
+
+### 1.3 Risks
+
+| Risk | Mitigation |
+|------|------------|
+| Alpha suggests a contract the chain doesn't contain (hallucination) | D4's programmatic validation rejects it — result is WAIT. |
+| Model-dependent relaxation quality | Single-parameter relaxation is constrained by enum; programmatic check enforces it. |
+| Latent approval-check bugs (D2/D3) affect existing exact-contract validation | Scoped fix: only change the comparison values, not the control flow. |
+| Chain refresh latency adds to validation wall-time | Reuse existing `_force_chain_refresh` (already called). Chain is cached for Alpha context building. |
+
+---
+
+## §2. State Machine — WAIT/SELL with Requested vs Selected Contract
+
+### 2.1 Terminology
+
+- **requested_contract**: The originally-clicked Best Option row (symbol, side, strike, expiration). Immutable after submission.
+- **selected_contract**: The contract actually recommended for SELL. Either identical to `requested_contract` or a nearby alternative from the same chain.
+- **relaxed_parameter**: Which single parameter was relaxed to find `selected_contract` (from Alpha's existing enum), or `null` when `selected_contract == requested_contract`.
+
+### 2.2 State Flow
+
+```
+POST /api/best-options/validate
+  │
+  ├─ Step 1: Force chain refresh (existing)
+  ├─ Step 2: Locate requested_contract in chain (existing)
+  │    └─ Not found → WAIT (error: contract_not_found)
+  ├─ Step 3: Validate market evidence (existing)
+  │    └─ Invalid → WAIT (error: invalid_market_data)
+  ├─ Step 4: Build evaluated snapshot (existing, augmented with chain)
+  ├─ Step 5: Run Primary agent against exact requested_contract (existing)
+  │    └─ No parseable JSON → WAIT (error)
+  │    └─ Primary says WAIT → proceed to Alpha (Alpha may find alternative)
+  │    └─ Primary says SELL → proceed to reviews
+  ├─ Step 6: Run Supervisor review (existing, fix approval check)
+  │    └─ Supervisor fails → WAIT (review_incomplete)
+  ├─ Step 7: Run Alpha with full chain context (NEW)
+  │    └─ Alpha fails → WAIT (review_incomplete)
+  │    └─ Alpha says NONE → requested_contract is the candidate
+  │    └─ Alpha says STRONG/MODERATE with alternative → alternative is candidate
+  ├─ Step 8: Determine final contract and validate (NEW)
+  │    ├─ Case A: Primary=SELL, Supervisor=ORIGINAL_HOLDS, Alpha=NONE
+  │    │    → selected_contract = requested_contract, SELL ✓
+  │    ├─ Case B: Primary=SELL, Supervisor=ORIGINAL_HOLDS,
+  │    │          Alpha=STRONG/MODERATE with valid alternative
+  │    │    → selected_contract = alternative (must pass D4 validation)
+  │    │    → If D4 fails → selected_contract = requested_contract, SELL ✓
+  │    ├─ Case C: Primary=WAIT, Alpha=STRONG/MODERATE with valid alternative
+  │    │    → selected_contract = alternative (must pass D4 validation)
+  │    │    → Supervisor re-check against selected_contract (deterministic, not LLM)
+  │    │    → If D4 fails → WAIT
+  │    ├─ Case D: Primary=WAIT, Alpha=NONE → WAIT
+  │    ├─ Case E: Supervisor=RECONSIDER → WAIT (regardless of Alpha)
+  │    └─ Case F: Any review failure → WAIT (fail-closed)
+  └─ Step 9: Persist activity with full lineage
+```
+
+### 2.3 Key Invariant — The Selected Contract Is Always Validated
+
+**Case A** (exact approval): Primary approved it, Supervisor endorsed it, Alpha
+found nothing better. Traditional unanimous approval.
+
+**Case B** (Alpha improves on approved request): Primary approved the
+requested_contract but Alpha found a better nearby contract. D4 programmatic
+validation confirms the alternative is real in the chain. If validation fails,
+fall back to the already-approved requested_contract (safe direction).
+
+**Case C** (Alpha rescues a WAIT): This is the product's core new value. Primary
+said WAIT but Alpha identified a viable alternative by relaxing one parameter.
+D4 programmatic validation confirms the alternative. If D4 passes, the
+alternative becomes a SELL candidate — but needs Supervisor-grade safety checks.
+**Resolution: D4's programmatic validation includes all deterministic gates the
+Supervisor would check** (DTE ≤ 45, earnings span, delta band, quote validity,
+premium floor) applied to the *selected* contract. This is cheaper, faster, and
+more predictable than a second LLM call. If any gate fails, result is WAIT.
+
+**Case E** (Supervisor rejects): Supervisor's RECONSIDER is terminal for SELL
+regardless of what Alpha says. This preserves the existing safety hierarchy.
+
+---
+
+## §3. Normal CC/CSP Chain Payload — How to Reuse It
+
+### 3.1 The Existing Chain Flow for Alpha in `run_symbol_agent`
+
+```python
+# agent_runner.py:2127-2128
+alpha_chain_text = self._build_alpha_options_chain(data, agent_type)
+alpha_market_data = self._build_market_data_block(
+    data, symbol, exchange, options_chain_text=alpha_chain_text
+)
+```
+
+`_build_alpha_options_chain` (`agent_runner.py:1759-1848`):
+1. Parses `data['options_chain']` (full yfinance JSON)
+2. Runs `apply_agent_view` (zero-free normalization)
+3. Runs `filter_options_chain_by_type` (calls-only or puts-only)
+4. Runs `filter_options_chain_by_delta` (default ranges: calls 0.15-0.90, puts -0.60 to -0.15)
+5. Excludes current contract (for monitors — N/A for new-position validation)
+6. Returns `OPTIONS_CHAIN_SCHEMA_DESCRIPTION + json.dumps(structured)`
+
+### 3.2 Reuse Strategy for Validation
+
+The validation path needs to build the same chain text from the cached chain
+(not from `data['options_chain']` which comes from `fetcher.fetch_all`). The
+chain is already available in `contract_validation_integration.py` as the
+`chain` dict from `chain_cache.get_or_hydrate()`.
+
+**New helper in `contract_validation_integration.py`:**
+```python
+def _build_validation_chain_context(chain: dict, side: str) -> str:
+    """Build the same options chain text Alpha sees in normal CC/CSP runs.
+
+    Applies the identical pipeline: apply_agent_view → filter_by_type →
+    filter_by_delta. No Best Options scoring/ranking.
+    """
+    from src.options_chain_cache import apply_agent_view
+    option_type = "call" if side == "call" else "put"
+    structured = apply_agent_view(chain)
+    structured = filter_options_chain_by_type(structured, option_type)
+    structured = filter_options_chain_by_delta(structured)
+    # Check if any contracts survive filtering
+    bucket = structured.get("calls" if side == "call" else "puts", {})
+    if not bucket:
+        return ""
+    return OPTIONS_CHAIN_SCHEMA_DESCRIPTION + "\n" + json.dumps(structured, indent=2)
+```
+
+This is **byte-semantically identical** to what `_build_alpha_options_chain`
+produces for CC/CSP watchlist agents (no `current_strike` exclusion, no position
+reference block — those are monitor-only features).
+
+### 3.3 Chain Text Injection into Alpha's Message
+
+The validation's Alpha call currently uses `market_data_text` (single-contract
+summary). The new flow passes chain context alongside:
+
+```python
+alpha_market_data = market_data_text + "\n\n" + chain_context_text
+```
+
+This mirrors how `_build_market_data_block` appends the chain for normal runs.
+
+---
+
+## §4. Programmatic Post-Alpha Validation (D4)
+
+### 4.1 What D4 Checks
+
+When Alpha proposes an alternative (opportunity_strength ∈ {STRONG, MODERATE}
+with `alternative.strike` and `alternative.expiration` populated):
+
+```python
+def _validate_alpha_alternative(
+    chain: dict,
+    side: str,
+    requested_strike: float,
+    requested_expiration: str,
+    alternative: dict,
+    category: str,
+    underlying_price: float,
+    next_earnings_date: Optional[str],
+) -> tuple[bool, Optional[str], Optional[dict]]:
+    """Validate Alpha's proposed alternative against the real chain.
+
+    Returns:
+        (is_valid, rejection_reason, normalized_contract)
+    """
+```
+
+**Validation gates (all must pass):**
+
+| # | Gate | Check |
+|---|------|-------|
+| G1 | **Exists in chain** | `get_contract(chain, alt_strike, alt_expiration, option_type)` returns non-None |
+| G2 | **Same side** | Implied by G1 (searches correct bucket) |
+| G3 | **Not identical to requested** | `(alt_strike, alt_expiration) != (requested_strike, requested_expiration)` |
+| G4 | **Single-parameter relaxation** | Exactly one of strike or expiration differs from requested (not both) |
+| G5 | **Proximity** | Strike within ±20% of requested OR ≤5 strikes away in the chain; Expiration within ±14 calendar days |
+| G6 | **DTE ≤ 45** | Hard cap (matching `rule_evaluator._dte_cap_rule`) |
+| G7 | **No spanned earnings** | If `next_earnings_date` is known and falls between now and expiration, reject |
+| G8 | **Delta in band** | `abs(delta)` within agent-type default range (calls: 0.15-0.50, puts: 0.15-0.50 abs) — tighter than chain filter |
+| G9 | **Complete quote** | `usable_quote(contract, "bid")` and `usable_greek(contract, "delta")` both non-None |
+| G10 | **Premium floor** | `bid / basis ≥ category_premium_min * DTE/30` (DTE-scaled, per best-options design) |
+
+**On G4 — single-parameter relaxation enforcement:**
+Alpha's `relaxed_parameter` enum already constrains what was relaxed. But the
+*contract coordinates* must also verify: if both strike AND expiration differ
+from the requested contract, the alternative changes two dimensions and is
+rejected. This is a programmatic invariant, not an LLM instruction.
+
+### 4.2 When D4 Fails
+
+- **Case B** (Primary was SELL): Fall back to `selected_contract = requested_contract`.
+  The primary already approved it; Alpha's improvement attempt failed but the
+  original trade is still valid. Result: SELL with requested contract.
+- **Case C** (Primary was WAIT): No fallback. Alpha's alternative was the only
+  path to SELL, and it failed validation. Result: WAIT.
+
+---
+
+## §5. Alpha Output Schema — Minimal Changes
+
+### 5.1 Reuse Existing Schema
+
+Alpha's `ALPHA_OUTPUT_SCHEMA` (`alpha_instructions.py`) already includes:
+- `opportunity_strength`: STRONG / MODERATE / NONE
+- `relaxed_parameter`: enum of allowed parameters
+- `alternative.strike`, `.expiration`, `.premium`, `.delta`, `.dte`
+- `alternative.rationale`, `.trade_off`, `.premium_comparison`
+
+**No schema changes required.** The existing schema is sufficient for
+chain-aware validation. The key insight is that Alpha currently *tries* to
+suggest alternatives from the chain but hallucinates because it has no chain
+data. Providing the chain data makes the existing schema work correctly.
+
+### 5.2 Alpha Instructions — One Addendum for Validation Context
+
+Add a validation-specific instruction addendum (not a new playbook — the SELL
+and NOT_NOW playbooks already cover the relevant cases):
+
+```
+## VALIDATION CONTEXT
+
+You are validating a specific contract selected by the user from the Best
+Options page. The contract is identified as the "requested contract" in the
+decision data. You have the full options chain for this symbol/side.
+
+If the requested contract is already optimal (all criteria pass or nearly
+pass), set opportunity_strength to NONE — this endorses the user's selection.
+
+If a nearby contract (same side, different strike OR different expiration,
+not both) offers meaningfully better risk/reward by relaxing one parameter,
+suggest it as your alternative. The alternative MUST exist in the supplied
+chain — verify strike/expiration/premium/delta against the chain data.
+
+Do NOT suggest an alternative that changes both strike AND expiration
+simultaneously — only one parameter may be relaxed.
+```
+
+### 5.3 Alpha Approval Semantics in Validation
+
+| Alpha Output | Meaning for Validation |
+|---|---|
+| `opportunity_strength: "NONE"` | Alpha endorses the requested contract (no better alternative found). This is "approval" for the exact-contract path. |
+| `opportunity_strength: "STRONG"/"MODERATE"` with valid alternative | Alpha found a better nearby contract. D4 validates it. |
+| `opportunity_strength: "STRONG"/"MODERATE"` with incomplete alternative | Alpha claimed improvement but didn't specify concrete coordinates. Treat as NONE (endorse requested). |
+
+---
+
+## §6. Supervisor Participation
+
+### 6.1 Supervisor Always Evaluates the Primary Decision
+
+Supervisor reviews the primary agent's output against the *requested* contract,
+same as today. Its `net_assessment` is `ORIGINAL_HOLDS` (approve) or
+`RECONSIDER` (reject).
+
+### 6.2 Supervisor Does NOT Re-evaluate the Alternative
+
+The architectural tension was: "if Alpha selects an alternative, who validates
+the selected contract?" The answer is D4 — a deterministic, programmatic gate
+that checks every hard constraint the Supervisor would. This is strictly safer
+than a second LLM call because:
+- It cannot hallucinate
+- It is reproducible
+- It applies the same gates (`_dte_cap_rule`, earnings span, delta band,
+  premium floor) deterministically
+- It runs in <1ms vs ~5s for an LLM call
+
+Supervisor's RECONSIDER remains a hard veto on SELL regardless of Alpha's
+alternative. If Supervisor rejects the primary decision and Alpha proposes an
+alternative, we still respect RECONSIDER because the Supervisor may have
+identified a fundamental safety issue (earnings, fundamental quality failure)
+that applies to *any* contract on this symbol right now.
+
+---
+
+## §7. Persistence / Activity Schema
+
+### 7.1 New Fields on the Activity Document
+
+```python
+activity_data = {
+    # ... all existing canonical fields ...
+
+    # Chain-aware validation additions
+    "requested_contract": {
+        "strike": 155.0,
+        "expiration": "2026-09-19",
+        "premium": 2.50,       # bid at validation time
+        "delta": -0.25,        # from chain
+    },
+    "selected_contract": {
+        "strike": 157.5,       # may differ from requested
+        "expiration": "2026-09-19",
+        "premium": 2.10,
+        "delta": -0.28,
+    },
+    "relaxed_parameter": "delta_outside_category_range",  # or null
+    "comparison_rationale": "...",  # from Alpha's alternative.rationale
+    "selection_source": "alpha_alternative",  # or "requested_approved"
+
+    # Existing fields preserved
+    "run_id": "...",
+    "run_trigger": "best_option_validation",
+    "validation_status": "approved" | "review_incomplete" | "error",
+    "supervisor_view": { ... },
+    "alpha_view": { ... },
+}
+```
+
+### 7.2 Backward Compatibility
+
+- `activity`, `is_alert`, `symbol`, `agent_type`, `timestamp`, `strike`,
+  `expiration`, `premium` retain their existing semantics.
+- The top-level `strike`/`expiration`/`premium` MUST reflect the
+  **selected_contract** (what the user should actually trade), not the requested.
+- `requested_contract` is always populated (even when identical to selected).
+- `relaxed_parameter` is `null` when `selected_contract == requested_contract`.
+- `selection_source` is `"requested_approved"` or `"alpha_alternative"`.
+
+### 7.3 Immutable Snapshots
+
+The existing `_validation_meta.evaluated_snapshot` and `displayed_snapshot` are
+preserved unchanged. A new `chain_snapshot_summary` field captures the chain
+context provided to Alpha (contract count, expiration range, timestamp) without
+duplicating the full chain JSON:
+
+```python
+"chain_snapshot_summary": {
+    "chain_timestamp": "2026-08-30T18:00:00Z",
+    "underlying_price": 150.00,
+    "contract_count": 47,
+    "expiration_range": ["2026-09-05", "2026-10-17"],
+    "side": "call",
+}
+```
+
+---
+
+## §8. API / Status Response Changes
+
+### 8.1 POST Request — No Change
+
+`ValidateContractRequest` schema is unchanged. The chain-aware behavior is
+the new default (no opt-in flag needed — the old flow was broken anyway
+per §1.1 finding #2).
+
+### 8.2 GET Status Response — Additions
+
+```typescript
+interface ValidationStatusCompleted {
+  // ... all existing fields ...
+
+  // New fields
+  requested_contract?: {
+    strike: number;
+    expiration: string;
+    premium: number | null;
+    delta: number | null;
+  } | null;
+  selected_contract?: {
+    strike: number;
+    expiration: string;
+    premium: number | null;
+    delta: number | null;
+  } | null;
+  relaxed_parameter?: string | null;
+  comparison_rationale?: string | null;
+  selection_source?: "requested_approved" | "alpha_alternative" | null;
+}
+```
+
+All new fields are optional and nullable — existing frontend code that
+doesn't read them continues to work.
+
+---
+
+## §9. Frontend Display Behavior
+
+### 9.1 Existing Components — No Breaking Changes
+
+`ContractValidationAction.tsx`, `DashboardActivity.tsx`,
+`ActivityDetailView.tsx` all read `activity`, `validation_status`,
+`is_alert`, `supervisor_view`, `alpha_view`. These are unchanged.
+
+### 9.2 New Display (Phase 2 — After Backend Ships)
+
+The `ActivityDetailView` gains a "Contract Selection" section when
+`requested_contract` and `selected_contract` are both present:
+
+- If `selected_contract != requested_contract`:
+  - Show "Requested: $155 Sep-19 Call" / "Selected: $157.50 Sep-19 Call"
+  - Show `relaxed_parameter` as a human-readable label
+  - Show `comparison_rationale`
+- If identical: Show "Validated: $155 Sep-19 Call ✓"
+
+### 9.3 Frontend Types Addition
+
+```typescript
+// types/contract-validation.ts — additions
+interface ContractRef {
+  strike: number;
+  expiration: string;
+  premium: number | null;
+  delta: number | null;
+}
+```
+
+---
+
+## §10. Concurrency / Deduplication Identity
+
+The deduplication key (`_validation_key` in `contract_validation_integration.py:41`)
+is currently `{symbol}_{side}_{strike}_{expiration}`. This is sufficient —
+two validations of the same contract would be true duplicates. No change needed.
+
+---
+
+## §11. Prompt Partitioning / Trace Lineage
+
+### 11.1 Trace Records
+
+The existing trace structure (`_record_trace` calls in `run_contract_validation`)
+is preserved. The new chain-aware path adds:
+
+- Primary trace: `phase="contract_validation"` (unchanged)
+- Supervisor trace: `phase="supervisor"` (unchanged)
+- Alpha trace: `phase="alpha"` (unchanged, but now includes chain context
+  in `user_message`)
+
+### 11.2 Prompt Partitioning
+
+- **Primary agent**: Sees only the requested contract's market data (unchanged).
+  It evaluates the exact contract the user clicked.
+- **Supervisor**: Sees the primary decision + market data (unchanged).
+  It reviews the primary's reasoning.
+- **Alpha**: Sees the primary decision + market data **+ full filtered chain**
+  (NEW). This is the only prompt that changes.
+
+This partitioning ensures Primary and Supervisor are not influenced by
+alternative contracts — they evaluate what was asked. Only Alpha, whose job
+is to find alternatives, sees the full candidate set.
+
+---
+
+## §12. Latent Bug Fixes (In Scope)
+
+### 12.1 Supervisor Approval Check
+
+**File:** `agent_runner.py:4394`
+**Current:** `supervisor_approved = supervisor_view.get("net_assessment", "").upper() == "APPROVE"`
+**Fix:** `supervisor_approved = supervisor_view.get("net_assessment", "").upper() == "ORIGINAL_HOLDS"`
+
+### 12.2 Alpha Approval Check
+
+**File:** `agent_runner.py:4420`
+**Current:** `alpha_approved = alpha_view.get("recommendation", "").upper() == "APPROVE"`
+**Fix:** Replace with chain-aware logic per §2.2 / §5.3.
+
+---
+
+## §13. File Ownership / Work Split
+
+### 13.1 Rusty (Agent Dev)
+
+| File | Scope |
+|------|-------|
+| `backend/src/contract_validation_integration.py` | `_build_validation_chain_context()`, chain injection into `_execute_validation`, `_validate_alpha_alternative()`, updated `_persist_validation_activity` for new fields, updated `get_validation_status` response |
+| `backend/web/app.py` | Updated `ValidateContractRequest` (if needed — currently sufficient), status response additions |
+
+### 13.2 Linus (Core Logic)
+
+| File | Scope |
+|------|-------|
+| `backend/src/agent_runner.py` | Fix supervisor/alpha approval checks (§12.1, §12.2), pass chain context to Alpha in `run_contract_validation`, implement Case A/B/C/D/E logic (§2.2), wire `requested_contract`/`selected_contract` into result dict |
+| `backend/src/alpha_instructions.py` | Add validation context addendum (§5.2) — append to Alpha instructions when invoked from validation path |
+
+### 13.3 Conflict Avoidance
+
+- **Rusty** owns `contract_validation_integration.py` exclusively (no Linus edits).
+- **Linus** owns `agent_runner.py:run_contract_validation` and `alpha_instructions.py` exclusively (no Rusty edits).
+- **Seam**: Rusty's `_execute_validation` calls Linus's `run_contract_validation`.
+  The interface contract is:
+  - Input: add `chain_context_text: str` parameter to `run_contract_validation`
+  - Output: add `requested_contract`, `selected_contract`, `relaxed_parameter`,
+    `comparison_rationale`, `selection_source` to the result dict
+
+### 13.4 Frontend (Phase 2 — Rusty)
+
+| File | Scope |
+|------|-------|
+| `frontend/src/types/contract-validation.ts` | Add `ContractRef`, update `ValidationStatusCompleted` |
+| `frontend/src/types/activity-detail.ts` | Add `requested_contract`, `selected_contract`, `relaxed_parameter` |
+| `frontend/src/components/ActivityDetailView.tsx` | "Contract Selection" display section |
+
+### 13.5 Livingston (Integration Tests)
+
+| File | Scope |
+|------|-------|
+| `backend/tests/test_chain_aware_validation_integration.py` | NEW — real-modules integration test across the Rusty/Linus seam |
+
+---
+
+## §14. Test Matrix
+
+### 14.1 Unit Tests (Linus)
+
+| Test | What It Validates |
+|------|-------------------|
+| Supervisor approval check uses `ORIGINAL_HOLDS` | §12.1 fix |
+| Alpha NONE → endorses requested contract | §5.3 |
+| Alpha STRONG with valid alternative → selected differs from requested | §2.2 Case B |
+| Alpha STRONG with invalid alternative → fallback to requested | §4.2 |
+| Primary WAIT + Alpha alternative → SELL when D4 passes | §2.2 Case C |
+| Primary WAIT + Alpha alternative → WAIT when D4 fails | §2.2 Case C |
+| Supervisor RECONSIDER → WAIT regardless of Alpha | §2.2 Case E |
+| Both strike AND expiration changed → D4 rejects (G4) | §4.1 |
+| Alternative not in chain → D4 rejects (G1) | §4.1 |
+| Alternative same as requested → D4 rejects (G3) | §4.1 |
+| DTE > 45 alternative → D4 rejects (G6) | §4.1 |
+| Missing bid/delta alternative → D4 rejects (G9) | §4.1 |
+
+### 14.2 Unit Tests (Rusty)
+
+| Test | What It Validates |
+|------|-------------------|
+| `_build_validation_chain_context` produces same shape as `_build_alpha_options_chain` | §3.2 byte-semantic parity |
+| Chain context included in persisted `chain_snapshot_summary` | §7.3 |
+| Status response includes new fields when present | §8.2 |
+| Status response backward-compatible when fields absent | §8.2 |
+
+### 14.3 Integration Tests (Livingston)
+
+| Test | What It Validates |
+|------|-------------------|
+| End-to-end: POST → poll → completed with `selected_contract` | Full flow |
+| Chain context text non-empty when chain has contracts | §3.2 |
+| `requested_contract` always populated | §7.2 |
+| `selection_source` is "requested_approved" when no alternative | §7.1 |
+| `selection_source` is "alpha_alternative" when alternative accepted | §7.1 |
+
+### 14.4 Adversarial Tests (Basher)
+
+| Test | What It Validates |
+|------|-------------------|
+| Alpha proposes contract not in chain → WAIT | D4/G1 |
+| Alpha proposes same contract as requested → treated as NONE | D4/G3 |
+| Alpha changes both strike AND expiration → rejected | D4/G4 |
+| Alpha proposes DTE 50 contract → rejected | D4/G6 |
+| Empty chain → Alpha gets no chain context → WAIT (no hallucinated SELL) | §3.2 edge case |
+| Supervisor RECONSIDER + Alpha STRONG alternative → WAIT | §6.2 |
+
+---
+
+## §15. Staged Rollout
+
+### Phase 1 — Backend Only (This Sprint)
+
+1. Fix latent approval-check bugs (§12) — immediate, zero-risk
+2. Add `_build_validation_chain_context` and `_validate_alpha_alternative`
+3. Update `run_contract_validation` with Case A-F logic
+4. Add chain context to Alpha's validation message
+5. Persist `requested_contract`/`selected_contract`/`relaxed_parameter`
+6. Update status polling response
+
+### Phase 2 — Frontend (Next Sprint)
+
+1. Update TypeScript types
+2. Add "Contract Selection" display in ActivityDetailView
+3. Show requested vs selected when they differ
+
+### Phase 3 — Observability
+
+1. Dashboard metrics: % of validations where Alpha improved the selection
+2. Track which `relaxed_parameter` values are most common
+
+---
+
+## §16. Reviewer Acceptance Criteria
+
+### Gate for Rusty's PR
+
+- [ ] `_build_validation_chain_context` output matches `_build_alpha_options_chain` for same chain input (unit test)
+- [ ] No `import` of `best_options.py` or Best Options scoring anywhere in the validation path
+- [ ] `requested_contract` always populated in persisted activity
+- [ ] Status response backward-compatible (all new fields optional)
+- [ ] No changes to `agent_runner.py`
+
+### Gate for Linus's PR
+
+- [ ] Supervisor check uses `ORIGINAL_HOLDS` (grep confirms no remaining `== "APPROVE"` in validation path)
+- [ ] Alpha NONE produces `selection_source: "requested_approved"`
+- [ ] D4 rejects when both strike AND expiration differ (G4 test passes)
+- [ ] D4 rejects when alternative not in chain (G1 test passes)
+- [ ] Primary WAIT + Alpha alternative + D4 pass → SELL (Case C test passes)
+- [ ] Supervisor RECONSIDER is terminal regardless of Alpha (Case E test passes)
+- [ ] No changes to `contract_validation_integration.py`
+
+### Gate for Livingston's Integration Test PR
+
+- [ ] Tests use real modules, not mocks of `_validate_alpha_alternative`
+- [ ] At least one test with a real chain JSON fixture
+
+### Gate for Basher's Adversarial PR
+
+- [ ] All six adversarial cases in §14.4 covered
+- [ ] At least one test that verifies the exact `rejection_reason` string from D4
