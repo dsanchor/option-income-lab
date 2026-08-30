@@ -157,6 +157,7 @@ class OptionsAgentScheduler:
             telegram_notifier=telegram_notifier,
             plan_monitor_model=self.config.plan_monitor_model,
             function_llms=self.config.function_llm_configs(),
+            function_models=self.config.function_model_deployments(),
         )
 
         print(f"Scheduler configured with cron: {self.config.cron_expression}")
@@ -682,6 +683,9 @@ class OptionsAgentScheduler:
             )
             self.runner.set_function_llms(
                 self.config.function_llm_configs()
+            )
+            self.runner.set_function_models(
+                self.config.function_model_deployments()
             )
 
         except Exception as e:

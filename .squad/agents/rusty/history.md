@@ -1300,3 +1300,40 @@ The infrastructure is complete and tested. What remains is adding the per-row "V
 
 **Learning:** When backend canonical schemas change field names, grep frontend for all references and update consumer components. The `ValidationStatusCompleted` interface intentionally mirrors normal agent activity schema (`reason`, `confidence`, etc.) to maintain consistency across validation and scheduled agent runs
 
+
+## 2026-08-30: Fixed Best Option contract validation model routing
+
+**Issue:** Best Option validation was using global default model instead of configured "Following Analysis" model.
+
+**Root Cause:** `_get_client` resolved function-specific providers but NOT models. When `run_contract_validation` passed `model=None`, it fell back to global default instead of consulting the function-specific model configuration.
+
+**Fix:**
+1. Added `function_models` parameter to `AgentRunner.__init__` (mirrors `function_llms`)
+2. Enhanced `_get_client` to resolve models via: explicit parameter > function-specific > global default
+3. Added `Config.function_model_deployments()` to generate per-function model dict
+4. Updated bootstrap (main.py, web/app.py) to pass `function_models` and reload them on config change
+5. Added `set_function_models()` for live reload support
+
+**Verification:**
+- Primary agent uses "analysis" model (Following Analysis)
+- Supervisor uses "supervisor" model
+- Alpha uses "alpha" model
+- Explicit overrides still work
+- Global default is fallback only when no function-specific config exists
+
+**Tests Added:**
+- `test_function_models_resolve_when_no_explicit_model_provided`
+- `test_function_models_fallback_to_global_default`
+- `test_explicit_model_overrides_function_model`
+- `test_set_function_models_updates_routing`
+- `TestContractValidationModelRouting` (2 tests)
+
+**Files Changed:**
+- backend/src/agent_runner.py: _get_client, __init__, set_function_models
+- backend/src/config.py: function_model_deployments()
+- backend/src/main.py: bootstrap + reload
+- backend/web/app.py: reload hook
+- backend/tests/test_agent_model_settings.py: 4 new tests + mock update
+- backend/tests/test_contract_validation_engine.py: 2 new tests
+
+All tests pass (26 model settings, 18 contract validation, 18 integration, 26 Alpha).

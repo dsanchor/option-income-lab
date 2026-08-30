@@ -121,7 +121,8 @@ class AgentRunner:
     def __init__(self, llm: LlmConfig, model: str, telegram_notifier=None,
                  project_endpoint: str = None, api_key: str = None,
                  plan_monitor_model: str = None,
-                 function_llms: Dict[str, LlmConfig] | None = None):
+                 function_llms: Dict[str, LlmConfig] | None = None,
+                 function_models: Dict[str, str] | None = None):
         """Initialize the agent runner.
 
         Args:
@@ -130,6 +131,8 @@ class AgentRunner:
             telegram_notifier: Optional TelegramNotifier for alert notifications
             project_endpoint: Deprecated — use llm= (Azure backward compat)
             api_key: Deprecated — use llm=
+            function_llms: Per-function provider configurations
+            function_models: Per-function model deployments
         """
         if project_endpoint is not None and api_key is not None:
             llm = LlmConfig(provider='azure', api_key=api_key, endpoint=project_endpoint)
@@ -140,6 +143,7 @@ class AgentRunner:
         self._function_llms = {
             k: self._normalize_llm_config(v) for k, v in (function_llms or {}).items()
         }
+        self._function_models: Dict[str, str] = dict(function_models or {})
         self._default_model = model
         self._plan_monitor_model = plan_monitor_model or "gpt-5.4-mini"
         self._clients: Dict[tuple[str, str, str], object] = {}
@@ -149,13 +153,46 @@ class AgentRunner:
         self._skills_providers: Dict[str, SkillsProvider] = {}
         self._skills_dir = Path(__file__).parent / "skills"
 
+    def _resolve_model_deployment(
+        self,
+        model: str | None = None,
+        function_id: str | None = None,
+    ) -> str:
+        """Resolve model deployment with consistent priority: explicit > function > default.
+
+        This is the single source of truth for model resolution, used by both
+        _get_client (routing) and trace recording (telemetry) to ensure they
+        always report the same deployment.
+
+        Priority order:
+        1. Explicit model parameter (caller override)
+        2. Function-specific model (from function_models)
+        3. Global default model
+        """
+        return (
+            model
+            or self._function_models.get(function_id)
+            or self._default_model
+        )
+
     def _get_client(
         self,
         model: str = None,
         function_id: str | None = None,
     ) -> OpenAIChatCompletionClient:
-        """Return a cached chat client for the given model name."""
-        deployment = model or self._default_model
+        """Return a cached chat client for the given model and provider.
+
+        Model resolution (first match wins):
+        1. Explicit model parameter
+        2. Function-specific model (from function_models)
+        3. Default model
+
+        Provider resolution (first match wins):
+        1. Function-specific provider (from function_llms)
+        2. Active context provider
+        3. Default provider
+        """
+        deployment = self._resolve_model_deployment(model, function_id)
         llm = (
             self._function_llms.get(function_id)
             or self._active_llm.get()
@@ -168,8 +205,8 @@ class AgentRunner:
         )
         if cache_key not in self._clients:
             logger.info(
-                "Creating OpenAIChatCompletionClient provider=%s model=%s",
-                llm.provider, deployment,
+                "Creating OpenAIChatCompletionClient provider=%s model=%s function_id=%s",
+                llm.provider, deployment, function_id or "default",
             )
             self._clients[cache_key] = create_async_chat_client(
                 deployment, llm,
@@ -185,6 +222,10 @@ class AgentRunner:
         self._function_llms = {
             k: self._normalize_llm_config(v) for k, v in values.items()
         }
+
+    def set_function_models(self, values: Dict[str, str]) -> None:
+        """Replace per-function model deployments after a live reload."""
+        self._function_models = dict(values)
 
     @property
     def client(self):
@@ -1370,7 +1411,7 @@ class AgentRunner:
         """
         symbol = activity_payload.get("symbol", "?")
         instructions = message = response_text = error = supervisor_data = None
-        resolved_model = model or self._default_model
+        resolved_model = self._resolve_model_deployment(model, "supervisor")
         start = time.time()
         try:
             activity_str = activity_payload.get("activity", "SELL")
@@ -1533,7 +1574,7 @@ Provide your supervisor audit in the JSON format specified above."""
         """
         symbol = activity_payload.get("symbol", "?")
         instructions = message = response_text = error = alpha_data = None
-        resolved_model = model or self._default_model
+        resolved_model = self._resolve_model_deployment(model, "alpha")
         start = time.time()
         try:
             activity_str = activity_payload.get("activity", "SELL")
@@ -4247,7 +4288,7 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
 
             # Run primary agent
             agent = Agent(
-                client=self._get_client(model or self._default_model, "analysis"),
+                client=self._get_client(model, "analysis"),
                 name=f"ContractValidation_{agent_type}",
                 instructions=base_instructions,
                 context_providers=[_skills] if _skills else None,
@@ -4273,7 +4314,7 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
                     system_prompt=base_instructions,
                     user_message=message,
                     response_text=response_text,
-                    model=model or self._default_model,
+                    model=self._resolve_model_deployment(model, "analysis"),
                     parsed=None,
                     phase="contract_validation",
                     duration_seconds=primary_duration,
@@ -4297,7 +4338,7 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
                 system_prompt=base_instructions,
                 user_message=message,
                 response_text=response_text,
-                model=model or self._default_model,
+                model=self._resolve_model_deployment(model, "analysis"),
                 parsed=activity_data,
                 phase="contract_validation",
                 duration_seconds=primary_duration,

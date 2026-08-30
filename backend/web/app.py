@@ -5355,6 +5355,9 @@ def _save_ai_provider_overrides(
         scheduler.runner.set_function_llms(
             scheduler.config.function_llm_configs()
         )
+        scheduler.runner.set_function_models(
+            scheduler.config.function_model_deployments()
+        )
     return effective_settings, persistence
 
 

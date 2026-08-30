@@ -204,6 +204,13 @@ class Config:
             for role in AI_FUNCTIONS
         }
 
+    def function_model_deployments(self) -> Dict[str, str]:
+        """Return per-function model deployments for all AI functions."""
+        return {
+            role: self.model_for(role)
+            for role in AI_FUNCTIONS
+        }
+
     def _function_override(self, role: str) -> Dict[str, Any]:
         return dict(
             self.config.get('ai_function_overrides', {}).get(role) or {}

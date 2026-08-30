@@ -118,6 +118,134 @@ def test_agent_runner_selects_provider_by_function(monkeypatch):
     ]
 
 
+def test_function_models_resolve_when_no_explicit_model_provided(monkeypatch):
+    """Regression: contract validation should use function-specific models, not global default."""
+    created = []
+
+    def fake_client(model, llm):
+        client = object()
+        created.append((model, llm.provider, client))
+        return client
+
+    monkeypatch.setattr("src.agent_runner.create_async_chat_client", fake_client)
+    runner = AgentRunner(
+        llm=LlmConfig("azure", "azure-key", "https://azure.test"),
+        model="global-default-model",
+        function_llms={
+            "analysis": LlmConfig("gemini", "gemini-key"),
+            "supervisor": LlmConfig("azure", "supervisor-key", "https://supervisor.test"),
+            "alpha": LlmConfig("azure", "alpha-key", "https://alpha.test"),
+        },
+        function_models={
+            "analysis": "following-analysis-model",
+            "supervisor": "supervisor-specific-model",
+            "alpha": "alpha-specific-model",
+        },
+    )
+
+    # Simulate contract validation flow: no explicit model parameter, only function_id
+    analysis_client = runner._get_client(model=None, function_id="analysis")
+    supervisor_client = runner._get_client(model=None, function_id="supervisor")
+    alpha_client = runner._get_client(model=None, function_id="alpha")
+
+    # Should use function-specific models, NOT global default
+    assert created[0] == ("following-analysis-model", "gemini", analysis_client)
+    assert created[1] == ("supervisor-specific-model", "azure", supervisor_client)
+    assert created[2] == ("alpha-specific-model", "azure", alpha_client)
+
+    # Verify that global default is NOT used when function-specific model exists
+    assert all(model != "global-default-model" for model, _, _ in created)
+
+
+def test_function_models_fallback_to_global_default(monkeypatch):
+    """When function has no specific model, should fall back to global default."""
+    created = []
+
+    def fake_client(model, llm):
+        client = object()
+        created.append((model, llm.provider, client))
+        return client
+
+    monkeypatch.setattr("src.agent_runner.create_async_chat_client", fake_client)
+    runner = AgentRunner(
+        llm=LlmConfig("azure", "azure-key", "https://azure.test"),
+        model="global-default-model",
+        function_llms={},
+        function_models={
+            "analysis": "analysis-model",
+            # No entry for "supervisor" or "alpha"
+        },
+    )
+
+    analysis_client = runner._get_client(model=None, function_id="analysis")
+    supervisor_client = runner._get_client(model=None, function_id="supervisor")
+
+    # Analysis should use its specific model
+    assert created[0] == ("analysis-model", "azure", analysis_client)
+    # Supervisor has no specific model, should use global default
+    assert created[1] == ("global-default-model", "azure", supervisor_client)
+
+
+def test_explicit_model_overrides_function_model(monkeypatch):
+    """Explicit model parameter should always win over function-specific model."""
+    created = []
+
+    def fake_client(model, llm):
+        client = object()
+        created.append((model, llm.provider, client))
+        return client
+
+    monkeypatch.setattr("src.agent_runner.create_async_chat_client", fake_client)
+    runner = AgentRunner(
+        llm=LlmConfig("azure", "azure-key", "https://azure.test"),
+        model="global-default-model",
+        function_models={
+            "analysis": "analysis-model",
+        },
+    )
+
+    # Explicit model should override function-specific model
+    client = runner._get_client(model="explicit-override", function_id="analysis")
+
+    assert created[0] == ("explicit-override", "azure", client)
+
+
+def test_set_function_models_updates_routing(monkeypatch):
+    """set_function_models should update model routing dynamically."""
+    created = []
+
+    def fake_client(model, llm):
+        client = object()
+        created.append((model, llm.provider, client))
+        return client
+
+    monkeypatch.setattr("src.agent_runner.create_async_chat_client", fake_client)
+    runner = AgentRunner(
+        llm=LlmConfig("azure", "azure-key", "https://azure.test"),
+        model="global-model",
+        function_models={
+            "analysis": "old-analysis-model",
+        },
+    )
+
+    # Initial model
+    c1 = runner._get_client(model=None, function_id="analysis")
+    assert created[0] == ("old-analysis-model", "azure", c1)
+
+    # Update function models
+    runner.set_function_models({
+        "analysis": "new-analysis-model",
+        "supervisor": "new-supervisor-model",
+    })
+
+    # New clients should use updated models
+    c2 = runner._get_client(model=None, function_id="analysis")
+    c3 = runner._get_client(model=None, function_id="supervisor")
+
+    assert created[1] == ("new-analysis-model", "azure", c2)
+    assert created[2] == ("new-supervisor-model", "azure", c3)
+
+
 class FakeCosmos:
     def __init__(self, settings=None, *, fail_update=False):
         self.document = {
@@ -405,9 +533,13 @@ def test_ai_provider_save_reloads_scheduler_from_verified_cosmos(monkeypatch):
 
     class Runner:
         function_llms = None
+        function_models = None
 
         def set_function_llms(self, values):
             self.function_llms = values
+
+        def set_function_models(self, values):
+            self.function_models = values
 
     class Scheduler:
         config = scheduler_config
