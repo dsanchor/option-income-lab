@@ -107,7 +107,7 @@ class TestSideToAgentTypeMapping:
             mock_agent_instance.run = AsyncMock(return_value=MagicMock(
                 text='```json\n{"activity": "WAIT", "timestamp": "2026-08-29T10:00:00Z"}\n```'
             ))
-            
+
             with patch('src.agent_runner.Agent', return_value=mock_agent_instance):
                 with patch.object(runner, '_run_supervisor_review', return_value=None):
                     with patch.object(runner, '_record_trace', return_value="trace-123"):
@@ -120,7 +120,7 @@ class TestSideToAgentTypeMapping:
                             cosmos=mock_cosmos,
                             context_provider=mock_context_provider,
                         )
-        
+
         assert result["agent_type"] == "covered_call"
         assert result["side"] == "call"
 
@@ -132,7 +132,7 @@ class TestSideToAgentTypeMapping:
             mock_agent_instance.run = AsyncMock(return_value=MagicMock(
                 text='```json\n{"activity": "WAIT", "timestamp": "2026-08-29T10:00:00Z"}\n```'
             ))
-            
+
             with patch('src.agent_runner.Agent', return_value=mock_agent_instance):
                 with patch.object(runner, '_run_supervisor_review', return_value=None):
                     with patch.object(runner, '_record_trace', return_value="trace-456"):
@@ -145,7 +145,7 @@ class TestSideToAgentTypeMapping:
                             cosmos=mock_cosmos,
                             context_provider=mock_context_provider,
                         )
-        
+
         assert result["agent_type"] == "cash_secured_put"
         assert result["side"] == "put"
 
@@ -174,7 +174,7 @@ class TestEvidenceValidation:
             "underlying_price": 150.00,
             # Missing contract_data, market_data_text, chain_timestamp
         }
-        
+
         with pytest.raises(ValueError, match="Missing required evidence fields"):
             import asyncio
             asyncio.run(runner.run_contract_validation(
@@ -197,7 +197,7 @@ class TestEvidenceValidation:
             "chain_timestamp": "2026-08-29T10:00:00Z",
             "market_data_text": "...",
         }
-        
+
         with pytest.raises(ValueError, match="Missing required evidence fields"):
             import asyncio
             asyncio.run(runner.run_contract_validation(
@@ -223,7 +223,7 @@ class TestFailClosedReviewLogic:
             mock_agent_instance.run = AsyncMock(return_value=MagicMock(
                 text='```json\n{"activity": "SELL", "timestamp": "2026-08-29T10:00:00Z"}\n```'
             ))
-            
+
             with patch('src.agent_runner.Agent', return_value=mock_agent_instance):
                 # Supervisor fails (returns None)
                 with patch.object(runner, '_run_supervisor_review', return_value=None):
@@ -238,7 +238,7 @@ class TestFailClosedReviewLogic:
                                 cosmos=mock_cosmos,
                                 context_provider=mock_context_provider,
                             )
-        
+
         assert result["activity"] == "WAIT", "Should downgrade to WAIT when Supervisor fails"
         assert result["is_alert"] is False
         assert result["validation_status"] == "review_incomplete"
@@ -252,7 +252,7 @@ class TestFailClosedReviewLogic:
             mock_agent_instance.run = AsyncMock(return_value=MagicMock(
                 text='```json\n{"activity": "SELL", "timestamp": "2026-08-29T10:00:00Z"}\n```'
             ))
-            
+
             with patch('src.agent_runner.Agent', return_value=mock_agent_instance):
                 # Supervisor succeeds
                 with patch.object(runner, '_run_supervisor_review', return_value={
@@ -273,7 +273,7 @@ class TestFailClosedReviewLogic:
                                     cosmos=mock_cosmos,
                                     context_provider=mock_context_provider,
                                 )
-        
+
         assert result["activity"] == "WAIT", "Should downgrade to WAIT when Alpha fails"
         assert result["is_alert"] is False
         assert result["validation_status"] == "review_incomplete"
@@ -291,7 +291,7 @@ class TestApprovedValidation:
             mock_agent_instance.run = AsyncMock(return_value=MagicMock(
                 text='```json\n{"activity": "SELL", "timestamp": "2026-08-29T10:00:00Z"}\n```'
             ))
-            
+
             with patch('src.agent_runner.Agent', return_value=mock_agent_instance):
                 with patch.object(runner, '_run_supervisor_review', return_value={
                     "net_assessment": "APPROVE",
@@ -313,7 +313,7 @@ class TestApprovedValidation:
                                     cosmos=mock_cosmos,
                                     context_provider=mock_context_provider,
                                 )
-        
+
         assert result["activity"] == "SELL"
         assert result["is_alert"] is True
         assert result["validation_status"] == "approved"
@@ -332,7 +332,7 @@ class TestRunIdAndTraceLineage:
             mock_agent_instance.run = AsyncMock(return_value=MagicMock(
                 text='```json\n{"activity": "WAIT", "timestamp": "2026-08-29T10:00:00Z"}\n```'
             ))
-            
+
             with patch('src.agent_runner.Agent', return_value=mock_agent_instance):
                 with patch.object(runner, '_run_supervisor_review', return_value=None):
                     with patch.object(runner, '_record_trace', return_value="trace-1"):
@@ -346,7 +346,7 @@ class TestRunIdAndTraceLineage:
                                 cosmos=mock_cosmos,
                                 context_provider=mock_context_provider,
                             )
-                            
+
                             result2 = await runner.run_contract_validation(
                                 symbol="MSFT",
                                 side="call",
@@ -356,7 +356,7 @@ class TestRunIdAndTraceLineage:
                                 cosmos=mock_cosmos,
                                 context_provider=mock_context_provider,
                             )
-        
+
         assert result1["run_id"] is not None
         assert result2["run_id"] is not None
         assert result1["run_id"] != result2["run_id"], "Each validation should get unique run_id"
@@ -373,7 +373,7 @@ class TestNoOrderSideEffects:
             mock_agent_instance.run = AsyncMock(return_value=MagicMock(
                 text='```json\n{"activity": "SELL", "timestamp": "2026-08-29T10:00:00Z"}\n```'
             ))
-            
+
             with patch('src.agent_runner.Agent', return_value=mock_agent_instance):
                 with patch.object(runner, '_run_supervisor_review', return_value={
                     "net_assessment": "APPROVE",
@@ -395,10 +395,68 @@ class TestNoOrderSideEffects:
                                     cosmos=mock_cosmos,
                                     context_provider=mock_context_provider,
                                 )
-        
+
         # Verify no position/order creation methods were called
         assert not mock_cosmos.create_position.called, "Should not create positions"
         assert not mock_cosmos.update_position.called, "Should not update positions"
+
+
+class TestDictCompatibility:
+    """Tests for dict-to-LlmConfig normalization (backward compatibility)."""
+
+    def test_constructor_llm_dict_normalized(self, mock_cosmos, mock_context_provider):
+        """Constructor accepts plain dict for llm= and normalizes to LlmConfig."""
+        llm_dict = {"provider": "azure", "api_key": "test", "endpoint": "https://test"}
+        runner = AgentRunner(
+            llm=llm_dict,
+            model="gpt-5.4-mini",
+        )
+        # Internal _llm should be LlmConfig with .provider accessible
+        assert hasattr(runner._llm, "provider")
+        assert runner._llm.provider == "azure"
+        assert runner._llm.api_key == "test"
+        assert runner._llm.endpoint == "https://test"
+
+    def test_constructor_function_llms_dict_normalized(self, mock_cosmos, mock_context_provider):
+        """Constructor normalizes function_llms dict values to LlmConfig."""
+        func_dict = {"validate_contract": {"provider": "gemini", "api_key": "key1"}}
+        runner = AgentRunner(
+            llm={"provider": "azure", "api_key": "test", "endpoint": "https://test"},
+            model="gpt-5.4-mini",
+            function_llms=func_dict,
+        )
+        # Internal _function_llms values should be LlmConfig
+        assert "validate_contract" in runner._function_llms
+        assert hasattr(runner._function_llms["validate_contract"], "provider")
+        assert runner._function_llms["validate_contract"].provider == "gemini"
+
+    def test_set_function_llms_dict_normalized(self, runner):
+        """set_function_llms accepts dict values and normalizes to LlmConfig."""
+        new_dict = {"alpha": {"provider": "azure", "api_key": "alpha_key", "endpoint": "https://alpha"}}
+        runner.set_function_llms(new_dict)
+        assert "alpha" in runner._function_llms
+        assert hasattr(runner._function_llms["alpha"], "provider")
+        assert runner._function_llms["alpha"].provider == "azure"
+        assert runner._function_llms["alpha"].api_key == "alpha_key"
+
+    def test_normalize_preserves_all_fields(self):
+        """_normalize_llm_config preserves all LlmConfig fields including optional endpoint."""
+        input_dict = {
+            "provider": "gemini",
+            "api_key": "test_key",
+            "endpoint": "https://endpoint",
+        }
+        result = AgentRunner._normalize_llm_config(input_dict)
+        assert result.provider == "gemini"
+        assert result.api_key == "test_key"
+        assert result.endpoint == "https://endpoint"
+
+    def test_normalize_llmconfig_instance_passthrough(self):
+        """_normalize_llm_config passes through existing LlmConfig unchanged."""
+        from src.llm import LlmConfig
+        original = LlmConfig(provider="azure", api_key="test", endpoint="https://test")
+        result = AgentRunner._normalize_llm_config(original)
+        assert result is original
 
 
 if __name__ == "__main__":

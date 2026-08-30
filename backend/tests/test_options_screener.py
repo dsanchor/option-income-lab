@@ -565,3 +565,154 @@ class TestPrecomputedParameter:
         assert len(result["symbols"]["error"]) == 1
         assert result["symbols"]["error"][0]["symbol"] == "BBB"
         assert {r["symbol"] for r in result["calls"]["rows"]} == {"AAA"}
+
+
+class TestGapPercentageFilters:
+    """Test signed gap percentage filters for Options Screener.
+
+    Gap formula: gap_pct = (strike - underlying_price) / underlying_price * 100
+    Preserves sign and is identical for calls/puts.
+    """
+
+    # Underlying price: 100.0
+    # Strike 105.0 -> gap_pct = (105 - 100) / 100 * 100 = 5.0%
+    # Strike 108.0 -> gap_pct = (108 - 100) / 100 * 100 = 8.0%
+
+    def test_gap_filter_above_range(self):
+        """Rows with gap_pct below min_gap_pct are excluded."""
+        result = evaluate_options_screener(
+            [_ready("AAA", AAA_CHAIN)], side="call", min_gap_pct=6.0, now=NOW,
+        )
+        # Only strike 108.0 (gap 8.0%) passes min_gap_pct=6.0; strike 105.0 (gap 5.0%) excluded
+        strikes = [r["strike"] for r in result["calls"]["rows"]]
+        assert strikes == [108.0]
+
+    def test_gap_filter_below_range(self):
+        """Rows with gap_pct above max_gap_pct are excluded."""
+        result = evaluate_options_screener(
+            [_ready("AAA", AAA_CHAIN)], side="call", max_gap_pct=6.0, now=NOW,
+        )
+        # Only strike 105.0 (gap 5.0%) passes max_gap_pct=6.0; strike 108.0 (gap 8.0%) excluded
+        strikes = [r["strike"] for r in result["calls"]["rows"]]
+        assert strikes == [105.0]
+
+    def test_gap_filter_window(self):
+        """Both min and max gap filters can be applied together."""
+        result = evaluate_options_screener(
+            [_ready("AAA", AAA_CHAIN)], side="call", min_gap_pct=5.0, max_gap_pct=8.0, now=NOW,
+        )
+        # Both strikes pass the [5.0, 8.0] window
+        strikes = [r["strike"] for r in result["calls"]["rows"]]
+        assert set(strikes) == {105.0, 108.0}
+
+    def test_gap_filter_exact_boundaries(self):
+        """Exact boundary values are included (>= and <=)."""
+        result_min = evaluate_options_screener(
+            [_ready("AAA", AAA_CHAIN)], side="call", min_gap_pct=5.0, now=NOW,
+        )
+        strikes_min = [r["strike"] for r in result_min["calls"]["rows"]]
+        assert 105.0 in strikes_min  # gap 5.0% exactly meets min_gap_pct=5.0
+
+        result_max = evaluate_options_screener(
+            [_ready("AAA", AAA_CHAIN)], side="call", max_gap_pct=8.0, now=NOW,
+        )
+        strikes_max = [r["strike"] for r in result_max["calls"]["rows"]]
+        assert 108.0 in strikes_max  # gap 8.0% exactly meets max_gap_pct=8.0
+
+    def test_gap_filter_negative_to_positive_window(self):
+        """Gap filters support negative values (ITM options)."""
+        # Create a chain with ITM and OTM strikes: underlying 100, strikes 95, 105
+        itm_otm_chain = _chain(calls={
+            _exp_key(20): _bucket(
+                _contract(bid=6.00, ask=6.20, iv=0.28, delta=0.28, oi=100, strike=95.0),  # ITM, gap -5.0%
+                _contract(bid=1.20, ask=1.30, iv=0.30, delta=0.25, oi=500, strike=105.0),  # OTM, gap 5.0%
+            ),
+        }, symbol="ITMO", underlying_price=100.0)
+
+        result = evaluate_options_screener(
+            [_ready("ITMO", itm_otm_chain, category="balanced")],
+            side="call", min_gap_pct=-10.0, max_gap_pct=10.0, now=NOW,
+        )
+        strikes = {r["strike"] for r in result["calls"]["rows"]}
+        # Both strikes within [-10.0, 10.0] window: -5.0% and 5.0%
+        assert strikes == {95.0, 105.0}
+
+    def test_gap_filter_missing_underlying_price_fails_filter(self):
+        """If underlying_price is missing/None and gap filter is set, row is excluded."""
+        no_price_chain = _chain(calls={
+            _exp_key(20): _bucket(_contract(bid=1.20, ask=1.30, iv=0.30, delta=0.25, oi=500, strike=105.0)),
+        }, symbol="NOPRICE", underlying_price=None)
+
+        result_no_filter = evaluate_options_screener(
+            [_ready("NOPRICE", no_price_chain)], side="call", now=NOW,
+        )
+        # Without gap filter, row is included
+        assert len(result_no_filter["calls"]["rows"]) == 1
+
+        result_with_filter = evaluate_options_screener(
+            [_ready("NOPRICE", no_price_chain)], side="call", min_gap_pct=0.0, now=NOW,
+        )
+        # With gap filter, row with missing underlying_price is excluded
+        assert len(result_with_filter["calls"]["rows"]) == 0
+
+    def test_gap_filter_zero_underlying_price_fails_filter(self):
+        """If underlying_price is zero and gap filter is set, row is excluded."""
+        zero_price_chain = _chain(calls={
+            _exp_key(20): _bucket(_contract(bid=1.20, ask=1.30, iv=0.30, delta=0.25, oi=500, strike=105.0)),
+        }, symbol="ZEROP", underlying_price=0.0)
+
+        result = evaluate_options_screener(
+            [_ready("ZEROP", zero_price_chain)], side="call", min_gap_pct=0.0, now=NOW,
+        )
+        # Row with zero underlying_price is excluded when gap filter is set
+        assert len(result["calls"]["rows"]) == 0
+
+    def test_gap_filter_no_filter_backward_parity(self):
+        """When gap filters are not set, behavior is unchanged from before."""
+        result_no_gap = evaluate_options_screener(
+            [_ready("AAA", AAA_CHAIN)], side="call", now=NOW,
+        )
+        strikes = [r["strike"] for r in result_no_gap["calls"]["rows"]]
+        assert set(strikes) == {105.0, 108.0}
+
+    def test_gap_filter_calls_and_puts_same_formula(self):
+        """Gap formula is identical for calls and puts (preserves sign)."""
+        # Create a chain with same strikes for calls and puts
+        both_chain = _chain(
+            calls={
+                _exp_key(20): _bucket(_contract(bid=1.20, ask=1.30, iv=0.30, delta=0.25, oi=500, strike=105.0)),
+            },
+            puts={
+                _exp_key(20): _bucket(_contract(bid=1.50, ask=1.60, iv=0.28, delta=-0.25, oi=300, strike=105.0)),
+            },
+            symbol="BOTH", underlying_price=100.0
+        )
+
+        result = evaluate_options_screener(
+            [_ready("BOTH", both_chain)], side="both", min_gap_pct=4.0, max_gap_pct=6.0, now=NOW,
+        )
+        # Both calls and puts with strike 105.0 have gap 5.0%, both should pass
+        call_strikes = [r["strike"] for r in result["calls"]["rows"]]
+        put_strikes = [r["strike"] for r in result["puts"]["rows"]]
+        assert call_strikes == [105.0]
+        assert put_strikes == [105.0]
+
+    def test_gap_filter_in_filters_output(self):
+        """Gap filters are echoed in the filters section of the output."""
+        result = evaluate_options_screener(
+            [_ready("AAA", AAA_CHAIN)], side="call", min_gap_pct=1.0, max_gap_pct=10.0, now=NOW,
+        )
+        assert result["filters"]["min_gap_pct"] == 1.0
+        assert result["filters"]["max_gap_pct"] == 10.0
+
+    def test_gap_filter_count_and_pagination_consistent(self):
+        """Gap filters affect total_matching count and pagination like other filters."""
+        result_unfiltered = evaluate_options_screener(
+            [_ready("AAA", AAA_CHAIN)], side="call", now=NOW,
+        )
+        result_filtered = evaluate_options_screener(
+            [_ready("AAA", AAA_CHAIN)], side="call", min_gap_pct=6.0, now=NOW,
+        )
+        # Unfiltered has 2 rows, filtered has 1 row
+        assert result_unfiltered["calls"]["pagination"]["total_matching"] == 2
+        assert result_filtered["calls"]["pagination"]["total_matching"] == 1

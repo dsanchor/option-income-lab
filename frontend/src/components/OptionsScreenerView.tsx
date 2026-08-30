@@ -39,6 +39,8 @@ interface NumericDraft {
   minDte: string;
   maxDte: string;
   minOi: string;
+  minGapPct: string;
+  maxGapPct: string;
 }
 
 const EMPTY_DRAFT: NumericDraft = {
@@ -48,6 +50,8 @@ const EMPTY_DRAFT: NumericDraft = {
   minDte: String(DEFAULT_DTE_MIN),
   maxDte: String(DEFAULT_DTE_MAX),
   minOi: "",
+  minGapPct: "",
+  maxGapPct: "",
 };
 
 interface AppliedFilters {
@@ -60,6 +64,8 @@ interface AppliedFilters {
   minDte: number;
   maxDte: number;
   minOi?: number;
+  minGapPct?: number;
+  maxGapPct?: number;
   sort: ScreenerSortField;
   dir: ScreenerSortDir;
   offset: number;
@@ -104,6 +110,8 @@ function buildQuery(applied: AppliedFilters): string {
   p.set("dte_min", String(applied.minDte));
   p.set("dte_max", String(applied.maxDte));
   if (applied.minOi != null) p.set("min_open_interest", String(applied.minOi));
+  if (applied.minGapPct != null) p.set("min_gap_pct", String(applied.minGapPct));
+  if (applied.maxGapPct != null) p.set("max_gap_pct", String(applied.maxGapPct));
   p.set("sort", applied.sort);
   p.set("dir", applied.dir);
   p.set("offset", String(applied.offset));
@@ -171,6 +179,7 @@ function SortableHeader({
 export default function OptionsScreenerView() {
   const [applied, setAppliedState] = useState<AppliedFilters>(DEFAULT_APPLIED);
   const [draft, setDraft] = useState<NumericDraft>(EMPTY_DRAFT);
+  const [filterError, setFilterError] = useState<string | null>(null);
   const [symbolOptions, setSymbolOptions] = useState<MultiSelectOption[]>([]);
   const [state, setState] = useState<ViewState>({ kind: "loading" });
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -211,6 +220,27 @@ export default function OptionsScreenerView() {
   useEffect(() => {
     if (draftTimer.current) clearTimeout(draftTimer.current);
     draftTimer.current = setTimeout(() => {
+      // Validate gap filters
+      const minGap = parseNum(draft.minGapPct);
+      const maxGap = parseNum(draft.maxGapPct);
+
+      // Bounds check [-100, 200]
+      if (minGap != null && (minGap < -100 || minGap > 200)) {
+        setFilterError("Min gap % must be between -100 and 200");
+        return;
+      }
+      if (maxGap != null && (maxGap < -100 || maxGap > 200)) {
+        setFilterError("Max gap % must be between -100 and 200");
+        return;
+      }
+
+      // Min <= Max check
+      if (minGap != null && maxGap != null && minGap > maxGap) {
+        setFilterError("Min gap % cannot exceed max gap %");
+        return;
+      }
+
+      setFilterError(null);
       setFilter({
         minAnnualizedReturn: parseNum(draft.minAnnualizedReturn),
         minAbsDelta: parseNum(draft.minAbsDelta),
@@ -218,6 +248,8 @@ export default function OptionsScreenerView() {
         minDte: parseNum(draft.minDte) ?? DEFAULT_DTE_MIN,
         maxDte: parseNum(draft.maxDte) ?? DEFAULT_DTE_MAX,
         minOi: parseNum(draft.minOi),
+        minGapPct: minGap,
+        maxGapPct: maxGap,
       });
     }, DEBOUNCE_MS);
     return () => {
@@ -422,6 +454,30 @@ export default function OptionsScreenerView() {
             />
           </div>
           <div className="flex flex-col gap-1">
+            <span className="text-xs text-text-muted">Min gap %</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              value={draft.minGapPct}
+              onChange={(e) => setDraft((d) => ({ ...d, minGapPct: e.target.value }))}
+              placeholder="e.g. -10"
+              className="w-24 rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1.5 text-sm text-text"
+              aria-label="Minimum gap percentage (-100 to 200)"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-text-muted">Max gap %</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              value={draft.maxGapPct}
+              onChange={(e) => setDraft((d) => ({ ...d, maxGapPct: e.target.value }))}
+              placeholder="e.g. 10"
+              className="w-24 rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1.5 text-sm text-text"
+              aria-label="Maximum gap percentage (-100 to 200)"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
             <span className="text-xs text-text-muted">Rows per page</span>
             <select
               value={applied.limit}
@@ -437,6 +493,12 @@ export default function OptionsScreenerView() {
           </div>
         </div>
       </div>
+
+      {filterError && (
+        <div role="alert" className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-3 py-2 text-xs text-accent-red">
+          {filterError}
+        </div>
+      )}
 
       {readinessStatus && readinessStatus.level !== "success" && (
         <div role="status" className={`rounded-[var(--radius)] border px-3 py-2 text-xs ${

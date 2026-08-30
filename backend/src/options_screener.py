@@ -173,6 +173,20 @@ def _passes_min_max(value: Optional[float], lo: Optional[float], hi: Optional[fl
     return True
 
 
+def _compute_gap_pct(strike: Optional[float], underlying_price: Optional[float]) -> Optional[float]:
+    """Compute signed gap percentage: (strike - underlying_price) / underlying_price * 100.
+
+    Returns None if strike, underlying_price is None, zero, or non-finite.
+    The formula preserves sign and is identical for calls/puts.
+    """
+    import math
+    if strike is None or underlying_price is None:
+        return None
+    if underlying_price == 0 or not math.isfinite(strike) or not math.isfinite(underlying_price):
+        return None
+    return (strike - underlying_price) / underlying_price * 100.0
+
+
 def _row_passes_filters(
     row: Dict[str, Any],
     *,
@@ -183,6 +197,8 @@ def _row_passes_filters(
     min_dte: Optional[int],
     max_dte: Optional[int],
     min_open_interest: Optional[float],
+    min_gap_pct: Optional[float],
+    max_gap_pct: Optional[float],
 ) -> bool:
     if row["label"] not in preferences:
         return False
@@ -194,6 +210,11 @@ def _row_passes_filters(
         return False
     if not _passes_min_max(row["open_interest"], min_open_interest, None):
         return False
+    # Gap filter: compute gap_pct from strike and underlying_price, fail if either filter is set and gap is None
+    if min_gap_pct is not None or max_gap_pct is not None:
+        gap_pct = _compute_gap_pct(row.get("strike"), row.get("underlying_price"))
+        if not _passes_min_max(gap_pct, min_gap_pct, max_gap_pct):
+            return False
     return True
 
 
@@ -341,6 +362,8 @@ def evaluate_options_screener(
     min_dte: Optional[int] = None,
     max_dte: Optional[int] = None,
     min_open_interest: Optional[float] = None,
+    min_gap_pct: Optional[float] = None,
+    max_gap_pct: Optional[float] = None,
     offset: int = 0,
     limit: int = 50,
     memo: Optional[Dict[_MemoKey, Dict[str, Any]]] = None,
@@ -469,6 +492,8 @@ def evaluate_options_screener(
                 min_dte=min_dte,
                 max_dte=max_dte,
                 min_open_interest=min_open_interest,
+                min_gap_pct=min_gap_pct,
+                max_gap_pct=max_gap_pct,
             )
         ]
         ordered = sorted(filtered, key=lambda r: _sort_key(r, midpoint_by_symbol[s]))
@@ -499,6 +524,8 @@ def evaluate_options_screener(
             "min_dte": min_dte,
             "max_dte": max_dte,
             "min_open_interest": min_open_interest,
+            "min_gap_pct": min_gap_pct,
+            "max_gap_pct": max_gap_pct,
             "offset": offset,
             "limit": limit,
         },

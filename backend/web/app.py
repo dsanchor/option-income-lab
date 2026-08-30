@@ -3274,6 +3274,8 @@ async def api_screener_options(
      dte_min: int = Query(default=0, ge=0),
      dte_max: int = Query(default=45, ge=0, le=60),
      min_open_interest: Optional[float] = Query(default=None, ge=0),
+     min_gap_pct: Optional[float] = Query(default=None, ge=-100, le=200),
+     max_gap_pct: Optional[float] = Query(default=None, ge=-100, le=200),
      sort: str = Query(default="default"),
      sort_dir: str = Query(default="desc", alias="dir"),
      offset: int = Query(default=0, ge=0),
@@ -3301,6 +3303,8 @@ async def api_screener_options(
          return JSONResponse({"error": "dte_min must be <= dte_max"}, status_code=400)
      if min_abs_delta is not None and max_abs_delta is not None and min_abs_delta > max_abs_delta:
          return JSONResponse({"error": "min_abs_delta must be <= max_abs_delta"}, status_code=400)
+     if min_gap_pct is not None and max_gap_pct is not None and min_gap_pct > max_gap_pct:
+         return JSONResponse({"error": "min_gap_pct must be <= max_gap_pct"}, status_code=400)
      if sort not in _SCREENER_SORT_FIELDS:
          return JSONResponse(
              {"error": f"sort must be one of: {', '.join(_SCREENER_SORT_FIELDS)}"}, status_code=400,
@@ -3388,6 +3392,8 @@ async def api_screener_options(
                  min_dte=dte_min,
                  max_dte=dte_max,
                  min_open_interest=min_open_interest,
+                 min_gap_pct=min_gap_pct,
+                 max_gap_pct=max_gap_pct,
                  offset=fetch_offset,
                  limit=fetch_limit,
                  precomputed=precomputed_envelopes,

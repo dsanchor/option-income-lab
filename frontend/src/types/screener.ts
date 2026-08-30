@@ -131,6 +131,8 @@ export interface ScreenerFilters {
   min_dte: number | null;
   max_dte: number | null;
   min_open_interest: number | null;
+  min_gap_pct: number | null;
+  max_gap_pct: number | null;
   offset: number;
   limit: number;
   sort: ScreenerSortField;

@@ -346,3 +346,35 @@ class TestSortAndPagination:
         assert len(body["rows"]) == 1
         assert body["rows"][0]["open_interest"] == 100
         assert body["pagination"]["has_more"] is True
+
+
+class TestGapPercentageFilters:
+    """Endpoint tests for gap percentage filters."""
+
+    def test_min_gap_pct_greater_than_max_gap_pct_returns_400(self, client_and_cosmos):
+        """min_gap_pct > max_gap_pct is rejected with 400."""
+        client, cosmos = client_and_cosmos
+        resp = client.get(
+            "/api/screener/options",
+            params={"side": "call", "min_gap_pct": 10.0, "max_gap_pct": 5.0},
+        )
+        assert resp.status_code == 400
+        assert "min_gap_pct must be <= max_gap_pct" in resp.json()["error"]
+
+    def test_gap_filter_api_bounds(self, client_and_cosmos):
+        """API enforces bounds on gap filter parameters."""
+        client, cosmos = client_and_cosmos
+
+        # Below lower bound
+        resp = client.get(
+            "/api/screener/options",
+            params={"side": "call", "min_gap_pct": -150.0},
+        )
+        assert resp.status_code == 422  # FastAPI validation error
+
+        # Above upper bound
+        resp = client.get(
+            "/api/screener/options",
+            params={"side": "call", "max_gap_pct": 250.0},
+        )
+        assert resp.status_code == 422  # FastAPI validation error

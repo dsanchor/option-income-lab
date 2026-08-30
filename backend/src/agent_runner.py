@@ -102,6 +102,22 @@ class AgentRunner:
     PROLONGED_WAIT_THRESHOLD = 5
     SUPERVISOR_COOLDOWN = 3  # WAITs between repeated supervisor/alpha reviews
 
+    @staticmethod
+    def _normalize_llm_config(value: LlmConfig | dict) -> LlmConfig:
+        """Convert raw dict or LlmConfig to a guaranteed LlmConfig instance,
+        preserving all fields (provider, api_key, endpoint, etc.)."""
+        if isinstance(value, LlmConfig):
+            return value
+        if isinstance(value, dict):
+            # Handle partial dicts that omit optional fields
+            normalized = {
+                "provider": value.get("provider", "azure"),
+                "api_key": value.get("api_key", ""),
+                "endpoint": value.get("endpoint"),
+            }
+            return LlmConfig(**normalized)
+        raise TypeError(f"Expected LlmConfig or dict, got {type(value).__name__}")
+
     def __init__(self, llm: LlmConfig, model: str, telegram_notifier=None,
                  project_endpoint: str = None, api_key: str = None,
                  plan_monitor_model: str = None,
@@ -117,11 +133,13 @@ class AgentRunner:
         """
         if project_endpoint is not None and api_key is not None:
             llm = LlmConfig(provider='azure', api_key=api_key, endpoint=project_endpoint)
-        self._llm = llm
+        self._llm = self._normalize_llm_config(llm)
         self._active_llm: ContextVar[LlmConfig | None] = ContextVar(
             "agent_runner_llm", default=None
         )
-        self._function_llms = dict(function_llms or {})
+        self._function_llms = {
+            k: self._normalize_llm_config(v) for k, v in (function_llms or {}).items()
+        }
         self._default_model = model
         self._plan_monitor_model = plan_monitor_model or "gpt-5.4-mini"
         self._clients: Dict[tuple[str, str, str], object] = {}
@@ -164,7 +182,9 @@ class AgentRunner:
 
     def set_function_llms(self, values: Dict[str, LlmConfig]) -> None:
         """Replace per-function provider configurations after a live reload."""
-        self._function_llms = dict(values)
+        self._function_llms = {
+            k: self._normalize_llm_config(v) for k, v in values.items()
+        }
 
     @property
     def client(self):
