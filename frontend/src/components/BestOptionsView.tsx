@@ -5,7 +5,7 @@ import { RefreshCw, Trophy } from "lucide-react";
 import BestOptionsParams from "@/components/BestOptionsParams";
 import ContractValidationAction from "@/components/ContractValidationAction";
 import { preferenceRowTint } from "@/lib/badges";
-import { ColorBadge, GateBadge, flagLabel, fmtNum, fmtPct, fmtExpiration, fmtTime } from "@/lib/options-row-format";
+import { ColorBadge, GateBadge, flagLabel, fmtNum, fmtPct, fmtExpiration, fmtTime, calcGap, fmtGap, fmtGapPct } from "@/lib/options-row-format";
 import type {
   BestOptionRow,
   BestOptionsResponse,
@@ -75,16 +75,18 @@ function NearestMissPanel({ nearestMiss }: { nearestMiss: BestOptionsSide["neare
   );
 }
 
-const TABLE_COLS = 13;
+const TABLE_COLS = 15;
 
 function OptionsTable({
   symbol,
   side,
   data,
+  underlyingPrice,
 }: {
   symbol: string;
   side: "call" | "put";
   data: BestOptionsSide;
+  underlyingPrice: number | null;
 }) {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const toggle = (i: number) =>
@@ -144,6 +146,8 @@ function OptionsTable({
                 <th className="border-b border-border px-2 py-1 text-left">Exp</th>
                 <th className="border-b border-border px-2 py-1 text-right">DTE</th>
                 <th className="border-b border-border px-2 py-1 text-right">Strike</th>
+                <th className="border-b border-border px-2 py-1 text-right" title="Gap from analyzed price">Gap $</th>
+                <th className="border-b border-border px-2 py-1 text-right" title="Gap from analyzed price (%)">Gap %</th>
                 <th className="border-b border-border px-2 py-1 text-right">Bid/Ask</th>
                 <th className="border-b border-border px-2 py-1 text-right">Δ</th>
                 <th className="border-b border-border px-2 py-1 text-right">Prem %</th>
@@ -157,6 +161,7 @@ function OptionsTable({
             <tbody>
               {data.rows.map((row, i) => {
                 const open = expanded.has(i);
+                const { gap, gapPct } = calcGap(row.strike, underlyingPrice);
                 return (
                   <Fragment key={`${row.expiration}-${row.strike}-${i}`}>
                     <tr
@@ -180,6 +185,12 @@ function OptionsTable({
                       <td className="px-2 py-1 text-left font-mono">{fmtExpiration(row.expiration)}</td>
                       <td className="px-2 py-1 text-right font-mono">{row.dte}</td>
                       <td className="px-2 py-1 text-right font-mono font-semibold">{fmtNum(row.strike)}</td>
+                      <td className="px-2 py-1 text-right font-mono text-text-muted" title={gap !== null && underlyingPrice !== null ? `Strike ${fmtNum(row.strike)} vs analyzed ${fmtNum(underlyingPrice)}` : undefined}>
+                        {fmtGap(gap)}
+                      </td>
+                      <td className="px-2 py-1 text-right font-mono text-text-muted">
+                        {fmtGapPct(gapPct)}
+                      </td>
                       <td className="px-2 py-1 text-right font-mono text-text-muted">
                         {fmtNum(row.bid)} / {fmtNum(row.ask)}
                       </td>
@@ -488,8 +499,19 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
       {state.kind === "ok" && (
         <>
           <BestOptionsParams parameters={state.data.parameters} />
-          <OptionsTable symbol={symbol} side="call" data={state.data.calls} />
-          <OptionsTable symbol={symbol} side="put" data={state.data.puts} />
+          <div className="rounded-[var(--radius)] border border-border bg-bg-card px-3 py-2 text-xs">
+            <span className="font-medium text-text-muted">Analyzed underlying price:</span>{" "}
+            <span className="font-mono font-semibold">
+              ${fmtNum(state.data.parameters.underlying.price, 2)}
+            </span>
+            {state.data.parameters.underlying.source && (
+              <span className="ml-2 text-text-muted">
+                ({state.data.parameters.underlying.source})
+              </span>
+            )}
+          </div>
+          <OptionsTable symbol={symbol} side="call" data={state.data.calls} underlyingPrice={state.data.parameters.underlying.price} />
+          <OptionsTable symbol={symbol} side="put" data={state.data.puts} underlyingPrice={state.data.parameters.underlying.price} />
         </>
       )}
     </div>

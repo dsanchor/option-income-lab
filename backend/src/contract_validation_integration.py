@@ -46,7 +46,7 @@ def _validation_key(symbol: str, side: str, strike: float, expiration: str) -> s
 
 async def _force_chain_refresh(symbol: str) -> bool:
     """Force a targeted chain refresh for the symbol.
-    
+
     Returns:
         bool: True if refresh succeeded, False otherwise
     """
@@ -67,30 +67,30 @@ def _find_exact_contract(
     now: datetime,
 ) -> Optional[dict]:
     """Locate the exact contract (side, strike, expiration) in the chain.
-    
+
     Args:
         chain: Full options chain (post-refresh)
         side: "call" or "put"
         strike: Exact strike price
         expiration: ISO expiration date (YYYY-MM-DD)
         now: Current timestamp for staleness check
-    
+
     Returns:
         Contract view dict if found, None if absent/expired/invalid
     """
     bucket = chain.get("calls" if side == "call" else "puts", {})
     exp_bucket = bucket.get(expiration, {})
-    
+
     strike_key = str(strike)
     contract = exp_bucket.get(strike_key)
-    
+
     if not contract:
         return None
-    
+
     # Convert to agent view (apply options_chain_view normalization)
     # Use same stale_after_seconds as Best Options (7200)
     contract_normalized = contract_view(contract, now=now, stale_after_seconds=7200)
-    
+
     return contract_normalized
 
 
@@ -116,10 +116,10 @@ def _build_market_data_text(
     gamma = usable_greek(contract, "gamma")
     theta = usable_greek(contract, "theta")
     vega = usable_greek(contract, "vega")
-    
+
     volume = contract.get("volume", 0)
     oi = contract.get("openInterest", 0)
-    
+
     lines = [
         f"Contract: {symbol} {expiration} {strike} {side.upper()}",
         f"Underlying: ${underlying_price:.2f}",
@@ -129,47 +129,47 @@ def _build_market_data_text(
         f"Volume: {volume}, Open Interest: {oi}",
         f"Chain Timestamp: {chain_timestamp}",
     ]
-    
+
     if next_earnings_date:
         lines.append(f"Next Earnings: {next_earnings_date}")
     if ex_dividend_date:
         lines.append(f"Ex-Dividend: {ex_dividend_date}")
-    
+
     return "\n".join(lines)
 
 
 def _validate_contract_evidence(contract: dict) -> tuple[bool, Optional[str]]:
     """Validate contract has usable market evidence.
-    
+
     Returns:
         (is_valid, error_message)
     """
     bid = usable_quote(contract, "bid")
     ask = usable_quote(contract, "ask")
-    
+
     # Check for zero/crossed/non-finite market
     if bid is None and ask is None:
         return False, "No usable market: both bid and ask are unavailable"
-    
+
     if bid and ask and bid > ask:
         return False, f"Crossed market: bid ${bid:.2f} > ask ${ask:.2f}"
-    
+
     if bid and bid <= 0:
         return False, f"Invalid bid: ${bid:.2f}"
-    
+
     if ask and ask <= 0:
         return False, f"Invalid ask: ${ask:.2f}"
-    
+
     # Check IV availability
     iv = usable_quote(contract, "iv")
     if iv is None:
         return False, "IV unavailable"
-    
+
     # Check delta availability
     delta = usable_greek(contract, "delta")
     if delta is None:
         return False, "Delta unavailable"
-    
+
     return True, None
 
 
@@ -179,10 +179,20 @@ async def _build_evaluated_snapshot(
     strike: float,
     expiration: str,
     contract: dict,
+    chain: dict,
     cosmos: CosmosDBService,
 ) -> Dict[str, Any]:
     """Build immutable evaluated snapshot for the engine.
-    
+
+    Args:
+        symbol: Ticker symbol
+        side: "call" or "put"
+        strike: Strike price
+        expiration: Expiration date (YYYY-MM-DD)
+        contract: Normalized contract view (from _find_exact_contract)
+        chain: Full options chain (source of canonical underlying_price)
+        cosmos: CosmosDB service
+
     Returns:
         Evidence snapshot dict with all required fields for run_contract_validation
     """
@@ -190,22 +200,23 @@ async def _build_evaluated_snapshot(
     sym_doc = cosmos.get_symbol(symbol)
     if not sym_doc:
         raise ValueError(f"Symbol {symbol} not found in Cosmos")
-    
+
     enrichment = sym_doc.get("enrichment", {})
     category = enrichment.get("category", "balanced")
     total_shares = sym_doc.get("total_shares", 0)
-    
+
     # Get calendar events
     next_earnings = cosmos.get_next_earnings_date(symbol)
     ex_dividend = cosmos.get_next_calendar_event_date(symbol, "ex_dividend")
-    
-    # Extract contract data
-    underlying_price = contract.get("underlyingPrice") or contract.get("underlying_price")
+
+    # Extract underlying price from chain (canonical source per best_options.py:720)
+    # This is the chain-level field, not contract-level
+    underlying_price = chain.get("underlying_price")
     if not underlying_price:
-        raise ValueError("Underlying price not available in contract")
-    
+        raise ValueError("Underlying price not available in chain")
+
     chain_timestamp = contract.get("_meta", {}).get("chain_timestamp") or datetime.now(timezone.utc).isoformat()
-    
+
     # Build contract_data dict
     contract_data = {
         "strike": strike,
@@ -221,26 +232,21 @@ async def _build_evaluated_snapshot(
         "volume": contract.get("volume", 0),
         "open_interest": contract.get("openInterest", 0),
     }
-    
+
     # Calculate ATM IV (reuse _atm_iv from best_options.py)
-    # For a single contract validation, we need the full chain to calculate ATM IV
-    chain_cache = get_options_chain_cache()
-    chain_json = chain_cache.get_or_hydrate(symbol, trigger_swr=False)
-    chain = json.loads(chain_json) if chain_json else {}
-    
-    # Calculate ATM IV using the same logic as best_options
+    # Chain is already available from caller
     now = datetime.now(timezone.utc)
     today_et = now.date()
-    
+
     # Get all calls and puts for ATM IV calculation
     calls_bucket = chain.get("calls", {})
     puts_bucket = chain.get("puts", {})
-    
+
     atm_iv_value = _atm_iv(calls_bucket, puts_bucket, underlying_price, now, today_et)
-    
+
     # Calculate IV rank (placeholder - not enforced per best_options.py line 54-56)
     iv_rank_value = None  # Not calculated/enforced
-    
+
     # Build market data text
     market_data_text = _build_market_data_text(
         symbol=symbol,
@@ -253,7 +259,7 @@ async def _build_evaluated_snapshot(
         next_earnings_date=next_earnings,
         ex_dividend_date=ex_dividend,
     )
-    
+
     # Build final snapshot
     snapshot = {
         "category": category,
@@ -266,11 +272,11 @@ async def _build_evaluated_snapshot(
         "atm_iv": atm_iv_value,
         "iv_rank": iv_rank_value,
     }
-    
+
     # Add total_shares for calls
     if side == "call":
         snapshot["total_shares"] = total_shares
-    
+
     return snapshot
 
 
@@ -286,7 +292,7 @@ async def start_validation(
     context_provider: Any,
 ) -> Dict[str, Any]:
     """Start contract validation (POST /api/best-options/validate).
-    
+
     Returns:
         dict: {status: "accepted"|"duplicate"|"max_concurrency"|"error",
                run_id: str, message: str}
@@ -294,23 +300,23 @@ async def start_validation(
     # Normalize inputs
     symbol = symbol.upper()
     side = side.lower()
-    
+
     # Validate inputs
     if side not in ("call", "put"):
         return {
             "status": "error",
             "message": f"Invalid side: {side}. Must be 'call' or 'put'.",
         }
-    
+
     if source not in ("best_options", "options_screener"):
         return {
             "status": "error",
             "message": f"Invalid source: {source}. Must be 'best_options' or 'options_screener'.",
         }
-    
+
     # Build dedup key
     val_key = _validation_key(symbol, side, strike, expiration)
-    
+
     async with _validation_lock:
         # Check for duplicate in-flight
         if val_key in _in_flight_validations:
@@ -321,7 +327,7 @@ async def start_validation(
                 "message": f"Validation already in progress for this contract",
                 "started_at": existing["started_at"],
             }
-        
+
         # Check concurrency limit
         active_count = sum(1 for v in _in_flight_validations.values() if not v.get("task").done())
         if active_count >= _MAX_CONCURRENT_VALIDATIONS:
@@ -330,11 +336,11 @@ async def start_validation(
                 "message": f"Maximum concurrent validations ({_MAX_CONCURRENT_VALIDATIONS}) reached. Please try again later.",
                 "retry_after": 30,
             }
-        
+
         # Mint run_id
         run_id = str(uuid4())
         started_at = datetime.now(timezone.utc).isoformat()
-        
+
         # Start background task
         task = asyncio.create_task(
             _execute_validation(
@@ -351,7 +357,7 @@ async def start_validation(
                 context_provider=context_provider,
             )
         )
-        
+
         # Register in-flight
         _in_flight_validations[val_key] = {
             "run_id": run_id,
@@ -362,12 +368,12 @@ async def start_validation(
             "strike": strike,
             "expiration": expiration,
         }
-        
+
         logger.info(
             f"Validation started: run_id={run_id}, symbol={symbol}, side={side}, "
             f"strike={strike}, exp={expiration}, source={source}"
         )
-        
+
         return {
             "status": "accepted",
             "run_id": run_id,
@@ -395,15 +401,15 @@ async def _execute_validation(
         # Step 1: Force chain refresh
         logger.info(f"[{run_id}] Forcing chain refresh for {symbol}")
         refresh_success = await _force_chain_refresh(symbol)
-        
+
         if not refresh_success:
             logger.warning(f"[{run_id}] Chain refresh failed (best-effort), continuing")
-        
+
         # Step 2: Locate exact contract
         logger.info(f"[{run_id}] Locating exact contract: {side} {strike} {expiration}")
         chain_cache = get_options_chain_cache()
         chain_json = chain_cache.get_or_hydrate(symbol, trigger_swr=False)
-        
+
         if not chain_json:
             await _persist_validation_activity(
                 cosmos=cosmos,
@@ -424,11 +430,11 @@ async def _execute_validation(
                 },
             )
             return
-        
+
         chain = json.loads(chain_json)
         now = datetime.now(timezone.utc)
         contract = _find_exact_contract(chain, side, strike, expiration, now)
-        
+
         if not contract:
             await _persist_validation_activity(
                 cosmos=cosmos,
@@ -449,7 +455,7 @@ async def _execute_validation(
                 },
             )
             return
-        
+
         # Step 3: Validate contract evidence
         is_valid, error_msg = _validate_contract_evidence(contract)
         if not is_valid:
@@ -472,7 +478,7 @@ async def _execute_validation(
                 },
             )
             return
-        
+
         # Step 4: Build immutable evaluated snapshot
         logger.info(f"[{run_id}] Building evaluated snapshot")
         evaluated_snapshot = await _build_evaluated_snapshot(
@@ -481,9 +487,10 @@ async def _execute_validation(
             strike=strike,
             expiration=expiration,
             contract=contract,
+            chain=chain,
             cosmos=cosmos,
         )
-        
+
         # Step 5: Run validation engine
         logger.info(f"[{run_id}] Running validation engine")
         result = await agent_runner.run_contract_validation(
@@ -495,7 +502,7 @@ async def _execute_validation(
             cosmos=cosmos,
             context_provider=context_provider,
         )
-        
+
         # Step 6: Persist activity with result
         await _persist_validation_activity(
             cosmos=cosmos,
@@ -509,12 +516,12 @@ async def _execute_validation(
             evaluated_snapshot=evaluated_snapshot,
             result=result,
         )
-        
+
         logger.info(
             f"[{run_id}] Validation complete: activity={result['activity']}, "
             f"validation_status={result['validation_status']}"
         )
-        
+
     except Exception as e:
         logger.error(f"[{run_id}] Validation error: {e}", exc_info=True)
         # Persist error activity
@@ -556,7 +563,7 @@ async def _persist_validation_activity(
 ):
     """Persist validation activity with run_id."""
     agent_type = "covered_call" if side == "call" else "cash_secured_put"
-    
+
     # Build activity document
     activity_data = {
         "symbol": symbol,
@@ -582,10 +589,10 @@ async def _persist_validation_activity(
         "alpha_view": result.get("alpha_view"),
         "alpha_trace_id": result.get("alpha_trace_id"),
     }
-    
+
     if result.get("error"):
         activity_data["error"] = result["error"]
-    
+
     # Write activity to Cosmos
     cosmos.write_activity(
         symbol=symbol,
@@ -597,7 +604,7 @@ async def _persist_validation_activity(
 
 async def get_validation_status(run_id: str, cosmos: CosmosDBService) -> Dict[str, Any]:
     """Get validation status (GET /api/best-options/validate/{run_id}).
-    
+
     Returns:
         dict: {status: "in_progress"|"completed"|"not_found", ...}
     """
@@ -618,45 +625,40 @@ async def get_validation_status(run_id: str, cosmos: CosmosDBService) -> Dict[st
                     }
                 # Task is done, will be in Cosmos
                 break
-    
-    # Query Cosmos for completed activity
-    # Activities are stored with agent_type in the doc_id, so we need to query by run_id field
+
+    # Query Cosmos for completed activity by run_id
     try:
-        # List recent activities and filter by run_id
-        # This is inefficient but works for now without adding a run_id index
-        # TODO: Consider adding a dedicated validation_status collection with run_id as partition key
-        activities = cosmos.list_activities(limit=100)  # Increase limit to find recent validations
-        
-        for activity in activities:
-            if activity.get("run_id") == run_id:
-                return {
-                    "status": "completed",
-                    "run_id": run_id,
-                    "activity_id": activity.get("id"),
-                    "symbol": activity.get("symbol"),
-                    "agent_type": activity.get("agent_type"),
-                    "activity": activity.get("activity"),
-                    "is_alert": activity.get("is_alert", False),
-                    "validation_status": activity.get("validation_status"),
-                    "note": activity.get("note"),
-                    "error": activity.get("error"),
-                    "timestamp": activity.get("timestamp"),
-                    "contract_strike": activity.get("contract_strike"),
-                    "contract_expiration": activity.get("contract_expiration"),
-                    "contract_side": activity.get("contract_side"),
-                    "source": activity.get("source"),
-                    "rule_evaluation": activity.get("rule_evaluation"),
-                    "primary_trace_id": activity.get("primary_trace_id"),
-                    "supervisor_trace_id": activity.get("supervisor_trace_id"),
-                    "alpha_trace_id": activity.get("alpha_trace_id"),
-                }
-        
+        activity = cosmos.get_activity_by_run_id(run_id)
+
+        if activity:
+            return {
+                "status": "completed",
+                "run_id": run_id,
+                "activity_id": activity.get("id"),
+                "symbol": activity.get("symbol"),
+                "agent_type": activity.get("agent_type"),
+                "activity": activity.get("activity"),
+                "is_alert": activity.get("is_alert", False),
+                "validation_status": activity.get("validation_status"),
+                "note": activity.get("note"),
+                "error": activity.get("error"),
+                "timestamp": activity.get("timestamp"),
+                "contract_strike": activity.get("contract_strike"),
+                "contract_expiration": activity.get("contract_expiration"),
+                "contract_side": activity.get("contract_side"),
+                "source": activity.get("source"),
+                "rule_evaluation": activity.get("rule_evaluation"),
+                "primary_trace_id": activity.get("primary_trace_id"),
+                "supervisor_trace_id": activity.get("supervisor_trace_id"),
+                "alpha_trace_id": activity.get("alpha_trace_id"),
+            }
+
         return {
             "status": "not_found",
             "run_id": run_id,
             "message": "Validation not found. It may have expired or the run_id is invalid.",
         }
-        
+
     except Exception as e:
         logger.error(f"Error querying validation status for {run_id}: {e}", exc_info=True)
         return {

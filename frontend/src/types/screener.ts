@@ -39,6 +39,7 @@ export type ScreenerSortDir = "asc" | "desc";
 export interface ScreenerOptionRow {
   symbol: string;
   category: string | null;
+  underlying_price: number | null;
   expiration: string;
   dte: number;
   strike: number;

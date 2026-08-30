@@ -6,7 +6,7 @@ import { RefreshCw, ListFilter, ChevronLeft, ChevronRight, ArrowUp, ArrowDown } 
 import MultiSelect, { type MultiSelectOption } from "@/components/MultiSelect";
 import ContractValidationAction from "@/components/ContractValidationAction";
 import { preferenceRowTint } from "@/lib/badges";
-import { ColorBadge, flagLabel, fmtNum, fmtPct, fmtExpiration } from "@/lib/options-row-format";
+import { ColorBadge, flagLabel, fmtNum, fmtPct, fmtExpiration, calcGap, fmtGapPct } from "@/lib/options-row-format";
 import type {
   ScreenerOptionRow,
   ScreenerOptionsApiResponse,
@@ -520,6 +520,7 @@ function ResultsTable({
                 ))}
                 <th className="border-b border-border px-2 py-1 text-left">Exp</th>
                 <th className="border-b border-border px-2 py-1 text-right">Strike</th>
+                <th className="border-b border-border px-2 py-1 text-right" title="Gap from analyzed price">Gap</th>
                 <th className="border-b border-border px-2 py-1 text-right">Bid/Ask</th>
                 <th className="border-b border-border px-2 py-1 text-right">Score</th>
                 <th className="border-b border-border px-2 py-1 text-left">Flags</th>
@@ -527,7 +528,12 @@ function ResultsTable({
               </tr>
             </thead>
             <tbody>
-              {rows.map((row: ScreenerOptionRow, i) => (
+              {rows.map((row: ScreenerOptionRow, i) => {
+                const { gap, gapPct } = calcGap(row.strike, row.underlying_price);
+                const gapTooltip = gap !== null && row.underlying_price !== null
+                  ? `Gap: ${fmtNum(gap, 2)} (${fmtGapPct(gapPct)}) | Strike ${fmtNum(row.strike)} vs analyzed ${fmtNum(row.underlying_price)}`
+                  : undefined;
+                return (
                 <tr
                   key={`${row.symbol}-${row.expiration}-${row.strike}-${i}`}
                   className="border-b border-border/40"
@@ -564,6 +570,9 @@ function ResultsTable({
                   <td className="px-2 py-1 text-right font-mono text-text-muted">{row.open_interest ?? "—"}</td>
                   <td className="px-2 py-1 text-left font-mono">{fmtExpiration(row.expiration)}</td>
                   <td className="px-2 py-1 text-right font-mono font-semibold">{fmtNum(row.strike)}</td>
+                  <td className="px-2 py-1 text-right font-mono text-text-muted" title={gapTooltip}>
+                    {fmtGapPct(gapPct)}
+                  </td>
                   <td className="px-2 py-1 text-right font-mono text-text-muted">
                     {fmtNum(row.bid)} / {fmtNum(row.ask)}
                   </td>
@@ -607,7 +616,8 @@ function ResultsTable({
                     />
                   </td>
                 </tr>
-              ))}
+              );
+              })}
             </tbody>
           </table>
         </div>

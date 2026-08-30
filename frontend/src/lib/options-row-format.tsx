@@ -78,3 +78,46 @@ export function GateBadge({ label, status }: { label: string; status: string }) 
     </span>
   );
 }
+
+/**
+ * Gap helpers for strike gap relative to analyzed underlying price.
+ * Gap = (strike - underlying_price), preserving sign.
+ * Calls and puts use the same mathematical definition; side context explains interpretation.
+ */
+
+interface GapCalc {
+  /** Absolute gap amount */
+  gap: number | null;
+  /** Gap percentage */
+  gapPct: number | null;
+}
+
+/** Calculate strike gap relative to analyzed underlying price. Returns null values for missing/non-finite inputs. */
+export function calcGap(strike: number | null | undefined, underlyingPrice: number | null | undefined): GapCalc {
+  if (
+    typeof strike !== "number" ||
+    !isFinite(strike) ||
+    typeof underlyingPrice !== "number" ||
+    !isFinite(underlyingPrice) ||
+    underlyingPrice === 0
+  ) {
+    return { gap: null, gapPct: null };
+  }
+  const gap = strike - underlyingPrice;
+  const gapPct = (gap / underlyingPrice) * 100;
+  return { gap, gapPct };
+}
+
+/** Format gap amount (preserves sign, em dash for null) */
+export function fmtGap(gap: number | null, digits = 2): string {
+  if (typeof gap !== "number" || !isFinite(gap)) return "—";
+  const sign = gap > 0 ? "+" : gap < 0 ? "" : "";
+  return `${sign}${gap.toFixed(digits)}`;
+}
+
+/** Format gap percentage (preserves sign, em dash for null) */
+export function fmtGapPct(gapPct: number | null, digits = 1): string {
+  if (typeof gapPct !== "number" || !isFinite(gapPct)) return "—";
+  const sign = gapPct > 0 ? "+" : gapPct < 0 ? "" : "";
+  return `${sign}${gapPct.toFixed(digits)}%`;
+}

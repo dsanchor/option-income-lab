@@ -435,10 +435,13 @@ def evaluate_options_screener(
             midpoint_by_symbol[s][symbol] = _delta_midpoint(thresholds_side)
 
             rows = section.get("rows") or []
+            # Extract underlying price from parameters to include in each row
+            underlying_price = ((result.get("parameters") or {}).get("underlying") or {}).get("price")
             for row in rows:
                 tagged = dict(row)
                 tagged["symbol"] = symbol
                 tagged["category"] = category_key
+                tagged["underlying_price"] = underlying_price
                 sections[s]["rows"].append(tagged)
 
             if not rows and int(section.get("total") or 0) == 0:

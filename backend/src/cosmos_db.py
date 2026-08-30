@@ -272,10 +272,10 @@ class CosmosDBService:
 
     def replace_symbol(self, doc: dict) -> dict:
         """Generic replace of a full symbol-partition document.
-        
+
         Args:
             doc: Full document dict with "id" and partition key fields.
-        
+
         Returns:
             The updated document from Cosmos.
         """
@@ -629,7 +629,7 @@ class CosmosDBService:
                     pos["buyback_cost"] = buyback_cost
                 found = True
                 # Don't break - handle any duplicate IDs if they exist
-        
+
         if not found:
             raise ValueError(f"Position {position_id} not found")
 
@@ -1052,7 +1052,7 @@ class CosmosDBService:
     def mark_as_alert(self, symbol: str, activity_id: str,
                       alert_data: dict) -> dict:
         """Mark an existing activity as an alert with enrichment data.
-        
+
         Replaces write_alert() in the unified schema model where alerts
         are not separate documents but activities with is_alert=true.
         """
@@ -1087,7 +1087,7 @@ class CosmosDBService:
                      alert_data: dict, activity_id: str,
                      timestamp: str | None = None) -> dict:
         """DEPRECATED: Use mark_as_alert() instead.
-        
+
         Write a alert document linked to a activity.
         This method is kept temporarily for backwards compatibility during
         the migration to unified schema. Will be removed after migration.
@@ -1198,6 +1198,29 @@ class CosmosDBService:
         ))
         return results[0] if results else None
 
+    def get_activity_by_run_id(self, run_id: str) -> dict | None:
+        """Get a validation activity by its run_id (cross-partition).
+
+        Used by contract validation status polling to retrieve persisted
+        validation activities after the in-flight entry is released.
+
+        Args:
+            run_id: Unique validation run identifier
+
+        Returns:
+            Activity document if found, None otherwise
+        """
+        query = (
+            "SELECT * FROM c WHERE c.doc_type = 'activity' "
+            "AND c.run_id = @run_id"
+        )
+        results = list(self.container.query_items(
+            query=query,
+            parameters=[{"name": "@run_id", "value": run_id}],
+            enable_cross_partition_query=True,
+        ))
+        return results[0] if results else None
+
     def get_banner(self) -> dict | None:
         """Get the current dashboard banner document."""
         try:
@@ -1254,7 +1277,7 @@ class CosmosDBService:
                           since: str | None = None,
                           limit: int = 100) -> list[dict]:
         """Get activities across all symbols (cross-partition query).
-        
+
         Returns all activities, including both alerts and non-alerts.
         """
         conditions = ["c.doc_type = 'activity'"]
@@ -1283,37 +1306,37 @@ class CosmosDBService:
                               since: str | None = None,
                               limit: int = 50) -> list[dict]:
         """Get activities for a single symbol (partition-scoped query).
-        
+
         Returns activities for the given symbol, ordered newest first.
         This is a partition-scoped query — all filtering/ordering happens
         within the specified symbol's partition.
-        
+
         Args:
             symbol: Ticker symbol (partition key).
             agent_type: Optional filter by agent_type.
             since: Optional ISO timestamp filter (>= since).
             limit: Max number of activities to return (default 50).
-        
+
         Returns:
             List of activity documents ordered by timestamp DESC.
         """
         conditions = ["c.doc_type = 'activity'"]
         params: list[dict] = []
-        
+
         if agent_type:
             conditions.append("c.agent_type = @agent_type")
             params.append({"name": "@agent_type", "value": agent_type})
         if since:
             conditions.append("c.timestamp >= @since")
             params.append({"name": "@since", "value": since})
-        
+
         query = (
             f"SELECT TOP @limit * FROM c "
             f"WHERE {' AND '.join(conditions)} "
             f"ORDER BY c.timestamp DESC"
         )
         params.append({"name": "@limit", "value": limit})
-        
+
         return list(self.container.query_items(
             query=query,
             parameters=params,
@@ -1344,20 +1367,20 @@ class CosmosDBService:
     def get_recent_activities_by_symbol(self, limit_per_symbol: int = 3,
                                         since: str | None = None) -> dict[str, list[dict]]:
         """Get N most recent activities per agent_type per symbol (cross-partition query).
-        
+
         Fetches up to `limit_per_symbol` activities for EACH active agent_type within
         each symbol. This ensures all agent types (covered_call, cash_secured_put,
         buy_tracker, open_call_monitor, open_put_monitor) are represented in the
         summary data,
         even when one type has more recent activity than others.
-        
+
         Args:
             limit_per_symbol: Number of activities to retrieve per agent_type per symbol (default: 3)
             since: Optional ISO-8601 UTC timestamp (``YYYY-MM-DDTHH:MM:SSZ``). When
                 provided, only activities with ``timestamp >= since`` are returned, so
                 stale analyses (e.g. from days ago) are excluded. ISO-8601 UTC strings
                 sort lexicographically, so a string comparison is calendar-correct.
-        
+
         Returns:
             Dictionary mapping symbol -> list of activity documents (newest first).
             Each symbol may have up to (limit_per_symbol × number_of_active_agent_types) activities.
@@ -1368,15 +1391,15 @@ class CosmosDBService:
             query=symbols_query,
             enable_cross_partition_query=True,
         ))
-        
+
         # Known agent types to query
         agent_types = ["covered_call", "cash_secured_put", "buy_tracker", "open_call_monitor", "open_put_monitor"]
-        
+
         result = {}
         for sym_doc in symbols:
             symbol = sym_doc["symbol"]
             all_activities = []
-            
+
             # Query each agent_type separately to ensure representation
             for agent_type in agent_types:
                 where = [
@@ -1402,12 +1425,12 @@ class CosmosDBService:
                     partition_key=symbol,
                 ))
                 all_activities.extend(activities)
-            
+
             # Sort merged results by timestamp (newest first) and store if non-empty
             if all_activities:
                 all_activities.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
                 result[symbol] = all_activities
-        
+
         return result
 
     # ── Reports ──────────────────────────────────────────────────────
@@ -1488,10 +1511,10 @@ class CosmosDBService:
 
     def get_latest_technical_analysis(self, symbol: str) -> dict | None:
         """Get the most recent technical_analysis document for a symbol.
-        
+
         Args:
             symbol: Ticker symbol (partition key).
-        
+
         Returns:
             The latest technical_analysis document, or None if not found.
         """
@@ -1910,26 +1933,26 @@ class CosmosDBService:
 
     def merge_defaults(self, defaults: dict) -> dict:
         """Deep-merge: read current settings from CosmosDB.
-        
+
         For any key in `defaults` that doesn't exist in the stored doc, add it.
         Never overwrite existing keys. This is called at startup with the
         config.yaml contents (excluding credentials) as defaults.
-        
+
         Args:
             defaults: Default settings from config.yaml (excluding azure/cosmosdb)
-        
+
         Returns:
             The merged settings document
         """
         if self.settings_container is None:
             logger.warning("Settings container unavailable — skipping merge_defaults")
             return {}
-        
+
         stored = self.get_settings()
-        
+
         def deep_merge(base: dict, new_vals: dict) -> dict:
             """Recursively merge new_vals into base.
-            
+
             Rules:
             - If key exists in new_vals but not in base → add it
             - If key exists in both and both are dicts → recurse
@@ -1946,16 +1969,16 @@ class CosmosDBService:
                     result[key] = deep_merge(result[key], val)
                 # else: key exists in stored and is not a dict → keep stored value
             return result
-        
+
         merged = deep_merge(stored, defaults)
-        
+
         # Save the merged result back to CosmosDB
         try:
             self.save_settings(merged)
             logger.info("Settings merged and saved to CosmosDB")
         except Exception as exc:
             logger.warning("Failed to save merged settings to CosmosDB: %s", exc)
-        
+
         return merged
 
     # ── Data Provider Health Status ───────────────────────────────────
