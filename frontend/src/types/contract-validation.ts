@@ -5,6 +5,8 @@
  * backend/web/app.py@3568+
  */
 
+import type { ContractRef } from "@/types/activity-detail";
+
 /** Request body for POST /api/best-options/validate */
 export interface ValidateContractRequest {
   symbol: string;
@@ -93,6 +95,12 @@ export interface ValidationStatusCompleted {
   alpha_trace_id?: string | null;
   // Error if present
   error?: string | null;
+  // Chain-aware validation fields (NEW)
+  requested_contract?: ContractRef | null;
+  selected_contract?: ContractRef | null;
+  relaxed_parameter?: string | null;
+  comparison_rationale?: string | null;
+  selection_source?: "requested_approved" | "alpha_alternative" | null;
   // Backward compatibility
   note?: string | null;
 }

@@ -26,10 +26,12 @@ from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from src.cosmos_db import CosmosDBService
-from src.options_chain_cache import get_options_chain_cache
+from src.options_chain_cache import get_options_chain_cache, apply_agent_view
 from src.options_chain_view import usable_quote, usable_greek, contract_view
+from src.options_chain_filters import filter_options_chain_by_type, filter_options_chain_by_delta, get_contract
 from src.greeks_calculator import _fetch_risk_free_rate
 from src.best_options import DEFAULT_DTE_MIN, DEFAULT_DTE_MAX, _atm_iv
+from src.yfinance_data_provider import OPTIONS_CHAIN_SCHEMA_DESCRIPTION
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +138,229 @@ def _build_market_data_text(
         lines.append(f"Ex-Dividend: {ex_dividend_date}")
 
     return "\n".join(lines)
+
+
+def _build_validation_chain_context(chain: dict, side: str) -> str:
+    """Build the same options chain text Alpha sees in normal CC/CSP runs.
+
+    Applies the identical pipeline: apply_agent_view → filter_by_type →
+    filter_by_delta. No Best Options scoring/ranking. This is byte-semantically
+    identical to what `_build_alpha_options_chain` produces for CC/CSP watchlist
+    agents (no current_strike exclusion, no position reference block).
+
+    Args:
+        chain: Full options chain (raw, will be normalized)
+        side: "call" or "put"
+
+    Returns:
+        Formatted chain text for Alpha (OPTIONS_CHAIN_SCHEMA_DESCRIPTION + JSON),
+        or empty string if no contracts survive filtering
+    """
+    # Apply agent view (zero-free normalization)
+    structured = apply_agent_view(chain)
+
+    # Filter by type (calls-only or puts-only)
+    option_type = "call" if side == "call" else "put"
+    structured = filter_options_chain_by_type(structured, option_type)
+
+    # Filter by delta (default ranges: calls 0.15-0.90, puts -0.60 to -0.15)
+    structured = filter_options_chain_by_delta(structured)
+
+    # Check if any contracts survive filtering
+    bucket = structured.get("calls" if side == "call" else "puts", {})
+    if not bucket:
+        return ""
+
+    # Return schema description + JSON (same format as normal Alpha chains)
+    return OPTIONS_CHAIN_SCHEMA_DESCRIPTION + "\n" + json.dumps(structured, indent=2)
+
+
+def _build_chain_snapshot_summary(chain: dict, side: str, chain_timestamp: str) -> dict:
+    """Build compact chain snapshot summary for audit trail.
+
+    Does NOT duplicate the full chain JSON — just metadata for tracing.
+
+    Args:
+        chain: Full options chain
+        side: "call" or "put"
+        chain_timestamp: ISO timestamp
+
+    Returns:
+        Compact summary dict
+    """
+    underlying_price = chain.get("underlying_price")
+    bucket = chain.get("calls" if side == "call" else "puts", {})
+
+    # Count total contracts
+    contract_count = sum(len(strikes) for strikes in bucket.values())
+
+    # Get expiration range
+    expirations = sorted(bucket.keys())
+    exp_range = None
+    if expirations:
+        # Convert YYYYMMDD to YYYY-MM-DD
+        def fmt_exp(exp: str) -> str:
+            if len(exp) == 8 and exp.isdigit():
+                return f"{exp[:4]}-{exp[4:6]}-{exp[6:]}"
+            return exp
+        exp_range = [fmt_exp(expirations[0]), fmt_exp(expirations[-1])]
+
+    return {
+        "chain_timestamp": chain_timestamp,
+        "underlying_price": underlying_price,
+        "contract_count": contract_count,
+        "expiration_range": exp_range,
+        "side": side,
+    }
+
+
+def _validate_alpha_alternative(
+    chain: dict,
+    side: str,
+    requested_strike: float,
+    requested_expiration: str,
+    alternative: dict,
+    category: str,
+    underlying_price: float,
+    next_earnings_date: Optional[str],
+    now: datetime,
+) -> tuple[bool, Optional[str], Optional[dict]]:
+    """Validate Alpha's proposed alternative against the real chain.
+
+    Implements D4 programmatic validation gates from the design. All gates must
+    pass for the alternative to be accepted.
+
+    Args:
+        chain: Full options chain (normalized)
+        side: "call" or "put"
+        requested_strike: Strike of the originally requested contract
+        requested_expiration: Expiration of the originally requested contract (YYYY-MM-DD)
+        alternative: Alpha's alternative dict (strike/expiration/premium/delta fields)
+        category: Symbol category (for premium floor calculation)
+        underlying_price: Current underlying price
+        next_earnings_date: Next earnings date (YYYY-MM-DD) or None
+        now: Current datetime
+
+    Returns:
+        (is_valid, rejection_reason, normalized_contract)
+    """
+    # Extract alternative coordinates
+    alt_strike = alternative.get("strike")
+    alt_expiration = alternative.get("expiration")
+
+    # G0: Alternative must have complete coordinates
+    if alt_strike is None or alt_expiration is None:
+        return False, "Alternative missing strike or expiration", None
+
+    # Normalize types
+    try:
+        alt_strike = float(alt_strike)
+    except (TypeError, ValueError):
+        return False, f"Alternative strike invalid: {alt_strike}", None
+
+    alt_expiration = str(alt_expiration)
+
+    # G1: Contract must exist in chain
+    option_type = "call" if side == "call" else "put"
+    alt_contract = get_contract(chain, alt_strike, alt_expiration, option_type)
+    if alt_contract is None:
+        return False, f"Alternative contract not found in chain: {alt_strike} {alt_expiration}", None
+
+    # G3: Must NOT be identical to requested contract
+    if alt_strike == requested_strike and alt_expiration == requested_expiration:
+        return False, "Alternative identical to requested contract", None
+
+    # G4: Single-parameter relaxation (exactly one of strike OR expiration differs)
+    strike_differs = alt_strike != requested_strike
+    expiration_differs = alt_expiration != requested_expiration
+    if strike_differs and expiration_differs:
+        return False, "Alternative changes both strike AND expiration (two parameters)", None
+    if not strike_differs and not expiration_differs:
+        # Already caught by G3, but defensive
+        return False, "Alternative identical to requested contract", None
+
+    # G5: Proximity checks
+    # Strike proximity: within ±20% or ≤5 strikes away in chain
+    if strike_differs:
+        strike_pct_diff = abs((alt_strike - requested_strike) / requested_strike) if requested_strike else 1.0
+        if strike_pct_diff > 0.20:
+            # Check strike distance in chain
+            bucket = chain.get("calls" if side == "call" else "puts", {})
+            all_strikes = set()
+            for exp_bucket in bucket.values():
+                all_strikes.update(float(s) for s in exp_bucket.keys())
+            sorted_strikes = sorted(all_strikes)
+            try:
+                req_idx = sorted_strikes.index(requested_strike)
+                alt_idx = sorted_strikes.index(alt_strike)
+                strike_distance = abs(alt_idx - req_idx)
+                if strike_distance > 5:
+                    return False, f"Alternative strike too far: {strike_distance} strikes away (>5)", None
+            except ValueError:
+                # One of the strikes not in the chain, already failed G1 for alt, should not happen
+                pass
+
+    # Expiration proximity: within ±14 calendar days
+    if expiration_differs:
+        try:
+            req_date = datetime.strptime(requested_expiration, "%Y-%m-%d").date()
+            alt_date = datetime.strptime(alt_expiration, "%Y-%m-%d").date()
+            day_diff = abs((alt_date - req_date).days)
+            if day_diff > 14:
+                return False, f"Alternative expiration too far: {day_diff} days away (>14)", None
+        except ValueError:
+            return False, f"Invalid expiration format: {alt_expiration}", None
+
+    # G6: DTE ≤ 45 (hard cap)
+    try:
+        alt_exp_date = datetime.strptime(alt_expiration, "%Y-%m-%d").date()
+        dte = (alt_exp_date - now.date()).days
+        if dte > 45:
+            return False, f"Alternative DTE too high: {dte} days (>45)", None
+        if dte < 0:
+            return False, f"Alternative already expired: {dte} days", None
+    except ValueError:
+        return False, f"Invalid expiration format: {alt_expiration}", None
+
+    # G7: No spanned earnings
+    if next_earnings_date:
+        try:
+            earnings_date = datetime.strptime(next_earnings_date, "%Y-%m-%d").date()
+            if now.date() < earnings_date <= alt_exp_date:
+                return False, f"Alternative spans earnings date: {next_earnings_date}", None
+        except ValueError:
+            pass  # Invalid earnings date, skip check
+
+    # G8: Delta in band (tighter than chain filter: 0.15-0.50 abs for both calls/puts)
+    alt_delta = usable_greek(alt_contract, "delta")
+    if alt_delta is None:
+        return False, "Alternative delta unavailable", None
+
+    abs_delta = abs(alt_delta)
+    if abs_delta < 0.15 or abs_delta > 0.50:
+        return False, f"Alternative delta out of band: {alt_delta:.3f} (abs must be 0.15-0.50)", None
+
+    # G9: Complete quote (usable bid and delta)
+    alt_bid = usable_quote(alt_contract, "bid")
+    if alt_bid is None:
+        return False, "Alternative bid unavailable", None
+
+    # G10: Premium floor (DTE-scaled, per best-options design)
+    # category_premium_min defaults (from best_options.py design):
+    # aggressive: 0.0040, balanced: 0.0050, conservative: 0.0060
+    category_premium_min = {
+        "aggressive": 0.0040,
+        "balanced": 0.0050,
+        "conservative": 0.0060,
+    }.get(category, 0.0050)
+
+    dte_scaled_min = category_premium_min * (dte / 30.0) if dte > 0 else category_premium_min
+    bid_basis_ratio = alt_bid / underlying_price if underlying_price > 0 else 0
+    if bid_basis_ratio < dte_scaled_min:
+        return False, f"Alternative premium too low: {bid_basis_ratio:.4f} < {dte_scaled_min:.4f}", None
+
+    # All gates passed!
+    return True, None, alt_contract
 
 
 def _validate_contract_evidence(contract: dict) -> tuple[bool, Optional[str]]:
@@ -491,6 +716,32 @@ async def _execute_validation(
             cosmos=cosmos,
         )
 
+        # Step 4.5: Build validation chain context for Alpha (NEW)
+        logger.info(f"[{run_id}] Building validation chain context")
+        chain_context_text = _build_validation_chain_context(chain, side)
+
+        # Build D4 validation callback that closes over the refreshed chain
+        now = datetime.now(timezone.utc)
+
+        def validated_alternative_callback_impl(**kwargs):
+            """D4 validation callback for Alpha's alternative.
+
+            Signature matches agent_runner expectation:
+                (side, requested_strike, requested_expiration, alternative,
+                 category, underlying_price, next_earnings_date)
+            """
+            return _validate_alpha_alternative(
+                chain=chain,  # Closed over from outer scope
+                side=kwargs["side"],
+                requested_strike=kwargs["requested_strike"],
+                requested_expiration=kwargs["requested_expiration"],
+                alternative=kwargs["alternative"],
+                category=kwargs["category"],
+                underlying_price=kwargs["underlying_price"],
+                next_earnings_date=kwargs["next_earnings_date"],
+                now=now,  # Closed over from outer scope
+            )
+
         # Step 5: Run validation engine
         logger.info(f"[{run_id}] Running validation engine")
         result = await agent_runner.run_contract_validation(
@@ -501,7 +752,15 @@ async def _execute_validation(
             evidence_snapshot=evaluated_snapshot,
             cosmos=cosmos,
             context_provider=context_provider,
+            chain_context_text=chain_context_text,
+            validated_alternative_callback=validated_alternative_callback_impl,
         )
+
+        # Step 5.5: Add chain snapshot summary to result (agent_runner doesn't handle this)
+        chain_snapshot_summary = _build_chain_snapshot_summary(
+            chain, side, evaluated_snapshot["chain_timestamp"]
+        )
+        result["chain_snapshot_summary"] = chain_snapshot_summary
 
         # Step 6: Persist activity with result
         await _persist_validation_activity(
@@ -614,6 +873,20 @@ async def _persist_validation_activity(
     if result.get("error"):
         activity_data["error"] = result["error"]
 
+    # Add chain-aware validation fields (NEW)
+    if result.get("requested_contract"):
+        activity_data["requested_contract"] = result["requested_contract"]
+    if result.get("selected_contract"):
+        activity_data["selected_contract"] = result["selected_contract"]
+    if result.get("relaxed_parameter") is not None:
+        activity_data["relaxed_parameter"] = result["relaxed_parameter"]
+    if result.get("comparison_rationale"):
+        activity_data["comparison_rationale"] = result["comparison_rationale"]
+    if result.get("selection_source"):
+        activity_data["selection_source"] = result["selection_source"]
+    if result.get("chain_snapshot_summary"):
+        activity_data["chain_snapshot_summary"] = result["chain_snapshot_summary"]
+
     # Optionally attach evidence snapshots for debugging (non-canonical)
     # Store as metadata, not in the main activity schema
     if displayed_snapshot or evaluated_snapshot:
@@ -694,6 +967,12 @@ async def get_validation_status(run_id: str, cosmos: CosmosDBService) -> Dict[st
                 "alpha_trace_id": activity.get("alpha_trace_id"),
                 # Error if present
                 "error": activity.get("error"),
+                # Chain-aware validation fields (NEW)
+                "requested_contract": activity.get("requested_contract"),
+                "selected_contract": activity.get("selected_contract"),
+                "relaxed_parameter": activity.get("relaxed_parameter"),
+                "comparison_rationale": activity.get("comparison_rationale"),
+                "selection_source": activity.get("selection_source"),
                 # Backward compatibility
                 "note": activity.get("note"),
             }

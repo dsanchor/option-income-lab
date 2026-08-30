@@ -294,12 +294,16 @@ class TestApprovedValidation:
 
             with patch('src.agent_runner.Agent', return_value=mock_agent_instance):
                 with patch.object(runner, '_run_supervisor_review', return_value={
-                    "net_assessment": "APPROVE",
+                    "net_assessment": "ORIGINAL_HOLDS",  # Fixed: was "APPROVE"
                     "challenge_strength": "WEAK",
                     "trace_id": "sup-999",
                 }):
                     with patch.object(runner, '_run_alpha_review', return_value={
-                        "recommendation": "APPROVE",
+                        "opportunity_strength": "NONE",  # Fixed: was "recommendation": "APPROVE"
+                        "relaxed_parameter": "none",
+                        "parameter_detail": "Contract is optimal",
+                        "alternative": {"action": "N/A", "rationale": "N/A", "trade_off": "N/A", "premium_comparison": "N/A"},
+                        "one_liner": "Optimal",
                         "trace_id": "alpha-999",
                     }):
                         with patch.object(runner, '_record_trace', return_value="trace-primary"):
@@ -480,13 +484,16 @@ class TestAlphaReviewContractRegression:
             ))
 
             mock_supervisor_view = {
-                "net_assessment": "APPROVE",
-                "supervisor_strength": "STRONG"
+                "net_assessment": "ORIGINAL_HOLDS",  # Fixed: was "APPROVE"
+                "challenge_strength": "WEAK",  # Fixed: was "supervisor_strength"
             }
 
             mock_alpha_view = {
-                "recommendation": "APPROVE",
-                "opportunity_strength": "STRONG"
+                "opportunity_strength": "NONE",  # Fixed: was "STRONG" with different schema
+                "relaxed_parameter": "none",
+                "parameter_detail": "Optimal",
+                "alternative": {"action": "N/A", "rationale": "N/A", "trade_off": "N/A", "premium_comparison": "N/A"},
+                "one_liner": "Optimal",
             }
 
             with patch('src.agent_runner.Agent', return_value=mock_agent_instance):

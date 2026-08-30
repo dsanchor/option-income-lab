@@ -121,7 +121,21 @@ export interface ActivityDoc {
   primary_trace_id?: string | null;
   supervisor_trace_id?: string | null;
   alpha_trace_id?: string | null;
+  // Chain-aware validation fields (NEW)
+  requested_contract?: ContractRef | null;
+  selected_contract?: ContractRef | null;
+  relaxed_parameter?: string | null;
+  comparison_rationale?: string | null;
+  selection_source?: "requested_approved" | "alpha_alternative" | null;
   [k: string]: unknown;
+}
+
+/** Contract reference (strike/expiration/premium/delta) */
+export interface ContractRef {
+  strike: number;
+  expiration: string;
+  premium: number | null;
+  delta: number | null;
 }
 
 export interface ActivityDetail {

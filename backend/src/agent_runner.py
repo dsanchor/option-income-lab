@@ -1560,6 +1560,7 @@ Provide your supervisor audit in the JSON format specified above."""
         cosmos=None,
         run_id: str = None,
         parent_trace_id: str = None,
+        is_validation_context: bool = False,
     ) -> dict | None:
         """Run an alpha advisor agent for aggressive perspective.
 
@@ -1587,6 +1588,11 @@ Provide your supervisor audit in the JSON format specified above."""
             alpha_agent_type = _AGENT_TYPE_MAP.get(agent_type, agent_type)
 
             instructions = get_alpha_instructions(alpha_agent_type, decision_type)
+
+            # Append validation context addendum if in validation mode
+            if is_validation_context:
+                from .alpha_instructions import VALIDATION_CONTEXT_ADDENDUM
+                instructions = instructions + "\n\n" + VALIDATION_CONTEXT_ADDENDUM
 
             message = f"""Provide an aggressive alternative perspective on this decision:
 
@@ -4120,6 +4126,50 @@ All market data has been pre-fetched above. Please analyze this data and generat
 
         return analysis_text
 
+    def _apply_selected_contract_to_result(self, result: dict, selected_contract: dict) -> None:
+        """Apply selected contract fields to top-level result and activity_data fields.
+
+        Updates canonical fields (strike, expiration, premium, delta) in both the result dict
+        and activity_data to match the selected_contract. This ensures downstream consumers
+        (persistence, status endpoint, UI) always see coherent data.
+
+        Args:
+            result: Result dict to update in-place
+            selected_contract: Contract dict with strike, expiration, premium, delta from D4-normalized chain
+        """
+        if not selected_contract:
+            return
+
+        # Update top-level result fields (these become the canonical contract coordinates)
+        if "strike" in selected_contract:
+            result["strike"] = selected_contract["strike"]
+        if "expiration" in selected_contract:
+            result["expiration"] = selected_contract["expiration"]
+
+        # Add/update premium and delta (not in initial result schema, but needed for status/persistence)
+        if "premium" in selected_contract:
+            result["premium"] = selected_contract["premium"]
+        if "delta" in selected_contract:
+            result["delta"] = selected_contract["delta"]
+
+        # Update activity_data if it exists (this is what gets persisted to Cosmos)
+        activity_data = result.get("activity_data")
+        if activity_data and isinstance(activity_data, dict):
+            # Ensure activity_data is mutable (make a copy if needed)
+            if not isinstance(activity_data, dict) or id(activity_data) == id(result.get("activity_data")):
+                # It's already mutable and in result, update in place
+                pass
+
+            # Update contract coordinates in activity_data for persistence
+            if "strike" in selected_contract:
+                activity_data["strike"] = selected_contract["strike"]
+            if "expiration" in selected_contract:
+                activity_data["expiration"] = selected_contract["expiration"]
+            if "premium" in selected_contract:
+                activity_data["premium"] = selected_contract["premium"]
+            if "delta" in selected_contract:
+                activity_data["delta"] = selected_contract["delta"]
+
     async def run_contract_validation(
         self,
         symbol: str,
@@ -4132,6 +4182,8 @@ All market data has been pre-fetched above. Please analyze this data and generat
         model: str = None,
         supervisor_model: str = None,
         alpha_model: str = None,
+        chain_context_text: str = "",
+        validated_alternative_callback=None,
     ) -> dict:
         """Run exact-contract validation for a preselected Best Options contract.
 
@@ -4167,6 +4219,11 @@ All market data has been pre-fetched above. Please analyze this data and generat
             model: Primary agent model override
             supervisor_model: Supervisor model override
             alpha_model: Alpha model override
+            chain_context_text: Optional options chain context for Alpha (default: "")
+            validated_alternative_callback: Optional callable for D4 validation of
+                Alpha's alternative (signature: (chain, side, requested_strike,
+                requested_expiration, alternative, category, underlying_price,
+                next_earnings_date) -> (is_valid, rejection_reason, normalized_contract))
 
         Returns:
             dict: Structured result containing:
@@ -4189,6 +4246,11 @@ All market data has been pre-fetched above. Please analyze this data and generat
                 - note: str
                 - error: str | None
                 - timestamp: str (ISO UTC)
+                - requested_contract: dict | None (strike, expiration, premium, delta)
+                - selected_contract: dict | None (strike, expiration, premium, delta)
+                - relaxed_parameter: str | None
+                - comparison_rationale: str | None
+                - selection_source: str | None ("requested_approved" | "alpha_alternative")
 
         Raises:
             ValueError: Invalid evidence_snapshot structure or missing required fields
@@ -4276,9 +4338,23 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
             "note": "",
             "error": None,
             "timestamp": timestamp,
+            # Chain-aware validation additions
+            "requested_contract": None,
+            "selected_contract": None,
+            "relaxed_parameter": None,
+            "comparison_rationale": None,
+            "selection_source": None,
         }
 
         try:
+            # Build requested_contract from evidence
+            result["requested_contract"] = {
+                "strike": strike,
+                "expiration": expiration,
+                "premium": contract_data.get("bid"),
+                "delta": contract_data.get("delta"),
+            }
+
             # Resolve category-specific skill (reuse existing helper)
             _category_skill = self._resolve_category_skill(agent_type, category)
             _skill_names = ["earnings-gate-sell", "data-source", "risk-flags"]
@@ -4391,18 +4467,25 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
             # and returned in supervisor_view - no need to extract it separately
 
             # Check supervisor approval
-            supervisor_approved = supervisor_view.get("net_assessment", "").upper() == "APPROVE"
+            # Supervisor schema emits ORIGINAL_HOLDS (approve) or RECONSIDER (reject)
+            supervisor_approved = supervisor_view.get("net_assessment", "").upper() == "ORIGINAL_HOLDS"
 
             # Run Alpha review (required for validation)
+            # Alpha sees the full chain context (if provided) for alternative finding
+            alpha_market_data = market_data_text
+            if chain_context_text:
+                alpha_market_data = market_data_text + "\n\n" + chain_context_text
+
             alpha_view = await self._run_alpha_review(
                 activity_payload=activity_data,
-                market_data=market_data_text,
+                market_data=alpha_market_data,
                 previous_context=previous_context,
                 agent_type=agent_type,
                 model=alpha_model or model,
                 cosmos=cosmos,
                 run_id=run_id,
                 parent_trace_id=primary_trace_id,
+                is_validation_context=bool(chain_context_text),
             )
 
             if alpha_view is None:
@@ -4416,28 +4499,202 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
             result["alpha_view"] = alpha_view
             # Alpha trace_id is recorded by _run_alpha_review via _record_trace
 
-            # Check alpha approval
-            alpha_approved = alpha_view.get("recommendation", "").upper() == "APPROVE"
+            # =====================================================================
+            # Chain-aware validation state machine (Cases A-F from design doc)
+            # =====================================================================
 
-            # Fail-closed logic: SELL alert eligible only if all reviews approve
-            if is_alert and supervisor_approved and alpha_approved:
-                result["validation_status"] = "approved"
-                result["note"] = f"Contract validated: {activity}"
-            elif is_alert and not (supervisor_approved and alpha_approved):
-                # Reviews did not approve the SELL - downgrade to WAIT
+            # Extract Alpha's assessment
+            alpha_opportunity = alpha_view.get("opportunity_strength", "").upper()
+            alpha_alternative = alpha_view.get("alternative", {})
+            alpha_relaxed_param = alpha_view.get("relaxed_parameter", "none")
+
+            # Determine if Alpha found a better alternative
+            alpha_has_alternative = (
+                alpha_opportunity in ("STRONG", "MODERATE")
+                and alpha_alternative.get("strike") is not None
+                and alpha_alternative.get("expiration") is not None
+            )
+
+            # Initialize selected contract as requested (may be overridden)
+            selected_contract = result["requested_contract"].copy()
+            relaxed_parameter = None
+            comparison_rationale = None
+            selection_source = "requested_approved"
+
+            # Case E: Supervisor RECONSIDER is terminal WAIT
+            if not supervisor_approved:
                 result["activity"] = "WAIT"
                 result["is_alert"] = False
                 result["validation_status"] = "review_incomplete"
-                reviews_status = []
-                if not supervisor_approved:
-                    reviews_status.append("Supervisor did not approve")
-                if not alpha_approved:
-                    reviews_status.append("Alpha did not approve")
-                result["note"] = f"SELL downgraded to WAIT: {'; '.join(reviews_status)}"
-            else:
-                # Primary was WAIT or reviews approved WAIT
+                result["note"] = "Supervisor recommended RECONSIDER — contract validation failed"
+                result["selected_contract"] = selected_contract
+                result["relaxed_parameter"] = None
+                result["comparison_rationale"] = None
+                result["selection_source"] = None
+                return result
+
+            # Primary decision from agent
+            primary_said_sell = (activity == "SELL")
+
+            # Case A: Primary=SELL, Supervisor=ORIGINAL_HOLDS, Alpha=NONE
+            # Traditional exact approval - all three agree on the requested contract
+            if primary_said_sell and alpha_opportunity == "NONE":
+                result["activity"] = "SELL"
+                result["is_alert"] = True
                 result["validation_status"] = "approved"
-                result["note"] = f"Contract validated: {activity}"
+                result["note"] = "Contract validated: unanimous approval (requested contract)"
+                result["selected_contract"] = selected_contract
+                result["relaxed_parameter"] = None
+                result["comparison_rationale"] = alpha_alternative.get("rationale", "")
+                result["selection_source"] = "requested_approved"
+                return result
+
+            # Case B: Primary=SELL, Supervisor=ORIGINAL_HOLDS, Alpha=STRONG/MODERATE with alternative
+            # Alpha found a better alternative, but primary already approved requested contract
+            # Also handles incomplete alternatives: treat as NONE/endorsement and SELL requested
+            if primary_said_sell and (alpha_has_alternative or alpha_opportunity in ("STRONG", "MODERATE")):
+                # Try D4 validation via callback if provided and alternative is complete
+                alternative_is_valid = False
+                d4_rejection_reason = None
+                normalized_alternative = None
+
+                if alpha_has_alternative and validated_alternative_callback:
+                    try:
+                        alternative_is_valid, d4_rejection_reason, normalized_alternative = validated_alternative_callback(
+                            side=side,
+                            requested_strike=strike,
+                            requested_expiration=expiration,
+                            alternative=alpha_alternative,
+                            category=category,
+                            underlying_price=underlying_price,
+                            next_earnings_date=evidence_snapshot.get("next_earnings_date"),
+                        )
+                    except Exception as e:
+                        logger.warning("D4 validation callback failed: %s", e)
+                        alternative_is_valid = False
+                        d4_rejection_reason = f"callback_error: {e}"
+                elif not alpha_has_alternative:
+                    # Incomplete alternative (STRONG/MODERATE but missing strike/expiration)
+                    d4_rejection_reason = "incomplete_alternative"
+                    logger.info("Alpha STRONG/MODERATE but alternative incomplete — endorsing requested contract")
+
+                if alternative_is_valid and normalized_alternative:
+                    # Alpha's alternative passed D4 - use it
+                    selected_contract = {
+                        "strike": normalized_alternative.get("strike", alpha_alternative.get("strike")),
+                        "expiration": normalized_alternative.get("expiration", alpha_alternative.get("expiration")),
+                        "premium": normalized_alternative.get("bid", alpha_alternative.get("premium")),
+                        "delta": normalized_alternative.get("delta", alpha_alternative.get("delta")),
+                    }
+                    relaxed_parameter = alpha_relaxed_param
+                    comparison_rationale = alpha_alternative.get("rationale", "")
+                    selection_source = "alpha_alternative"
+                    result["note"] = "Alpha improved on approved contract (alternative validated)"
+                else:
+                    # D4 failed or incomplete - fall back to requested contract (still valid, primary approved it)
+                    logger.info(
+                        "Alpha alternative failed D4 validation (%s) — using requested contract",
+                        d4_rejection_reason or "unknown"
+                    )
+                    result["note"] = f"Alpha alternative rejected ({d4_rejection_reason}) — using requested contract"
+
+                result["activity"] = "SELL"
+                result["is_alert"] = True
+                result["validation_status"] = "approved"
+                result["selected_contract"] = selected_contract
+                result["relaxed_parameter"] = relaxed_parameter
+                result["comparison_rationale"] = comparison_rationale
+                result["selection_source"] = selection_source
+                # Apply selected contract to top-level fields
+                self._apply_selected_contract_to_result(result, selected_contract)
+                return result
+
+            # Case C: Primary=WAIT, Alpha=STRONG/MODERATE with valid alternative
+            # Alpha rescues a WAIT by finding a viable alternative
+            if not primary_said_sell and alpha_has_alternative:
+                # Try D4 validation via callback if provided
+                alternative_is_valid = False
+                d4_rejection_reason = None
+                normalized_alternative = None
+
+                if validated_alternative_callback:
+                    try:
+                        alternative_is_valid, d4_rejection_reason, normalized_alternative = validated_alternative_callback(
+                            side=side,
+                            requested_strike=strike,
+                            requested_expiration=expiration,
+                            alternative=alpha_alternative,
+                            category=category,
+                            underlying_price=underlying_price,
+                            next_earnings_date=evidence_snapshot.get("next_earnings_date"),
+                        )
+                    except Exception as e:
+                        logger.warning("D4 validation callback failed: %s", e)
+                        alternative_is_valid = False
+                        d4_rejection_reason = f"callback_error: {e}"
+
+                if alternative_is_valid and normalized_alternative:
+                    # Alpha's alternative passed D4 - use it for SELL
+                    selected_contract = {
+                        "strike": normalized_alternative.get("strike", alpha_alternative.get("strike")),
+                        "expiration": normalized_alternative.get("expiration", alpha_alternative.get("expiration")),
+                        "premium": normalized_alternative.get("bid", alpha_alternative.get("premium")),
+                        "delta": normalized_alternative.get("delta", alpha_alternative.get("delta")),
+                    }
+                    relaxed_parameter = alpha_relaxed_param
+                    comparison_rationale = alpha_alternative.get("rationale", "")
+                    selection_source = "alpha_alternative"
+
+                    result["activity"] = "SELL"
+                    result["is_alert"] = True
+                    result["validation_status"] = "approved"
+                    result["note"] = "Alpha rescued WAIT with validated alternative"
+                    result["selected_contract"] = selected_contract
+                    result["relaxed_parameter"] = relaxed_parameter
+                    result["comparison_rationale"] = comparison_rationale
+                    result["selection_source"] = selection_source
+                    # Apply selected contract to top-level fields
+                    self._apply_selected_contract_to_result(result, selected_contract)
+                    return result
+                else:
+                    # D4 failed - no fallback for Case C (primary was WAIT)
+                    logger.info(
+                        "Alpha alternative failed D4 validation (%s) — result is WAIT",
+                        d4_rejection_reason or "unknown"
+                    )
+                    result["activity"] = "WAIT"
+                    result["is_alert"] = False
+                    result["validation_status"] = "review_incomplete"
+                    result["note"] = f"Alpha alternative rejected ({d4_rejection_reason}) — no valid contract"
+                    result["selected_contract"] = selected_contract
+                    result["relaxed_parameter"] = None
+                    result["comparison_rationale"] = comparison_rationale
+                    result["selection_source"] = None
+                    return result
+
+            # Case D: Primary=WAIT, Alpha=NONE or incomplete alternative
+            # Everyone agrees this is a WAIT (or Alpha incomplete attempt doesn't change WAIT)
+            if not primary_said_sell and (alpha_opportunity == "NONE" or not alpha_has_alternative):
+                result["activity"] = "WAIT"
+                result["is_alert"] = False
+                result["validation_status"] = "approved"
+                note_suffix = " (no viable alternative)" if alpha_opportunity == "NONE" else " (incomplete alternative)"
+                result["note"] = f"Contract validated: unanimous WAIT{note_suffix}"
+                result["selected_contract"] = selected_contract
+                result["relaxed_parameter"] = None
+                result["comparison_rationale"] = alpha_alternative.get("rationale", "")
+                result["selection_source"] = None
+                return result
+
+            # Case F: Any review failure (should not reach here, but defensive)
+            result["activity"] = "WAIT"
+            result["is_alert"] = False
+            result["validation_status"] = "review_incomplete"
+            result["note"] = "Validation incomplete: unexpected state"
+            result["selected_contract"] = selected_contract
+            result["relaxed_parameter"] = None
+            result["comparison_rationale"] = None
+            result["selection_source"] = None
 
             logger.info(
                 "Contract validation complete: symbol=%s, activity=%s, validation_status=%s",

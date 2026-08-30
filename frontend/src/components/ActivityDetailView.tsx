@@ -172,6 +172,91 @@ function AlphaPanel({ av, activity }: { av: NonNullable<ActivityDoc["alpha_view"
   );
 }
 
+function ContractSelectionPanel({ activity }: { activity: ActivityDoc }) {
+  const req = activity.requested_contract;
+  const sel = activity.selected_contract;
+
+  if (!req || !sel) return null;
+
+  const isDifferent = req.strike !== sel.strike || req.expiration !== sel.expiration;
+
+  const formatContract = (c: typeof req) => {
+    const parts = [
+      `Strike: $${c.strike}`,
+      `Exp: ${c.expiration}`,
+      c.premium != null && `Premium: $${c.premium.toFixed(2)}`,
+      c.delta != null && `Δ ${c.delta.toFixed(3)}`,
+    ].filter(Boolean);
+    return parts.join(" · ");
+  };
+
+  if (!isDifferent) {
+    // Same contract: show validated confirmation
+    return (
+      <section className="space-y-3 rounded-[var(--radius)] border border-border bg-bg-card p-4">
+        <div className="flex items-center gap-2">
+          <span>📝</span>
+          <h2 className="text-lg font-semibold">Contract Selection</h2>
+          <Badge text="Validated ✓" className="border-accent-green/40 bg-accent-green/10 text-accent-green" />
+        </div>
+        <div className="rounded-[var(--radius)] bg-bg-input px-3 py-2 font-mono text-sm">
+          {formatContract(sel)}
+        </div>
+        <div className="text-sm text-text-muted">
+          The requested contract passed all validation gates.
+        </div>
+      </section>
+    );
+  }
+
+  // Different contracts: show requested vs selected
+  const relaxedParamLabel = activity.relaxed_parameter
+    ? titleCase(activity.relaxed_parameter.replace(/_/g, " "))
+    : "—";
+
+  return (
+    <section className="space-y-3 rounded-[var(--radius)] border border-border bg-bg-card p-4">
+      <div className="flex items-center gap-2">
+        <span>📝</span>
+        <h2 className="text-lg font-semibold">Contract Selection</h2>
+        <Badge text="Alternative Selected" className="border-accent-orange/40 bg-accent-orange/10 text-accent-orange" />
+      </div>
+
+      {activity.relaxed_parameter && (
+        <div className="rounded-[var(--radius)] border-l-2 border-accent-orange bg-accent-orange/10 px-3 py-2 text-sm">
+          🔓 <strong>Relaxed Parameter:</strong> {relaxedParamLabel}
+        </div>
+      )}
+
+      <div className="grid gap-3">
+        <div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-text-muted">Requested Contract</div>
+          <div className="rounded-[var(--radius)] bg-bg-input px-3 py-2 font-mono text-sm opacity-60">
+            {formatContract(req)}
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-text-muted">Selected Contract</div>
+          <div className="rounded-[var(--radius)] border border-accent-green/40 bg-accent-green/10 px-3 py-2 font-mono text-sm text-accent-green">
+            {formatContract(sel)}
+          </div>
+        </div>
+      </div>
+
+      {activity.comparison_rationale && (
+        <div className="rounded-[var(--radius)] bg-bg-input px-3 py-2 text-sm text-text-muted">
+          <strong>Rationale:</strong> {activity.comparison_rationale}
+        </div>
+      )}
+
+      <div className="text-xs text-text-muted">
+        Source: {activity.selection_source === "alpha_alternative" ? "Alpha Advisor alternative" : "Primary agent approved"}
+      </div>
+    </section>
+  );
+}
+
 export default function ActivityDetailView({ data }: { data: ActivityDetail }) {
   const a = data.activity;
   const dStrike = pick(a.strike, a.new_strike, a.current_strike);
@@ -285,6 +370,9 @@ export default function ActivityDetailView({ data }: { data: ActivityDetail }) {
           {a.position_id && <Field label="Position ID"><span className="font-mono">{a.position_id}</span></Field>}
         </div>
       </section>
+
+      {/* Contract Selection — only for chain-aware validation */}
+      {a.requested_contract && a.selected_contract && <ContractSelectionPanel activity={a} />}
 
       {/* Rule Evaluation — only rendered when rule_evaluation was persisted on the activity.
           Historic activities without it fall through untouched. */}

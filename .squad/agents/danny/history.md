@@ -846,3 +846,17 @@ Revalidated the accepted Best Options precompute design against HEAD e3a20a2. Al
 
 **Pattern learned:**
 - When consolidating UI columns, ensure provenance/metadata tags are contextually relevant to the specific activity they describe, not just conditionally rendered based on row-level flags.
+
+### 2026-08-30 — Chain-Aware Best Option Validation (design review, no implementation)
+
+Decision: `.squad/decisions/inbox/danny-chain-aware-validation-design.md` (accepted). User directives require Alpha to receive normal CC/CSP chain context (not Best Options filtered), and validation to return WAIT or SELL where SELL may use the requested contract or a nearby real alternative found by relaxing one parameter.
+
+**Critical finding during code inspection: both reviewer approval checks in `run_contract_validation` are dead code.** `agent_runner.py:4394` checks `net_assessment == "APPROVE"` — Supervisor's schema emits `ORIGINAL_HOLDS`/`RECONSIDER`, never `APPROVE`. Line 4420 checks `alpha_view.get("recommendation") == "APPROVE"` — Alpha's schema emits `opportunity_strength` (STRONG/MODERATE/NONE), never `recommendation`. Both always evaluate `False`, so every SELL from the primary agent is silently downgraded to WAIT. This is fail-closed (correct direction) but means the entire Supervisor+Alpha review pipeline in contract validation has been inert since shipping.
+
+**Architectural tension resolved: deterministic post-Alpha validation (D4), not a second LLM pass.** When Alpha proposes an alternative contract, the selected contract must be validated before SELL. Options considered: (a) run Primary+Supervisor again against the alternative, (b) run a lightweight validation LLM, (c) deterministic programmatic gates. Chose (c) — a programmatic `_validate_alpha_alternative` function checks 10 gates: exists in chain, same side, not identical to requested, single-parameter relaxation only, proximity, DTE ≤ 45, no spanned earnings, delta in band, complete quote, premium floor. This is cheaper (<1ms vs ~5s), reproducible, and cannot hallucinate. Supervisor's RECONSIDER remains a hard SELL veto regardless of Alpha's alternative.
+
+**Chain context reuse is straightforward.** The normal CC/CSP Alpha path already builds chain text via `_build_alpha_options_chain` (apply_agent_view → filter_by_type → filter_by_delta). Validation replicates this exact pipeline from the cached chain instead of `fetcher.fetch_all`, producing byte-semantically identical output. No Best Options scoring/ranking applied per user directive.
+
+**Ownership split kept conflict-free.** Rusty owns `contract_validation_integration.py` exclusively (chain context builder, D4 validator, persistence). Linus owns `agent_runner.py:run_contract_validation` exclusively (approval check fixes, Case A-F state machine, result dict augmentation). Interface contract frozen: one new input parameter (`chain_context_text: str`) and five new output fields. Livingston owns the cross-seam integration test.
+
+**Reusable lesson: when an LLM output schema has an approval/endorsement field, verify the code actually reads the field name the schema defines, not an assumed conventional name.** The `"APPROVE"` checks were plausible-looking code that compiled, tested green (because the fail-closed default is WAIT, which is a valid outcome), and passed review — but never matched any real model output. Schema-to-code field-name parity needs an explicit test, not inference from behavioral tests.

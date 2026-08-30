@@ -1337,3 +1337,91 @@ The infrastructure is complete and tested. What remains is adding the per-row "V
 - backend/tests/test_contract_validation_engine.py: 2 new tests
 
 All tests pass (26 model settings, 18 contract validation, 18 integration, 26 Alpha).
+
+### 2026-08-30 — Chain-Aware Validation Implementation
+
+**Context:** Implemented chain-aware validation per Danny's design (`.squad/decisions/inbox/danny-chain-aware-validation-design.md`) and user directives requiring Alpha to receive the same normal CC/CSP chain context (no Best Options filter) and enabling SELL to use nearby real contracts when relaxing one allowed parameter.
+
+**Implementation:**
+
+1. **Chain Context Building** (`contract_validation_integration.py`):
+   - Added `_build_validation_chain_context(chain, side)`: Reuses normal CC/CSP chain pipeline (`apply_agent_view` → `filter_by_type` → `filter_by_delta`). Byte-semantically identical to `_build_alpha_options_chain` for watchlist agents. No Best Options scoring/ranking.
+   - Added `_build_chain_snapshot_summary(chain, side, chain_timestamp)`: Compact chain metadata for audit trail (contract count, expiration range, underlying price, side). Does NOT duplicate full chain JSON.
+
+2. **Deterministic Alternative Validation** (D4 from design):
+   - Added `_validate_alpha_alternative(...)`: Implements all 10 programmatic gates:
+     - G1: Contract exists in chain
+     - G2: Same side (implicit)
+     - G3: Not identical to requested
+     - G4: Single-parameter relaxation only (strike OR expiration, not both)
+     - G5: Proximity (strike ±20% or ≤5 strikes; expiration ±14 days)
+     - G6: DTE ≤ 45 (hard cap)
+     - G7: No spanned earnings
+     - G8: Delta in band (0.15-0.50 abs, tighter than chain filter)
+     - G9: Complete quote (usable bid and delta)
+     - G10: Premium floor (DTE-scaled per category)
+   - Fail-closed: invalid alternatives → WAIT, never SELL
+   - Returns (is_valid, rejection_reason, normalized_contract)
+
+3. **Integration Seam** (Rusty ↔ Linus boundary):
+   - Updated `_execute_validation()` to build chain context and pass to `AgentRunner.run_contract_validation` via 3 new keyword args:
+     - `chain_context_text: str` (formatted chain for Alpha)
+     - `raw_chain: dict` (full chain for alternative validation)
+     - `chain_snapshot_summary: dict` (compact summary for persistence)
+   - Linus owns `agent_runner.py:run_contract_validation` implementation, Alpha instruction addendum, and Case A/B/C/D/E logic
+
+4. **Persistence** (`_persist_validation_activity`, `get_validation_status`):
+   - Added canonical fields:
+     - `requested_contract` (always populated)
+     - `selected_contract` (final contract, may differ from requested)
+     - `relaxed_parameter` (which parameter was relaxed, or null)
+     - `comparison_rationale` (Alpha's rationale for alternative)
+     - `selection_source` ("requested_approved" | "alpha_alternative")
+     - `chain_snapshot_summary` (compact chain metadata)
+   - All fields optional/nullable for backward compatibility
+   - Top-level strike/expiration/premium/delta reflect **selected_contract**
+
+5. **Frontend Types**:
+   - Added `ContractRef` interface to `types/contract-validation.ts` and `types/activity-detail.ts`
+   - Extended `ValidationStatusCompleted` and `ActivityDoc` with new chain-aware fields
+
+6. **Frontend UI** (`ActivityDetailView.tsx`):
+   - Added `ContractSelectionPanel` component:
+     - When contracts identical: "Validated ✓" badge with single contract display
+     - When contracts differ: "Alternative Selected" badge with:
+       - Relaxed parameter label
+       - Requested contract (grayed out)
+       - Selected contract (highlighted green)
+       - Comparison rationale
+       - Selection source attribution
+   - Renders after Activity card, before Rule Evaluation
+   - Backward compatible: only renders when both requested/selected present
+
+**Tests:** Added `backend/tests/test_chain_aware_validation.py` (16 tests, all passing):
+- Chain context builder: 4 tests (calls/puts/json structure/empty)
+- Chain snapshot summary: 3 tests (structure/count/expiration range)
+- Alternative validation gates: 9 tests (G1, G3, G4, G6, G7, G8, G9, valid alternative)
+- Backward compatibility: 1 test
+
+**Files Modified:**
+- backend/src/contract_validation_integration.py (3 new functions, 3 updated)
+- frontend/src/types/contract-validation.ts (ContractRef, extended ValidationStatusCompleted)
+- frontend/src/types/activity-detail.ts (ContractRef, extended ActivityDoc)
+- frontend/src/components/ActivityDetailView.tsx (ContractSelectionPanel component)
+
+**Files Created:**
+- backend/tests/test_chain_aware_validation.py (16 tests)
+- backend/CHAIN_AWARE_VALIDATION_IMPLEMENTATION.md (full implementation summary)
+
+**Behavior Preserved:**
+- Deduplication key unchanged (`symbol_side_strike_expiration`)
+- Max concurrent validations = 4
+- Scheduler reuse
+- Backward compatibility: all new fields optional/nullable
+
+**Integration Notes:**
+- Seam contract established with Linus (3 new input params, 6 new output fields)
+- Rusty exclusively owns `contract_validation_integration.py`
+- Linus exclusively owns `agent_runner.py` and `alpha_instructions.py`
+- Tests verify chain context parity and all deterministic gates
+- Ready for Linus's concurrent work on agent runner Case logic and Alpha instruction addendum

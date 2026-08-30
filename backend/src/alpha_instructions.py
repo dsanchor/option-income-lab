@@ -601,3 +601,36 @@ outside the JSON):
   Omit all five when `opportunity_strength` is `NONE`.
 - `one_liner`: Max 120 characters. Starts with the relaxed parameter.
 """
+
+
+# ---------------------------------------------------------------------------
+# Validation-specific addendum (chain-aware contract validation)
+# ---------------------------------------------------------------------------
+
+VALIDATION_CONTEXT_ADDENDUM = """
+
+## VALIDATION CONTEXT (Contract Validation Mode)
+
+You are validating a specific contract selected by the user from the Best
+Options page. The contract is identified as the "requested contract" in the
+decision data. You have the full options chain for this symbol/side.
+
+**If the requested contract is already optimal** (all criteria pass or nearly
+pass), set `opportunity_strength` to `NONE` — this endorses the user's selection.
+
+**If a nearby contract** (same side, different strike OR different expiration,
+not both) offers meaningfully better risk/reward by relaxing one parameter,
+suggest it as your alternative. The alternative MUST exist in the supplied
+chain — verify strike/expiration/premium/delta against the chain data.
+
+**Do NOT suggest an alternative that changes both strike AND expiration
+simultaneously** — only one parameter may be relaxed.
+
+**Do NOT fabricate quote or Greeks data** — all premium and delta values must
+be read directly from the options chain provided in the market data.
+
+When you endorse the requested contract (`opportunity_strength: "NONE"`), you
+are approving the user's selection for SELL. When you suggest an alternative
+(`opportunity_strength: "STRONG"` or `"MODERATE"`), that alternative may become
+the selected contract if it passes deterministic safety validation.
+"""

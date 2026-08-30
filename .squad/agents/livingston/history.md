@@ -1207,3 +1207,68 @@ Implementation complete, all tests green, deterministic duplicate detection veri
 5. **Regression Coverage:** Explicit tests comparing validation vs normal agent activity shapes prevent future schema drift.
 
 **Decision:** See `.squad/decisions/inbox/livingston-canonical-validation-schema.md`
+
+---
+
+## 2024-12 Chain-Aware Validation Integration Tests
+
+**Context:** Rusty (Contract Validation Integration) and Linus (AgentRunner) implemented chain-aware validation feature per Danny's approved design. Task: Build independent real-module integration coverage at contract_validation_integration + AgentRunner boundaries.
+
+**Created:** `backend/tests/test_chain_aware_validation_integration.py` (12 tests, 100% passing)
+
+**Coverage Achieved:**
+1. **Chain Context Building** (3 tests):
+   - Normal PUT chain → non-empty context with same-side contracts
+   - Normal CALL chain → non-empty context with same-side contracts
+   - Empty chain → empty string
+
+2. **D4 Validation Gates** (9 tests):
+   - G1 (exists): Fabricated contract fails, existing contract passes
+   - G3 (not identical): Same contract fails
+   - G4 (single parameter): Strike-only/expiration-only pass, both-changed fails
+   - G6 (DTE≤45): DTE=50 fails
+   - G8 (delta band): Delta -0.10 outside [0.15-0.50] fails
+   - G9 (complete quote): Missing bid fails
+
+**Contract Verification:** ✓ NO MISMATCHES between Rusty and Linus modules
+- contract_validation_integration.py:721 → builds chain_context_text
+- contract_validation_integration.py:733 → builds validated_alternative_callback
+- agent_runner.py:4141 → receives chain_context_text parameter
+- agent_runner.py:4307 → persists requested_contract always
+- agent_runner.py:4502+4542+4595 → persists selected_contract + selection_source conditionally
+
+**Regression Safe:** All 18 existing contract_validation_integration tests still pass.
+
+**Fixture Design:**
+- Representative chain: SPY @ $450, 4 expirations (DTE: 21, 35, 40, 50), 5 PUT strikes
+- Edge cases: delta out-of-band, DTE>45, missing bid/delta
+- Real contract filtering (minimal mocks: LLM/network/Cosmos only)
+- Critical structure: float types (not Decimal), _meta.greeks_valid=True
+
+**Key Challenges Solved:**
+1. **Gate Isolation:** Gates execute sequentially (G1→G10). Early gate failures block later tests. Solution: Careful fixture design to pass early gates while testing later ones.
+   - Example: Test G6 (DTE≤45) requires passing G1-G5 first
+   - Used requested DTE=40 + alternative DTE=50 (10-day gap passes G5, fails G6)
+
+2. **Proximity Constraints:** G5 (±14 days expiration proximity) limits G6 testing when requested DTE is low.
+   - Solution: Use requested expiration with DTE=40, alternative with DTE=50
+
+3. **Multi-Use Fixtures:** Same expiration (2024-04-19) used for both G4 expiration-only test (strike 440) and G9 missing-bid test (strike 445).
+
+4. **Contract Structure:** Initial failures due to Decimal vs float, missing _meta.greeks_valid. Fixed by modeling after test_best_options.py patterns.
+
+**Scope Limits (intentional per task):**
+- NOT COVERED: End-to-end Case A-E flows (requires full AgentRunner execution with LLM)
+- NOT COVERED: displayed_snapshot non-selection assertion (requires full agent execution)
+- NOT COVERED: Persistence regressions (requires DB layer, backward compatibility tests)
+- NOT COVERED: G2/G5/G7/G10 explicit tests (G2/G5 tested indirectly, G7/G10 lower priority)
+
+**Learnings:**
+1. **Module boundary tests** effectively verify integration contracts without full end-to-end execution overhead.
+2. **Sequential gate validation** requires fixture design that creates passing paths to later gates.
+3. **Float vs Decimal matters** - usable_quote/usable_greek expect float, not Decimal.
+4. **Representative chain fixtures** need 4+ expirations to test proximity/DTE constraints independently.
+
+**Test Execution:** 12/12 passing (100%), 18/18 existing tests passing (regression safe).
+
+**Decision:** See `.squad/decisions/inbox/danny-chain-aware-validation-design.md` (approved design, 28.5KB)
