@@ -10064,3 +10064,8 @@ TOTAL:                                            91 passed
 **Reviewer:** Basher (Tester & QA)  
 **Date:** 2026-08-30T19:23:19+02:00  
 **Verdict:** ✅ **APPROVED FOR PRODUCTION**
+### 2026-08-30T17:29:20Z: User directive
+**By:** Copilot (via Copilot)
+**What:** Use the Recent dashboard column for both activity and recommendation provenance. Add an ALPHA tag only when the recommendation comes from Alpha; regular-agent recommendations keep only the SELL tag. Remove the separate Rec. column.
+**Why:** User request — captured for team memory
+
