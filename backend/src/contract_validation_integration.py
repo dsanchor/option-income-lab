@@ -561,39 +561,69 @@ async def _persist_validation_activity(
     evaluated_snapshot: Optional[dict],
     result: dict,
 ):
-    """Persist validation activity with run_id."""
+    """Persist validation activity using canonical agent schema.
+
+    Uses the canonical activity_data from the agent (same schema as normal runs),
+    augmented with minimal validation-specific metadata for tracing/status.
+    """
     agent_type = "covered_call" if side == "call" else "cash_secured_put"
 
-    # Build activity document
-    activity_data = {
-        "symbol": symbol,
-        "agent_type": agent_type,
-        "activity": result.get("activity", "WAIT"),
-        "is_alert": result.get("is_alert", False),
-        "note": result.get("note", ""),
-        "timestamp": result.get("timestamp") or datetime.now(timezone.utc).isoformat(),
-        # Validation-specific fields
-        "run_trigger": "best_option_validation",
-        "source": source,
-        "contract_strike": strike,
-        "contract_expiration": expiration,
-        "contract_side": side,
-        "displayed_snapshot": displayed_snapshot,
-        "evaluated_snapshot": evaluated_snapshot,
-        "validation_status": result.get("validation_status"),
-        "run_id": run_id,
-        "rule_evaluation": result.get("rule_evaluation"),
-        "primary_trace_id": result.get("primary_trace_id"),
-        "supervisor_view": result.get("supervisor_view"),
-        "supervisor_trace_id": result.get("supervisor_trace_id"),
-        "alpha_view": result.get("alpha_view"),
-        "alpha_trace_id": result.get("alpha_trace_id"),
-    }
+    # Use canonical agent activity_data as base (same schema as normal agent runs)
+    activity_data = result.get("activity_data")
 
+    if activity_data is None:
+        # Fallback for error cases where agent didn't return parseable JSON
+        activity_data = {
+            "symbol": symbol,
+            "activity": result.get("activity", "WAIT"),
+            "timestamp": result.get("timestamp") or datetime.now(timezone.utc).isoformat(),
+        }
+        # Include note/reason from result if present
+        if result.get("note"):
+            activity_data["note"] = result["note"]
+        if result.get("reason"):
+            activity_data["reason"] = result["reason"]
+
+    # Ensure activity_data is a mutable copy
+    activity_data = dict(activity_data)
+
+    # Augment with validation-specific metadata (minimal, non-interfering fields)
+    # These are for tracing/debugging and do NOT alter the canonical activity schema
+    activity_data["run_id"] = run_id
+    activity_data["run_trigger"] = "best_option_validation"
+    activity_data["validation_status"] = result.get("validation_status")
+    activity_data["is_alert"] = result.get("is_alert", False)
+
+    # Add rule_evaluation if not already in activity_data (include even if empty dict)
+    if "rule_evaluation" not in activity_data and result.get("rule_evaluation") is not None:
+        activity_data["rule_evaluation"] = result["rule_evaluation"]
+
+    # Add trace IDs and review outputs (same as normal agent runs)
+    if result.get("primary_trace_id"):
+        activity_data["primary_trace_id"] = result["primary_trace_id"]
+    if result.get("supervisor_view") is not None:
+        activity_data["supervisor_view"] = result["supervisor_view"]
+    if result.get("supervisor_trace_id"):
+        activity_data["supervisor_trace_id"] = result["supervisor_trace_id"]
+    if result.get("alpha_view") is not None:
+        activity_data["alpha_view"] = result["alpha_view"]
+    if result.get("alpha_trace_id"):
+        activity_data["alpha_trace_id"] = result["alpha_trace_id"]
+
+    # Add error if present
     if result.get("error"):
         activity_data["error"] = result["error"]
 
-    # Write activity to Cosmos
+    # Optionally attach evidence snapshots for debugging (non-canonical)
+    # Store as metadata, not in the main activity schema
+    if displayed_snapshot or evaluated_snapshot:
+        activity_data["_validation_meta"] = {
+            "source": source,
+            "displayed_snapshot": displayed_snapshot,
+            "evaluated_snapshot": evaluated_snapshot,
+        }
+
+    # Write activity to Cosmos using canonical schema
     cosmos.write_activity(
         symbol=symbol,
         agent_type=agent_type,
@@ -631,6 +661,7 @@ async def get_validation_status(run_id: str, cosmos: CosmosDBService) -> Dict[st
         activity = cosmos.get_activity_by_run_id(run_id)
 
         if activity:
+            # Return canonical activity fields (same schema as normal agent runs)
             return {
                 "status": "completed",
                 "run_id": run_id,
@@ -639,18 +670,32 @@ async def get_validation_status(run_id: str, cosmos: CosmosDBService) -> Dict[st
                 "agent_type": activity.get("agent_type"),
                 "activity": activity.get("activity"),
                 "is_alert": activity.get("is_alert", False),
-                "validation_status": activity.get("validation_status"),
-                "note": activity.get("note"),
-                "error": activity.get("error"),
                 "timestamp": activity.get("timestamp"),
-                "contract_strike": activity.get("contract_strike"),
-                "contract_expiration": activity.get("contract_expiration"),
-                "contract_side": activity.get("contract_side"),
-                "source": activity.get("source"),
+                # Canonical agent fields (same as normal runs)
+                "reason": activity.get("reason") or activity.get("note"),
+                "confidence": activity.get("confidence"),
+                "underlying_price": activity.get("underlying_price"),
+                "strike": activity.get("strike"),
+                "expiration": activity.get("expiration"),
+                "premium": activity.get("premium"),
+                "iv": activity.get("iv"),
+                "risk_rating": activity.get("risk_rating"),
+                "risk_flags": activity.get("risk_flags"),
+                "assignment_risk": activity.get("assignment_risk"),
+                # Validation metadata
+                "validation_status": activity.get("validation_status"),
+                "run_trigger": activity.get("run_trigger"),
+                # Trace/review outputs (same as normal runs)
                 "rule_evaluation": activity.get("rule_evaluation"),
                 "primary_trace_id": activity.get("primary_trace_id"),
+                "supervisor_view": activity.get("supervisor_view"),
                 "supervisor_trace_id": activity.get("supervisor_trace_id"),
+                "alpha_view": activity.get("alpha_view"),
                 "alpha_trace_id": activity.get("alpha_trace_id"),
+                # Error if present
+                "error": activity.get("error"),
+                # Backward compatibility
+                "note": activity.get("note"),
             }
 
         return {

@@ -529,25 +529,42 @@ class TestEvidenceBuilding:
 
 
 class TestActivityPersistence:
-    """Test validation activity persistence with run_id."""
+    """Test validation activity persistence using canonical agent schema."""
 
     @pytest.mark.asyncio
-    async def test_persists_activity_with_run_id(self, fake_cosmos):
-        """Activity includes run_id and validation-specific fields."""
+    async def test_persists_canonical_activity_schema(self, fake_cosmos):
+        """Activity uses canonical agent schema, not validation-specific structure."""
         from src.contract_validation_integration import _persist_validation_activity
+
+        # Simulate agent result with canonical activity_data (same as normal runs)
+        canonical_activity_data = {
+            "activity": "SELL",
+            "reason": "Strong premium with acceptable delta and risk profile",
+            "confidence": "high",
+            "underlying_price": 150.25,
+            "strike": 155.0,
+            "expiration": "2026-09-20",
+            "premium": 2.52,
+            "premium_pct": 1.68,
+            "iv": 30.5,
+            "delta": -0.25,
+            "risk_rating": 3,
+            "risk_flags": ["approaching_earnings"],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
 
         result = {
             "activity": "SELL",
             "is_alert": True,
             "validation_status": "approved",
-            "note": "Contract validated: SELL",
-            "rule_evaluation": {"signal": "SELL"},
+            "activity_data": canonical_activity_data,  # Canonical agent output
             "primary_trace_id": "trace-1",
-            "supervisor_view": {"net_assessment": "APPROVE"},
             "supervisor_trace_id": "trace-2",
-            "alpha_view": {"recommendation": "APPROVE"},
             "alpha_trace_id": "trace-3",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "rule_evaluation": {"signal": "SELL"},
+            "supervisor_view": {"net_assessment": "APPROVE"},
+            "alpha_view": {"recommendation": "APPROVE"},
+            "timestamp": canonical_activity_data["timestamp"],
         }
 
         await _persist_validation_activity(
@@ -558,27 +575,222 @@ class TestActivityPersistence:
             strike=155.0,
             expiration="2026-09-20",
             source="best_options",
-            displayed_snapshot={"premium": 2.52},
-            evaluated_snapshot={"category": "balanced"},
+            displayed_snapshot=None,
+            evaluated_snapshot=None,
             result=result,
         )
 
         assert len(fake_cosmos.activities) == 1
 
         activity = fake_cosmos.activities[0]
+
+        # Verify canonical agent fields are preserved
+        assert activity["activity"] == "SELL"
+        assert activity["reason"] == "Strong premium with acceptable delta and risk profile"
+        assert activity["confidence"] == "high"
+        assert activity["underlying_price"] == 150.25
+        assert activity["strike"] == 155.0
+        assert activity["expiration"] == "2026-09-20"
+        assert activity["premium"] == 2.52
+        assert activity["premium_pct"] == 1.68
+        assert activity["iv"] == 30.5
+        assert activity["delta"] == -0.25
+        assert activity["risk_rating"] == 3
+        assert activity["risk_flags"] == ["approaching_earnings"]
+
+        # Verify validation metadata (minimal augmentation)
         assert activity["run_id"] == "test-run-123"
         assert activity["run_trigger"] == "best_option_validation"
-        assert activity["source"] == "best_options"
-        assert activity["contract_strike"] == 155.0
-        assert activity["contract_expiration"] == "2026-09-20"
-        assert activity["contract_side"] == "call"
-        assert activity["displayed_snapshot"] == {"premium": 2.52}
-        assert activity["evaluated_snapshot"] == {"category": "balanced"}
         assert activity["validation_status"] == "approved"
         assert activity["is_alert"] is True
         assert activity["primary_trace_id"] == "trace-1"
         assert activity["supervisor_trace_id"] == "trace-2"
         assert activity["alpha_trace_id"] == "trace-3"
+
+    @pytest.mark.asyncio
+    async def test_canonical_schema_matches_normal_agent_run(self, fake_cosmos):
+        """Regression: validation activity schema matches normal agent run schema."""
+        from src.contract_validation_integration import _persist_validation_activity
+
+        # Canonical fields that ALL agent runs should have
+        canonical_fields = {
+            "activity", "reason", "confidence", "underlying_price", "strike",
+            "expiration", "premium", "iv", "risk_rating", "risk_flags",
+            "timestamp", "is_alert", "run_id", "rule_evaluation",
+        }
+
+        # Validation activity
+        validation_activity_data = {
+            "activity": "SELL",
+            "reason": "Test reason",
+            "confidence": "medium",
+            "underlying_price": 100.0,
+            "strike": 105.0,
+            "expiration": "2026-09-20",
+            "premium": 1.50,
+            "iv": 25.0,
+            "risk_rating": 2,
+            "risk_flags": [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        validation_result = {
+            "activity": "SELL",
+            "is_alert": True,
+            "validation_status": "approved",
+            "activity_data": validation_activity_data,
+            "rule_evaluation": {},
+            "timestamp": validation_activity_data["timestamp"],
+        }
+
+        await _persist_validation_activity(
+            cosmos=fake_cosmos,
+            run_id="val-run-1",
+            symbol="TEST",
+            side="call",
+            strike=105.0,
+            expiration="2026-09-20",
+            source="best_options",
+            displayed_snapshot=None,
+            evaluated_snapshot=None,
+            result=validation_result,
+        )
+
+        # Normal agent run (simulated - what cosmos.write_activity receives)
+        normal_activity_data = {
+            "activity": "SELL",
+            "reason": "Test reason",
+            "confidence": "medium",
+            "underlying_price": 100.0,
+            "strike": 105.0,
+            "expiration": "2026-09-20",
+            "premium": 1.50,
+            "iv": 25.0,
+            "risk_rating": 2,
+            "risk_flags": [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "is_alert": True,
+            "run_id": "normal-run-1",
+            "rule_evaluation": {},
+            "run_trigger": "scheduled",
+        }
+
+        fake_cosmos.write_activity(
+            symbol="TEST",
+            agent_type="covered_call",
+            activity_data=normal_activity_data,
+            timestamp=normal_activity_data["timestamp"],
+        )
+
+        assert len(fake_cosmos.activities) == 2
+
+        validation_activity = fake_cosmos.activities[0]
+        normal_activity = fake_cosmos.activities[1]
+
+        # Both activities must have the same canonical fields
+        for field in canonical_fields:
+            assert field in validation_activity, f"Validation activity missing canonical field: {field}"
+            assert field in normal_activity, f"Normal activity missing canonical field: {field}"
+
+        # Field types must match
+        for field in ["activity", "reason", "confidence"]:
+            assert type(validation_activity[field]) == type(normal_activity[field])
+
+        for field in ["underlying_price", "strike", "premium", "iv"]:
+            assert isinstance(validation_activity[field], (int, float))
+            assert isinstance(normal_activity[field], (int, float))
+
+    @pytest.mark.asyncio
+    async def test_backward_compatible_with_missing_activity_data(self, fake_cosmos):
+        """Activity handles error cases where agent didn't return parseable JSON."""
+        from src.contract_validation_integration import _persist_validation_activity
+
+        # Error result without activity_data
+        result = {
+            "activity": "WAIT",
+            "is_alert": False,
+            "validation_status": "error",
+            "error": "Agent returned no parseable JSON",
+            "activity_data": None,  # Missing
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        await _persist_validation_activity(
+            cosmos=fake_cosmos,
+            run_id="test-run-error",
+            symbol="TEST",
+            side="put",
+            strike=95.0,
+            expiration="2026-09-20",
+            source="best_options",
+            displayed_snapshot=None,
+            evaluated_snapshot=None,
+            result=result,
+        )
+
+        assert len(fake_cosmos.activities) == 1
+
+        activity = fake_cosmos.activities[0]
+
+        # Verify minimal fallback structure
+        assert activity["symbol"] == "TEST"
+        assert activity["activity"] == "WAIT"
+        assert activity["error"] == "Agent returned no parseable JSON"
+        assert activity["validation_status"] == "error"
+        assert activity["run_id"] == "test-run-error"
+
+    @pytest.mark.asyncio
+    async def test_get_validation_status_returns_canonical_fields(self, fake_cosmos):
+        """get_validation_status returns canonical agent fields."""
+        from src.contract_validation_integration import get_validation_status
+
+        # Create a completed activity with canonical schema
+        activity_doc = {
+            "id": "activity-123",
+            "symbol": "TEST",
+            "agent_type": "covered_call",
+            "activity": "SELL",
+            "reason": "Strong premium opportunity",
+            "confidence": "high",
+            "underlying_price": 150.25,
+            "strike": 155.0,
+            "expiration": "2026-09-20",
+            "premium": 2.52,
+            "iv": 30.5,
+            "risk_rating": 3,
+            "risk_flags": ["approaching_earnings"],
+            "is_alert": True,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            # Validation metadata
+            "run_id": "run-abc-123",
+            "run_trigger": "best_option_validation",
+            "validation_status": "approved",
+            "primary_trace_id": "trace-1",
+            "rule_evaluation": {},
+        }
+        fake_cosmos.activities.append(activity_doc)
+
+        status = await get_validation_status("run-abc-123", fake_cosmos)
+
+        assert status["status"] == "completed"
+        assert status["run_id"] == "run-abc-123"
+        assert status["activity_id"] == "activity-123"
+
+        # Verify canonical agent fields are returned
+        assert status["activity"] == "SELL"
+        assert status["reason"] == "Strong premium opportunity"
+        assert status["confidence"] == "high"
+        assert status["underlying_price"] == 150.25
+        assert status["strike"] == 155.0
+        assert status["expiration"] == "2026-09-20"
+        assert status["premium"] == 2.52
+        assert status["iv"] == 30.5
+        assert status["risk_rating"] == 3
+        assert status["risk_flags"] == ["approaching_earnings"]
+
+        # Verify validation metadata
+        assert status["validation_status"] == "approved"
+        assert status["run_trigger"] == "best_option_validation"
 
 
 class TestRunnerIdentityRegression:
@@ -782,3 +994,115 @@ class TestRunnerIdentityRegression:
         # Should pass validation
         error = validate_llm_config(normalized)
         assert error is None
+
+
+class TestReasonNoteFallbackRegression:
+    """Regression test for canonical reason field with backward-compatible note fallback.
+
+    Danny's retrospective (2026-08-30):
+    Canonical `reason` must win when both fields exist, fall back to `note` for
+    note-only legacy/error docs, and return both fields for backward compatibility.
+    """
+
+    @pytest.mark.asyncio
+    async def test_reason_field_wins_when_both_present(self, fake_cosmos):
+        """When both reason and note exist, reason is returned as canonical."""
+        from src.contract_validation_integration import get_validation_status
+
+        # Simulate activity with both reason (canonical) and note (legacy)
+        activity = {
+            "id": "AAPL_covered_call_test",
+            "run_id": "test-run-both-fields",
+            "symbol": "AAPL",
+            "agent_type": "covered_call",
+            "activity": "WAIT",
+            "is_alert": False,
+            "timestamp": "2026-08-30T12:00:00Z",
+            "reason": "IV below threshold (canonical)",
+            "note": "Old note format (legacy)",
+        }
+        fake_cosmos.activities.append(activity)
+
+        result = await get_validation_status("test-run-both-fields", fake_cosmos)
+
+        assert result["status"] == "completed"
+        assert result["reason"] == "IV below threshold (canonical)", \
+            "Canonical reason should win when both exist"
+        assert result["note"] == "Old note format (legacy)", \
+            "Legacy note should still be returned for backward compatibility"
+
+    @pytest.mark.asyncio
+    async def test_reason_falls_back_to_note_when_reason_missing(self, fake_cosmos):
+        """When reason is missing but note exists, reason falls back to note."""
+        from src.contract_validation_integration import get_validation_status
+
+        # Simulate legacy activity with only note
+        activity = {
+            "id": "MSFT_cash_secured_put_test",
+            "run_id": "test-run-note-only",
+            "symbol": "MSFT",
+            "agent_type": "cash_secured_put",
+            "activity": "WAIT",
+            "is_alert": False,
+            "timestamp": "2026-08-30T12:00:00Z",
+            "note": "Legacy note only",
+        }
+        fake_cosmos.activities.append(activity)
+
+        result = await get_validation_status("test-run-note-only", fake_cosmos)
+
+        assert result["status"] == "completed"
+        assert result["reason"] == "Legacy note only", \
+            "Canonical reason should fall back to note when reason missing"
+        assert result["note"] == "Legacy note only", \
+            "Legacy note should be returned"
+
+    @pytest.mark.asyncio
+    async def test_reason_none_when_both_missing(self, fake_cosmos):
+        """When both reason and note are missing, reason is None."""
+        from src.contract_validation_integration import get_validation_status
+
+        # Simulate activity with neither field
+        activity = {
+            "id": "TSLA_covered_call_test",
+            "run_id": "test-run-no-fields",
+            "symbol": "TSLA",
+            "agent_type": "covered_call",
+            "activity": "SELL",
+            "is_alert": True,
+            "timestamp": "2026-08-30T12:00:00Z",
+        }
+        fake_cosmos.activities.append(activity)
+
+        result = await get_validation_status("test-run-no-fields", fake_cosmos)
+
+        assert result["status"] == "completed"
+        assert result["reason"] is None, \
+            "Canonical reason should be None when both missing"
+        assert result["note"] is None, \
+            "Legacy note should be None when both missing"
+
+    @pytest.mark.asyncio
+    async def test_field_completeness_includes_both_reason_and_note(self, fake_cosmos):
+        """Response includes both reason and note fields for schema completeness."""
+        from src.contract_validation_integration import get_validation_status
+
+        activity = {
+            "id": "NVDA_covered_call_test",
+            "run_id": "test-run-field-check",
+            "symbol": "NVDA",
+            "agent_type": "covered_call",
+            "activity": "WAIT",
+            "is_alert": False,
+            "timestamp": "2026-08-30T12:00:00Z",
+            "reason": "Canonical reason",
+        }
+        fake_cosmos.activities.append(activity)
+
+        result = await get_validation_status("test-run-field-check", fake_cosmos)
+
+        # Assert both fields are present in response (schema completeness)
+        assert "reason" in result, "Response must include canonical reason field"
+        assert "note" in result, "Response must include backward-compatible note field"
+        assert result["reason"] == "Canonical reason"
+        assert result["note"] is None  # note not in activity

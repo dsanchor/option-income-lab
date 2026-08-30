@@ -4137,6 +4137,7 @@ All market data has been pre-fetched above. Please analyze this data and generat
                 - activity: str (SELL | WAIT | error state)
                 - is_alert: bool
                 - run_id: str
+                - activity_data: dict | None (canonical agent JSON output)
                 - rule_evaluation: dict | None
                 - primary_trace_id: str | None
                 - supervisor_view: dict | None
@@ -4285,6 +4286,9 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
             # Ensure timestamp in activity_data
             activity_data["timestamp"] = timestamp
 
+            # Store canonical agent output for persistence
+            result["activity_data"] = activity_data
+
             # Record primary trace
             primary_trace_id = self._record_trace(
                 cosmos,
@@ -4351,7 +4355,6 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
             # Run Alpha review (required for validation)
             alpha_view = await self._run_alpha_review(
                 activity_payload=activity_data,
-                supervisor_view=supervisor_view,
                 market_data=market_data_text,
                 previous_context=previous_context,
                 agent_type=agent_type,

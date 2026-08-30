@@ -459,5 +459,73 @@ class TestDictCompatibility:
         assert result is original
 
 
+class TestAlphaReviewContractRegression:
+    """Regression test for Alpha review in contract validation.
+
+    Production failure (2026-08-30):
+    TypeError: AgentRunner._run_alpha_review() got an unexpected keyword argument 'supervisor_view'
+
+    Root cause: run_contract_validation incorrectly passed supervisor_view to _run_alpha_review,
+    but Alpha is designed to independently review the primary decision, not the Supervisor output.
+    """
+
+    @pytest.mark.asyncio
+    async def test_alpha_review_receives_correct_arguments(self, runner, mock_cosmos, mock_context_provider, valid_call_evidence):
+        """Alpha review should be called with correct arguments (no supervisor_view)."""
+        with patch.object(runner, '_get_client'):
+            mock_agent_instance = AsyncMock()
+            # Primary returns SELL
+            mock_agent_instance.run = AsyncMock(return_value=MagicMock(
+                text='```json\n{"activity": "SELL", "timestamp": "2026-08-29T10:00:00Z"}\n```'
+            ))
+
+            mock_supervisor_view = {
+                "net_assessment": "APPROVE",
+                "supervisor_strength": "STRONG"
+            }
+
+            mock_alpha_view = {
+                "recommendation": "APPROVE",
+                "opportunity_strength": "STRONG"
+            }
+
+            with patch('src.agent_runner.Agent', return_value=mock_agent_instance):
+                with patch.object(runner, '_run_supervisor_review', return_value=mock_supervisor_view):
+                    with patch.object(runner, '_run_alpha_review', return_value=mock_alpha_view) as mock_alpha:
+                        with patch.object(runner, '_record_trace', return_value="trace-regression"):
+                            with patch('src.agent_runner.build_rule_evaluation', return_value={}):
+                                result = await runner.run_contract_validation(
+                                    symbol="AAPL",
+                                    side="call",
+                                    strike=155.0,
+                                    expiration="2026-10-16",
+                                    evidence_snapshot=valid_call_evidence,
+                                    cosmos=mock_cosmos,
+                                    context_provider=mock_context_provider,
+                                )
+
+        # Verify _run_alpha_review was called
+        assert mock_alpha.called, "_run_alpha_review should be called"
+
+        # Verify the call arguments - should NOT include supervisor_view
+        call_kwargs = mock_alpha.call_args.kwargs
+        assert "supervisor_view" not in call_kwargs, \
+            "supervisor_view should NOT be passed to _run_alpha_review"
+
+        # Verify expected arguments ARE present
+        assert "activity_payload" in call_kwargs
+        assert "market_data" in call_kwargs
+        assert "previous_context" in call_kwargs
+        assert "agent_type" in call_kwargs
+        assert "cosmos" in call_kwargs
+        assert "run_id" in call_kwargs
+        assert "parent_trace_id" in call_kwargs
+
+        # Verify result includes both supervisor and alpha views
+        assert result["supervisor_view"] == mock_supervisor_view
+        assert result["alpha_view"] == mock_alpha_view
+        assert result["validation_status"] == "approved"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

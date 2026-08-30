@@ -65,15 +65,36 @@ export interface ValidationStatusCompleted {
   status: "completed";
   run_id: string;
   activity_id: string;
+  symbol: string;
+  agent_type: string;
   activity: string; // SELL, WAIT, etc.
   is_alert: boolean;
-  validation_status: "approved" | "review_incomplete" | "error";
-  note: string;
-  symbol: string;
-  side: "call" | "put";
-  strike: number;
-  expiration: string;
   timestamp: string;
+  // Canonical agent fields (same as normal agent runs)
+  reason?: string | null;
+  confidence?: string | null;
+  underlying_price?: number | null;
+  strike?: number | null;
+  expiration?: string | null;
+  premium?: number | null;
+  iv?: number | null;
+  risk_rating?: number | null;
+  risk_flags?: string[] | null;
+  assignment_risk?: string | null;
+  // Validation metadata
+  validation_status?: "approved" | "review_incomplete" | "error" | null;
+  run_trigger?: string | null;
+  // Trace/review outputs (same as normal runs)
+  rule_evaluation?: Record<string, unknown> | null;
+  primary_trace_id?: string | null;
+  supervisor_view?: Record<string, unknown> | null;
+  supervisor_trace_id?: string | null;
+  alpha_view?: Record<string, unknown> | null;
+  alpha_trace_id?: string | null;
+  // Error if present
+  error?: string | null;
+  // Backward compatibility
+  note?: string | null;
 }
 
 /** Status polling response: not found (404) */

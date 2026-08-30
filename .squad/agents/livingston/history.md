@@ -1139,3 +1139,71 @@ Implementation complete, all tests green, deterministic duplicate detection veri
 
 **Handoff to Rusty:** All API contracts finalized, response types locked; frontend UI implementation ready
 
+
+---
+
+## 2026-08-30: Validation Activity Field Propagation
+
+**Issue:** Best Options contract validation activities missing analyzed data (underlying_price, strike, expiration, confidence, IV, description) needed by frontend.
+
+**Root Cause:** `_persist_validation_activity` was not extracting analyzed fields from `evaluated_snapshot` (authoritative chain data) or agent `result` (confidence). Standard activity fields not duplicated from contract-specific fields.
+
+**Fix:**
+- Extract `underlying_price`, `iv` from `evaluated_snapshot.contract_data`
+- Extract `confidence` from agent `result`
+- Duplicate `strike`/`expiration` from parameters to standard fields
+- Convert IV from decimal (0.305) to percentage (30.5) for display
+- Build enhanced description: `SELL | Underlying $150.25 | Strike $155 | ...`
+- Backward compatible: all new fields optional, None when evaluated_snapshot missing
+
+**Files Changed:**
+- `backend/src/contract_validation_integration.py`: Extraction logic in `_persist_validation_activity`, enhanced `get_validation_status` response
+- `backend/tests/test_contract_validation_integration.py`: +3 tests (analyzed fields, backward compat, API response)
+- `frontend/src/types/contract-validation.ts`: Updated `ValidationStatusCompleted` interface
+
+**Tests:** All 14 contract validation integration tests pass. New tests prove field round-trip fidelity and backward compatibility.
+
+**Coordination:** No changes to `agent_runner.py` (Rusty's Alpha fix territory). Changes confined to persistence/API layer (Livingston's ownership).
+
+**Learnings:**
+1. **Authoritative Sources Matter:** Used `evaluated_snapshot` (immutable analyzed chain data) not `displayed_snapshot` (user-supplied, potentially stale). Confidence from `result` (agent output) not invented.
+2. **IV Storage Convention:** Stored as percentage (30.5) for frontend display. Backend converts from decimal. Document this pattern for future fields.
+3. **Field Name Duplication Trade-off:** `strike`/`expiration` vs `contract_strike`/`contract_expiration` duplicates data but satisfies frontend conventions. Acceptable for display-layer consistency.
+4. **Description Determinism:** Chose field-based format over preserving agent natural language. More consistent, less expressive. Revisit if richer notes needed.
+5. **Backward Compatibility Testing:** Explicit test for None-valued fields when evaluated_snapshot missing prevents UI crashes on older activities.
+
+**Decision:** See `.squad/decisions/inbox/livingston-validation-activity-fields.md`
+
+---
+
+## 2026-08-30: Canonical Agent Schema for Validation Activities (REVISED)
+
+**Critical Requirement:** Validation activities must use **identical canonical schema** as normal agent runs. No custom Best Options structure, no special UI, no field name differences.
+
+**Root Cause:** Initial implementation created custom validation schema with `contract_strike`, `contract_expiration`, `displayed_snapshot`, `evaluated_snapshot` fields, breaking uniformity with normal agent activities.
+
+**Solution:**
+1. agent_runner.run_contract_validation now returns `activity_data` (canonical agent JSON)
+2. _persist_validation_activity uses activity_data as base, augments with minimal metadata
+3. Canonical fields (from agent): activity, reason, confidence, underlying_price, strike, expiration, premium, iv, risk_rating, risk_flags
+4. Metadata fields: run_id, run_trigger, validation_status (same pattern as normal runs)
+5. Debug snapshots moved to `_validation_meta` (non-canonical, optional)
+
+**Files Changed:**
+- `backend/src/agent_runner.py`: +1 line (return activity_data in result dict)
+- `backend/src/contract_validation_integration.py`: Complete rewrite to use canonical schema
+- `backend/tests/test_contract_validation_integration.py`: Replaced with canonical schema tests
+- `frontend/src/types/contract-validation.ts`: Updated to match canonical schema
+
+**Tests:** All 14 contract validation integration tests pass.
+
+**Key Regression Test:** `test_canonical_schema_matches_normal_agent_run` proves validation and normal agent activities have identical canonical fields and types.
+
+**Learnings:**
+1. **Agent Output is Canonical:** The agent already returns all necessary fields. Don't rebuild from evaluated_snapshot - use what the agent produced.
+2. **Minimal Metadata Pattern:** Augmentation fields (run_trigger, validation_status) are metadata, not part of decision schema. Follow existing patterns (normal runs also have run_trigger).
+3. **Uniformity Requirement:** Downstream consumers (UI, analytics) must handle validation activities identically to normal runs. No special-case logic.
+4. **Debug vs Schema:** Debug data (_validation_meta) uses underscore prefix and is non-canonical. Main activity document is pure agent output + minimal metadata.
+5. **Regression Coverage:** Explicit tests comparing validation vs normal agent activity shapes prevent future schema drift.
+
+**Decision:** See `.squad/decisions/inbox/livingston-canonical-validation-schema.md`

@@ -117,7 +117,7 @@ export default function ContractValidationAction({
         <div className="rounded border border-accent-green/40 bg-accent-green/10 px-2 py-1 text-xs text-accent-green">
           {state.result!.activity === "SELL" && state.result!.validation_status === "approved" && "✓ SELL — check Recent Activities"}
           {state.result!.activity === "SELL" && state.result!.validation_status !== "approved" && `⏸ SELL (${state.result!.validation_status})`}
-          {state.result!.activity === "WAIT" && `⏸ WAIT — ${state.result!.note?.slice(0, 40) || "see Recent Activities"}`}
+          {state.result!.activity === "WAIT" && `⏸ WAIT — ${state.result!.reason?.slice(0, 40) || "see Recent Activities"}`}
           {state.result!.activity !== "SELL" && state.result!.activity !== "WAIT" && state.result!.activity}
         </div>
       )}

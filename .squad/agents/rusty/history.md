@@ -1272,3 +1272,31 @@ The infrastructure is complete and tested. What remains is adding the per-row "V
 
 **Handoff to Basher:** All implementations complete and ready for independent review gate
 
+## Learnings
+
+### 2026-08-30 — Alpha review contract: Independent review, not Supervisor-derived
+
+**Production failure:** `TypeError: AgentRunner._run_alpha_review() got an unexpected keyword argument 'supervisor_view'` when `run_contract_validation` called Alpha review after Supervisor completed.
+
+**Root cause:** `run_contract_validation` (line 4354) incorrectly passed `supervisor_view=supervisor_view` to `_run_alpha_review`, but the method signature (line 1511) does not accept that parameter. All other call sites (alert/monitor paths at lines 2111, 2147, 3208, 3341) correctly omit it.
+
+**Contract:** Alpha Advisor is designed to independently review the **primary agent's decision**, not to review or react to Supervisor output. Alpha receives `activity_payload`, `market_data`, and `previous_context` — the same inputs as Supervisor — but evaluates from its own aggressive alternative-perspective lens (parameter relaxation, opportunity identification).
+
+**Fix:** Removed `supervisor_view` argument from the `_run_alpha_review` call in `run_contract_validation`. Alpha now receives the same contract as all other review paths.
+
+**Test coverage:** Added regression test `TestAlphaReviewContractRegression::test_alpha_review_receives_correct_arguments` asserting the exact keyword failure and verifying Alpha receives correct arguments without `supervisor_view`. All 16 contract-validation, 11 integration, and 27 Alpha execution tests pass.
+
+**Learning:** When adding new review paths, always verify method signatures match existing call sites. Alpha and Supervisor are parallel independent reviewers of the primary decision, not a sequential chain where Alpha sees Supervisor output
+
+### 2026-08-30 — Frontend contract validation: Use canonical `reason` field not legacy `note`
+
+**Type error:** `TS2339: Property 'note' does not exist on type 'ValidationStatusCompleted'` at `ContractValidationAction.tsx:120`
+
+**Root cause:** Component referenced `state.result!.note?.slice(0, 40)` but contract validation now uses the canonical activity schema where the decision explanation field is `reason`, not `note`.
+
+**Fix:** Updated line 120 to use `state.result!.reason?.slice(0, 40)` to match the canonical `ValidationStatusCompleted` type from `contract-validation.ts` which defines `reason?: string | null`.
+
+**Validation:** TypeScript compilation (`npx tsc --noEmit`) passes cleanly. No other frontend files reference validation `.note` (other `.note` references are for position notes and plan notes in different contexts).
+
+**Learning:** When backend canonical schemas change field names, grep frontend for all references and update consumer components. The `ValidationStatusCompleted` interface intentionally mirrors normal agent activity schema (`reason`, `confidence`, etc.) to maintain consistency across validation and scheduled agent runs
+
