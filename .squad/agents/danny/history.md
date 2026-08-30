@@ -818,3 +818,31 @@ Revalidated the accepted Best Options precompute design against HEAD e3a20a2. Al
 
 **Key decision:** No per-task timezone capability — design correctly ruled out, inherits container TZ semantics from existing 10 tasks.
 
+
+### 2026-08-30 — Dashboard UX: Integrate Alpha Provenance into Recent Column
+
+**Context:** User request to remove the separate "Rec." column and integrate recommendation provenance into the existing "Recent" column.
+
+**Changes:**
+- Modified `frontend/src/components/DashboardAgentTables.tsx`:
+  - Removed "Rec." header column from watchlist agents table
+  - Removed separate "Rec." cell that displayed SELL + ALPHA badges
+  - Enhanced `RecentCell` component to accept `recommendationSource` prop
+  - Added logic to conditionally show ALPHA tag alongside the first activity badge when:
+    - The most recent activity is a SELL recommendation
+    - AND `recommendation_source === "alpha"`
+  - Maintained all existing click/navigation behavior for activity badges
+  - Column count now matches between header and body for all table variants (position monitor, buy tracker, watchlist)
+
+**Implementation details:**
+- ALPHA tag uses existing `styleFor("purple")` badge styling for consistency
+- Provenance tag only appears when appropriate, avoiding misleading attachment to historical WAIT/ERROR activities
+- No backend changes required; all logic is frontend rendering based on existing data contract
+
+**Validation:**
+- TypeScript compilation: ✅ `npx tsc --noEmit` passes with no errors
+- Git diff: 21 insertions, 11 deletions (net +10 lines)
+- No breaking changes to table structure or empty/loading state handling
+
+**Pattern learned:**
+- When consolidating UI columns, ensure provenance/metadata tags are contextually relevant to the specific activity they describe, not just conditionally rendered based on row-level flags.

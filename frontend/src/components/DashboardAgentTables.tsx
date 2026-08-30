@@ -48,19 +48,35 @@ function GapCell({ row }: { row: AgentRow }) {
   return <span style={{ color }}>{`${positive ? "+" : ""}${row.strike_pct.toFixed(1)}%`}</span>;
 }
 
-function RecentCell({ items, paused }: { items?: RecentActivityRef[]; paused?: boolean }) {
+function RecentCell({
+  items,
+  paused,
+  recommendationSource
+}: {
+  items?: RecentActivityRef[];
+  paused?: boolean;
+  recommendationSource?: "agent" | "alpha" | null;
+}) {
   if (paused || !items || items.length === 0) return <>—</>;
+
+  // Check if the most recent activity is a recommendation (SELL)
+  const hasRecommendation = items.length > 0 &&
+    items[0].activity?.toUpperCase() === "SELL";
+  const showAlphaTag = hasRecommendation && recommendationSource === "alpha";
+
   return (
     <span className="inline-flex flex-wrap items-center gap-1">
       {items.map((act, i) => (
-        <Link
-          key={i}
-          href={`/activities/${act.id}`}
-          onClick={(e) => e.stopPropagation()}
-          title={act.reason || act.timestamp?.slice(0, 16)}
-        >
-          <Badge style={activityStyle(act.activity)}>{act.activity || "N/A"}</Badge>
-        </Link>
+        <span key={i} className="inline-flex items-center gap-1">
+          <Link
+            href={`/activities/${act.id}`}
+            onClick={(e) => e.stopPropagation()}
+            title={act.reason || act.timestamp?.slice(0, 16)}
+          >
+            <Badge style={activityStyle(act.activity)}>{act.activity || "N/A"}</Badge>
+          </Link>
+          {i === 0 && showAlphaTag && <Badge style={styleFor("purple")}>ALPHA</Badge>}
+        </span>
       ))}
     </span>
   );
@@ -151,7 +167,6 @@ export default function DashboardAgentTables({ tables }: { tables: AgentTable[] 
                         </>
                       ) : (
                         <>
-                          <th className={TH}>Rec.</th>
                           <th className={THNUM}>Strike</th>
                           <th className={TH}>Expiry</th>
                           <th className={THNUM}>Premium</th>
@@ -184,7 +199,11 @@ export default function DashboardAgentTables({ tables }: { tables: AgentTable[] 
                           </td>
                         )}
                         <td className={TD}>
-                          <RecentCell items={row.recent_activities} paused={row.paused} />
+                          <RecentCell
+                            items={row.recent_activities}
+                            paused={row.paused}
+                            recommendationSource={row.recommendation_source}
+                          />
                         </td>
                         {isPM ? (
                           <>
@@ -243,14 +262,6 @@ export default function DashboardAgentTables({ tables }: { tables: AgentTable[] 
                           </>
                         ) : (
                           <>
-                            <td className={TD}>
-                              {!row.paused && row.recommendation_source === "alpha" && (
-                                <span className="inline-flex gap-1">
-                                  <Badge style={activityStyle("SELL")}>SELL</Badge>
-                                  <Badge style={styleFor("purple")}>ALPHA</Badge>
-                                </span>
-                              )}
-                            </td>
                             <td className={TDNUM}>{row.paused ? "—" : row.strike ?? "—"}</td>
                             <td className={TD}>{row.paused ? "—" : row.expiration || "—"}</td>
                             <td className={TDNUM}>{row.paused ? "—" : money(row.premium)}</td>
