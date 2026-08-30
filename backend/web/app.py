@@ -3515,10 +3515,13 @@ async def api_trigger_best_options(request: Request):
     if task is None:
         return JSONResponse({"error": "Best Options task not registered"}, status_code=404)
 
-    # Enqueue the task (scheduler registry pattern)
-    scheduler.registry.enqueue_task("best_options")
+    # Trigger the task (scheduler registry pattern)
+    result = scheduler.registry.trigger_task_now("best_options", trigger="manual")
 
-    return JSONResponse({"message": "Best Options precompute triggered"})
+    if not result.get("success"):
+        return JSONResponse({"error": result.get("message", "Failed to trigger task")}, status_code=400)
+
+    return JSONResponse({"message": result.get("message", "Best Options precompute triggered")})
 
 
 @app.get("/api/health/best-options")

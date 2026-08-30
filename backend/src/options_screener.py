@@ -230,17 +230,45 @@ def _sort_key(row: Dict[str, Any], midpoint_by_symbol: Dict[str, Optional[float]
 
 
 def _memo_key(symbol: str, side: str, entry: Mapping[str, Any]) -> _MemoKey:
+    """Build a hashable memo key from symbol and input fields.
+
+    Extracts only the hashable primitives from entry: strings, ints, floats,
+    None. If category/calendar dates are dicts (malformed Cosmos data), extract
+    the string value or convert to None to prevent 'unhashable type: dict' errors.
+    """
     chain = entry.get("chain")
     chain_timestamp = chain.get("timestamp") if isinstance(chain, Mapping) else None
+
+    # Normalize category: if it's a dict, try to extract a string value or use None
+    category = entry.get("category")
+    if isinstance(category, Mapping):
+        # Malformed: category is a dict instead of string
+        # Try to extract a string field (e.g. {"type": "balanced"})
+        category = category.get("type") or category.get("category") or category.get("name") or None
+
+    # Normalize calendar dates: if dicts, extract date field or use None
+    earnings_date = entry.get("next_earnings_date")
+    if isinstance(earnings_date, Mapping):
+        earnings_date = earnings_date.get("date") or None
+
+    ex_div_date = entry.get("ex_dividend_date")
+    if isinstance(ex_div_date, Mapping):
+        ex_div_date = ex_div_date.get("date") or None
+
+    # Support level should always be None or a number, but guard anyway
+    support = entry.get("support_level")
+    if isinstance(support, Mapping):
+        support = None
+
     return (
         symbol,
         side,
         chain_timestamp,
-        entry.get("category"),
+        category,
         entry.get("total_shares", 0),
-        entry.get("next_earnings_date"),
-        entry.get("ex_dividend_date"),
-        entry.get("support_level"),
+        earnings_date,
+        ex_div_date,
+        support,
     )
 
 

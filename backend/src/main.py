@@ -619,8 +619,12 @@ class OptionsAgentScheduler:
 
         print(f"\nCalendar Sync Complete: {updated} events updated, {errors} errors, {len(symbols)} symbols processed")
 
-    def run_best_options_precompute_job(self):
-        """Execute Best Options precompute (SYNCHRONOUS, no _run_async wrapper)."""
+    def run_best_options_precompute_job(self, *, trigger: str = "scheduled"):
+        """Execute Best Options precompute (SYNCHRONOUS, no _run_async wrapper).
+
+        Args:
+            trigger: "scheduled" | "startup" | "manual" (passed through to precompute)
+        """
         task_config = self.config.config.get('best_options_scheduler', {})
         if not task_config.get('enabled', True):
             print("⏭️  Best Options Precompute disabled in config")
@@ -630,16 +634,19 @@ class OptionsAgentScheduler:
 
         now_tz = _now_local()
         print(f"\n{'📋'*35}")
-        print(f"📋 Best Options Precompute - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"📋 Best Options Precompute - {trigger.capitalize()} run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'📋'*35}\n")
 
         try:
-            result = run_best_options_precompute(self.cosmos)
-            print(f"Best Options Precompute complete: {result.get('ok', 0)} ok, "
-                  f"{result.get('stale', 0)} stale, {result.get('error', 0)} errors, "
+            result = run_best_options_precompute(self.cosmos, trigger=trigger)
+            print(f"Best Options Precompute complete: {result.get('success', 0)} ok, "
+                  f"{result.get('stale', 0)} stale, {result.get('error', 0)} error, "
                   f"{result.get('warming', 0)} warming")
         except Exception as e:
             print(f"ERROR during Best Options Precompute: {e}")
+            import traceback
+            traceback.print_exc()  # Print full traceback to logs
+            logger.exception("Best Options Precompute failed with traceback")
 
     def signal_handler(self, sig, frame):
         """Handle graceful shutdown on Ctrl+C."""
@@ -798,7 +805,15 @@ class OptionsAgentScheduler:
         # Startup catch-up for best_options if enabled
         best_options_config = self.config.config.get('best_options_scheduler', {})
         if best_options_config.get('run_on_startup', True) and best_options_config.get('enabled', True):
-            self.registry.trigger_task_now("best_options", run_trigger="startup")
+            print("\n🚀 Best Options startup catch-up enabled")
+            result = self.registry.trigger_task_now("best_options", trigger="startup")
+            if result.get("success"):
+                print(f"✅ {result.get('message', 'Best Options startup cycle queued')}")
+            else:
+                print(f"⚠️  Best Options startup failed: {result.get('message')}")
+                print(f"⚠️  Best Options startup catch-up failed: {result.get('message', 'Unknown error')}")
+        else:
+            print("\n⏭️  Best Options startup catch-up disabled in config")
 
         # Display initial schedule
         self.registry.display_schedule()

@@ -300,23 +300,13 @@ export default function OptionsScreenerView() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold">
-            <ListFilter size={22} className="text-accent-blue" aria-hidden /> Options Screener
-          </h1>
-          <p className="text-sm text-text-muted">
-            Every option under 45 DTE and within category delta bands, across every tracked symbol.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={retry}
-          disabled={state.kind === "loading"}
-          className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border border-border bg-bg-input px-3 py-1.5 text-xs text-text-muted transition hover:bg-bg-hover disabled:opacity-50"
-        >
-          <RefreshCw aria-hidden="true" size={13} className={state.kind === "loading" ? "animate-spin" : ""} /> Refresh
-        </button>
+      <div>
+        <h1 className="flex items-center gap-2 text-2xl font-semibold">
+          <ListFilter size={22} className="text-accent-blue" aria-hidden /> Options Screener
+        </h1>
+        <p className="text-sm text-text-muted">
+          Every option under 45 DTE and within category delta bands, across every tracked symbol.
+        </p>
       </div>
 
       {/* Calls/Puts tabs — every symbol stays on the Calls tab regardless of

@@ -315,14 +315,73 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await fetch(`/api/symbols/${encodeURIComponent(symbol)}/best-options/refresh`, {
+      const res = await fetch(`/api/symbols/${encodeURIComponent(symbol)}/best-options/refresh`, {
         method: "POST",
         cache: "no-store",
       });
-      // Start polling for updates
-      setTimeout(load, 2000);
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 409) {
+        // Already refreshing - just poll
+        console.log("Refresh already in progress");
+      } else if (!res.ok) {
+        console.error("Refresh failed:", data.error || "Unknown error");
+        setState({ kind: "error", message: data.error || `Refresh failed: HTTP ${res.status}` });
+        setRefreshing(false);
+        return;
+      }
+
+      // 202 Accepted or 409 Conflict - start polling
+      // Poll more aggressively at first, then back off
+      let pollAttempt = 0;
+      const maxPolls = 30; // Max 30 polls over ~60 seconds
+
+      const pollForResult = async () => {
+        pollAttempt++;
+        try {
+          const pollRes = await fetch(
+            `/api/symbols/${encodeURIComponent(symbol)}/best-options?side=both`,
+            { cache: "no-store" }
+          );
+          const pollBody = await pollRes.json().catch(() => ({}));
+
+          // Check if refresh completed
+          if (pollBody?.status === "ok" || pollBody?.status === "stale") {
+            // Success - entry now available
+            setState({ kind: "ok", data: pollBody });
+            setRefreshing(false);
+          } else if (pollBody?.cache?.refresh_error || pollBody?.cache?.chain_refresh_error) {
+            // Refresh failed with error
+            const error = pollBody.cache.refresh_error || pollBody.cache.chain_refresh_error;
+            setState({ kind: "error", message: `Refresh failed: ${error}` });
+            setRefreshing(false);
+          } else if (pollBody?.status === "warming" && pollAttempt < maxPolls) {
+            // Still warming - keep polling with backoff
+            const delay = pollAttempt < 5 ? 2000 : pollAttempt < 10 ? 3000 : 4000;
+            setTimeout(pollForResult, delay);
+          } else if (pollAttempt >= maxPolls) {
+            // Timeout - stop polling but don't error (might still be processing)
+            setState({ kind: "warming", retryAfter: 15, reason: "Refresh in progress - still processing" });
+            setRefreshing(false);
+          } else {
+            // Unexpected state - keep polling
+            setTimeout(pollForResult, 3000);
+          }
+        } catch (err) {
+          console.error("Poll failed:", err);
+          if (pollAttempt < maxPolls) {
+            setTimeout(pollForResult, 3000);
+          } else {
+            setRefreshing(false);
+          }
+        }
+      };
+
+      // Start polling after 2 seconds
+      setTimeout(pollForResult, 2000);
     } catch (err) {
-      console.error("Refresh failed:", err);
+      console.error("Refresh request failed:", err);
+      setState({ kind: "error", message: err instanceof Error ? err.message : "Network error" });
       setRefreshing(false);
     }
   }, [symbol, load]);
@@ -404,10 +463,11 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
           </p>
           <button
             type="button"
-            onClick={retry}
-            className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] bg-accent-orange px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90"
+            onClick={refresh}
+            disabled={refreshing}
+            className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] bg-accent-orange px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90 disabled:opacity-50"
           >
-            <RefreshCw aria-hidden="true" size={13} /> Retry now
+            <RefreshCw aria-hidden="true" size={13} className={refreshing ? "animate-spin" : ""} /> Refresh Now
           </button>
         </div>
       )}
