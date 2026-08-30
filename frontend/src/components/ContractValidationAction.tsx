@@ -85,7 +85,7 @@ export default function ContractValidationAction({
           title={isValidating ? "Validating..." : actionLabel}
           className="rounded border border-border bg-bg-input px-1.5 py-0.5 text-[10px] text-text-muted hover:bg-bg-hover disabled:opacity-50"
         >
-          {isValidating ? "⏳" : "🔍"}
+          {isValidating ? "⏳" : "▶"}
         </button>
         {showResult && hasResult && state.result!.status === "completed" && (
           <div className="absolute right-0 top-full z-10 mt-1 whitespace-nowrap rounded border border-accent-green/40 bg-accent-green/10 px-2 py-1 text-[10px] text-accent-green shadow-lg">

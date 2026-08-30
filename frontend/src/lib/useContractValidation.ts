@@ -167,6 +167,22 @@ export function useContractValidation(options?: UseContractValidationOptions) {
 
         if (abortRef.current) return;
 
+        // Handle 422 validation errors (FastAPI contract mismatch)
+        if (res.status === 422) {
+          const detail = await res.json().catch(() => ({ detail: "Validation error" }));
+          const message = Array.isArray(detail.detail)
+            ? detail.detail.map((e: any) => `${e.loc?.join(".")}: ${e.msg}`).join("; ")
+            : detail.detail || "Request validation failed";
+          setState({
+            validating: false,
+            runId: null,
+            result: null,
+            error: message,
+          });
+          options?.onError?.(message);
+          return;
+        }
+
         const data: ValidateContractResponse = await res.json();
 
         if (data.status === "accepted" || data.status === "duplicate") {

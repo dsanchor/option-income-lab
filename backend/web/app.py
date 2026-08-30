@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 from croniter import croniter
 from fastapi import FastAPI, Request, Query, Body
+from pydantic import BaseModel, Field
 
 from src.market_hours import is_us_market_open
 from fastapi.responses import JSONResponse
@@ -3568,27 +3569,32 @@ async def api_health_best_options(request: Request):
     })
 
 
+class ValidateContractRequest(BaseModel):
+    """Contract validation request matching frontend payload."""
+    symbol: str = Field(..., description="Ticker symbol")
+    side: str = Field(..., description="'call' or 'put'")
+    strike: float = Field(..., description="Exact strike price")
+    expiration: str = Field(..., description="ISO expiration date (YYYY-MM-DD)")
+    source: str = Field(..., description="'best_options' or 'options_screener'")
+    displayed_snapshot: Optional[dict] = Field(None, description="Optional snapshot of displayed data")
+
+
 @app.post("/api/best-options/validate")
 async def api_best_options_validate(
     request: Request,
-    symbol: str = Body(...),
-    side: str = Body(...),
-    strike: float = Body(...),
-    expiration: str = Body(...),
-    source: str = Body(...),
-    displayed_snapshot: Optional[dict] = Body(None),
+    payload: ValidateContractRequest,
 ):
     """Start exact-contract validation (Best Option Validate flow).
 
     Asynchronous POST returning 202 Accepted with run_id for status polling.
 
-    Args:
-        symbol: Ticker symbol
-        side: "call" or "put"
-        strike: Exact strike price
-        expiration: ISO expiration date (YYYY-MM-DD)
-        source: "best_options" or "options_screener"
-        displayed_snapshot: Optional snapshot of displayed data
+    Request body matches ValidateContractRequest schema sent by frontend:
+    - symbol: Ticker symbol
+    - side: "call" or "put"
+    - strike: Exact strike price
+    - expiration: ISO expiration date (YYYY-MM-DD)
+    - source: "best_options" or "options_screener"
+    - displayed_snapshot: Optional snapshot of displayed data (can be null or omitted)
 
     Returns:
         202 Accepted: {status: "accepted", run_id, started_at, status_url}
@@ -3621,12 +3627,12 @@ async def api_best_options_validate(
 
     # Start validation
     result = await start_validation(
-        symbol=symbol,
-        side=side,
-        strike=strike,
-        expiration=expiration,
-        source=source,
-        displayed_snapshot=displayed_snapshot,
+        symbol=payload.symbol,
+        side=payload.side,
+        strike=payload.strike,
+        expiration=payload.expiration,
+        source=payload.source,
+        displayed_snapshot=payload.displayed_snapshot,
         cosmos=cosmos,
         agent_runner=agent_runner,
         context_provider=context_provider,
