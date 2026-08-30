@@ -646,7 +646,6 @@ class OptionsAgentScheduler:
             print(f"ERROR during Best Options Precompute: {e}")
             import traceback
             traceback.print_exc()  # Print full traceback to logs
-            logger.exception("Best Options Precompute failed with traceback")
 
     def signal_handler(self, sig, frame):
         """Handle graceful shutdown on Ctrl+C."""

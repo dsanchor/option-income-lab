@@ -97,10 +97,34 @@ def run_best_options_precompute(
 
     # Cosmos reads (batched)
     try:
-        symbols = cosmos.list_symbols()
+        symbols_raw = cosmos.list_symbols()
     except Exception as exc:
         logger.exception("Precompute: failed to list symbols")
         return {"success": 0, "stale": 0, "error": 1, "warming": 0, "truncated": False, "duration_seconds": 0.0}
+
+    # Normalize symbols: extract ticker strings from dict entries, handle legacy string format
+    symbols = []
+    for entry in symbols_raw:
+        if isinstance(entry, str):
+            # Legacy format: already a string ticker
+            ticker = entry.strip().upper()
+            if ticker:
+                symbols.append(ticker)
+        elif isinstance(entry, dict):
+            # Real Cosmos format: full document with "symbol" field
+            ticker = entry.get("symbol", "")
+            if isinstance(ticker, str):
+                ticker = ticker.strip().upper()
+                if ticker:
+                    symbols.append(ticker)
+            else:
+                logger.warning("Precompute: skipping malformed entry (symbol not a string): %s", entry)
+        else:
+            logger.warning("Precompute: skipping malformed entry (not string/dict): %s", entry)
+
+    # Deduplicate while preserving order
+    seen = set()
+    symbols = [s for s in symbols if not (s in seen or seen.add(s))]
 
     if not symbols:
         logger.warning("Precompute: no symbols configured")
