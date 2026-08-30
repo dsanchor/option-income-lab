@@ -116,12 +116,38 @@ def mock_chain_cache(monkeypatch):
 @pytest.fixture
 def client(fake_cosmos, monkeypatch):
     """TestClient with cosmos dependency injected."""
+    from src.agent_runner import AgentRunner
+    from src.llm import LlmConfig
+
     def mock_get_cosmos(request):
         return fake_cosmos
 
     monkeypatch.setattr("web.app._get_cosmos", mock_get_cosmos)
 
-    return TestClient(app)
+    # Create a test runner with complete config
+    test_llm_config = LlmConfig(
+        provider="gemini",
+        api_key="test-cross-contract-key",
+    )
+    test_runner = AgentRunner(
+        llm=test_llm_config,
+        model="gpt-5.4-mini",
+        telegram_notifier=None,
+    )
+
+    # Create a fake scheduler with the test runner
+    fake_scheduler = MagicMock()
+    fake_scheduler.runner = test_runner
+
+    # Inject scheduler into app state
+    app.state.scheduler = fake_scheduler
+
+    try:
+        yield TestClient(app)
+    finally:
+        # Clean up app state
+        if hasattr(app.state, "scheduler"):
+            delattr(app.state, "scheduler")
 
 
 class TestFrontendContractValidationPayload:

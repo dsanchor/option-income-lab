@@ -160,13 +160,39 @@ def monkeypatch_chain_cache(monkeypatch, sample_chain):
 
 @pytest.fixture
 def client(fake_cosmos, monkeypatch):
-    """Test client with cosmos dependency injected."""
+    """Test client with cosmos dependency injected and scheduler.runner."""
+    from src.agent_runner import AgentRunner
+    from src.llm import LlmConfig
+
     def mock_get_cosmos(request):
         return fake_cosmos
 
     monkeypatch.setattr("web.app._get_cosmos", mock_get_cosmos)
 
-    return TestClient(app)
+    # Create a test runner with complete config (not placeholder)
+    test_llm_config = LlmConfig(
+        provider="gemini",
+        api_key="test-integration-key",
+    )
+    test_runner = AgentRunner(
+        llm=test_llm_config,
+        model="gpt-5.4-mini",
+        telegram_notifier=None,
+    )
+
+    # Create a fake scheduler with the test runner
+    fake_scheduler = MagicMock()
+    fake_scheduler.runner = test_runner
+
+    # Inject scheduler into app state
+    app.state.scheduler = fake_scheduler
+
+    try:
+        yield TestClient(app)
+    finally:
+        # Clean up app state
+        if hasattr(app.state, "scheduler"):
+            delattr(app.state, "scheduler")
 
 
 class TestValidationAPI:
@@ -248,6 +274,8 @@ class TestValidationAPI:
     ):
         """Duplicate validation request returns 409 Conflict."""
         from httpx import AsyncClient, ASGITransport
+        from src.agent_runner import AgentRunner
+        from src.llm import LlmConfig
 
         fake_cosmos.symbols["TEST"] = {
             "symbol": "TEST",
@@ -259,6 +287,24 @@ class TestValidationAPI:
         def mock_get_cosmos(request):
             return fake_cosmos
         monkeypatch.setattr("web.app._get_cosmos", mock_get_cosmos)
+
+        # Create a test runner with complete config
+        test_llm_config = LlmConfig(
+            provider="gemini",
+            api_key="test-integration-key",
+        )
+        test_runner = AgentRunner(
+            llm=test_llm_config,
+            model="gpt-5.4-mini",
+            telegram_notifier=None,
+        )
+
+        # Create a fake scheduler with the test runner
+        fake_scheduler = MagicMock()
+        fake_scheduler.runner = test_runner
+
+        # Inject scheduler into app state
+        app.state.scheduler = fake_scheduler
 
         # Mock agent runner with a slow execution to keep task in-flight
         task_started = asyncio.Event()
@@ -288,44 +334,50 @@ class TestValidationAPI:
                 "error": None,
             }
 
-        with patch("src.agent_runner.AgentRunner.run_contract_validation", new=slow_validation):
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-                # First request
-                resp1 = await client.post(
-                    "/api/best-options/validate",
-                    json={
-                        "symbol": "TEST",
-                        "side": "call",
-                        "strike": 155.0,
-                        "expiration": "2026-09-20",
-                        "source": "best_options",
-                    },
-                )
-                assert resp1.status_code == 202
-                run_id_1 = resp1.json()["run_id"]
+        try:
+            with patch("src.agent_runner.AgentRunner.run_contract_validation", new=slow_validation):
+                async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                    # First request
+                    resp1 = await client.post(
+                        "/api/best-options/validate",
+                        json={
+                            "symbol": "TEST",
+                            "side": "call",
+                            "strike": 155.0,
+                            "expiration": "2026-09-20",
+                            "source": "best_options",
+                        },
+                    )
+                    assert resp1.status_code == 202
+                    run_id_1 = resp1.json()["run_id"]
 
-                # Wait for background task to actually start
-                await asyncio.wait_for(task_started.wait(), timeout=2.0)
+                    # Wait for background task to actually start
+                    await asyncio.wait_for(task_started.wait(), timeout=2.0)
 
-                # NOW send duplicate while first is still in-flight
-                resp2 = await client.post(
-                    "/api/best-options/validate",
-                    json={
-                        "symbol": "TEST",
-                        "side": "call",
-                        "strike": 155.0,
-                        "expiration": "2026-09-20",
-                        "source": "best_options",
-                    },
-                )
-                assert resp2.status_code == 409
-                data2 = resp2.json()
-                assert data2["status"] == "duplicate"
-                assert data2["run_id"] == run_id_1
+                    # NOW send duplicate while first is still in-flight
+                    resp2 = await client.post(
+                        "/api/best-options/validate",
+                        json={
+                            "symbol": "TEST",
+                            "side": "call",
+                            "strike": 155.0,
+                            "expiration": "2026-09-20",
+                            "source": "best_options",
+                        },
+                    )
+                    assert resp2.status_code == 409
+                    data2 = resp2.json()
+                    assert data2["status"] == "duplicate"
+                    assert data2["run_id"] == run_id_1
 
-                # Clean up: allow first task to finish
-                task_can_finish.set()
-                await asyncio.sleep(0.5)
+                    # Clean up: allow first task to finish
+                    task_can_finish.set()
+                    await asyncio.sleep(0.5)
+
+        finally:
+            # Clean up app state
+            if hasattr(app.state, "scheduler"):
+                delattr(app.state, "scheduler")
 
     def test_invalid_side_returns_400(self, client, fake_cosmos):
         """Invalid side parameter returns 400 Bad Request."""
@@ -527,3 +579,206 @@ class TestActivityPersistence:
         assert activity["primary_trace_id"] == "trace-1"
         assert activity["supervisor_trace_id"] == "trace-2"
         assert activity["alpha_trace_id"] == "trace-3"
+
+
+class TestRunnerIdentityRegression:
+    """Regression tests for production hotfix: validation must use scheduler.runner.
+
+    Issue: Prior implementation constructed new AgentRunner with placeholder
+    {"provider": "azure"} dict, leading to SettingNotFoundError when creating
+    OpenAI client (missing credentials).
+
+    Fix: Validation endpoint must reuse scheduler.runner (which has complete
+    LlmConfig, credentials, per-function configs, client cache, etc.)
+    """
+
+    @pytest.mark.asyncio
+    async def test_validation_endpoint_uses_scheduler_runner(
+        self, fake_cosmos, monkeypatch_chain_cache, monkeypatch
+    ):
+        """Validation endpoint must use scheduler.runner, not ad-hoc AgentRunner."""
+        from httpx import AsyncClient, ASGITransport
+        from src.agent_runner import AgentRunner
+        from src.llm import LlmConfig
+
+        # Create a sentinel runner with identifiable config
+        sentinel_llm_config = LlmConfig(
+            provider="gemini",
+            api_key="sentinel-test-key-12345",
+        )
+        sentinel_runner = AgentRunner(
+            llm=sentinel_llm_config,
+            model="gpt-5.4-mini",
+            telegram_notifier=None,
+        )
+
+        # Create a fake scheduler with the sentinel runner
+        fake_scheduler = MagicMock()
+        fake_scheduler.runner = sentinel_runner
+
+        # Mock agent runner to avoid real LLM calls and capture the runner used
+        captured_runner = None
+
+        async def mock_run_contract_validation(self, *args, **kwargs):
+            nonlocal captured_runner
+            captured_runner = self
+            return {
+                "symbol": "TEST",
+                "agent_type": "covered_call",
+                "side": "call",
+                "strike": 155.0,
+                "expiration": "2026-09-20",
+                "activity": "SELL",
+                "is_alert": True,
+                "validation_status": "approved",
+                "note": "Contract validated: SELL",
+                "rule_evaluation": {"signal": "SELL"},
+                "primary_trace_id": "trace-1",
+                "supervisor_view": {"net_assessment": "APPROVE"},
+                "supervisor_trace_id": "trace-2",
+                "alpha_view": {"recommendation": "APPROVE"},
+                "alpha_trace_id": "trace-3",
+                "error": None,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        monkeypatch.setattr(
+            AgentRunner,
+            "run_contract_validation",
+            mock_run_contract_validation
+        )
+
+        def mock_get_cosmos(request):
+            return fake_cosmos
+
+        monkeypatch.setattr("web.app._get_cosmos", mock_get_cosmos)
+
+        fake_cosmos.symbols["TEST"] = {
+            "symbol": "TEST",
+            "enrichment": {"category": "balanced"},
+            "total_shares": 500,
+        }
+
+        # Inject sentinel scheduler into app state
+        app.state.scheduler = fake_scheduler
+
+        try:
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.post(
+                    "/api/best-options/validate",
+                    json={
+                        "symbol": "TEST",
+                        "side": "call",
+                        "strike": 155.0,
+                        "expiration": "2026-09-20",
+                        "source": "best_options",
+                        "displayed_snapshot": None,
+                    },
+                )
+
+                assert response.status_code == 202
+                data = response.json()
+                assert data["status"] == "accepted"
+
+                # Wait for background task to complete
+                await asyncio.sleep(1.0)
+
+                # CRITICAL: Verify the runner used is the sentinel scheduler.runner
+                assert captured_runner is not None, "run_contract_validation was not called"
+                assert captured_runner is sentinel_runner, (
+                    "Validation must use scheduler.runner, not ad-hoc AgentRunner"
+                )
+
+                # Verify sentinel config was preserved (proves no re-construction)
+                assert captured_runner._llm.provider == "gemini"
+                assert captured_runner._llm.api_key == "sentinel-test-key-12345"
+
+        finally:
+            # Clean up app state
+            delattr(app.state, "scheduler")
+
+    @pytest.mark.asyncio
+    async def test_validation_fails_503_when_scheduler_unavailable(
+        self, fake_cosmos, monkeypatch
+    ):
+        """Validation endpoint returns 503 when scheduler/runner not available."""
+        from httpx import AsyncClient, ASGITransport
+
+        def mock_get_cosmos(request):
+            return fake_cosmos
+
+        monkeypatch.setattr("web.app._get_cosmos", mock_get_cosmos)
+
+        # Ensure app.state has no scheduler
+        if hasattr(app.state, "scheduler"):
+            delattr(app.state, "scheduler")
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/best-options/validate",
+                json={
+                    "symbol": "TEST",
+                    "side": "call",
+                    "strike": 155.0,
+                    "expiration": "2026-09-20",
+                    "source": "best_options",
+                    "displayed_snapshot": None,
+                },
+            )
+
+            assert response.status_code == 503
+            data = response.json()
+            assert data["status"] == "error"
+            assert "infrastructure not available" in data["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_placeholder_azure_config_would_fail_without_credentials(self):
+        """Regression: placeholder {"provider": "azure"} dict fails without credentials.
+
+        This test documents the original bug: constructing AgentRunner with
+        {"provider": "azure"} and no api_key/endpoint would fail when creating
+        the OpenAI client.
+        """
+        from src.agent_runner import AgentRunner
+        from src.llm import LlmConfig, validate_llm_config
+
+        # Simulate the old code path: {"provider": "azure"} dict normalization
+        placeholder_config = {"provider": "azure"}
+        normalized = AgentRunner._normalize_llm_config(placeholder_config)
+
+        # Normalized config has empty api_key and endpoint
+        assert isinstance(normalized, LlmConfig)
+        assert normalized.provider == "azure"
+        assert normalized.api_key == ""
+        assert normalized.endpoint is None
+
+        # Validate would fail (incomplete config)
+        error = validate_llm_config(normalized)
+        assert error is not None
+        assert "api key not configured" in error.lower()
+
+    def test_normalize_preserves_complete_config(self):
+        """Dict normalization preserves complete config (legitimate use case)."""
+        from src.agent_runner import AgentRunner
+        from src.llm import LlmConfig, validate_llm_config
+
+        # Complete config dict (legitimate use case: tests, config reload, etc.)
+        complete_dict = {
+            "provider": "azure",
+            "api_key": "test-key-abc123",
+            "endpoint": "https://test.openai.azure.com",
+        }
+        normalized = AgentRunner._normalize_llm_config(complete_dict)
+
+        assert isinstance(normalized, LlmConfig)
+        assert normalized.provider == "azure"
+        assert normalized.api_key == "test-key-abc123"
+        assert normalized.endpoint == "https://test.openai.azure.com"
+
+        # Should pass validation
+        error = validate_llm_config(normalized)
+        assert error is None

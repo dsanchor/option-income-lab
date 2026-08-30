@@ -3607,31 +3607,30 @@ async def api_best_options_validate(
         409 Conflict: {status: "duplicate", run_id, started_at}
         429 Too Many Requests: {status: "max_concurrency", retry_after}
         400 Bad Request: {status: "error", message}
+        503 Service Unavailable: {status: "error", message} - scheduler/runner not available
     """
     try:
         cosmos = _get_cosmos(request)
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
 
-    # Get agent runner
-    from src.agent_runner import AgentRunner
+    # Get scheduler with configured runner (do not construct ad-hoc AgentRunner)
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None or scheduler.runner is None:
+        return JSONResponse(
+            {
+                "status": "error",
+                "message": "Contract validation infrastructure not available (scheduler/runner not initialized)",
+            },
+            status_code=503,
+        )
+
     from src.context import ContextProvider
     from src.contract_validation_integration import start_validation
 
-    # Initialize agent runner (reuse app state if available)
-    agent_runner = getattr(request.app.state, "agent_runner", None)
-    if agent_runner is None:
-        # Create a new one
-        llm_config = {"provider": "azure"}  # Will use environment vars
-        agent_runner = AgentRunner(
-            llm=llm_config,
-            model="gpt-5.4-mini",
-            telegram_notifier=None,
-        )
-
     context_provider = ContextProvider(cosmos)
 
-    # Start validation
+    # Start validation using the application-owned configured runner
     result = await start_validation(
         symbol=payload.symbol,
         side=payload.side,
@@ -3640,7 +3639,7 @@ async def api_best_options_validate(
         source=payload.source,
         displayed_snapshot=payload.displayed_snapshot,
         cosmos=cosmos,
-        agent_runner=agent_runner,
+        agent_runner=scheduler.runner,
         context_provider=context_provider,
     )
 
