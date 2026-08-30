@@ -9796,3 +9796,138 @@ All required behaviors from Best Options charter maintained:
 
 **Status:** ✅ APPROVED & READY FOR PRODUCTION  
 **Not committed** (as requested)
+
+
+---
+
+## Decision: Alpha Review Contract — Independent Evaluation
+
+**Date:** 2026-08-30  
+**Author:** Rusty  
+**Status:** Approved  
+**Category:** Architecture / Review Pipeline
+
+### Context
+
+Contract validation introduced a new review path (`run_contract_validation`) that runs Primary → Supervisor → Alpha for exact-contract Best Options validation. During implementation, Alpha was called with `supervisor_view=supervisor_view`, causing a production TypeError.
+
+### Problem
+
+The `_run_alpha_review` method signature does not accept `supervisor_view` as a parameter. All existing call sites (alert/monitor review paths) correctly omit it, but `run_contract_validation` incorrectly passed it.
+
+### Decision
+
+**Alpha and Supervisor are parallel independent reviewers, not a sequential chain.**
+
+Both receive:
+- Primary agent's decision (`activity_payload`)
+- Market data
+- Previous context (decision history)
+
+Neither sees the other's output. This ensures:
+1. **Independent perspectives:** Each reviewer evaluates from its own lens without anchoring
+2. **Contract consistency:** All review paths use identical Alpha signature
+3. **Clear separation:** Supervisor = conservative check; Alpha = aggressive alternative
+4. **Fail-closed clarity:** Validation requires both to approve independently
+
+### Implementation
+
+**Fixed:** Removed `supervisor_view` argument from `_run_alpha_review` call in `run_contract_validation` (line 4354)
+
+**Contract:**
+```python
+async def _run_alpha_review(
+    self,
+    activity_payload: dict,      # Primary decision to review
+    market_data: str,             # Same market data as primary/supervisor
+    previous_context: str,        # Decision history
+    agent_type: str,
+    model: str = None,
+    *,
+    cosmos=None,
+    run_id: str = None,
+    parent_trace_id: str = None,
+) -> dict | None
+```
+
+### Test Coverage
+
+New regression test: `TestAlphaReviewContractRegression::test_alpha_review_receives_correct_arguments`
+- Reproduces the exact TypeError from production
+- Asserts `supervisor_view` is NOT in call kwargs
+- Verifies all expected parameters ARE present
+- Confirms both supervisor_view and alpha_view are captured in result
+
+All tests pass (16 contract-validation + 11 integration + 27 Alpha execution = 54 total)
+
+### Implications
+
+1. **Future review paths:** Always use the established Alpha contract (no Supervisor input)
+2. **Architecture clarity:** Reviews are parallel, not sequential
+3. **No breaking changes:** All existing code paths already follow this pattern
+4. **Regression protection:** Test explicitly guards against this failure mode
+
+---
+
+## Decision: Validation Activities Use Canonical Agent Schema
+
+**Date:** 2026-08-30  
+**Owner:** Livingston (Persistence & Integration)  
+**Status:** Rejected (Error-path data loss)
+
+### Context
+
+Contract validation activities must use the **identical canonical agent schema** as normal scheduled/manual agent runs. Original implementation created a custom validation-specific schema with fields like `contract_strike`, `contract_expiration`, `displayed_snapshot`, `evaluated_snapshot`, which broke uniformity with normal agent activities.
+
+### Decision
+
+Validation activities use the **canonical agent activity_data** (from `agent_runner._extract_activity_line`) as the base document, augmented with minimal validation metadata (run_id, run_trigger, validation_status). No custom validation-specific fields in the main activity schema.
+
+### Rationale
+
+**Uniformity:** Downstream consumers (frontend UI, analytics, notifications) treat validation activities identically to normal agent runs. No special-case logic needed.
+
+**Consistency:** Same field names (strike not contract_strike), same semantics (confidence from agent, not invented), same rendering path.
+
+**Agent Output is Canonical:** The agent already returns all necessary fields (underlying_price, strike, expiration, premium, iv, confidence, reason, risk_rating, etc.). No need to extract/rebuild from evaluated_snapshot.
+
+### Rejection Reason
+
+**Production Data Loss in Error Path:** Legacy error-only fallback (minimal {symbol, activity, timestamp, note, reason}) loses canonical fields when agent execution fails. No field recovery mechanism from evaluated_snapshot. This represents real data loss in production-critical code path.
+
+**Status:** REJECTED — requires error-path recovery design before merge.
+
+---
+
+## Decision: Basher's Two-Gate Validation Review
+
+**Date:** 2026-08-30  
+**Reviewer:** Basher (Tester & QA)  
+**Status:** Approved (with rejection and revision)
+
+### Executive Summary
+
+Two-phase review: initially rejected Livingston artifact due to error-path data loss, then approved Rusty's revised Alpha review fix and frontend/backend compatibility validation. Comprehensive test verification: 110/110 backend tests passing, TypeScript clean, zero defects.
+
+### Review Cycle 1: Livingston Canonical Schema (Initial Rejection)
+
+**Gate:** Schema design soundness  
+**Finding:** Canonical field design correct; error-fallback path loses production data  
+**Verdict:** ❌ REJECT — blocking production data loss  
+
+### Review Cycle 2: Rusty Alpha Review Fix (Approval)
+
+**Gate:** Alpha review signature correction  
+**Verdict:** ✅ APPROVE
+
+- Signature removed invalid `supervisor_view` kwarg
+- Independent review architecture confirmed
+- Fail-closed semantics verified
+- 54 contract-validation + integration + Alpha execution tests passing
+- Zero defects detected
+- Code quality clean, TypeScript verified
+- Git diff minimal and surgical
+
+**Status:** ✅ **APPROVED FOR PRODUCTION DEPLOYMENT**
+
+
