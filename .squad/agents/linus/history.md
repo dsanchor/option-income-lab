@@ -766,3 +766,29 @@ precedent).
 
 **Handoff to Livingston:** Cache module ready for integration into precompute cycle; screener type changes ready for Rusty's frontend
 
+
+## 2026-08-31 — Best Options Validation Audit (Context Parity Finding)
+
+**Context:** Best Option contract validation runs Primary→Supervisor→Alpha pipeline but feeds minimal contract-only snapshot instead of full multi-page market data block that normal Following provides
+
+**Owner:** Linus — Code inspection, audit findings
+
+**Work Items:**
+
+### Audit: Context Coverage Gap
+- **Scope:** Line-by-line comparison of validation snapshot vs normal Following market data block
+- **Finding:** Validation missing 6 canonical data elements:
+  - OVERVIEW page (earnings, fundamentals)
+  - TECHNICALS page (indicators, S/R)
+  - FORECAST page (analyst consensus)
+  - DIVIDENDS page (full history, ex-dates)
+  - ENRICHMENT section (tech-timing, momentum, DGI)
+  - VOLATILITY section (IV/HV, premium richness)
+- **Impact:** Ex-dividend date present in Cosmos calendar was missed because agents only saw bare ISO date, not full dividend schedule
+- **Root cause:** Validation never calls `fetch_all` or `_build_market_data_block` — uses only chain + contract snapshot
+- **Recommendation:** Reuse existing `fetch_all` and `_build_market_data_block` — one canonical path, no parallel implementation
+
+**Interdependencies:**
+- Informs Danny's full-context-parity design
+- Enables Livingston's initial implementation (later rejected for other reasons)
+- Foundational for Rusty's calendar extractor revision

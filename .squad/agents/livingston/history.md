@@ -1272,3 +1272,45 @@ Implementation complete, all tests green, deterministic duplicate detection veri
 **Test Execution:** 12/12 passing (100%), 18/18 existing tests passing (regression safe).
 
 **Decision:** See `.squad/decisions/inbox/danny-chain-aware-validation-design.md` (approved design, 28.5KB)
+
+## 2026-08-31 — Best Options Validation: Full Context Parity Implementation (Basher rejection + strict lockout)
+
+**Context:** Assigned to implement Danny's accepted full-context-parity design. Initial implementation reviewed by Basher, who identified 3 critical findings.
+
+**Owner:** Livingston — Initial implementation (now rejected)
+
+**Status:** LOCKED OUT — cannot participate in revision due to strict lockout after Basher rejection
+
+**Work Items:**
+
+### Initial Implementation (REJECTED by Basher 2026-08-31)
+- **Files created/modified:**
+  - `backend/src/contract_validation_integration.py` — calendar extractors (`_extract_earnings_from_overview`, `_extract_exdiv_from_dividends`)
+  - `backend/tests/test_contract_validation_calendar.py` — test fixtures and test cases
+
+### Basher Findings (3 CRITICAL):
+1. **Extractor-provider shape mismatch:** Extractors read flat top-level keys, but real provider output nests dates under nested structure paths. All 167 tests pass = false confidence due to invented fixtures
+2. **Unbound `error_msg` in exception handler:** Reference to conditionally-assigned variable in catch-all handler causes NameError on pre-Step-4 failures
+3. **Dead code block:** Duplicate Steps 5-7 after return statement obscures control flow and creates merge-conflict risk
+
+### Lockout Rationale:
+Per strict lockout policy: author of rejected code cannot participate in revision. Rusty assigned as revision author; Basher re-reviews revised work.
+
+### Provider Hang Investigation (PARALLEL ISSUE)
+- **Finding:** Line 863 `_execute_validation` bypasses injected `context_provider`, calls global `get_shared_provider()` singleton
+- **Impact:** Tests hang indefinitely (4h+ in CI at 74% completion)
+- **Root causes:** DI bypass in production + false test patches + event-loop deadlock
+- **Status:** Owned by Danny (analysis) and Livingston (production fix required in follow-up)
+- **Fix scope:** Provider must be explicit parameter through entire call chain; tests must patch at injection seam, not at singleton
+- **Specification:** `.squad/decisions.md` — `danny-validation-provider-hang-retrospective.md` section
+
+### Blocked Actions:
+- ❌ Cannot modify calendar extractors (Rusty assigned)
+- ❌ Cannot modify test fixtures (Rusty assigned)
+- ❌ Cannot update exception handler (Rusty assigned)
+- ✅ CAN work on provider hang fix in `contract_validation_integration.py` (separate concern, not calendar)
+
+**Interdependencies:**
+- Calendar extractor revision owned by Rusty
+- Provider hang fix requires follow-up work (parallel path)
+- Gates on Basher's second review (calendar) and successful fix (provider hang)

@@ -10069,3 +10069,1196 @@ TOTAL:                                            91 passed
 **What:** Use the Recent dashboard column for both activity and recommendation provenance. Add an ALPHA tag only when the recommendation comes from Alpha; regular-agent recommendations keep only the SELL tag. Remove the separate Rec. column.
 **Why:** User request — captured for team memory
 
+# Design: Full Market-Context Parity for Best Option Contract Validation
+
+**Author:** Danny (Lead / Design Review)
+**Date:** 2026-08-31
+**Status:** ACCEPTED — implementation-ready
+**Supersedes:** Rusty's audit `best-option-validation-market-data-audit.md` (session files)
+**Prereqs:** Existing chain-aware validation (D4, Alpha chain context) fully preserved.
+
+---
+
+## 0. Problem Statement
+
+Best Option contract validation runs a Primary→Supervisor→Alpha pipeline
+identical in structure to normal Following CC/CSP, but feeds the agents a
+**minimal contract-only snapshot** instead of the **full multi-page market data
+block** that normal Following provides. Confirmed gaps:
+
+| Data Element | Normal Following | Validation Today |
+|---|---|---|
+| OVERVIEW page (earnings, fundamentals) | ✅ | ❌ |
+| TECHNICALS page (indicators, S/R) | ✅ | ❌ |
+| FORECAST page (analyst consensus) | ✅ | ❌ |
+| DIVIDENDS page (full history, ex-dates) | ✅ | ❌ |
+| ENRICHMENT section (tech-timing, momentum, DGI) | ✅ | ❌ |
+| VOLATILITY section (IV/HV, premium richness) | ✅ | ❌ |
+| Options chain (Primary) | ✅ (full filtered) | ❌ |
+| Options chain (Alpha) | ✅ | ✅ (already chain-aware) |
+| Previous activity context | ✅ | ✅ |
+| Calendar dates (earnings, ex-div) | ✅ (embedded in pages) | ⚠️ (isolated Cosmos dates) |
+
+A real ex-dividend date present in the Cosmos calendar was missed because the
+agent only saw a bare ISO date, not the full dividend schedule with payment
+dates, yield, and history that normal agents use for decision quality.
+
+The `rule_evaluator.build_rule_evaluation` call in validation passes
+`enrichment_data=None`, so enrichment-dependent rules always degrade.
+
+---
+
+## 1. Design Principles
+
+1. **One canonical data-fetch path.** Reuse `YFinanceDataProvider.fetch_all()`
+   and `AgentRunner._build_market_data_block()` — no parallel implementation.
+2. **Immutable contract evidence preserved.** The contract-specific evidence
+   snapshot (`evaluated_snapshot`) remains a separately labeled, immutable
+   section in the prompt; it is never replaced by the full market block.
+3. **Chain-aware Alpha preserved as-is.** No changes to D4 validation gates,
+   `_build_validation_chain_context`, or `_validate_alpha_alternative`.
+4. **Calendar robustness.** Calendar dates from `fetch_all` (live yfinance) are
+   primary; Cosmos calendar is fallback. Both sources are logged with
+   provenance so a conflict or omission is auditable.
+5. **Single refresh boundary.** One `fetch_all(force_refresh=True)` call per
+   validation replaces both the current `_force_chain_refresh` AND the missing
+   market-data fetch. The chain from `fetch_all` is the authoritative snapshot
+   for the entire validation cycle (contract lookup, Alpha chain context, D4
+   callback).
+6. **Fail-closed for SELL.** If `fetch_all` fails, validation returns WAIT with
+   `error=full_context_unavailable`; it does **not** silently fall back to
+   contract-only context.
+7. **No duplicate fetches.** `fetch_all` fetches the chain internally via
+   `_build_options_chain` which calls `chain_cache.get_or_hydrate`. We pass
+   `force_refresh=True` so the cache refreshes once. The existing
+   `_force_chain_refresh` call is removed (it would be a redundant second
+   refresh). This resolves the conflict with Linus's suggestion: we use
+   `fetch_all(force_refresh=True)` as the single entry point, and the chain
+   cache refresh happens inside it, not separately.
+
+---
+
+## 2. Data-Flow Diagram (After)
+
+```
+POST /api/best-options/validate
+  │
+  └─ _execute_validation(symbol, side, strike, expiration, …)
+       │
+       ├─ [REMOVED] _force_chain_refresh(symbol)
+       │
+       ├─ ① full_data = await get_shared_provider().fetch_all(symbol, force_refresh=True)
+       │     Returns: {overview, technicals, forecast, dividends, options_chain, volatility}
+       │     Chain cache is refreshed inside fetch_all → single network boundary
+       │
+       ├─ ② chain = json.loads(full_data["options_chain"])
+       │     Authoritative chain for this validation cycle
+       │
+       ├─ ③ contract = _find_exact_contract(chain, side, strike, exp, now)
+       │     If not found → WAIT + error (unchanged behavior)
+       │
+       ├─ ④ _validate_contract_evidence(contract)
+       │     If invalid → WAIT + error (unchanged behavior)
+       │
+       ├─ ⑤ evaluated_snapshot = _build_evaluated_snapshot(
+       │       symbol, side, strike, exp, contract, chain, cosmos,
+       │       full_data=full_data,               ← NEW
+       │       agent_runner_ref=agent_runner,      ← NEW (for _build_market_data_block)
+       │   )
+       │     Now includes:
+       │       market_data_text → full 4-page block + contract evidence section
+       │       enrichment_block → tech-timing, momentum, DGI
+       │       volatility_block → IV/HV, premium richness
+       │       calendar provenance → {source, earnings, ex_dividend}
+       │
+       ├─ ⑥ chain_context_text = _build_validation_chain_context(chain, side)
+       │     Unchanged — Alpha still gets filtered chain
+       │
+       ├─ ⑦ agent_runner.run_contract_validation(
+       │       evidence_snapshot=evaluated_snapshot,
+       │       chain_context_text=chain_context_text,
+       │       validated_alternative_callback=…,   ← still closes over same chain
+       │   )
+       │
+       └─ ⑧ _persist_validation_activity(…)
+```
+
+---
+
+## 3. Detailed Changes
+
+### 3.1 `contract_validation_integration.py` — `_execute_validation`
+
+**Remove:** `_force_chain_refresh(symbol)` call (lines ~633-637)
+
+**Add:** Replace with `fetch_all`:
+```python
+from src.yfinance_data_provider import get_shared_provider
+
+# Single authoritative fetch — refreshes chain cache + all market pages
+yf_provider = get_shared_provider()
+try:
+    full_data = await yf_provider.fetch_all(symbol, force_refresh=True)
+except Exception as e:
+    logger.error(f"[{run_id}] Full market data fetch failed: {e}")
+    await _persist_validation_activity(…, result={
+        "activity": "WAIT",
+        "validation_status": "error",
+        "error": "full_context_unavailable",
+        "note": f"Market data fetch failed: {e}",
+    })
+    return
+```
+
+**Replace chain acquisition:** Use `full_data["options_chain"]` instead of
+`chain_cache.get_or_hydrate`:
+```python
+raw_chain = full_data.get("options_chain", "")
+if not raw_chain:
+    # … existing chain_unavailable error path …
+    return
+chain = json.loads(raw_chain) if isinstance(raw_chain, str) else raw_chain
+```
+
+**Update `_build_evaluated_snapshot` call** to pass `full_data` and
+`agent_runner`:
+```python
+evaluated_snapshot = await _build_evaluated_snapshot(
+    symbol, side, strike, expiration, contract, chain, cosmos,
+    full_data=full_data,
+    agent_runner_ref=agent_runner,
+)
+```
+
+### 3.2 `contract_validation_integration.py` — `_build_evaluated_snapshot`
+
+**New signature:**
+```python
+async def _build_evaluated_snapshot(
+    symbol: str,
+    side: str,
+    strike: float,
+    expiration: str,
+    contract: dict,
+    chain: dict,
+    cosmos: CosmosDBService,
+    *,
+    full_data: dict | None = None,           # NEW
+    agent_runner_ref: Any | None = None,      # NEW (for _build_market_data_block)
+) -> Dict[str, Any]:
+```
+
+**Calendar with provenance (replaces bare Cosmos lookup):**
+```python
+# Primary: extract from yfinance pages (fresh, just-fetched)
+yf_earnings = _extract_earnings_from_overview(full_data.get("overview", ""))
+yf_ex_div = _extract_exdiv_from_dividends(full_data.get("dividends", ""))
+
+# Fallback: Cosmos calendar (may be stale)
+cosmos_earnings = cosmos.get_next_earnings_date(symbol)
+cosmos_ex_div = cosmos.get_next_calendar_event_date(symbol, "ex_dividend")
+
+# Resolve with explicit provenance
+next_earnings, earnings_source = _resolve_calendar_date(yf_earnings, cosmos_earnings, "earnings")
+ex_dividend, exdiv_source = _resolve_calendar_date(yf_ex_div, cosmos_ex_div, "ex_dividend")
+```
+
+Where `_resolve_calendar_date` prefers the yfinance date when available and
+not stale, falls back to Cosmos, and logs a warning when both sources disagree:
+```python
+def _resolve_calendar_date(
+    yf_date: str | None,
+    cosmos_date: str | None,
+    event_type: str,
+) -> tuple[str | None, str]:
+    """Return (date, source). Prefer yfinance; fallback to Cosmos."""
+    if yf_date and cosmos_date and yf_date != cosmos_date:
+        logger.warning(
+            "Calendar conflict for %s: yfinance=%s, cosmos=%s — using yfinance (fresher)",
+            event_type, yf_date, cosmos_date,
+        )
+    if yf_date:
+        return yf_date, "yfinance"
+    if cosmos_date:
+        return cosmos_date, "cosmos"
+    return None, "none"
+```
+
+**Build full market_data_text (replaces _build_market_data_text):**
+```python
+# Full 4-page market data block (identical to normal Following agents)
+exchange = _extract_exchange(full_data.get("overview", ""))
+full_market_block = agent_runner_ref._build_market_data_block(full_data, symbol, exchange)
+
+# Enrichment + volatility (identical to normal Following agents)
+enrichment_block = agent_runner_ref._build_enrichment_block(symbol, cosmos)
+volatility_block = agent_runner_ref._volatility_text(full_data)
+
+enrichment_section = f"\n--- ENRICHMENT ({symbol}) ---\n{enrichment_block}\n" if enrichment_block else ""
+volatility_section = f"\n--- VOLATILITY ({symbol}) ---\n{volatility_block}\n" if volatility_block else ""
+
+# Contract evidence section — immutable, separately labeled
+contract_evidence = _build_market_data_text(
+    symbol, side, strike, expiration, underlying_price,
+    contract, chain_timestamp, next_earnings, ex_dividend,
+)
+
+# Combined market_data_text: full context + labeled contract evidence
+market_data_text = (
+    full_market_block
+    + enrichment_section
+    + volatility_section
+    + f"\n\n--- VALIDATED CONTRACT EVIDENCE ({symbol} {expiration} {strike} {side.upper()}) ---\n"
+    + contract_evidence
+)
+```
+
+**Add to snapshot:**
+```python
+snapshot["calendar_provenance"] = {
+    "next_earnings": {"date": next_earnings, "source": earnings_source},
+    "ex_dividend": {"date": ex_dividend, "source": exdiv_source},
+}
+```
+
+### 3.3 `agent_runner.py` — `run_contract_validation`
+
+**Prompt parity.** The `message` construction (lines ~4290-4310) currently
+injects only `market_data_text`. After this change, `market_data_text` already
+contains the full 4-page block + enrichment + volatility + contract evidence,
+so the prompt template needs only minimal adjustment:
+
+```python
+# BEFORE: Minimal prompt with contract-only data
+message = f"""Validate this exact {side.upper()} contract for {symbol}.
+Category: {cat_key.title()}
+→ Load the **category-params** skill for category-specific thresholds.
+
+Contract to validate:
+- Strike: ${strike}
+- Expiration: {expiration}
+- Underlying: ${underlying_price:.2f}
+
+{market_data_text}
+
+Previous activities for {symbol}:
+{previous_context}
+…"""
+
+# AFTER: Full context parity — market_data_text now contains full pages
+message = f"""Validate this exact {side.upper()} contract for {symbol}.
+Category: {cat_key.title()}
+→ Load the **category-params** skill for category-specific thresholds.
+
+=== PRE-FETCHED MARKET DATA ===
+
+{market_data_text}
+
+=== END OF DATA ===
+
+Previous activities for {symbol}:
+{previous_context}
+
+Current UTC timestamp: {timestamp}
+
+Analyze this EXACT contract (see VALIDATED CONTRACT EVIDENCE section above)
+and output your decision in the required JSON format.
+Use the timestamp above in your JSON output; do NOT generate your own."""
+```
+
+**Supervisor market_data:** The supervisor currently receives
+`market_data_text` (which is now the full block). This matches normal
+Following exactly. No code change needed in the supervisor call.
+
+**Alpha market_data:** Currently:
+```python
+alpha_market_data = market_data_text
+if chain_context_text:
+    alpha_market_data = market_data_text + "\n\n" + chain_context_text
+```
+This now gives Alpha the full 4-page block + enrichment + volatility +
+contract evidence + filtered chain. This matches normal Following Alpha
+semantics (4-page block + chain) plus the extra contract evidence section.
+No code change needed.
+
+**Rule evaluation enrichment_data.** Currently `enrichment_data=None`. After:
+```python
+rule_eval = build_rule_evaluation(
+    agent_type=agent_type,
+    activity_data=activity_data,
+    phase="contract_validation",
+    category=category,
+    enrichment_data=evidence_snapshot.get("enrichment_data"),  # NEW
+)
+```
+
+The `enrichment_data` dict is added to the snapshot in §3.2:
+```python
+snapshot["enrichment_data"] = {
+    "tech_timing": enrichment.get("technicals", {}).get("score"),
+    "momentum": enrichment.get("momentum"),
+    "entry_tag": enrichment.get("entry_tag"),
+    "dgi_quality": enrichment.get("quality_score"),
+}
+```
+
+### 3.4 `contract_validation_integration.py` — New Helper Functions
+
+```python
+def _extract_earnings_from_overview(overview_json: str) -> str | None:
+    """Extract next earnings date from yfinance overview JSON."""
+    # Parse the JSON, look for earningsTimestampStart / next_earnings_date
+    # Return YYYY-MM-DD or None
+
+def _extract_exdiv_from_dividends(dividends_json: str) -> str | None:
+    """Extract next ex-dividend date from yfinance dividends JSON."""
+    # Parse the JSON, look for ex_dividend_date_recent
+    # Return YYYY-MM-DD or None (only if date >= today)
+
+def _extract_exchange(overview_json: str) -> str:
+    """Extract exchange from overview JSON. Default 'UNKNOWN'."""
+```
+
+### 3.5 `contract_validation_integration.py` — `start_validation` Signature
+
+**No change.** The `agent_runner` parameter already provides access to
+`_build_market_data_block`, `_build_enrichment_block`, and `_volatility_text`
+as instance methods.
+
+### 3.6 `_force_chain_refresh` — Deprecation
+
+The function remains in the module (not deleted) but is no longer called from
+`_execute_validation`. A docstring note marks it as superseded. This avoids
+breaking any external callers or tests that import it.
+
+---
+
+## 4. Primary / Supervisor / Alpha Visibility Matrix (After)
+
+| Agent | Pages (O/T/F/D) | Enrichment | Volatility | Chain | Contract Evidence | Previous Context |
+|---|---|---|---|---|---|---|
+| **Primary** | ✅ all 4 | ✅ | ✅ | ❌ (not in prompt) | ✅ labeled section | ✅ |
+| **Supervisor** | ✅ all 4 | ✅ | ✅ | ❌ | ✅ (via market_data) | ✅ |
+| **Alpha** | ✅ all 4 | ✅ | ✅ | ✅ (filtered, delta) | ✅ (via market_data) | ✅ |
+
+**Matches normal Following semantics:**
+- Normal Primary: 4 pages + enrichment + volatility + full chain (filtered)
+- Validation Primary: 4 pages + enrichment + volatility + contract evidence (no full chain search — agent validates ONE specific contract, not the entire chain)
+
+The difference (no full chain for Primary) is **intentional and correct**:
+Validation Primary's job is to assess the pre-selected contract, not to search
+the chain for alternatives. Full chain search would encourage the agent to
+suggest different contracts, undermining the "validate THIS contract" semantics.
+Alpha already has the chain for alternatives. This is the same separation of
+concerns as normal Following where Primary decides and Alpha second-guesses.
+
+---
+
+## 5. Calendar Robustness
+
+### 5.1 Date Resolution Logic
+
+```
+yfinance live (fetch_all) ─── preferred (fresh, just-fetched)
+        │
+        ├─ available → use yfinance date, source="yfinance"
+        │
+        └─ unavailable → Cosmos calendar, source="cosmos"
+                │
+                └─ unavailable → None, source="none"
+```
+
+### 5.2 Conflict Handling
+
+When yfinance and Cosmos dates disagree:
+- Log WARNING with both dates and source labels
+- Use yfinance (fresher — just-fetched vs. cron-populated)
+- Persist provenance in `calendar_provenance` for auditing
+
+### 5.3 Staleness
+
+`fetch_all(force_refresh=True)` fetches from yfinance live, so the data is
+as fresh as the source allows. The chain cache TTL does not apply because
+`force_refresh=True` bypasses it. The `_build_options_chain` inside `fetch_all`
+goes through the chain cache's `refresh` path (which is the same path as
+`_force_chain_refresh` today).
+
+### 5.4 Ex-Dividend Date Provenance
+
+The dividends page from `fetch_all` contains `ex_dividend_date_recent` with
+both the raw timestamp and formatted date. The extraction helper parses this
+and compares against `today` to ensure it's a future date. If the yfinance
+`exDividendDate` is in the past, only the Cosmos calendar (which stores
+future-only events) is consulted.
+
+---
+
+## 6. Persistence / Trace Snapshot
+
+### 6.1 What Changes in Persisted Activity
+
+The `_validation_meta.evaluated_snapshot` already persists `market_data_text`.
+After this change, `market_data_text` is larger (full block vs. contract-only).
+However:
+
+- **Trace records** already capture the full prompt (`user_message`) and
+  response. Adding the full market block to `market_data_text` means the trace
+  captures it automatically — no new trace fields needed.
+- **`calendar_provenance`** is a new small dict added to `evaluated_snapshot`
+  for auditability. ~100 bytes.
+- **`enrichment_data`** is a new small dict (~200 bytes).
+
+### 6.2 What Does NOT Change
+
+- `displayed_snapshot` (frontend-sent) — unchanged, still stored as-is
+- Chain snapshot summary — unchanged
+- Supervisor/Alpha views — unchanged
+- Trace structure — unchanged
+
+### 6.3 Avoiding Bloat
+
+The full 4-page market data block is ~5-15KB of text. This is already
+comparable to what normal agent traces store (the user_message in trace
+records already contains the full prompt including all pages). Validation
+traces will now store similar-sized prompts. No excessive raw page storage
+is added beyond what traces already capture.
+
+---
+
+## 7. Backward Compatibility
+
+### 7.1 Function Signatures
+
+| Function | Change | Breaking? |
+|---|---|---|
+| `_build_evaluated_snapshot` | Add keyword-only `full_data`, `agent_runner_ref` | ❌ (keyword-only, defaults to None) |
+| `start_validation` | No change | ❌ |
+| `_execute_validation` | Internal refactor | ❌ (not exported) |
+| `run_contract_validation` | No signature change; reads new keys from `evidence_snapshot` | ❌ |
+| `_force_chain_refresh` | Deprecated, not called | ❌ (not removed) |
+
+### 7.2 Failure Behavior
+
+If `fetch_all` fails (network error, yfinance down):
+- Validation returns `WAIT` with `error=full_context_unavailable`
+- **Does NOT silently fall back to contract-only context**
+- The caller can retry (same as any other validation error)
+- This is a deliberate choice: a SELL recommendation without full context is
+  worse than a WAIT that signals incomplete data
+
+If `fetch_all` succeeds but individual pages are empty (e.g., yfinance returns
+empty overview):
+- `_build_market_data_block` handles this gracefully (empty string for missing page)
+- Validation continues — partial context is better than none, and the agent
+  can note missing data in its analysis
+- Calendar extraction helpers return None for missing data, triggering Cosmos
+  fallback
+
+---
+
+## 8. Refresh Boundary Resolution
+
+**Conflict:** Linus suggested `fetch_all(force_refresh=True)` while the current
+code uses `_force_chain_refresh` (which calls `chain_cache.refresh(symbol)`
+directly).
+
+**Resolution:** `fetch_all(force_refresh=True)` is the single entry point.
+
+**Why this is safe:**
+1. `fetch_all(force_refresh=True)` bypasses the in-memory data cache (TTL check
+   skipped) and refetches all 5 resource types from yfinance live.
+2. Inside `fetch_all`, `_build_options_chain` calls
+   `chain_cache.get_or_hydrate(symbol, trigger_swr=True)` which refreshes
+   the chain cache entry from yfinance if stale.
+3. The chain returned by `fetch_all["options_chain"]` and the chain in
+   `chain_cache` are the same object (fetched in the same call).
+4. Removing the separate `_force_chain_refresh` eliminates a redundant network
+   round-trip that would fetch the chain twice.
+
+**Edge case:** If chain_cache's `get_or_hydrate` uses stale-while-revalidate
+(SWR) and returns a cached version while refreshing in the background, the
+`fetch_all` chain would be stale. Mitigation: the `_build_options_chain`
+implementation uses `trigger_swr=True` but then waits for the result, so
+the chain is always fresh post-refresh.
+
+---
+
+## 9. File Ownership for Parallel Implementation
+
+| File | Owner | Changes |
+|---|---|---|
+| `contract_validation_integration.py` | **Livingston** | §3.1 (`_execute_validation`), §3.2 (`_build_evaluated_snapshot`), §3.4 (new helpers), §3.6 (`_force_chain_refresh` deprecation) |
+| `agent_runner.py` | **Rusty** | §3.3 (`run_contract_validation` prompt + rule_eval enrichment) |
+| Tests | **Rusty + Livingston** (see §10 matrix) | New integration tests + unit test updates |
+
+**No conflicts:** Livingston owns the integration layer, Rusty owns the
+agent engine. The interface between them (`evidence_snapshot` dict) is
+extended with backward-compatible new keys.
+
+---
+
+## 10. Test Matrix
+
+### T1: Ex-Dividend Omission Reproduction
+**File:** `tests/test_contract_validation_calendar.py` (new)
+**Owner:** Livingston
+**Setup:** Mock `fetch_all` returning dividends page with ex-dividend date;
+mock Cosmos calendar returning None.
+**Assert:** `evaluated_snapshot["ex_dividend_date"]` == yfinance date,
+`calendar_provenance.ex_dividend.source` == "yfinance".
+
+### T2: Calendar Conflict / Staleness
+**File:** `tests/test_contract_validation_calendar.py` (new)
+**Owner:** Livingston
+**Setup:** Mock `fetch_all` dividends with ex-div date X; mock Cosmos with
+different date Y.
+**Assert:** Resolved date == X (yfinance wins), WARNING logged,
+provenance records both sources.
+
+### T3: Context Parity
+**File:** `tests/test_contract_validation_context.py` (new)
+**Owner:** Rusty
+**Setup:** Mock `fetch_all` and `_build_market_data_block`. Run
+`run_contract_validation` with full snapshot.
+**Assert:** Primary prompt contains `--- OVERVIEW PAGE ---`,
+`--- TECHNICALS PAGE ---`, `--- FORECAST PAGE ---`, `--- DIVIDENDS PAGE ---`,
+`--- ENRICHMENT ---`, `--- VOLATILITY ---`, and
+`--- VALIDATED CONTRACT EVIDENCE ---`.
+
+### T4: No `displayed_snapshot` Influence
+**File:** `tests/test_contract_validation_context.py` (new)
+**Owner:** Livingston
+**Setup:** Call `_build_evaluated_snapshot` with `displayed_snapshot` having
+stale prices.
+**Assert:** `evaluated_snapshot["underlying_price"]` comes from chain (not
+`displayed_snapshot`); `market_data_text` contains no values from
+`displayed_snapshot`.
+
+### T5: No Extra Fetch
+**File:** `tests/test_contract_validation_integration.py` (existing, extend)
+**Owner:** Livingston
+**Setup:** Mock `get_shared_provider().fetch_all` and
+`chain_cache.get_or_hydrate`.
+**Assert:** `fetch_all` called exactly once; `chain_cache.refresh` NOT called
+separately; `_force_chain_refresh` NOT called.
+
+### T6: Full Context Unavailable → Fail Closed
+**File:** `tests/test_contract_validation_integration.py` (existing, extend)
+**Owner:** Livingston
+**Setup:** Mock `fetch_all` to raise Exception.
+**Assert:** Validation result has `activity=WAIT`,
+`error=full_context_unavailable`, no SELL emitted.
+
+### T7: Rule Evaluation Enrichment Parity
+**File:** `tests/test_contract_validation_context.py` (new)
+**Owner:** Rusty
+**Setup:** Mock enrichment data in snapshot.
+**Assert:** `build_rule_evaluation` receives non-None `enrichment_data`;
+enrichment-dependent checks produce real results (not degraded).
+
+### T8: Alpha Chain Context Unaffected
+**File:** `tests/test_contract_validation_integration.py` (existing, extend)
+**Owner:** Livingston
+**Setup:** Full validation with mock chain.
+**Assert:** `_build_validation_chain_context` called with same chain from
+`fetch_all`; Alpha receives chain context text appended to full market block;
+D4 callback uses same chain.
+
+---
+
+## 11. Implementation Order
+
+1. **Livingston (integration layer):**
+   a. Add `_extract_earnings_from_overview`, `_extract_exdiv_from_dividends`,
+      `_extract_exchange`, `_resolve_calendar_date` helpers
+   b. Update `_build_evaluated_snapshot` (new params, full market block assembly,
+      calendar provenance, enrichment_data)
+   c. Update `_execute_validation` (replace `_force_chain_refresh` + separate
+      chain load with single `fetch_all`)
+   d. Add import for `get_shared_provider`
+   e. Write T1, T2, T4, T5, T6, T8 tests
+
+2. **Rusty (agent engine):**
+   a. Update `run_contract_validation` prompt template (§3.3)
+   b. Update `build_rule_evaluation` call to pass `enrichment_data`
+   c. Write T3, T7 tests
+
+3. **Danny (review):**
+   Verify parity by diff-comparing a normal Following prompt and a validation
+   prompt for the same symbol — all pages present, contract evidence labeled.
+
+---
+
+## 12. What This Design Does NOT Change
+
+- Normal Following CC/CSP pipeline — completely untouched
+- Monitor agent pipelines — untouched
+- Best Options scoring/ranking — untouched
+- Best Options precompute — untouched
+- Chain cache module — untouched (used indirectly via `fetch_all`)
+- Alpha D4 validation gates — untouched
+- Frontend API contract — untouched (same POST/GET endpoints, same status schema)
+- Telegram notifications — untouched (validation doesn't send notifications today)
+
+---
+
+## Decision History
+
+| Date | Who | Event |
+|---|---|---|
+| 2026-08-29 | Chain-aware validation | D4 gates + Alpha chain context implemented |
+| 2026-08-30 | Canonical schema | Validation activities use identical schema as normal runs |
+| 2026-08-31 | Rusty (audit) | Identified full market context gap (`best-option-validation-market-data-audit.md`) |
+| 2026-08-31 | Danny (this doc) | Accepted design for full market-context parity |
+
+---
+
+*End of design. No production code or tests modified by this document.*
+
+# Retrospective: Validation Suite Hang — Provider Injection Bypass
+
+**Date:** 2026-08-31  
+**Author:** Danny (Lead)  
+**Severity:** P0 — blocked CI for >4 hours at 74% suite completion  
+**Status:** Root-caused; fix spec below; no code changes in this document
+
+---
+
+## Root Cause
+
+**`_execute_validation` bypasses the injected `context_provider` and hardcodes a call to the global `get_shared_provider()` singleton, which performs real network I/O.**
+
+### Evidence chain
+
+| Layer | What happens | Citation |
+|-------|-------------|----------|
+| **app.py:3633–3638** | Endpoint constructs `ContextProvider(cosmos)` and passes it to `start_validation(...)` | `backend/web/app.py:3633` |
+| **contract_validation_integration.py:752** | `start_validation` accepts `context_provider: Any` parameter | `backend/src/contract_validation_integration.py:752` |
+| **contract_validation_integration.py:817** | `start_validation` forwards `context_provider` to `_execute_validation` via `asyncio.create_task` | `backend/src/contract_validation_integration.py:817` |
+| **contract_validation_integration.py:857** | `_execute_validation` receives `context_provider: Any` | `backend/src/contract_validation_integration.py:857` |
+| **contract_validation_integration.py:863** | ⚠️ **BYPASS**: ignores the parameter, calls `yf_provider = get_shared_provider()` | `backend/src/contract_validation_integration.py:863` |
+| **contract_validation_integration.py:865** | Calls `await yf_provider.fetch_all(symbol, force_refresh=True)` — **real HTTP to Yahoo Finance** | `backend/src/contract_validation_integration.py:865` |
+| **yfinance_data_provider.py:708–721** | `get_shared_provider()` is a process-wide singleton; creates a real `YFinanceDataProvider` | `backend/src/yfinance_data_provider.py:708-721` |
+
+### Why tests hang
+
+1. **Neither test file patches `get_shared_provider` or `fetch_all`.**  
+   Confirmed: `grep -n "get_shared_provider\|fetch_all\|yfinance_data_provider" test_contract_validation_integration.py test_cross_contract_validation_regression.py` → **zero matches**.
+
+2. Tests correctly patch the **chain cache** (`get_options_chain_cache`) and **agent runner** (`run_contract_validation`), but the background task's *first action* is the unpatched `get_shared_provider().fetch_all()` call.
+
+3. The Starlette `TestClient` runs the ASGI app synchronously. `start_validation` fires `asyncio.create_task(_execute_validation(...))` on the ASGI event loop. The task immediately calls the real provider, which:
+   - In CI: no network → hangs on DNS/TCP connect indefinitely
+   - Locally: may eventually timeout but blocks the event loop
+
+4. `test_start_validation_returns_202_accepted` then does `await asyncio.sleep(1.0)` on the **pytest-asyncio event loop** (different from TestClient's ASGI loop), so it can never advance the background task. Result: permanent deadlock.
+
+### Classification
+
+| Category | Applies? | Detail |
+|----------|----------|--------|
+| Production architecture | **YES** | `_execute_validation` ignores its own `context_provider` parameter |
+| Test dependency injection | **YES** | Tests don't patch the symbol that production actually calls |
+| Event-loop / background-task | **YES** | `asyncio.create_task` + sync `TestClient` + `await asyncio.sleep` on wrong loop = deadlock |
+| False-patch problem | **YES** | Tests patch `src.contract_validation_integration.get_options_chain_cache` (chain cache), but production call path goes through `get_shared_provider().fetch_all()` first — the patched chain cache is never even reached |
+
+**Verdict:** All four categories contribute. The primary defect is the production code bypassing its own injection seam.
+
+---
+
+## Canonical Provider Injection Seam
+
+### Current (broken)
+
+```
+app.py → ContextProvider(cosmos) → start_validation(context_provider=...) 
+  → _execute_validation(context_provider=...)
+    → get_shared_provider()          # ← IGNORES parameter, uses global singleton
+    → yf_provider.fetch_all(...)     # ← real network I/O
+```
+
+### Required (correct)
+
+```
+app.py → start_validation(yf_provider=get_shared_provider(), ...) 
+  → _execute_validation(yf_provider=yf_provider, ...)
+    → yf_provider.fetch_all(...)     # ← uses injected provider
+```
+
+**Design principle:** The `yf_provider` (data provider) must be an explicit parameter to both `start_validation` and `_execute_validation`, injected by the caller (app.py). Tests inject a fake/mock provider at the same seam. No module-level import of `get_shared_provider` is called inside validation execution.
+
+---
+
+## Fix Specification
+
+### Production fix (Livingston owns `contract_validation_integration.py`)
+
+1. **Add `yf_provider` parameter** to `start_validation()` signature (after `context_provider`).
+2. **Forward `yf_provider`** to `_execute_validation()`.
+3. **In `_execute_validation`**: replace `yf_provider = get_shared_provider()` (line 863) with the injected parameter.
+4. **In `app.py:3634`**: pass `yf_provider=get_shared_provider()` from the endpoint (app owns the singleton lifecycle).
+5. **Remove** the import of `get_shared_provider` from `contract_validation_integration.py` if no other usage remains (it should only be used for the deprecated `_force_chain_refresh`).
+
+### Test fix (Livingston owns both test files)
+
+1. **In both test files' `client` fixture**: create a `fake_yf_provider` mock with:
+   ```python
+   fake_yf_provider = AsyncMock()
+   fake_yf_provider.fetch_all.return_value = {
+       "overview": "...",
+       "technicals": "...",
+       "forecast": "...",
+       "dividends": "...",
+       "options_chain": json.dumps(sample_chain),
+       "volatility": "...",
+   }
+   ```
+2. **Patch the provider at the injection seam**, NOT the global singleton:
+   ```python
+   monkeypatch.setattr(
+       "src.contract_validation_integration.get_shared_provider",
+       lambda config=None: fake_yf_provider
+   )
+   ```
+   Or preferably, once the production fix is in, pass `yf_provider=fake_yf_provider` directly through the `start_validation` call (requires patching `app.py`'s endpoint to inject it, or monkeypatching `get_shared_provider` at the `contract_validation_integration` module level).
+
+3. **Fix the event-loop deadlock** in `test_start_validation_returns_202_accepted`:
+   - Use `httpx.AsyncClient` with `ASGITransport(app)` instead of `TestClient` for async tests, OR
+   - After `client.post(...)`, drain the background task deterministically (e.g., retrieve the task from `_in_flight_validations` and `await` it with a timeout), OR
+   - Use `TestClient` context manager which drains background tasks on exit.
+
+### What NOT to do
+
+- ❌ Do NOT just add `pytest.mark.timeout(5)` — this masks the hang, doesn't fix it.
+- ❌ Do NOT skip the `await asyncio.sleep(1.0)` + status poll — that's testing real behavior.
+- ❌ Do NOT mock `asyncio.create_task` to run synchronously — this hides event-loop bugs.
+
+---
+
+## Acceptance Criteria for Fix PR
+
+### AC-1: Provider injection
+- [ ] `_execute_validation` does NOT call `get_shared_provider()` or any module-level singleton.
+- [ ] `start_validation` receives the provider from its caller.
+- [ ] `app.py` endpoint passes `get_shared_provider()` (production lifecycle).
+
+### AC-2: Tests use deterministic provider
+- [ ] Both `test_contract_validation_integration.py` and `test_cross_contract_validation_regression.py` inject a fake `yf_provider` that returns canned `fetch_all` data.
+- [ ] No test in either file reaches real network (grep confirms zero unpatched `get_shared_provider` calls in execution path).
+
+### AC-3: Timeout-bounded regression
+- [ ] At least one test per file proves POST returns 202 within 2 seconds wall-clock.
+- [ ] At least one test per file proves background validation completes (or fails deterministically) within 5 seconds.
+- [ ] Tests use `pytest.mark.timeout(10)` as a safety net, NOT as the mechanism.
+
+### AC-4: Background task cleanup
+- [ ] Tests that fire POST validation drain or cancel the background `asyncio.Task` before teardown.
+- [ ] The `isolate_validation_registry` fixture cancels any in-flight tasks in its cleanup phase.
+- [ ] No test uses `await asyncio.sleep()` on a different event loop than the background task.
+
+### AC-5: No false patches
+- [ ] Every patched symbol is verified to be on the actual call path of the code under test.
+- [ ] Chain cache patches remain (they're valid for the chain-lookup step), but `get_shared_provider`/`fetch_all` is patched at the correct module (`src.contract_validation_integration`) or injected via parameter.
+
+---
+
+## Calendar / Context Parity Tests Status
+
+- `test_contract_validation_calendar.py` — **safe**: tests pure extractors (`_extract_earnings_from_overview`, etc.), no network calls, no `fetch_all`.
+- `test_contract_validation_context_parity.py` — **safe**: tests `AgentRunner.run_contract_validation` directly with mocked LLM, does not go through `_execute_validation`.
+- Neither file references `get_shared_provider` or `fetch_all` (confirmed: zero grep matches).
+
+These tests are not contributing to the hang and should not be modified.
+
+---
+
+## Ownership
+
+| Item | Owner | Reviewer |
+|------|-------|----------|
+| `contract_validation_integration.py` provider injection | Livingston | Danny |
+| `app.py` endpoint wiring | Livingston | Danny |
+| `test_contract_validation_integration.py` fixture fix | Livingston | Basher |
+| `test_cross_contract_validation_regression.py` fixture fix | Livingston | Basher |
+| AC-3 timeout-bounded regression tests | Livingston | Basher |
+| Final CI green confirmation | Danny | — |
+
+---
+
+## Summary
+
+The 4-hour hang was caused by a single line: `yf_provider = get_shared_provider()` in `_execute_validation` (line 863) ignoring the `context_provider` parameter that was threaded all the way from the endpoint. Tests couldn't intercept it because they patched the chain cache (step 2 of execution) but not the provider (step 1). The fix is mechanical: make the provider an explicit injected dependency, mock it in tests, and drain background tasks deterministically.
+
+# Retrospective: Calendar Parity Extractors & Exception Flow
+
+**Author:** Danny (Lead)
+**Date:** 2026-08-31
+**Status:** REVISION REQUIRED — Rusty assigned
+**Trigger:** Basher rejection of Livingston's full-context-parity implementation
+**Related decision:** `danny-validation-full-context-parity.md` (accepted design)
+
+---
+
+## 1. Factual Root Causes
+
+### RC-1: Extractor-to-Provider Shape Mismatch (CRITICAL)
+
+**What happened:** `_extract_exdiv_from_dividends()` reads flat top-level keys
+(`ex_dividend_date_recent`, `exDividendDate`). `_extract_earnings_from_overview()`
+reads flat top-level keys (`earningsTimestamp`, `earningsDate`).
+
+**What the provider actually produces:**
+
+`_build_dividends()` → JSON:
+```json
+{
+  "name": "…", "ticker": "…", "exchange": "…",
+  "dividends": {
+    "ex_dividend_date_recent": {
+      "label": "Ex-Dividend Date (Recent)",
+      "value": 1725984000,          ← epoch int
+      "formatted": "2024-09-10"
+    }
+  }
+}
+```
+Path to date: `root.dividends.ex_dividend_date_recent.value`
+
+`_build_overview()` → JSON:
+```json
+{
+  "name": "…", "ticker": "…", "exchange": "…",
+  "fundamentals": {
+    "earnings_release_next_date_fq": {
+      "label": "Next Earnings Date",
+      "value": 1725984000,          ← epoch int
+      "formatted": "2024-09-10"
+    }
+  }
+}
+```
+Path to date: `root.fundamentals.earnings_release_next_date_fq.value`
+
+**Impact:** Both extractors always return `None` against real provider output.
+The `_resolve_calendar_date` fallback then uses the Cosmos calendar, which is
+cron-populated and may be stale — reproducing the exact ex-dividend omission bug
+this design was created to fix. The yfinance-preferred path is dead code in
+production.
+
+### RC-2: Exception Handler Uses Unbound `error_msg` (CRITICAL)
+
+**What happened:** The outer `except Exception` handler at line ~993
+references `error_msg` in its error note:
+```python
+"note": f"Invalid market data: {error_msg}",
+```
+`error_msg` is only assigned in Step 4 (`_validate_contract_evidence`). If the
+exception fires before Step 4 (JSON parse failure, contract lookup error, etc.),
+`error_msg` is undefined → `NameError` → the `_persist_validation_activity` call
+itself fails → the validation silently disappears with no persisted WAIT activity.
+
+**Additional dead code:** After the `return` in the first `except` handler,
+there is an unreachable duplicate of Steps 5–7 (another `_build_evaluated_snapshot`,
+another `run_contract_validation`, another `_persist_validation_activity`) followed
+by a second `except Exception` handler. This dead block can never execute but
+obscures the control flow and creates merge-conflict risk.
+
+### RC-3: Test Fixtures Mask Provider Shape (HIGH)
+
+**What happened:** All test fixtures use invented flat JSON shapes:
+```python
+json.dumps({"exDividendDate": "2027-01-15"})
+json.dumps({"earningsDate": "2027-09-15"})
+```
+These match the extractor key expectations but do NOT match real
+`_build_dividends()` / `_build_overview()` output. All 167 tests pass, creating
+false confidence that the calendar extraction works against live data.
+
+---
+
+## 2. Why Review and Tests Missed These
+
+1. **No integration path through provider → extractor.** Tests hand-authored
+   fixture JSON instead of calling `_build_dividends()` / `_build_overview()`
+   to produce it. The extractor-to-provider contract was never exercised.
+
+2. **The design doc (§3.4) specified key names loosely** (`earningsTimestampStart`,
+   `next_earnings_date`, `ex_dividend_date_recent`) without stating whether they
+   refer to raw yfinance `info` dict keys or to the transformed provider page
+   structure. Livingston implemented extractors that match yfinance raw keys
+   rather than the page structure that `fetch_all` actually returns.
+
+3. **Exception handler was copy-pasted from the Step-4-only error path** without
+   removing the `error_msg` reference. The dead code block after `return` is
+   a merge remnant of the old implementation that was never cleaned up.
+
+4. **Behavioral tests didn't detect it** because the fail-closed fallback
+   (Cosmos calendar) is a valid outcome — tests assert a snapshot was built,
+   not that the yfinance path specifically populated the date.
+
+---
+
+## 3. Revision Ownership & Lockout
+
+| Agent | Role | Status |
+|---|---|---|
+| **Livingston** | Original author of `contract_validation_integration.py` changes and `test_contract_validation_calendar.py` | **LOCKED OUT** — authored the buggy code |
+| **Rusty** | Revision author | **ELIGIBLE** — no authorship on affected files |
+| **Basher** | Reviewer / gate | Re-reviews Rusty's revision |
+
+---
+
+## 4. Exact Extractor Behavior Specification
+
+### 4.1 `_extract_earnings_from_overview(overview_json: str) -> str | None`
+
+1. Parse `overview_json` as JSON. On parse failure → return `None`.
+2. Navigate to `root["fundamentals"]["earnings_release_next_date_fq"]`.
+   If any key is missing → return `None`.
+3. Read `field["value"]`. This is an epoch int (from yfinance `earningsTimestampStart`).
+4. If value is `int` or `float`: convert via `datetime.fromtimestamp(value, tz=utc)`, return `YYYY-MM-DD`.
+5. If value is `str` and matches `YYYY-MM-DD` → return as-is.
+6. If value is `str` in ISO format → parse and return `YYYY-MM-DD`.
+7. If value is `None` or unparseable → return `None`.
+8. **Fallback:** Also check `field.get("formatted")`. If value extraction fails but formatted is a parseable date string → parse and return `YYYY-MM-DD`.
+
+### 4.2 `_extract_exdiv_from_dividends(dividends_json: str) -> str | None`
+
+1. Parse `dividends_json` as JSON. On parse failure → return `None`.
+2. Navigate to `root["dividends"]["ex_dividend_date_recent"]`.
+   If any key is missing → return `None`.
+3. Read `field["value"]`. This is an epoch int (from yfinance `exDividendDate`).
+4. If value is `int` or `float`: convert via `datetime.fromtimestamp(value, tz=utc)`, return `YYYY-MM-DD`.
+5. If value is `str` and matches `YYYY-MM-DD` → parse as date.
+6. If value is `str` in ISO format → parse to date.
+7. If value is `None` or unparseable → return `None`.
+8. **Fallback:** Also check `field.get("formatted")`. If value extraction fails but formatted is a parseable date string → parse and return `YYYY-MM-DD`.
+9. **Future-only gate:** If parsed date < today (UTC) → return `None`.
+
+### 4.3 `_extract_exchange(overview_json: str) -> str`
+
+1. Parse JSON. Navigate to `root["exchange"]`. If present and non-empty → return it.
+2. This field IS at the top level of the overview structure, so current implementation is correct.
+3. Default → `"UNKNOWN"`.
+
+---
+
+## 5. Exception Flow Cleanup Specification
+
+### 5.1 Outer `except Exception` Handler
+
+Replace:
+```python
+except Exception as e:
+    ...
+    "note": f"Invalid market data: {error_msg}",
+    "error": "invalid_market_data",
+```
+With:
+```python
+except Exception as e:
+    logger.error(f"[{run_id}] Validation error: {e}", exc_info=True)
+    await _persist_validation_activity(
+        cosmos=cosmos,
+        run_id=run_id,
+        symbol=symbol,
+        side=side,
+        strike=strike,
+        expiration=expiration,
+        source=source,
+        displayed_snapshot=displayed_snapshot,
+        evaluated_snapshot=None,
+        result={
+            "activity": "WAIT",
+            "is_alert": False,
+            "validation_status": "error",
+            "note": f"Validation error: {str(e)}",
+            "error": "validation_exception",
+        },
+    )
+```
+
+Key changes:
+- Use `str(e)` (always defined) instead of `error_msg` (conditionally assigned).
+- Use `"error": "validation_exception"` to distinguish from the Step-4 specific `"invalid_market_data"`.
+
+### 5.2 Dead Code Removal
+
+Delete the entire unreachable block after the first `except` handler's `return`
+statement (lines ~1005–1095 approximately). This includes the duplicate
+`_build_evaluated_snapshot`, `run_contract_validation`,
+`_persist_validation_activity`, and second `except Exception` handler.
+
+### 5.3 Verification
+
+After cleanup, the `_execute_validation` function must have exactly:
+- One `try` block
+- Multiple early-return error paths inside (fetch fail, chain missing, contract missing, evidence invalid) — each calling `_persist_validation_activity` with WAIT
+- One success path (steps 5–7) ending with `_persist_validation_activity`
+- One `except Exception` handler referencing only guaranteed-bound locals
+- One `finally` block cleaning up `_in_flight_validations`
+- Zero code after `return` statements
+
+---
+
+## 6. Prevention Tests
+
+### 6.1 Provider-Shape Integration Tests (NEW — required)
+
+These tests call the actual provider builder to produce fixture data, then pass
+it through the extractor. They fail if the extractor-to-provider contract drifts.
+
+**Test: `test_extract_earnings_from_real_overview_shape`**
+```
+1. Call _build_overview(info={"earningsTimestampStart": 1725984000, "symbol": "TEST", ...})
+2. Pass result to _extract_earnings_from_overview()
+3. Assert result == "2024-09-10"
+```
+
+**Test: `test_extract_exdiv_from_real_dividends_shape`**
+```
+1. Call _build_dividends(info={"exDividendDate": <future_epoch>, ...}, ticker=mock_ticker)
+2. Pass result to _extract_exdiv_from_dividends()
+3. Assert result is not None and is a YYYY-MM-DD string
+```
+
+**Test: `test_extract_earnings_none_when_no_earnings_in_overview`**
+```
+1. Call _build_overview(info={"symbol": "TEST"})  # no earnings fields
+2. Pass result to _extract_earnings_from_overview()
+3. Assert result is None
+```
+
+**Test: `test_extract_exdiv_none_when_past_date_in_real_shape`**
+```
+1. Call _build_dividends(info={"exDividendDate": 946684800}, ...)  # 2000-01-01
+2. Pass result to _extract_exdiv_from_dividends()
+3. Assert result is None  (future-only gate)
+```
+
+**Test: `test_extract_exdiv_formatted_fallback`**
+```
+1. Build dividends JSON with value=None but formatted="2027-01-15"
+2. Pass to _extract_exdiv_from_dividends()
+3. Assert result == "2027-01-15" (formatted fallback)
+```
+
+### 6.2 Exception Flow Tests (NEW — required)
+
+**Test: `test_execute_validation_json_parse_error_persists_wait`**
+```
+1. Provider returns {"options_chain": "not-valid-json", ...}
+2. Run _execute_validation()
+3. Assert cosmos.write_activity called with activity="WAIT", validation_status="error"
+4. Assert no NameError raised
+```
+
+**Test: `test_execute_validation_early_exception_no_undefined_locals`**
+```
+1. Provider returns valid full_data but contract lookup raises ValueError
+2. Run _execute_validation()
+3. Assert WAIT persisted — not swallowed by NameError
+```
+
+### 6.3 Existing Flat-Fixture Tests
+
+The existing tests in `test_contract_validation_calendar.py` that use flat JSON
+shapes must be updated to use production-shaped nested structures. The flat-shape
+tests may be kept as a secondary "raw yfinance info" path only if the extractors
+are explicitly documented to also accept raw info dicts (which they should NOT —
+the input is always `fetch_all` output).
+
+**Decision:** Remove or rewrite flat-fixture tests. Do not maintain two
+incompatible input assumptions.
+
+---
+
+## 7. Acceptance Gate
+
+### 7.1 Files Rusty May Modify
+
+| File | Scope |
+|---|---|
+| `backend/src/contract_validation_integration.py` | Extractors (`_extract_earnings_from_overview`, `_extract_exdiv_from_dividends`), outer `except` handler, dead code removal |
+| `backend/tests/test_contract_validation_calendar.py` | All test classes — rewrite fixtures to use provider-shaped data |
+
+### 7.2 Files Rusty Must NOT Modify
+
+- `backend/src/yfinance_data_provider.py` (provider is correct; extractors must conform to it)
+- `backend/src/agent_runner.py`
+- Any other production file
+
+### 7.3 Acceptance Criteria (all must pass)
+
+1. **Extractor reads nested path:** `_extract_earnings_from_overview` navigates
+   `root.fundamentals.earnings_release_next_date_fq.value` — not flat top-level keys.
+2. **Extractor reads nested path:** `_extract_exdiv_from_dividends` navigates
+   `root.dividends.ex_dividend_date_recent.value` — not flat top-level keys.
+3. **Epoch handling:** Both extractors handle `int`/`float` epoch values (the
+   primary type in provider output).
+4. **Formatted fallback:** Both extractors fall back to `field["formatted"]`
+   when value is `None` or unparseable.
+5. **Exception handler:** Outer `except` uses only guaranteed-bound locals; no
+   reference to `error_msg`.
+6. **Dead code removed:** No unreachable code after `return` in any handler.
+7. **Provider-shape integration tests exist:** At least 4 tests that call
+   `_build_overview` / `_build_dividends` and pipe output through extractors.
+8. **Exception flow tests exist:** At least 2 tests proving early failures
+   persist WAIT without `NameError`.
+9. **All existing tests pass** (167 + new tests).
+10. **No functional regression:** `_extract_exchange` still works (top-level
+    `exchange` field is correct in overview structure).
+
+### 7.4 Gate Process
+
+Rusty submits → Basher reviews against criteria 1–10 → Danny final sign-off.
+
+---
+
+## 8. Actions for Rusty
+
+```
+ACTION-1: Fix _extract_earnings_from_overview
+  File: backend/src/contract_validation_integration.py
+  Change: Navigate root["fundamentals"]["earnings_release_next_date_fq"]["value"]
+          Handle epoch int → YYYY-MM-DD conversion
+          Add formatted-string fallback via field["formatted"]
+          Remove flat-key lookups (earningsTimestamp, earningsDate)
+
+ACTION-2: Fix _extract_exdiv_from_dividends
+  File: backend/src/contract_validation_integration.py
+  Change: Navigate root["dividends"]["ex_dividend_date_recent"]["value"]
+          Handle epoch int → YYYY-MM-DD conversion
+          Add formatted-string fallback via field["formatted"]
+          Keep future-only gate
+          Remove flat-key lookups (ex_dividend_date_recent at top level, exDividendDate)
+
+ACTION-3: Fix outer except handler
+  File: backend/src/contract_validation_integration.py
+  Change: Replace error_msg with str(e)
+          Replace "invalid_market_data" error code with "validation_exception"
+
+ACTION-4: Remove dead code block
+  File: backend/src/contract_validation_integration.py
+  Change: Delete unreachable code after first except handler's return (~lines 1005-1095)
+
+ACTION-5: Rewrite test fixtures
+  File: backend/tests/test_contract_validation_calendar.py
+  Change: Replace all flat JSON fixtures with _build_overview/_build_dividends output
+          Add provider-shape integration tests (§6.1)
+          Add exception flow tests (§6.2)
+          Remove or rewrite tests that assume flat key structure
+
+ACTION-6: Run full test suite, confirm 167+ all green
+```
+
+---
+
+## History
+
+| Date | Event |
+|---|---|
+| 2026-08-31 | Danny authored `danny-validation-full-context-parity.md` — accepted design for full market-context parity in validation |
+| 2026-08-31 | Livingston implemented extractors + tests in `contract_validation_integration.py` and `test_contract_validation_calendar.py` |
+| 2026-08-31 | Basher rejected: 3 findings (flat-key extractors, unbound error_msg, invented fixtures). All 167 tests pass = false confidence |
+| 2026-08-31 | Danny retrospective (this document): root-cause analysis, Livingston locked out, Rusty assigned for revision with exact specs |

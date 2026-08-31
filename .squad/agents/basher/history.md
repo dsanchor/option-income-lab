@@ -2444,3 +2444,161 @@ lockout-reassigned revision. 9 files changed, 689 insertions, 58 deletions.
 
 **Verdict: APPROVE**
 
+
+## 2026-08-31 — Best Options Validation: Gate Review — Calendar Extractors (REJECT + REVISION ASSIGN)
+
+**Context:** Livingston submitted implementation of Danny's accepted full-context-parity design. Basher conducted gate review per standardized validation checklist.
+
+**Owner:** Basher — Code review, gate decision, acceptance criteria
+
+**Status:** REVISION REQUIRED
+
+**Scope:** `contract_validation_integration.py` calendar extractors and tests
+
+### Findings (Review Session 1 — REJECT)
+
+#### CRITICAL-1: Extractor-Provider Shape Mismatch
+- **File:** `contract_validation_integration.py` (extractors)
+- **Finding:** `_extract_earnings_from_overview` reads flat top-level keys:
+  ```python
+  data.get("earningsTimestamp")  # ❌ not found in real output
+  data.get("earningsDate")       # ❌ not found in real output
+  ```
+  Real `_build_overview()` output structure:
+  ```python
+  data["fundamentals"]["earnings_release_next_date_fq"]["value"]  # ← correct path
+  ```
+- **Impact:** Extractor always returns `None` against live provider output → fallback to Cosmos calendar → original ex-dividend omission bug reproduced
+- **Same issue in:** `_extract_exdiv_from_dividends` (flat keys vs nested `root.dividends.ex_dividend_date_recent.value`)
+- **Root cause:** Extractors implement against yfinance raw `info` dict keys, not against `_build_overview`/`_build_dividends` output shapes
+
+#### CRITICAL-2: Unbound Variable in Exception Handler
+- **File:** `contract_validation_integration.py` (line ~993)
+- **Finding:** Outer `except Exception` handler references `error_msg`:
+  ```python
+  "note": f"Invalid market data: {error_msg}",
+  ```
+  But `error_msg` is only assigned in Step 4 (`_validate_contract_evidence`). If exception fires before Step 4 (JSON parse, contract lookup, etc.), `error_msg` is undefined → `NameError` → `_persist_validation_activity` itself fails → WAIT activity never persisted
+- **Impact:** Silent loss of validation result on parse failures
+- **Dead code:** Unreachable duplicate of Steps 5-7 after return statement obscures control flow
+
+#### HIGH-3: Test Fixture Fragility
+- **File:** `test_contract_validation_calendar.py`
+- **Finding:** All fixtures hand-author flat JSON shapes:
+  ```python
+  json.dumps({"exDividendDate": "2027-01-15"})
+  json.dumps({"earningsDate": "2027-09-15"})
+  ```
+  These match extractor expectations but DO NOT match real `_build_dividends()`/`_build_overview()` output (which use nested structure + epoch ints in `value` field)
+- **Impact:** 167 passing tests = false confidence. Tests never exercise actual provider-to-extractor contract.
+- **Root cause:** Tests don't call actual `_build_overview`/`_build_dividends` to generate fixtures
+
+### Gate Decision: REJECT
+- **Reason:** 3 critical findings block acceptance. Livingston (author of buggy code) locked out per strict lockout policy.
+- **Revision path:** Rusty assigned as revision author
+- **Next review:** Basher re-reviews Rusty's submission against 10-criterion gate (see `.squad/decisions.md`)
+
+### Acceptance Criteria for Revision (10 items):
+1. ✅ Extractor reads nested path (earnings)
+2. ✅ Extractor reads nested path (exdiv)
+3. ✅ Epoch handling (int/float → YYYY-MM-DD)
+4. ✅ Formatted fallback active
+5. ✅ Exception handler uses guaranteed-bound locals only
+6. ✅ Zero dead code after return
+7. ✅ Provider-shape integration tests (≥4)
+8. ✅ Exception flow tests (≥2)
+9. ✅ All 167+ existing tests pass
+10. ✅ No functional regression (exchange field)
+
+**Interdependencies:**
+- Blocks production fix for original ex-dividend omission
+- Parallel issue: provider hang investigation (Danny) — requires separate fix in provider injection seam
+- Non-responsive original reviewer: replaced with Basher for re-review
+
+**Timeline:**
+- 2026-08-31 T09:13 — Initial implementation submitted
+- 2026-08-31 T09:59 — Basher REJECT + findings documented
+- 2026-08-31 PENDING — Rusty revision (expected <1d turnaround)
+- 2026-08-31 PENDING — Basher re-review (expected <2h turnaround after Rusty submits)
+
+## 2026-08-31 — Best Options Validation: Gate Review — Calendar Extractors (APPROVE AFTER REVISION)
+
+**Context:** Rusty submitted revised implementation fixing all 3 critical findings identified in initial review. Basher conducted gate review against 10-criterion acceptance gate.
+
+**Owner:** Basher — Code review, gate decision, final approval
+
+**Status:** REVISION APPROVED ✅
+
+**Scope:** Rusty's fixes to `contract_validation_integration.py` and `test_contract_validation_calendar.py`
+
+### Revision Verification (Review Session 2 — APPROVE)
+
+#### Criterion 1-2: Nested Path Navigation ✅
+- `_extract_earnings_from_overview` navigates `root["fundamentals"]["earnings_release_next_date_fq"]["value"]`
+- `_extract_exdiv_from_dividends` navigates `root["dividends"]["ex_dividend_date_recent"]["value"]`
+- Both extractors correctly match real provider output structure (not flat top-level keys)
+
+#### Criterion 3: Epoch Handling ✅
+- Both extractors handle `int`/`float` epoch values (primary type in provider output)
+- Conversion via `datetime.fromtimestamp(value, tz=utc)` → YYYY-MM-DD format
+- ISO string parsing fallback also implemented
+
+#### Criterion 4: Formatted Fallback ✅
+- Both extractors fall back to `field.get("formatted")` when value is `None` or unparseable
+- Fallback activates deterministically when primary value extraction fails
+
+#### Criterion 5: Exception Handler ✅
+- Outer `except Exception` uses `str(e)` (always defined) instead of conditional `error_msg`
+- Error code changed to `"validation_exception"` (distinct from Step-4 `"invalid_market_data"`)
+- All exception paths now safe
+
+#### Criterion 6: Dead Code Removal ✅
+- Unreachable block after first except handler's return statement deleted
+- Duplicate Steps 5-7 and second except handler removed
+- Control flow now clear and unambiguous
+
+#### Criterion 7: Provider-Shape Integration Tests ✅
+- 4+ new tests calling actual `_build_overview`/`_build_dividends` to produce fixtures
+- Tests pipe provider output directly through extractors
+- Integration contract between provider and extractors now exercised and verified
+
+#### Criterion 8: Exception Flow Tests ✅
+- 2+ new tests proving early failures persist WAIT without NameError
+- JSON parse failure path verified
+- Contract lookup failure path verified
+
+#### Criterion 9: Test Regression ✅
+- All 167+ existing tests passing (no regression)
+- New tests integrated without breaking existing test suite
+- Flat-fixture tests rewritten to use production-shaped nested structures
+
+#### Criterion 10: Functional Regression ✅
+- `_extract_exchange` still works (top-level `exchange` field is correct in overview structure)
+- No side effects on other extractors or calendar logic
+
+### Test Results
+- **Before revision:** 167 tests passing (false confidence due to invented fixtures)
+- **After revision:** 167+ tests passing (with provider-shaped fixtures + new integration/exception tests)
+- **Timeline:** Coordinator ran full suite: 30/30 formerly-hanging tests in 10.18s + 124/124 parity suites in 9.21s (deterministic, non-flaky)
+
+### Gate Decision: APPROVE ✅
+- **Reason:** All 10 acceptance criteria met. Fixes address root causes.
+- **Scope approved for production:** Changes to `contract_validation_integration.py` (extractors + exception handler) and `test_contract_validation_calendar.py` (fixtures + new tests)
+- **Impact:** Production fix for original ex-dividend omission bug now unblocked
+- **Next step:** Commit `dfe3385 Align validation with Following market context` to main
+
+### Process Notes
+- Original reviewer became non-responsive; Basher (replacement) handled both initial rejection and second approval
+- Strict lockout compliance: Rusty (non-author) handled all revisions; Livingston unable to participate
+- No defects found in revision
+
+**Interdependencies:**
+- Parallel issue: provider hang investigation (Danny/Livingston) — separate PR required for DI bypass fix
+- Calendar extraction now production-ready
+
+**Timeline:**
+- 2026-08-31 T09:13 — Initial implementation submitted
+- 2026-08-31 T09:59 — Basher REJECT + findings documented
+- 2026-08-31 [Rusty revision window]
+- 2026-08-31 — Basher re-review and APPROVE
+- 2026-08-31 — Push commit `dfe3385` to origin/main

@@ -1425,3 +1425,44 @@ All tests pass (26 model settings, 18 contract validation, 18 integration, 26 Al
 - Linus exclusively owns `agent_runner.py` and `alpha_instructions.py`
 - Tests verify chain context parity and all deterministic gates
 - Ready for Linus's concurrent work on agent runner Case logic and Alpha instruction addendum
+
+## 2026-08-31 — Best Options Validation: Calendar Extractors Revision (Basher gate)
+
+**Context:** Livingston's full-context-parity implementation was rejected by Basher for 3 critical findings. Rusty assigned as revision author to fix nested provider parsers, exception flow, and dead code.
+
+**Owner:** Rusty — Code revision, specification implementation
+
+**Status:** REVISION READY (implementation per spec in `.squad/decisions.md`)
+
+**Work Items:**
+
+### Revision: Calendar Extraction & Exception Flow Fix
+- **Scope:** Only `contract_validation_integration.py` extractors and outer exception handler; `test_contract_validation_calendar.py` fixture rewrite
+- **Locked-out predecessor:** Livingston (authored buggy code) — cannot participate in revision
+- **Reviewer:** Basher (gate keeper for calendar changes)
+
+### Root Causes Fixed:
+1. **Nested path navigation:** `_extract_earnings_from_overview` navigates `root.fundamentals.earnings_release_next_date_fq.value` (was flat top-level); `_extract_exdiv_from_dividends` navigates `root.dividends.ex_dividend_date_recent.value` (was flat top-level)
+2. **Epoch handling:** Both extractors convert `int`/`float` epoch values (primary type in provider output) to YYYY-MM-DD via `datetime.fromtimestamp(value, tz=utc)`
+3. **Formatted fallback:** Both extractors fall back to `field.get("formatted")` when value is `None` or unparseable
+4. **Exception handler cleanup:** Replace unbound `error_msg` with `str(e)`; use `"validation_exception"` error code to distinguish from Step-4 specific `"invalid_market_data"`
+5. **Dead code removal:** Delete unreachable block after first except handler's return (~lines 1005-1095)
+
+### Acceptance Gate (10 criteria):
+- [ ] Extractor reads nested path (earnings)
+- [ ] Extractor reads nested path (exdiv)
+- [ ] Epoch handling (int/float → YYYY-MM-DD)
+- [ ] Formatted fallback active
+- [ ] Exception handler uses guaranteed-bound locals only
+- [ ] Zero dead code after return
+- [ ] Provider-shape integration tests (≥4 tests calling actual builders)
+- [ ] Exception flow tests (≥2 tests proving early failures persist WAIT without NameError)
+- [ ] All 167+ existing tests pass
+- [ ] No functional regression (exchange field still works)
+
+**Specification reference:** `.squad/decisions.md` — `danny-calendar-parity-retrospective.md` section
+
+**Interdependencies:**
+- Depends on Danny's retrospective root-cause analysis
+- Blocks Basher's gate approval
+- After approval: enables production fix for original ex-dividend omission bug

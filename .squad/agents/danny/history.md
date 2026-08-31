@@ -875,3 +875,52 @@ Decision: `.squad/decisions/inbox/danny-chain-aware-validation-design.md` (accep
 **Decision:** `.squad/decisions/inbox/danny-calendar-parity-retrospective.md` — contains exact extractor specs (nested navigation, epoch handling, formatted fallback), exception-flow cleanup spec, provider-shape integration test requirements, and narrow acceptance gate (10 criteria). Rusty authorized to modify only `contract_validation_integration.py` (extractors + exception handler) and `test_contract_validation_calendar.py` (fixture rewrite).
 
 **Reusable lesson: test fixtures that hand-author the shape of an upstream dependency's output are inherently fragile. Integration tests must call the actual builder to produce fixtures — if the builder changes shape, the test fails immediately instead of silently diverging.**
+
+## 2026-08-31 — Best Options Validation: Full Context Parity (Design + Retrospectives)
+
+**Context:** User reported Best Option validation missed an ex-dividend date present in calendar, requesting parity with normal Following coverage. Linus/Rusty audits found validation copied chain context but omitted canonical Following overview, technicals, forecast, dividends, enrichment, volatility.
+
+**Owner:** Danny (Lead) — Design, retrospective analysis, acceptance gate specification
+
+**Work Items:**
+
+### (1) Design: Full Market-Context Parity (ACCEPTED)
+- **Document:** `.squad/decisions.md` (merged from inbox)
+- **Core principle:** One canonical `fetch_all(force_refresh=True)` — feeds full 6-page block + contract evidence to all three agents (Primary, Supervisor, Alpha)
+- **Chain reuse:** Single refresh boundary. `fetch_all` refreshes chain internally; old `_force_chain_refresh` call removed (duplicate)
+- **Fail-closed SELL:** If `fetch_all` fails → WAIT + `error=full_context_unavailable`, not silent fallback
+- **Calendar robustness:** Live yfinance dates primary; Cosmos fallback with provenance logging
+- **Immutable contract evidence:** Separate labeled section in prompt, never replaced
+
+### (2) Retrospective: Validation Suite Hang (4h+ deadlock)
+- **Root cause:** Line 863 `_execute_validation` bypasses injected `context_provider`, calls global `get_shared_provider()` singleton
+- **Evidence chain:** app.py → ContextProvider → start_validation(context_provider=...) → _execute_validation(...) → **ignored parameter** → `get_shared_provider()` → real network I/O
+- **Classification:** Production DI defect + test false-patch + event-loop deadlock (all three compound)
+- **Impact:** 4h+ CI hang at 74% suite completion, >100 blocked test runs
+- **Fix spec:** Provider must be explicit parameter to both `start_validation` and `_execute_validation`, injected by caller. Tests inject mock provider at seam
+- **Ownership:** Livingston (contract_validation_integration.py + test files fix)
+- **Document:** `.squad/decisions.md` (merged from inbox)
+
+### (3) Retrospective: Calendar Parity Extractors (Basher rejection)
+- **Trigger:** Basher rejected Livingston's full-context-parity calendar extractors (3 findings)
+- **Root causes (CRITICAL):**
+  1. **Extractor-provider shape mismatch:** Extractors read flat top-level keys (`earningsTimestamp`, `exDividendDate`), but real `_build_overview`/`_build_dividends` output nests dates under `fundamentals.earnings_release_next_date_fq.value` and `dividends.ex_dividend_date_recent.value`. Live yfinance dates always `None`; Cosmos fallback silently activates → original bug reproduced
+  2. **Unbound `error_msg` in outer exception handler:** Reference to Step-4-only variable in catch-all → `NameError` on pre-Step-4 failures → WAIT activity never persisted. Dead duplicate code block after `return` compounds issue
+  3. **Test fixture fragility:** All flat JSON shapes match extractor expectations but not real provider output. 167 passing tests = false confidence
+- **Ownership resolution:** Livingston locked out (authored buggy code). Rusty assigned as revision author
+- **Spec:** Exact extractor behavior (nested navigation, epoch handling, formatted fallback), exception-flow cleanup, provider-shape integration test requirements (4+ new tests), acceptance gate (10 criteria)
+- **Document:** `.squad/decisions.md` (merged from inbox)
+
+**Reusable Lessons:**
+1. When an LLM output schema has approval/endorsement field, verify code reads exact field name (discovered dead approval checks in `run_contract_validation`)
+2. Test fixtures hand-authoring upstream dependency output are inherently fragile — integration tests must call actual builder
+3. Provider injection seams must be explicit parameters all the way down, not implicit module-level singletons
+
+**Artifacts:**
+- `.squad/decisions.md` — 3 new sections (design + 2 retrospectives)
+- `.squad/decisions/inbox/` — REMOVED (merged into main)
+
+**Interdependencies:**
+- Holds on Livingston's fix (provider hang + test fixture rewrite)
+- Holds on Rusty's revision (calendar extractors + exception flow)
+- Both gate on Basher's second review
