@@ -792,3 +792,38 @@ precedent).
 - Informs Danny's full-context-parity design
 - Enables Livingston's initial implementation (later rejected for other reasons)
 - Foundational for Rusty's calendar extractor revision
+
+---
+
+## 2026-08-31: Alpha Recommendation Badge Display — Frontend Fix
+
+**Issue:** Dashboard `RecentCell` component showed primary WAIT activity instead of Alpha SELL recommendation when `recommendation_source = "alpha"`.
+
+**Root Cause:** UI only rendered ALPHA badge when most recent primary activity was SELL. When primary activity was WAIT but Alpha provided SELL recommendation, ALPHA badge was suppressed.
+
+**Solution:** Modified `RecentCell` component in `frontend/src/components/DashboardAgentTables.tsx` to check `recommendationSource === "alpha"`. When true, render hardcoded SELL + ALPHA badges instead of mapping over primary activity list.
+
+**Implementation Details:**
+- Component: `RecentCell` in `DashboardAgentTables.tsx`
+- Logic: Check `recommendationSource === "alpha"` → render SELL + ALPHA
+- Fallback: Primary-sourced recommendations render normal activity list
+- Preservation: Click navigation and table styling unchanged
+
+**Validation:**
+- ✅ TypeScript: `npm run build` (noEmit) — clean compilation
+- ✅ ESLint: Targeted checks passed
+- ✅ Backend Tests: All 19 contract tests passed (`backend/tests/test_dashboard_alpha_fallback.py`)
+
+**Impact:**
+- Users now see correct Alpha recommendations (SELL + ALPHA) in dashboard
+- No backend logic changes
+- No performance impact
+- No breaking changes
+
+**Key Learning:** UI components must respect backend recommendation source flag as a data contract. Alpha fallback is not just a styling hint; it represents a backend decision that should drive UI rendering. The backend already correctly sets `recommendation_source = "alpha"` via `_build_dashboard_tables`; frontend just needed to honor that contract.
+
+**Related Files:**
+- Backend: `backend/web/app.py` (`_build_dashboard_tables`) — sets recommendation_source
+- Tests: `backend/tests/test_dashboard_alpha_fallback.py` — validates backend contract
+- Types: `frontend/src/types/dashboard.ts` — defines recommendationSource field
+- Decision: Documented in `.squad/decisions/decisions.md` (merged from inbox)

@@ -4119,3 +4119,62 @@ is to find alternatives, sees the full candidate set.
 
 - [ ] All six adversarial cases in §14.4 covered
 - [ ] At least one test that verifies the exact `rejection_reason` string from D4
+
+---
+
+## Alpha Recommendation Badge Display Fix (2026-08-31)
+
+**Author:** Linus (Quant Dev)  
+**Status:** Implemented  
+**Scope:** Frontend UI fix — RecentCell rendering in DashboardAgentTables.tsx  
+
+### Problem
+When Alpha agents generate SELL recommendations (via `recommendation_source = "alpha"`), the dashboard was showing the primary agent's WAIT activity instead of the Alpha SELL recommendation. Users expected to see both "SELL" and "ALPHA" badges when Alpha provided the recommendation.
+
+### Root Cause
+The `RecentCell` component in `DashboardAgentTables.tsx` only displayed the ALPHA tag when the most recent primary activity was already SELL. When the primary activity was WAIT but Alpha provided a SELL recommendation, the UI incorrectly displayed WAIT and suppressed the ALPHA badge.
+
+### Solution
+Modified `RecentCell` to check `recommendationSource === "alpha"` and, when true, display SELL + ALPHA badges instead of rendering the primary activity list. This ensures:
+
+1. Alpha-sourced recommendations always show "SELL" + "ALPHA" badges
+2. Primary-sourced recommendations show the normal activity list
+3. Click navigation behavior is preserved (links to the activity detail)
+4. Table alignment and styling remain consistent
+
+### Implementation Details
+
+**File Modified:**
+- `frontend/src/components/DashboardAgentTables.tsx` (Component: `RecentCell`)
+
+**Logic:**
+- When `recommendationSource === "alpha"`, render hardcoded SELL badge + ALPHA badge
+- Otherwise, render the normal primary activity list mapping
+
+**Backend Context:**
+- Backend (`backend/web/app.py`, `_build_dashboard_tables`) already correctly sets `recommendation_source` to "alpha" when Alpha provides the triplet
+- No backend changes needed
+
+### Testing & Validation
+
+- **TypeScript:** ✅ Type checking passed (`npm run build`)
+- **ESLint:** ✅ Targeted linting checks passed
+- **Backend Contract Tests:** ✅ All 19 tests passed (`backend/tests/test_dashboard_alpha_fallback.py`)
+  - Validates backend correctly sets `recommendation_source` field
+  - Validates Alpha recommendation triplet structure
+
+### Impact
+
+| Category | Impact |
+|----------|--------|
+| **Users** | Now see correct Alpha recommendations (SELL + ALPHA) in the dashboard |
+| **Backend Logic** | No change to data flow or validation logic |
+| **Performance** | No measurable impact |
+| **Breaking Changes** | None |
+
+### Related References
+
+- Backend implementation: `backend/web/app.py` (`_build_dashboard_tables`)
+- Contract tests: `backend/tests/test_dashboard_alpha_fallback.py`
+- Type definitions: `frontend/src/types/dashboard.ts`
+- Design context: Alpha agents can recommend SELL on nearby contracts by relaxing one parameter

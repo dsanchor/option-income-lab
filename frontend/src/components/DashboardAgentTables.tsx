@@ -59,25 +59,35 @@ function RecentCell({
 }) {
   if (paused || !items || items.length === 0) return <>—</>;
 
-  // Check if the most recent activity is a recommendation (SELL)
-  const hasRecommendation = items.length > 0 &&
-    items[0].activity?.toUpperCase() === "SELL";
-  const showAlphaTag = hasRecommendation && recommendationSource === "alpha";
+  // When recommendation_source is "alpha", display SELL + ALPHA badges
+  const isAlphaRec = recommendationSource === "alpha";
 
   return (
     <span className="inline-flex flex-wrap items-center gap-1">
-      {items.map((act, i) => (
-        <span key={i} className="inline-flex items-center gap-1">
+      {isAlphaRec ? (
+        <span className="inline-flex items-center gap-1">
           <Link
-            href={`/activities/${act.id}`}
+            href={`/activities/${items[0]?.id}`}
             onClick={(e) => e.stopPropagation()}
-            title={act.reason || act.timestamp?.slice(0, 16)}
+            title={items[0]?.reason || items[0]?.timestamp?.slice(0, 16)}
           >
-            <Badge style={activityStyle(act.activity)}>{act.activity || "N/A"}</Badge>
+            <Badge style={activityStyle("SELL")}>SELL</Badge>
           </Link>
-          {i === 0 && showAlphaTag && <Badge style={styleFor("purple")}>ALPHA</Badge>}
+          <Badge style={styleFor("purple")}>ALPHA</Badge>
         </span>
-      ))}
+      ) : (
+        items.map((act, i) => (
+          <span key={i} className="inline-flex items-center gap-1">
+            <Link
+              href={`/activities/${act.id}`}
+              onClick={(e) => e.stopPropagation()}
+              title={act.reason || act.timestamp?.slice(0, 16)}
+            >
+              <Badge style={activityStyle(act.activity)}>{act.activity || "N/A"}</Badge>
+            </Link>
+          </span>
+        ))
+      )}
     </span>
   );
 }
