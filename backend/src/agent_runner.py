@@ -4298,24 +4298,26 @@ All market data has been pre-fetched above. Please analyze this data and generat
         base_instructions = TV_COVERED_CALL_INSTRUCTIONS if agent_type == "covered_call" else TV_CASH_SECURED_PUT_INSTRUCTIONS
 
         # Build validation message
+        # After full-context parity: market_data_text contains the complete 4-page
+        # block + enrichment + volatility + labeled contract evidence section
         cat_key = normalize_category(category).replace("_", " ")
         message = f"""Validate this exact {side.upper()} contract for {symbol}.
 Category: {cat_key.title()}
 → Load the **category-params** skill for category-specific thresholds.
 
-Contract to validate:
-- Strike: ${strike}
-- Expiration: {expiration}
-- Underlying: ${underlying_price:.2f}
+=== PRE-FETCHED MARKET DATA ===
 
 {market_data_text}
+
+=== END OF DATA ===
 
 Previous activities for {symbol}:
 {previous_context}
 
 Current UTC timestamp: {timestamp}
 
-Analyze this EXACT contract and output your decision in the required JSON format.
+Analyze this EXACT contract (see VALIDATED CONTRACT EVIDENCE section above)
+and output your decision in the required JSON format.
 Use the timestamp above in your JSON output; do NOT generate your own."""
 
         # Initialize result
@@ -4429,12 +4431,13 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
             result["activity"] = activity
 
             # Build rule evaluation
+            # After full-context parity: pass enrichment_data from evidence_snapshot
             rule_eval = build_rule_evaluation(
                 agent_type=agent_type,
                 activity_data=activity_data,
                 phase="contract_validation",
                 category=category,
-                enrichment_data=None,
+                enrichment_data=evidence_snapshot.get("enrichment_data"),
             )
             result["rule_evaluation"] = rule_eval
 

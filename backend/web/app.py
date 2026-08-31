@@ -3630,7 +3630,18 @@ async def api_best_options_validate(
 
     context_provider = ContextProvider(cosmos)
 
-    # Start validation using the application-owned configured runner
+    # Get the app-owned provider (same one used by scheduler/following)
+    yf_provider = getattr(request.app.state, "yf_provider", None)
+    if yf_provider is None:
+        return JSONResponse(
+            {
+                "status": "error",
+                "message": "Contract validation infrastructure not available (provider not initialized)",
+            },
+            status_code=503,
+        )
+
+    # Start validation using the application-owned configured runner and provider
     result = await start_validation(
         symbol=payload.symbol,
         side=payload.side,
@@ -3641,6 +3652,7 @@ async def api_best_options_validate(
         cosmos=cosmos,
         agent_runner=scheduler.runner,
         context_provider=context_provider,
+        yf_provider=yf_provider,
     )
 
     # Map status to HTTP status code

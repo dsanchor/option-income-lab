@@ -860,3 +860,18 @@ Decision: `.squad/decisions/inbox/danny-chain-aware-validation-design.md` (accep
 **Ownership split kept conflict-free.** Rusty owns `contract_validation_integration.py` exclusively (chain context builder, D4 validator, persistence). Linus owns `agent_runner.py:run_contract_validation` exclusively (approval check fixes, Case A-F state machine, result dict augmentation). Interface contract frozen: one new input parameter (`chain_context_text: str`) and five new output fields. Livingston owns the cross-seam integration test.
 
 **Reusable lesson: when an LLM output schema has an approval/endorsement field, verify the code actually reads the field name the schema defines, not an assumed conventional name.** The `"APPROVE"` checks were plausible-looking code that compiled, tested green (because the fail-closed default is WAIT, which is a valid outcome), and passed review — but never matched any real model output. Schema-to-code field-name parity needs an explicit test, not inference from behavioral tests.
+
+### 2026-08-31 — Calendar Parity Retrospective (Basher rejection → Rusty revision)
+
+**Context:** Basher rejected Livingston's implementation of the full-context-parity calendar extractors (3 findings). Danny conducted post-rejection retrospective.
+
+**Root causes identified:**
+1. **CRITICAL — Extractor-provider shape mismatch.** `_extract_earnings_from_overview` and `_extract_exdiv_from_dividends` read flat top-level keys (`earningsTimestamp`, `exDividendDate`), but real `_build_overview`/`_build_dividends` output nests dates under `fundamentals.earnings_release_next_date_fq.value` and `dividends.ex_dividend_date_recent.value` respectively. Live yfinance dates always return `None`; Cosmos fallback silently activates, reproducing the original bug.
+2. **CRITICAL — Unbound `error_msg` in outer exception handler.** Reference to Step-4-only variable in the catch-all handler → `NameError` on pre-Step-4 failures → WAIT activity never persisted. Dead duplicate code block after `return` compounds the issue.
+3. **HIGH — Invented test fixtures.** All flat JSON shapes (`{"exDividendDate": "..."}`) match extractor expectations but not real provider output. 167 passing tests = false confidence.
+
+**Ownership resolution:** Livingston locked out (authored the buggy code). Rusty assigned as revision author. Basher re-reviews.
+
+**Decision:** `.squad/decisions/inbox/danny-calendar-parity-retrospective.md` — contains exact extractor specs (nested navigation, epoch handling, formatted fallback), exception-flow cleanup spec, provider-shape integration test requirements, and narrow acceptance gate (10 criteria). Rusty authorized to modify only `contract_validation_integration.py` (extractors + exception handler) and `test_contract_validation_calendar.py` (fixture rewrite).
+
+**Reusable lesson: test fixtures that hand-author the shape of an upstream dependency's output are inherently fragile. Integration tests must call the actual builder to produce fixtures — if the builder changes shape, the test fails immediately instead of silently diverging.**

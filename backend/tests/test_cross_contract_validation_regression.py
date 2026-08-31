@@ -139,8 +139,55 @@ def client(fake_cosmos, monkeypatch):
     fake_scheduler = MagicMock()
     fake_scheduler.runner = test_runner
 
-    # Inject scheduler into app state
+    # Create a fake provider with production-shaped fetch_all
+    fake_provider = MagicMock()
+    async def fake_fetch_all(symbol, force_refresh=False):
+        """Production-shaped full_data with all 4 pages."""
+        return {
+            "symbol": symbol,
+            "exchange": "NYSE",
+            "overview": {
+                "price": {"current": 75.0},
+                "fundamentals": {
+                    "earnings_release_next_date_fq": {
+                        "value": None,
+                        "formatted": "N/A"
+                    }
+                }
+            },
+            "dividends": {
+                "ex_dividend_date_recent": {
+                    "value": None,
+                    "formatted": "N/A"
+                }
+            },
+            "enrichment_data": {
+                "category": "balanced",
+                "volatility": {"implied_volatility_30d": 0.25}
+            },
+            "volatility": {"ivrank": 50},
+            "options_chain": {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "calls": {
+                    "2025-01-17": {
+                        "75.0": {
+                            "strike": 75.0,
+                            "bid": 2.5,
+                            "ask": 2.55,
+                            "mid": 2.525,
+                            "iv": 0.30,
+                            "delta": 0.25,
+                        }
+                    }
+                },
+                "puts": {}
+            }
+        }
+    fake_provider.fetch_all = fake_fetch_all
+
+    # Inject scheduler and provider into app state
     app.state.scheduler = fake_scheduler
+    app.state.yf_provider = fake_provider
 
     try:
         yield TestClient(app)
@@ -148,6 +195,8 @@ def client(fake_cosmos, monkeypatch):
         # Clean up app state
         if hasattr(app.state, "scheduler"):
             delattr(app.state, "scheduler")
+        if hasattr(app.state, "yf_provider"):
+            delattr(app.state, "yf_provider")
 
 
 class TestFrontendContractValidationPayload:

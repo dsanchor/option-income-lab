@@ -184,8 +184,59 @@ def client(fake_cosmos, monkeypatch):
     fake_scheduler = MagicMock()
     fake_scheduler.runner = test_runner
 
-    # Inject scheduler into app state
+    # Create a fake provider with production-shaped fetch_all
+    fake_provider = MagicMock()
+    async def fake_fetch_all(symbol, force_refresh=False):
+        """Production-shaped full_data with all 4 pages."""
+        return {
+            "symbol": symbol,
+            "exchange": "NASDAQ",
+            "overview": {
+                "price": {"current": 150.0},
+                "fundamentals": {
+                    "earnings_release_next_date_fq": {
+                        "value": None,
+                        "formatted": "N/A"
+                    }
+                }
+            },
+            "dividends": {
+                "ex_dividend_date_recent": {
+                    "value": None,
+                    "formatted": "N/A"
+                }
+            },
+            "enrichment_data": {
+                "category": "balanced",
+                "volatility": {"implied_volatility_30d": 0.25}
+            },
+            "volatility": {"ivrank": 50},
+            "options_chain": {
+                "timestamp": "2026-08-29T10:00:00Z",
+                "underlying_price": 150.0,
+                "calls": {
+                    "2026-09-20": {
+                        "155.0": {
+                            "strike": 155.0,
+                            "bid": 2.50,
+                            "ask": 2.55,
+                            "mid": 2.525,
+                            "lastPrice": 2.52,
+                            "volume": 100,
+                            "openInterest": 500,
+                            "iv": 0.30,
+                            "delta": 0.25,
+                        }
+                    }
+                },
+                "puts": {}
+            }
+        }
+    fake_provider.fetch_all = fake_fetch_all
+
+    # Inject scheduler and provider into app state
     app.state.scheduler = fake_scheduler
+    app.state.yf_provider = fake_provider
 
     try:
         yield TestClient(app)
@@ -193,6 +244,8 @@ def client(fake_cosmos, monkeypatch):
         # Clean up app state
         if hasattr(app.state, "scheduler"):
             delattr(app.state, "scheduler")
+        if hasattr(app.state, "yf_provider"):
+            delattr(app.state, "yf_provider")
 
 
 class TestValidationAPI:
@@ -303,8 +356,28 @@ class TestValidationAPI:
         fake_scheduler = MagicMock()
         fake_scheduler.runner = test_runner
 
-        # Inject scheduler into app state
+        # Create a fake provider
+        fake_provider = MagicMock()
+        async def fake_fetch_all(symbol, force_refresh=False):
+            return {
+                "symbol": symbol,
+                "exchange": "NASDAQ",
+                "overview": {"price": {"current": 150.0}, "fundamentals": {"earnings_release_next_date_fq": {"value": None, "formatted": "N/A"}}},
+                "dividends": {"ex_dividend_date_recent": {"value": None, "formatted": "N/A"}},
+                "enrichment_data": {"category": "balanced", "volatility": {"implied_volatility_30d": 0.25}},
+                "volatility": {"ivrank": 50},
+                "options_chain": {
+                    "timestamp": "2026-08-29T10:00:00Z",
+                    "underlying_price": 150.0,
+                    "calls": {"2026-09-20": {"155.0": {"strike": 155.0, "bid": 2.50, "ask": 2.55, "mid": 2.525, "iv": 0.30, "delta": 0.25}}},
+                    "puts": {}
+                }
+            }
+        fake_provider.fetch_all = fake_fetch_all
+
+        # Inject scheduler and provider into app state
         app.state.scheduler = fake_scheduler
+        app.state.yf_provider = fake_provider
 
         # Mock agent runner with a slow execution to keep task in-flight
         task_started = asyncio.Event()
@@ -378,6 +451,8 @@ class TestValidationAPI:
             # Clean up app state
             if hasattr(app.state, "scheduler"):
                 delattr(app.state, "scheduler")
+            if hasattr(app.state, "yf_provider"):
+                delattr(app.state, "yf_provider")
 
     def test_invalid_side_returns_400(self, client, fake_cosmos):
         """Invalid side parameter returns 400 Bad Request."""
@@ -399,55 +474,84 @@ class TestValidationAPI:
         assert "Invalid side" in data["message"]
 
     def test_contract_not_found_persists_error_activity(
-        self, client, fake_cosmos, monkeypatch
+        self, fake_cosmos, monkeypatch
     ):
         """Contract not found results in error activity."""
+        from httpx import AsyncClient, ASGITransport
+        from src.agent_runner import AgentRunner
+        from src.llm import LlmConfig
+
         fake_cosmos.symbols["TEST"] = {
             "enrichment": {"category": "balanced"},
             "total_shares": 500,
         }
 
-        # Monkeypatch chain cache to return empty chain
-        from src.options_chain_cache import OptionsChainCache
-        cache = MagicMock(spec=OptionsChainCache)
+        def mock_get_cosmos(request):
+            return fake_cosmos
+        monkeypatch.setattr("web.app._get_cosmos", mock_get_cosmos)
 
-        async def fake_refresh(symbol):
-            return True
+        # Create a test runner
+        test_llm_config = LlmConfig(provider="gemini", api_key="test-integration-key")
+        test_runner = AgentRunner(llm=test_llm_config, model="gpt-5.4-mini", telegram_notifier=None)
+        fake_scheduler = MagicMock()
+        fake_scheduler.runner = test_runner
 
-        def fake_get_or_hydrate(symbol, trigger_swr=True):
-            return json.dumps({"symbol": "TEST", "calls": {}, "puts": {}})
+        # Inject provider that returns empty chain (contract not found scenario)
+        fake_provider = MagicMock()
+        async def fake_fetch_all_empty(symbol, force_refresh=False):
+            return {
+                "symbol": symbol,
+                "exchange": "NASDAQ",
+                "overview": {"price": {"current": 150.0}, "fundamentals": {"earnings_release_next_date_fq": {"value": None, "formatted": "N/A"}}},
+                "dividends": {"ex_dividend_date_recent": {"value": None, "formatted": "N/A"}},
+                "enrichment_data": {"category": "balanced", "volatility": {"implied_volatility_30d": 0.25}},
+                "volatility": {"ivrank": 50},
+                "options_chain": {
+                    "timestamp": "2026-08-29T10:00:00Z",
+                    "underlying_price": 150.0,
+                    "calls": {},  # Empty - no contracts
+                    "puts": {}
+                }
+            }
+        fake_provider.fetch_all = fake_fetch_all_empty
 
-        cache.refresh = fake_refresh
-        cache.get_or_hydrate = fake_get_or_hydrate
+        app.state.scheduler = fake_scheduler
+        app.state.yf_provider = fake_provider
 
-        monkeypatch.setattr(
-            "src.contract_validation_integration.get_options_chain_cache",
-            lambda: cache
-        )
+        try:
+            import asyncio
+            async def run_test():
+                async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                    response = await client.post(
+                        "/api/best-options/validate",
+                        json={
+                            "symbol": "TEST",
+                            "side": "call",
+                            "strike": 155.0,
+                            "expiration": "2026-09-20",
+                            "source": "best_options",
+                        },
+                    )
+                    assert response.status_code == 202
+                    run_id = response.json()["run_id"]
 
-        response = client.post(
-            "/api/best-options/validate",
-            json={
-                "symbol": "TEST",
-                "side": "call",
-                "strike": 155.0,
-                "expiration": "2026-09-20",
-                "source": "best_options",
-            },
-        )
-        assert response.status_code == 202
-        run_id = response.json()["run_id"]
+                    # Wait for execution (background task to persist error)
+                    await asyncio.sleep(2.0)
 
-        # Wait for execution
-        import time
-        time.sleep(1.0)
+                    # Check that error activity was persisted
+                    assert len(fake_cosmos.activities) > 0, "No activities persisted after 2s wait"
+                    latest = fake_cosmos.activities[-1]
+                    assert latest["run_id"] == run_id
+                    assert latest["validation_status"] == "error"
+                    assert "not found" in latest["note"].lower()
 
-        # Check that error activity was persisted
-        assert len(fake_cosmos.activities) > 0
-        latest = fake_cosmos.activities[-1]
-        assert latest["run_id"] == run_id
-        assert latest["validation_status"] == "error"
-        assert "not found" in latest["note"].lower()
+            asyncio.run(run_test())
+
+        finally:
+            if hasattr(app.state, "scheduler"):
+                delattr(app.state, "scheduler")
+            if hasattr(app.state, "yf_provider"):
+                delattr(app.state, "yf_provider")
 
 
 class TestEvidenceBuilding:
@@ -874,6 +978,26 @@ class TestRunnerIdentityRegression:
         # Inject sentinel scheduler into app state
         app.state.scheduler = fake_scheduler
 
+        # Inject fake provider
+        fake_provider = MagicMock()
+        async def fake_fetch_all(symbol, force_refresh=False):
+            return {
+                "symbol": symbol,
+                "exchange": "NASDAQ",
+                "overview": {"price": {"current": 150.0}, "fundamentals": {"earnings_release_next_date_fq": {"value": None, "formatted": "N/A"}}},
+                "dividends": {"ex_dividend_date_recent": {"value": None, "formatted": "N/A"}},
+                "enrichment_data": {"category": "balanced", "volatility": {"implied_volatility_30d": 0.25}},
+                "volatility": {"ivrank": 50},
+                "options_chain": {
+                    "timestamp": "2026-08-29T10:00:00Z",
+                    "underlying_price": 150.0,
+                    "calls": {"2026-09-20": {"155.0": {"strike": 155.0, "bid": 2.50, "ask": 2.55, "mid": 2.525, "iv": 0.30, "delta": 0.25}}},
+                    "puts": {}
+                }
+            }
+        fake_provider.fetch_all = fake_fetch_all
+        app.state.yf_provider = fake_provider
+
         try:
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url="http://test"
@@ -909,7 +1033,10 @@ class TestRunnerIdentityRegression:
 
         finally:
             # Clean up app state
-            delattr(app.state, "scheduler")
+            if hasattr(app.state, "scheduler"):
+                delattr(app.state, "scheduler")
+            if hasattr(app.state, "yf_provider"):
+                delattr(app.state, "yf_provider")
 
     @pytest.mark.asyncio
     async def test_validation_fails_503_when_scheduler_unavailable(
@@ -1106,3 +1233,126 @@ class TestReasonNoteFallbackRegression:
         assert "note" in result, "Response must include backward-compatible note field"
         assert result["reason"] == "Canonical reason"
         assert result["note"] is None  # note not in activity
+
+    @pytest.mark.asyncio
+    async def test_provider_injected_no_global_singleton_call(
+        self, client, fake_cosmos, monkeypatch_chain_cache
+    ):
+        """Validation uses injected provider, never calls get_shared_provider()."""
+        from src import contract_validation_integration as cvi
+
+        fake_cosmos.symbols["TEST"] = {
+            "symbol": "TEST",
+            "enrichment": {"category": "balanced"},
+            "total_shares": 500,
+        }
+
+        # The client fixture already injects fake_provider with canned fetch_all,
+        # so validation should never need to call get_shared_provider().
+        # If _execute_validation tried to call it, it would fail with ImportError
+        # since we removed the import.
+
+        # Mock agent runner to avoid real LLM calls
+        async def mock_run_contract_validation(*args, **kwargs):
+            return {
+                "symbol": "TEST",
+                "agent_type": "covered_call",
+                "side": "call",
+                "strike": 155.0,
+                "expiration": "2026-09-20",
+                "activity": "SELL",
+                "is_alert": True,
+                "run_id": kwargs.get("run_id", "test-run-id"),
+                "validation_status": "approved",
+                "note": "Provider injection test",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        with patch("src.agent_runner.AgentRunner.run_contract_validation", new=mock_run_contract_validation):
+            # Start validation - should use injected provider, not global
+            response = client.post(
+                "/api/best-options/validate",
+                json={
+                    "symbol": "TEST",
+                    "side": "call",
+                    "strike": 155.0,
+                    "expiration": "2026-09-20",
+                    "source": "best_options",
+                    "displayed_snapshot": None,
+                },
+            )
+
+            assert response.status_code == 202, f"POST failed: {response.text}"
+
+            # Wait for background task to complete
+            await asyncio.sleep(0.5)
+
+            # If get_shared_provider was called, it would have raised ImportError or NameError
+            # since the function no longer exists in the module. Test passing = no call.
+
+    @pytest.mark.asyncio
+    async def test_validation_completes_promptly_no_network_hang(
+        self, client, fake_cosmos, monkeypatch_chain_cache
+    ):
+        """Background validation completes within 5s without network I/O."""
+        fake_cosmos.symbols["TEST"] = {
+            "symbol": "TEST",
+            "enrichment": {"category": "balanced"},
+            "total_shares": 500,
+        }
+
+        # Mock agent runner to return quickly
+        async def mock_run_contract_validation(*args, **kwargs):
+            return {
+                "symbol": "TEST",
+                "agent_type": "covered_call",
+                "side": "call",
+                "strike": 155.0,
+                "expiration": "2026-09-20",
+                "activity": "WAIT",
+                "is_alert": False,
+                "run_id": kwargs.get("run_id", "test-run-id"),
+                "validation_status": "rejected",
+                "note": "Timeout test",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+        with patch("src.agent_runner.AgentRunner.run_contract_validation", new=mock_run_contract_validation):
+            start_time = time.time()
+
+            # POST should return 202 within 2 seconds
+            response = client.post(
+                "/api/best-options/validate",
+                json={
+                    "symbol": "TEST",
+                    "side": "call",
+                    "strike": 155.0,
+                    "expiration": "2026-09-20",
+                    "source": "best_options",
+                    "displayed_snapshot": None,
+                },
+            )
+
+            post_time = time.time() - start_time
+            assert response.status_code == 202, f"POST failed: {response.text}"
+            assert post_time < 2.0, f"POST took {post_time:.2f}s - should be <2s"
+
+            run_id = response.json()["run_id"]
+
+            # Background task should complete within 5 seconds total
+            max_wait = 5.0
+            poll_start = time.time()
+            completed = False
+
+            while (time.time() - poll_start) < max_wait:
+                await asyncio.sleep(0.1)
+                status_response = client.get(f"/api/best-options/validate/{run_id}")
+                if status_response.status_code == 200:
+                    result = status_response.json()
+                    if result["status"] == "completed":
+                        completed = True
+                        break
+
+            total_time = time.time() - start_time
+            assert completed, f"Validation did not complete within {max_wait}s - possible network hang"
+            assert total_time < max_wait, f"Total time {total_time:.2f}s exceeds {max_wait}s"

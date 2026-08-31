@@ -46,8 +46,180 @@ def _validation_key(symbol: str, side: str, strike: float, expiration: str) -> s
     return f"{symbol.upper()}_{side.lower()}_{strike}_{expiration}"
 
 
+def _extract_earnings_from_overview(overview_json: str) -> Optional[str]:
+    """Extract next earnings date from yfinance overview JSON.
+
+    Navigates the actual provider structure:
+        root["fundamentals"]["earnings_release_next_date_fq"]["value"]
+
+    Returns YYYY-MM-DD or None if unavailable.
+    """
+    if not overview_json:
+        return None
+    try:
+        overview = json.loads(overview_json) if isinstance(overview_json, str) else overview_json
+
+        # Navigate to nested provider structure
+        fundamentals = overview.get("fundamentals")
+        if not fundamentals:
+            return None
+
+        earnings_field = fundamentals.get("earnings_release_next_date_fq")
+        if not earnings_field:
+            return None
+
+        # Extract value (epoch int from yfinance earningsTimestampStart)
+        earnings_value = earnings_field.get("value")
+
+        # Try primary value field
+        if earnings_value is not None:
+            if isinstance(earnings_value, (int, float)):
+                # Epoch timestamp → YYYY-MM-DD
+                earnings_dt = datetime.fromtimestamp(earnings_value, tz=timezone.utc)
+                return earnings_dt.date().isoformat()
+            elif isinstance(earnings_value, str):
+                # Already formatted string
+                if len(earnings_value) == 10 and earnings_value[4] == "-":
+                    return earnings_value
+                # ISO format → YYYY-MM-DD
+                try:
+                    earnings_dt = datetime.fromisoformat(earnings_value.replace("Z", "+00:00"))
+                    return earnings_dt.date().isoformat()
+                except (ValueError, AttributeError):
+                    pass
+
+        # Fallback to formatted field
+        formatted = earnings_field.get("formatted")
+        if formatted and isinstance(formatted, str):
+            if len(formatted) == 10 and formatted[4] == "-":
+                return formatted
+            try:
+                earnings_dt = datetime.fromisoformat(formatted.replace("Z", "+00:00"))
+                return earnings_dt.date().isoformat()
+            except (ValueError, AttributeError):
+                pass
+
+        return None
+    except (ValueError, TypeError, json.JSONDecodeError) as e:
+        logger.debug(f"Failed to extract earnings from overview: {e}")
+        return None
+
+
+def _extract_exdiv_from_dividends(dividends_json: str) -> Optional[str]:
+    """Extract next ex-dividend date from yfinance dividends JSON.
+
+    Navigates the actual provider structure:
+        root["dividends"]["ex_dividend_date_recent"]["value"]
+
+    Returns YYYY-MM-DD or None if unavailable or in past.
+    """
+    if not dividends_json:
+        return None
+    try:
+        dividends_doc = json.loads(dividends_json) if isinstance(dividends_json, str) else dividends_json
+
+        # Navigate to nested provider structure
+        dividends = dividends_doc.get("dividends")
+        if not dividends:
+            return None
+
+        ex_date_field = dividends.get("ex_dividend_date_recent")
+        if not ex_date_field:
+            return None
+
+        # Extract value (epoch int from yfinance exDividendDate)
+        ex_date_value = ex_date_field.get("value")
+        ex_date_str = None
+
+        # Try primary value field
+        if ex_date_value is not None:
+            if isinstance(ex_date_value, (int, float)):
+                # Epoch timestamp → YYYY-MM-DD
+                ex_dt = datetime.fromtimestamp(ex_date_value, tz=timezone.utc)
+                ex_date_str = ex_dt.date().isoformat()
+            elif isinstance(ex_date_value, str):
+                # Already formatted string
+                if len(ex_date_value) == 10 and ex_date_value[4] == "-":
+                    ex_date_str = ex_date_value
+                else:
+                    try:
+                        ex_dt = datetime.fromisoformat(ex_date_value.replace("Z", "+00:00"))
+                        ex_date_str = ex_dt.date().isoformat()
+                    except (ValueError, AttributeError):
+                        pass
+
+        # Fallback to formatted field
+        if ex_date_str is None:
+            formatted = ex_date_field.get("formatted")
+            if formatted and isinstance(formatted, str):
+                if len(formatted) == 10 and formatted[4] == "-":
+                    ex_date_str = formatted
+                else:
+                    try:
+                        ex_dt = datetime.fromisoformat(formatted.replace("Z", "+00:00"))
+                        ex_date_str = ex_dt.date().isoformat()
+                    except (ValueError, AttributeError):
+                        pass
+
+        # Future-only gate
+        if ex_date_str:
+            today = datetime.now(timezone.utc).date()
+            try:
+                ex_date_obj = datetime.strptime(ex_date_str, "%Y-%m-%d").date()
+                if ex_date_obj >= today:
+                    return ex_date_str
+            except ValueError:
+                pass
+
+        return None
+    except (ValueError, TypeError, json.JSONDecodeError) as e:
+        logger.debug(f"Failed to extract ex-dividend from dividends: {e}")
+        return None
+
+
+def _extract_exchange(overview_json: str) -> str:
+    """Extract exchange from overview JSON. Default 'UNKNOWN'."""
+    if not overview_json:
+        return "UNKNOWN"
+    try:
+        overview = json.loads(overview_json) if isinstance(overview_json, str) else overview_json
+        return overview.get("exchange") or overview.get("fullExchangeName") or "UNKNOWN"
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return "UNKNOWN"
+
+
+def _resolve_calendar_date(
+    yf_date: Optional[str],
+    cosmos_date: Optional[str],
+    event_type: str,
+) -> tuple[Optional[str], str]:
+    """Return (date, source). Prefer yfinance; fallback to Cosmos.
+
+    Args:
+        yf_date: Date from yfinance live fetch (YYYY-MM-DD)
+        cosmos_date: Date from Cosmos calendar (YYYY-MM-DD)
+        event_type: Event type for logging ("earnings" or "ex_dividend")
+
+    Returns:
+        (resolved_date, source) where source is "yfinance", "cosmos", or "none"
+    """
+    if yf_date and cosmos_date and yf_date != cosmos_date:
+        logger.warning(
+            "Calendar conflict for %s: yfinance=%s, cosmos=%s — using yfinance (fresher)",
+            event_type, yf_date, cosmos_date,
+        )
+    if yf_date:
+        return yf_date, "yfinance"
+    if cosmos_date:
+        return cosmos_date, "cosmos"
+    return None, "none"
+
+
 async def _force_chain_refresh(symbol: str) -> bool:
-    """Force a targeted chain refresh for the symbol.
+    """DEPRECATED: Force a targeted chain refresh for the symbol.
+
+    Superseded by fetch_all(force_refresh=True) in full-context parity design.
+    Retained for backward compatibility with external callers/tests.
 
     Returns:
         bool: True if refresh succeeded, False otherwise
@@ -406,6 +578,9 @@ async def _build_evaluated_snapshot(
     contract: dict,
     chain: dict,
     cosmos: CosmosDBService,
+    *,
+    full_data: Optional[dict] = None,
+    agent_runner_ref: Any = None,
 ) -> Dict[str, Any]:
     """Build immutable evaluated snapshot for the engine.
 
@@ -417,6 +592,8 @@ async def _build_evaluated_snapshot(
         contract: Normalized contract view (from _find_exact_contract)
         chain: Full options chain (source of canonical underlying_price)
         cosmos: CosmosDB service
+        full_data: Full market data from fetch_all (overview, technicals, forecast, dividends, options_chain, volatility)
+        agent_runner_ref: AgentRunner instance for _build_market_data_block, _build_enrichment_block, _volatility_text
 
     Returns:
         Evidence snapshot dict with all required fields for run_contract_validation
@@ -430,9 +607,20 @@ async def _build_evaluated_snapshot(
     category = enrichment.get("category", "balanced")
     total_shares = sym_doc.get("total_shares", 0)
 
-    # Get calendar events
-    next_earnings = cosmos.get_next_earnings_date(symbol)
-    ex_dividend = cosmos.get_next_calendar_event_date(symbol, "ex_dividend")
+    # Calendar robustness: prefer yfinance live dates, fallback to Cosmos
+    yf_earnings = None
+    yf_ex_div = None
+    if full_data:
+        yf_earnings = _extract_earnings_from_overview(full_data.get("overview", ""))
+        yf_ex_div = _extract_exdiv_from_dividends(full_data.get("dividends", ""))
+
+    # Fallback: Cosmos calendar (may be stale)
+    cosmos_earnings = cosmos.get_next_earnings_date(symbol)
+    cosmos_ex_div = cosmos.get_next_calendar_event_date(symbol, "ex_dividend")
+
+    # Resolve with explicit provenance
+    next_earnings, earnings_source = _resolve_calendar_date(yf_earnings, cosmos_earnings, "earnings")
+    ex_dividend, exdiv_source = _resolve_calendar_date(yf_ex_div, cosmos_ex_div, "ex_dividend")
 
     # Extract underlying price from chain (canonical source per best_options.py:720)
     # This is the chain-level field, not contract-level
@@ -472,18 +660,57 @@ async def _build_evaluated_snapshot(
     # Calculate IV rank (placeholder - not enforced per best_options.py line 54-56)
     iv_rank_value = None  # Not calculated/enforced
 
-    # Build market data text
-    market_data_text = _build_market_data_text(
-        symbol=symbol,
-        side=side,
-        strike=strike,
-        expiration=expiration,
-        underlying_price=underlying_price,
-        contract=contract,
-        chain_timestamp=chain_timestamp,
-        next_earnings_date=next_earnings,
-        ex_dividend_date=ex_dividend,
-    )
+    # Build full market data text with all pages if full_data available
+    if full_data and agent_runner_ref:
+        # Extract exchange for market data block
+        exchange = _extract_exchange(full_data.get("overview", ""))
+
+        # Full 4-page market data block (identical to normal Following agents)
+        full_market_block = agent_runner_ref._build_market_data_block(full_data, symbol, exchange)
+
+        # Enrichment + volatility (identical to normal Following agents)
+        enrichment_block = agent_runner_ref._build_enrichment_block(symbol, cosmos)
+        volatility_block = agent_runner_ref._volatility_text(full_data)
+
+        enrichment_section = f"\n--- ENRICHMENT ({symbol}) ---\n{enrichment_block}\n" if enrichment_block else ""
+        volatility_section = f"\n--- VOLATILITY ({symbol}) ---\n{volatility_block}\n" if volatility_block else ""
+
+        # Contract evidence section — immutable, separately labeled
+        contract_evidence = _build_market_data_text(
+            symbol, side, strike, expiration, underlying_price,
+            contract, chain_timestamp, next_earnings, ex_dividend,
+        )
+
+        # Combined market_data_text: full context + labeled contract evidence
+        market_data_text = (
+            full_market_block
+            + enrichment_section
+            + volatility_section
+            + f"\n\n--- VALIDATED CONTRACT EVIDENCE ({symbol} {expiration} {strike} {side.upper()}) ---\n"
+            + contract_evidence
+        )
+
+        # Extract enrichment_data for rule evaluation
+        enrichment_data = {
+            "tech_timing": (enrichment.get("technicals") or {}).get("score"),
+            "momentum": enrichment.get("momentum"),
+            "entry_tag": enrichment.get("entry_tag"),
+            "dgi_quality": enrichment.get("quality_score"),
+        }
+    else:
+        # Legacy path: contract-only market data text (backward compatibility)
+        market_data_text = _build_market_data_text(
+            symbol=symbol,
+            side=side,
+            strike=strike,
+            expiration=expiration,
+            underlying_price=underlying_price,
+            contract=contract,
+            chain_timestamp=chain_timestamp,
+            next_earnings_date=next_earnings,
+            ex_dividend_date=ex_dividend,
+        )
+        enrichment_data = None
 
     # Build final snapshot
     snapshot = {
@@ -496,7 +723,15 @@ async def _build_evaluated_snapshot(
         "ex_dividend_date": ex_dividend,
         "atm_iv": atm_iv_value,
         "iv_rank": iv_rank_value,
+        "calendar_provenance": {
+            "next_earnings": {"date": next_earnings, "source": earnings_source},
+            "ex_dividend": {"date": ex_dividend, "source": exdiv_source},
+        },
     }
+
+    # Add enrichment_data if available
+    if enrichment_data is not None:
+        snapshot["enrichment_data"] = enrichment_data
 
     # Add total_shares for calls
     if side == "call":
@@ -515,6 +750,7 @@ async def start_validation(
     cosmos: CosmosDBService,
     agent_runner: Any,
     context_provider: Any,
+    yf_provider: Any,
 ) -> Dict[str, Any]:
     """Start contract validation (POST /api/best-options/validate).
 
@@ -580,6 +816,7 @@ async def start_validation(
                 cosmos=cosmos,
                 agent_runner=agent_runner,
                 context_provider=context_provider,
+                yf_provider=yf_provider,
             )
         )
 
@@ -620,22 +857,41 @@ async def _execute_validation(
     cosmos: CosmosDBService,
     agent_runner: Any,
     context_provider: Any,
+    yf_provider: Any,
 ):
     """Execute validation in background."""
     try:
-        # Step 1: Force chain refresh
-        logger.info(f"[{run_id}] Forcing chain refresh for {symbol}")
-        refresh_success = await _force_chain_refresh(symbol)
+        # Step 1: Single authoritative fetch — refreshes chain cache + all market pages
+        logger.info(f"[{run_id}] Fetching full market data for {symbol} (force_refresh=True)")
+        try:
+            full_data = await yf_provider.fetch_all(symbol, force_refresh=True)
+        except Exception as e:
+            logger.error(f"[{run_id}] Full market data fetch failed: {e}", exc_info=True)
+            await _persist_validation_activity(
+                cosmos=cosmos,
+                run_id=run_id,
+                symbol=symbol,
+                side=side,
+                strike=strike,
+                expiration=expiration,
+                source=source,
+                displayed_snapshot=displayed_snapshot,
+                evaluated_snapshot=None,
+                result={
+                    "activity": "WAIT",
+                    "is_alert": False,
+                    "validation_status": "error",
+                    "note": f"Market data fetch failed: {e}",
+                    "error": "full_context_unavailable",
+                },
+            )
+            return
 
-        if not refresh_success:
-            logger.warning(f"[{run_id}] Chain refresh failed (best-effort), continuing")
-
-        # Step 2: Locate exact contract
-        logger.info(f"[{run_id}] Locating exact contract: {side} {strike} {expiration}")
-        chain_cache = get_options_chain_cache()
-        chain_json = chain_cache.get_or_hydrate(symbol, trigger_swr=False)
-
-        if not chain_json:
+        # Step 2: Extract chain from full_data (authoritative source for this validation cycle)
+        logger.info(f"[{run_id}] Extracting options chain from full_data")
+        raw_chain = full_data.get("options_chain", "")
+        if not raw_chain:
+            logger.error(f"[{run_id}] Options chain not available in full_data")
             await _persist_validation_activity(
                 cosmos=cosmos,
                 run_id=run_id,
@@ -656,7 +912,10 @@ async def _execute_validation(
             )
             return
 
-        chain = json.loads(chain_json)
+        chain = json.loads(raw_chain) if isinstance(raw_chain, str) else raw_chain
+
+        # Step 3: Locate exact contract
+        logger.info(f"[{run_id}] Locating exact contract: {side} {strike} {expiration}")
         now = datetime.now(timezone.utc)
         contract = _find_exact_contract(chain, side, strike, expiration, now)
 
@@ -681,7 +940,7 @@ async def _execute_validation(
             )
             return
 
-        # Step 3: Validate contract evidence
+        # Step 4: Validate contract evidence
         is_valid, error_msg = _validate_contract_evidence(contract)
         if not is_valid:
             await _persist_validation_activity(
@@ -704,8 +963,8 @@ async def _execute_validation(
             )
             return
 
-        # Step 4: Build immutable evaluated snapshot
-        logger.info(f"[{run_id}] Building evaluated snapshot")
+        # Step 5: Build immutable evaluated snapshot with full market data
+        logger.info(f"[{run_id}] Building evaluated snapshot with full market context")
         evaluated_snapshot = await _build_evaluated_snapshot(
             symbol=symbol,
             side=side,
@@ -714,9 +973,11 @@ async def _execute_validation(
             contract=contract,
             chain=chain,
             cosmos=cosmos,
+            full_data=full_data,
+            agent_runner_ref=agent_runner,
         )
 
-        # Step 4.5: Build validation chain context for Alpha (NEW)
+        # Step 5.5: Build validation chain context for Alpha
         logger.info(f"[{run_id}] Building validation chain context")
         chain_context_text = _build_validation_chain_context(chain, side)
 
@@ -742,7 +1003,7 @@ async def _execute_validation(
                 now=now,  # Closed over from outer scope
             )
 
-        # Step 5: Run validation engine
+        # Step 6: Run validation engine
         logger.info(f"[{run_id}] Running validation engine")
         result = await agent_runner.run_contract_validation(
             symbol=symbol,
@@ -756,13 +1017,13 @@ async def _execute_validation(
             validated_alternative_callback=validated_alternative_callback_impl,
         )
 
-        # Step 5.5: Add chain snapshot summary to result (agent_runner doesn't handle this)
+        # Step 6.5: Add chain snapshot summary to result (agent_runner doesn't handle this)
         chain_snapshot_summary = _build_chain_snapshot_summary(
             chain, side, evaluated_snapshot["chain_timestamp"]
         )
         result["chain_snapshot_summary"] = chain_snapshot_summary
 
-        # Step 6: Persist activity with result
+        # Step 7: Persist activity with result
         await _persist_validation_activity(
             cosmos=cosmos,
             run_id=run_id,
