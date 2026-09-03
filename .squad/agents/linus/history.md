@@ -827,3 +827,77 @@ precedent).
 - Tests: `backend/tests/test_dashboard_alpha_fallback.py` — validates backend contract
 - Types: `frontend/src/types/dashboard.ts` — defines recommendationSource field
 - Decision: Documented in `.squad/decisions/decisions.md` (merged from inbox)
+
+---
+
+## Learnings
+
+### Buy Tracker Six-State Redesign (buy-tracker-state-redesign, 2025-07)
+
+**Task:** Implement Danny's redesign of Buy Tracker from 3-state binary (BUY/STRONG_BUY/WAIT with 0/1 dimensions) to 6-state tri-state (AVOID/UNFAVORABLE/WAIT/ACCUMULATE/BUY/STRONG_BUY with -1/0/+1 dimensions) to fix ~95% BUY rate bias.
+
+**Scope:**
+- `backend/src/rule_evaluator.py`: Deterministic normalizer rewrite
+- `backend/src/buy_tracker_instructions.py`: LLM system instructions rewrite
+- `docs/screener.md`: User-facing documentation update
+
+**Key Implementation Decisions:**
+
+**1. Missing-data cap semantics (validation_flags vs evidence absence):**
+The ≥3-missing dimension cap must use `validation_flags` (LLM omitted/invalidated breakdown keys), NOT absence of canonical evidence. A deliberate `0` (LLM explicitly sent neutral) with absent evidence is genuine neutrality. An absent breakdown key is a data gap. These two test requirements conflict if implemented naively — evidence-based counting fails when evidence is present but the LLM omits the key; flag-based counting correctly handles both. `_count_missing_data_dimensions` signature includes `validation_flags` parameter.
+
+**2. Hard gate split (AVOID vs WAIT):**
+- `dividend_cut_or_suspended` and `triple_bearish_breakdown` → Hard AVOID (AVOID state, never overridden by score)
+- `earnings_within_days`, `rsi_overbought`, `price_extended` → Hard WAIT (WAIT state, only caps ≥ACCUMULATE)
+- Hard WAIT does NOT affect UNFAVORABLE or AVOID (already negative signals)
+
+**3. Signed score format:**
+`_signed_score_text(n)` returns `"+n/5"` for positive, `"0/5"` for zero, `"-n/5"` for negative. Old `{0,1}` breakdowns remain backward-compatible (they sum 0–5, mapping into the positive tier of the new thresholds).
+
+**4. Precedence order:** Hard AVOID → Hard WAIT (only when score ≥ ACCUMULATE) → Exceptional STRONG_BUY gate (only at +5 with no hard gates) → Score-based state.
+
+**Validation Issue:**
+After first implementation pass, one test failed: `test_three_missing_dims_caps_at_wait_with_insufficient_data`. Root cause: `_count_missing_data_dimensions` used evidence presence as proxy for data availability. Fix: use `validation_flags` exclusively — a dimension is "data-missing" only when `score_breakdown_{dim}_invalid` is present in the validation_flags set.
+
+**Test File Hygiene:**
+Stale `.pyc` cache files caused false test failure reports during CI iteration. Running `find . -name "*.pyc" -delete` before test runs is essential when test parametrize values have been recently updated. Always clear `__pycache__` dirs in `tests/` before reporting final pass/fail counts.
+
+**Final Result:** 272 tests passing (all of `test_rule_evaluator.py` + `test_buy_tracker_normalization.py`), 0 failures.
+
+### 2026-09-03 — Buy Tracker Six-State Implementation & Tri-State Scoring
+
+**Role:** Quantitative strategy, prompt, deterministic normalization
+
+Implemented Danny's six-state tri-state redesign across strategy, prompt, rule evaluation, and agent runner:
+
+**Strategy & Prompt** (`buy_tracker_instructions.py`):
+- Rewrote `DGI_ENTRY_RULES` with tri-state (-1/0/+1) per-dimension thresholds, replacing binary {0,1}
+- Updated `BUY_TRACKER_INSTRUCTIONS` with six-state vocabulary, threshold examples, missing-data semantics
+- Five dimensions: Value Entry (SMA50/SMA200 pullback/valuation), Trend (structural direction), Momentum (RSI/oscillator), Income (dividend/analyst), Calendar (earnings/gap-down)
+
+**Normalization & Rule Evaluation** (`rule_evaluator.py`):
+- `normalize_buy_tracker_activity()`: tri-state validation, hard-AVOID precedence (dividend_cut_or_suspended, triple_bearish_breakdown), hard-WAIT capping (earnings ≤2d, RSI>80, price_extended), exceptional gate (+5 + no hard gates + full evidence only)
+- `_count_missing_data_dimensions()`: uses `score_breakdown_*_invalid` flags (not evidence absence); ≥3 missing → cap at WAIT with `insufficient_data` flag; deliberate LLM 0s are never miscounted
+- Signed score format `"+3/5"` / `"-2/5"` / `"0/5"` with denominator 5 (number of dimensions)
+- State thresholds: -5..−3 AVOID, -2..−1 UNFAVORABLE, 0..+1 WAIT, +2..+3 ACCUMULATE, +4 BUY, +5 BUY→STRONG_BUY via gate
+
+**Agent Runner** (`agent_runner.py`):
+- Updated `_NON_ALERT_ACTIVITIES` to include UNFAVORABLE and AVOID (only BUY, STRONG_BUY, ACCUMULATE alert now)
+- Summary builder branches on alerting states; historical activity re-normalized on next run
+
+**Frontend** (`badges.ts`, `ActivityDetailView.tsx`):
+- Minimal changes: ACCUMULATE→blue, UNFAVORABLE→orange, AVOID→red
+
+**Documentation** (`docs/screener.md`):
+- Updated Buy Tracker section with six-state scale, tri-state thresholds, gate precedence, hard-AVOID/WAIT semantics
+- Fixed stale documentation (was 4/5=STRONG_BUY, now correctly 5/5±gate=STRONG_BUY)
+
+**Backward Compatibility:**
+- Old {0,1} breakdowns remain valid (subset of {-1,0,+1}); historical data auto-re-normalized
+- Unsigned score format "5/5" converted to "+5/5" on normalization
+- No schema migration required
+
+**Validation:** Basher, 272 focused tests passing. All acceptance criteria met.
+
+**Decision record:** `.squad/decisions.md` — new entries "Buy Tracker Six-State Redesign (Danny)" and "Decision: Buy Tracker Implementation Details (Linus)"
+

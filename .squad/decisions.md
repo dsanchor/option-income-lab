@@ -11262,3 +11262,188 @@ ACTION-6: Run full test suite, confirm 167+ all green
 | 2026-08-31 | Livingston implemented extractors + tests in `contract_validation_integration.py` and `test_contract_validation_calendar.py` |
 | 2026-08-31 | Basher rejected: 3 findings (flat-key extractors, unbound error_msg, invented fixtures). All 167 tests pass = false confidence |
 | 2026-08-31 | Danny retrospective (this document): root-cause analysis, Livingston locked out, Rusty assigned for revision with exact specs |
+
+---
+
+## Buy Tracker Six-State Redesign (Danny)
+
+**Date:** 2026-09-03  
+**Author:** Danny (Lead)  
+**Status:** ✅ Accepted & Implemented  
+**Impact:** Buy Tracker recommendation accuracy, DGI timing, agent informativeness
+
+### Problem Statement
+
+The Buy Tracker recommends `BUY` approximately 95% of the time. The three-state vocabulary (`WAIT`, `BUY`, `STRONG_BUY`) combined with a 5-dimension binary scoring system that is structurally biased toward +1 makes the agent uninformative for patient DGI accumulation timing.
+
+### Solution
+
+**Six-State Scale** (ordered from most favorable to least favorable for entry):
+- `STRONG_BUY` — Exceptional confluence, all dimensions confirm, exceptional gate triggered
+- `BUY` — Clear favorable window for accumulation
+- `ACCUMULATE` — Acceptable but not compelling; lean positive
+- `WAIT` — Neutral; insufficient signal in either direction
+- `UNFAVORABLE` — Conditions lean negative; poor timing for entry
+- `AVOID` — Actively bad setup; hard gate triggered
+
+**Tri-State Dimension Scoring** (replace binary {0,1} with {-1,0,+1}):
+- **+1 (Tailwind)** — Dimension actively supports accumulation
+- **0 (Neutral)** — Mixed signals or insufficient data
+- **-1 (Headwind)** — Dimension actively argues against entry
+
+Score range: -5 to +5 (11 possible values).
+
+**Five Dimensions:**
+1. **Value Entry / Pullback** — Price vs. SMA50/SMA200 for value vs. momentum
+2. **Trend** — SMA50/SMA200 alignment for structural direction
+3. **Momentum** — RSI + oscillator for overbought/oversold zones
+4. **Income & Fundamentals** — Dividend yield, payout ratio, analyst consensus
+5. **Calendar & Risk** — Earnings proximity, gap-down risk
+
+**Hard Gates** (override score-based state):
+- **Hard AVOID** — Dividend cut/suspended OR triple bearish (oscillator=STRONG_SELL, MA=STRONG_SELL, price >10% below SMA200)
+- **Hard WAIT** — Earnings ≤2d OR RSI>80 OR price extended (>10% above SMA50 AND >15% above SMA200)
+
+**State Thresholds:**
+- Score -5 to -3 → `AVOID`
+- Score -2 to -1 → `UNFAVORABLE`
+- Score 0 to +1 → `WAIT`
+- Score +2 to +3 → `ACCUMULATE`
+- Score +4 → `BUY`
+- Score +5 → `BUY` (→ `STRONG_BUY` only via exceptional gate)
+
+**Exceptional STRONG_BUY Gate:** Requires score +5 + no hard gates + all dimensions present and valid + narrow confluence conditions.
+
+**Missing-Data Behavior:** Missing dimension → score 0 (neutral). ≥3 missing dimensions → cap state at `WAIT` with `insufficient_data` flag.
+
+**Alert Policy:**
+- `STRONG_BUY`, `BUY`, `ACCUMULATE` → alerting states
+- `WAIT`, `UNFAVORABLE`, `AVOID` → non-alerting states
+
+**Score Format:** Signed representation (`"+3/5"`, `"-2/5"`, `"0/5"`) with denominator 5 (number of dimensions).
+
+**Backward Compatibility:** Old {0,1} breakdowns remain valid; automatically re-normalized on next run. Unsigned score format "5/5" converted to "+5/5".
+
+### Implementation Status
+
+✅ **Linus:** Strategy/prompt rewrite, tri-state normalization, rule evaluation, signed score format  
+✅ **Rusty:** Agent runner integration, frontend badge updates (6 lines), documentation  
+✅ **Basher:** Validation — 272 focused tests passing, all acceptance criteria met
+
+### Expected Distribution Shift
+
+- `STRONG_BUY`: 1–3% (rare)
+- `BUY`: 10–20% (meaningful)
+- `ACCUMULATE`: 20–30% (new "normal" positive)
+- `WAIT`: 25–35% (true neutral)
+- `UNFAVORABLE`: 10–20% (moderately negative)
+- `AVOID`: 2–5% (hard gates)
+
+Compare to current: BUY ~95%, WAIT ~4–5%, STRONG_BUY <1%.
+
+### Verdict
+
+**✅ ACCEPTED** — Design complete. Implementation and tests complete and approved. Outcome accepted.
+
+---
+
+## Portfolio Chat 3-Month Persisted Calendar Context (Rusty)
+
+**Date:** 2026-09-03  
+**Author:** Rusty (Agent Dev)  
+**Status:** ✅ Accepted & Implemented  
+**Impact:** Portfolio Chat context richness, calendar-aware decision making
+
+### Feature Description
+
+New optional `include_calendar_events` toggle in Portfolio Chat mode (off by default).
+
+**Backend behavior:**
+- Read once per request when flag=true and mode=portfolio
+- Persisted `cosmos.get_calendar_events()` call filtered to `context_symbols` (symbols with active agent context)
+- Date window: today (UTC, inclusive) through `_add_three_months(today)` (inclusive)
+- Calendar-month arithmetic: Jan 31 + 3 months = Apr 30 (not May 1 from 90-day approximation)
+- Event types: `"earnings"`, `"ex_dividend"` only (case-insensitive)
+- Deduplication key: (symbol, type, date); deterministic sort: (date, symbol, type)
+- `has_active_position` label: `" [active position]"` when present
+- Empty calendar: explicit marker "No earnings or ex-dividend events found for tracked symbols in the next 3 months."
+- Calendar failure: graceful degradation with "(Calendar data unavailable)"; activities preserved
+
+**Frontend behavior:**
+- Toggle `includeCalendarEvents` initialized to `false`
+- `include_calendar_events` field sent only in portfolio-mode payload (not quick-analysis)
+- Toggle rendered only during portfolio-config phase
+- Toggle reset on mode-switch
+
+**Documentation:** Updated `docs/chat.md` with context toggles table.
+
+### Validation Status
+
+✅ **Basher:** Validation — 44 focused tests passing, all 13 acceptance criteria met
+
+### Acceptance Criteria
+
+1. ✅ Flag false/omitted → no calendar read, no section
+2. ✅ Flag true → exactly one cosmos call, filtered to context_symbols
+3. ✅ Inclusive date boundaries (today ✓, window_end ✓, yesterday ✗, +1 day ✗)
+4. ✅ Calendar-month arithmetic (Jan 31 → Apr 30, not May 1)
+5. ✅ Filtering: unknown types, invalid dates, missing symbols silently ignored
+6. ✅ Deduplication: (symbol, type, date)
+7. ✅ has_active_position label when present
+8. ✅ Empty calendar → explicit marker + header
+9. ✅ Calendar failure → graceful degradation; activities preserved
+10. ✅ Frontend: default-off, portfolio-only
+11. ✅ Docs updated
+12. ✅ System prompt: static instructions + data section
+13. ✅ Toggle reset on mode-switch
+
+### Verdict
+
+**✅ ACCEPTED** — Implementation and tests complete and approved. Outcome accepted.
+
+---
+
+## Decision: Buy Tracker Implementation Details (Linus)
+
+**Date:** 2026-09-03  
+**Author:** Linus (Quant Dev)  
+**Status:** ✅ Implemented  
+**Impact:** Deterministic Buy Tracker scoring, validation robustness
+
+### Key Decisions
+
+**Decision 1: Missing-Data Cap Uses `validation_flags`, Not Evidence Absence**
+
+A dimension is "data-missing" **if and only if** `score_breakdown_{dim}_invalid` appears in `validation_flags`. Absence of canonical evidence fields does NOT count as missing. Rationale: Evidence absence can be a legitimate "no signal" state. The LLM's failure to produce a breakdown key is the data gap.
+
+**Decision 2: Hard WAIT Scope — Only Caps Positive States**
+
+Hard WAIT gates (earnings ≤2d, RSI>80, price extended) cap **ACCUMULATE or higher → WAIT** only. States that are already WAIT, UNFAVORABLE, or AVOID are unaffected. Rationale: Hard WAIT blocks entry timing when setup is good; if setup is already poor, there's no timing gate to apply.
+
+**Decision 3: Confidence for Hard-WAIT-Triggered WAIT**
+
+Hard-WAIT-triggered WAIT states use `"low"` confidence (same as score-triggered WAIT). Rationale: The user's action is identical: do not enter.
+
+**Decision 4: Backward Compatibility of Old {0,1} Breakdowns**
+
+Old LLM responses with {0,1} breakdown values remain valid (subset of {-1,0,+1}). Historical data automatically re-normalized on next agent run, improving accuracy without migration.
+
+### Threshold Table
+
+| Signed Score | State |
+|---|---|
+| +5 + exceptional gate | STRONG_BUY |
+| +4 to +5 | BUY |
+| +2 to +3 | ACCUMULATE |
+| 0 to +1 | WAIT |
+| -1 to -2 | UNFAVORABLE |
+| -3 to -5 | AVOID |
+
+Hard AVOID gates always produce AVOID regardless of score. Hard WAIT gates cap ACCUMULATE+ → WAIT only. Exceptional gate requires score +5 AND no hard gates AND full objective evidence.
+
+### Verdict
+
+**✅ IMPLEMENTED** — All decisions adopted during Linus's implementation, validated by Basher, outcome accepted.
+
+---
+

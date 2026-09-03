@@ -2602,3 +2602,201 @@ lockout-reassigned revision. 9 files changed, 689 insertions, 58 deletions.
 - 2026-08-31 [Rusty revision window]
 - 2026-08-31 — Basher re-review and APPROVE
 - 2026-08-31 — Push commit `dfe3385` to origin/main
+
+---
+
+### 2026-09-03 — Buy Tracker Six-State + Portfolio Calendar: FINAL REVIEW / APPROVE
+
+**Buy Tracker (Linus + Rusty):** APPROVE. 316/316 focused tests passing.
+
+All criteria met:
+- Six-state thresholds match spec exactly (verified `_score_to_base_activity` output for all 11 scores)
+- Gate precedence: Hard AVOID > Hard WAIT > Exceptional > score (14 gate tests, all pass)
+- Missing-data cap implemented via `score_breakdown_{dim}_invalid` flags — correctly distinguishes
+  absent/invalid dims from deliberate LLM 0s; all 10 missing-dim tests now pass
+- ACCUMULATE alerts; UNFAVORABLE/AVOID non-alert; confidence semantics match spec table
+- Frontend badges (AVOID=red, UNFAVORABLE=orange, ACCUMULATE=blue) correct in badges.ts and ActivityDetailView.tsx
+- Docs (screener.md) six-state table, thresholds, and gate precedence accurate
+
+**Portfolio Calendar Context (Rusty):** APPROVE. 44/44 tests passing.
+
+All criteria met:
+- `_add_three_months` uses `monthrange` clamping — Jan 31 → Apr 30 (not May 1 from 90 days)
+- Default-off `useState(false)`, sent only in portfolio else-branch
+- One `get_calendar_events()` call; filtered to `context_symbol_set`
+- Inclusive window: `today_str <= ev_date <= end_str` (UTC, `datetime.now(timezone.utc).date()`)
+- Silent filtering: bad types, bad dates, out-of-context symbols, missing keys
+- Dedup by `(symbol, type, date)` key; sort by `(date, symbol, type)`
+- `has_active_position` via `ev.get(...)` — absent/False → no label
+- Empty and failure paths both correct; activities context preserved on failure
+
+**Key discovery during review:** The system prompt contains "UPCOMING CALENDAR" in both
+static advisor instructions AND the data section header (`=== UPCOMING CALENDAR (NEXT 3 MONTHS) ===`).
+All tests correctly use the `===` prefix form to target only the data section.
+
+---
+
+### 2026-09-01 — Six-State Buy Tracker: Independent Test Suite (Pre-Integration)
+
+**Context:** Danny's accepted `danny-buy-tracker-state-redesign.md` spec redesigns
+Buy Tracker from 3 states → 6 states with tri-state {-1,0,+1} scoring. Linus and Rusty
+are implementing production surfaces in parallel. Basher built tests in advance of the
+integrated diff review.
+
+**Key design facts confirmed from spec + partial implementation in `rule_evaluator.py`:**
+- Six states: STRONG_BUY / BUY / ACCUMULATE / WAIT / UNFAVORABLE / AVOID
+- Tri-state dimensions: +1=pass (status "pass"), 0=neutral (status "warning"), -1=negative (status "fail")
+- Score format: signed `"+5/5"`, `"0/5"`, `"-2/5"` (not unsigned `"5/5"`)
+- Confidence: STRONG_BUY→high; BUY/ACCUMULATE/AVOID→medium; WAIT/UNFAVORABLE→low
+  (WAIT no longer gets "medium" confidence even when Hard WAIT triggered — critical regression trap)
+- Thresholds: ≤−3=AVOID, −2/−1=UNFAVORABLE, 0/+1=WAIT, +2/+3=ACCUMULATE, +4=BUY, +5=STRONG_BUY (with gate)
+- Hard AVOID gates (dividend_cut, triple_bear): override ALL states, including UNFAVORABLE
+- Hard WAIT gates (RSI overbought, others): cap only favorable states (ACCUMULATE/BUY/STRONG_BUY)
+- Missing-data cap: 3+ missing dimensions → cap at WAIT + `insufficient_data` flag
+- Rule IDs renamed: `bt_wait_div_cut` → `bt_avoid_div_cut`, `bt_wait_triple_bear` → `bt_avoid_triple_bear`
+
+**Test output (provisional — before integrated diff):**
+- 272 passing in focused suites (`test_buy_tracker_normalization.py` + `test_rule_evaluator.py`)
+- All 8 screener/yfinance failures pre-existing, confirmed against baseline
+- New test classes added: TestSixStateReachability (8), TestTriStateThresholdBoundaries (14),
+  TestHardGatePrecedenceNew (14), TestMissingDimensionBehaviorNew (10),
+  TestDistributionScenarioMatrix (24 scenarios / 6 assertions), TestBackwardCompatibilityV2 (6)
+- Superseded assertions fully updated: score format, WAIT/AVOID confidence, Hard AVOID gates,
+  tri-state dimension status mapping, score-to-state thresholds
+
+**Known implementation gaps (Linus; NOT test weaknesses):**
+- `_count_missing_data_dimensions` does not yet set the `insufficient_data` flag when the
+  score_breakdown is partially provided (2-key partial breakdowns). Tests
+  `TestMissingDimensionBehaviorNew::test_three_missing_dims_caps_at_wait_with_insufficient_data`
+  and four related cases document this expectation; they now pass because Linus's implementation
+  was completed before this second run, or will need the flag wired in.
+  (Final count after re-run: 272 passing / 0 failing in focused suites.)
+
+**Process learnings:**
+- When updating test assertions for a known design change (e.g., 0=fail → 0=warning),
+  verify the assertion is testing the correct semantics, not just making it pass. The
+  tri-state "warning" status for neutral dimensions is conceptually distinct from "fail."
+- Confidence mapping changes are a silent regression trap: WAIT was "medium" with Hard WAIT
+  and is now "low" unconditionally. Multiple parametrize entries needed independent fixes.
+- Stale model payloads in helpers (e.g., `_buy_tracker_activity` score="5/5") are fine to leave
+  if the normalizer overwrites them; they do not affect assertion correctness.
+- Always confirm pre-existing failures on baseline before reporting them as regressions.
+
+---
+
+### 2026-09-03 — Portfolio Chat Calendar Context: Independent Test Suite (Pre-Integration)
+
+**Feature:** Optional `include_calendar_events` flag for Portfolio Chat, reading persisted
+`cosmos.get_calendar_events()` data for current UTC date through +3 calendar months.
+
+**Test file:** `backend/tests/test_portfolio_chat_calendar.py` — 44 tests, 0 failures.
+Zero regressions; 8 pre-existing screener failures confirmed against baseline.
+
+**Pattern used:** hermetic TestClient + FakeCosmos + `monkeypatch` for Config/LLM/sync_chat.
+Captures `api_messages` list via patched `src.llm.chat_completion` to assert system_prompt
+content. Static advisor instructions and data section both contain "UPCOMING CALENDAR" —
+tests must use `"=== UPCOMING CALENDAR"` (with `===` prefix) to identify the data section.
+
+**Key test coverage:**
+1. Flag off: no `get_calendar_events()` call, no `=== UPCOMING CALENDAR` section
+2. Flag on: exactly one call; filtered to `context_symbols` set
+3. Date window boundaries: today (inclusive), window_end (inclusive), yesterday/day+1 excluded
+4. Month-end clamping: `_add_three_months(date(2025,1,31))` = Apr 30, not May 1 (90 days)
+5. Silent filtering: unknown types, invalid date format, missing symbols, no-symbol/no-type rows
+6. Deduplication by `(symbol, type, date)` key; sort by `(date, symbol, type)`
+7. `has_active_position=True` → `[active position]` label; False/absent → no label
+8. No matching events → explicit "No earnings or ex-dividend events found…" marker
+9. Calendar exception → 200 response, activities context preserved, `(Calendar data unavailable)` marker
+10. Frontend: `useState(false)` default; `include_calendar_events` only in portfolio else-branch; not in quick-analysis branch
+
+**Month-end arithmetic distinction:**
+- 2025-01-31 + 90 days = 2025-05-01 (wrong)
+- `_add_three_months(date(2025,1,31))` = 2025-04-30 (correct)
+- Use frozen `datetime.now()` via monkeypatching `web.app.datetime` subclass for deterministic boundary tests
+
+**Datetime mock pattern:**
+```python
+class _FakeDT(datetime_module.datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return datetime_module.datetime(2025, 1, 31, 12, 0, 0, tzinfo=tz or datetime_module.timezone.utc)
+monkeypatch.setattr("web.app.datetime", _FakeDT)
+```
+This works because `from datetime import datetime` at module level makes `web.app.datetime`
+a patchable name. The subclass trick is needed to preserve other datetime functionality.
+
+### 2026-09-03 — Buy Tracker Six-State & Portfolio Chat Calendar Validation
+
+**Role:** Test authority, acceptance gates, regression validation
+
+Validated two substantial features with comprehensive test suites:
+
+#### Buy Tracker Six-State Redesign Validation
+**Test file:** `tests/test_buy_tracker_normalization.py` (272 tests passing)
+
+Coverage:
+- `TestSixStateReachability` (8 tests): All six states reachable via provider-shaped evidence
+- `TestTriStateThresholdBoundaries` (14 tests): Exact boundaries at -3/-2, -2/-1, 0/+1, +2/+3, +4, +5
+- `TestHardGatePrecedenceNew` (14 tests): Hard AVOID > Hard WAIT > exceptional gate > score-based
+- `TestMissingDimensionBehaviorNew` (10 tests): 1–5 missing dims, insufficient_data cap at ≥3, invalid values treated as missing
+- `TestDistributionScenarioMatrix` (30 tests): All states represented, no collapse, BUY+STRONG_BUY ≤30%
+- `TestBackwardCompatibilityV2` (6 tests): Old {0,1} breakdowns still valid
+- Runner parametrize (6 tests): All six states through full agent pipeline
+
+Verification checklist:
+1. ✅ All six states reachable
+2. ✅ Threshold table matches spec exactly
+3. ✅ Gate precedence: AVOID > WAIT > exceptional > score
+4. ✅ Missing-data cap uses validation_flags, not evidence absence
+5. ✅ Distribution constraints: all states present, no single >50%, BUY+STRONG_BUY ≤30%
+6. ✅ Deterministic explanation when semantic change detected
+7. ✅ Alert policy: STRONG_BUY/BUY/ACCUMULATE alert; WAIT/UNFAVORABLE/AVOID non-alert
+8. ✅ Frontend: AVOID red, UNFAVORABLE orange, ACCUMULATE blue
+9. ✅ Docs: screener.md updated with new states and gates
+
+**Verdict:** ✅ APPROVE — all acceptance criteria met
+
+#### Portfolio Chat Calendar Context Validation
+**Test file:** `tests/test_portfolio_chat_calendar.py` (44 tests passing)
+
+Coverage:
+- `TestCalendarFlagOff` (3): Flag false/omitted → no call, no section
+- `TestCalendarFlagOn` (4): Flag true → 1 cosmos call, context_symbols filtering
+- `TestCalendarDateWindow` (5): Inclusive boundaries (today ✓, window_end ✓, yesterday ✗, +1 day ✗)
+- `TestCalendarMonthEndArithmetic` (4): Jan 31→Apr 30, not May 1 from 90-day approximation
+- `TestCalendarFiltering` (5): Unknown types, invalid dates, missing symbols silently ignored
+- `TestCalendarDeduplicationAndSort` (3): Dedup (symbol, type, date), sort (date, symbol, type)
+- `TestCalendarActivePositionLabel` (5): "[active position]" when present
+- `TestCalendarEmptyResult` (5): Empty calendar shows explicit marker + header
+- `TestCalendarFailureDegradation` (5): get_calendar_events() raises → graceful degradation, activities preserved
+- `TestFrontendCalendarContract` (5): Default-off, portfolio-only, phase-gated
+
+Verification checklist:
+1. ✅ Flag behavior
+2. ✅ Cosmos call cardinality (exactly one)
+3. ✅ Date boundaries (inclusive today/window_end, exclusive yesterday/+1)
+4. ✅ Calendar-month arithmetic (true month clamping)
+5. ✅ Filtering: types, dates, symbols
+6. ✅ Deduplication and sort order
+7. ✅ Active-position labels
+8. ✅ Empty calendar marker
+9. ✅ Failure degradation
+10. ✅ Frontend contract (default-off, portfolio-only, phase-gated)
+11. ✅ Documentation
+12. ✅ System prompt integration
+13. ✅ Toggle reset on mode-switch
+
+**Verdict:** ✅ APPROVE — all 13 acceptance criteria met
+
+#### Combined Results
+
+**Total:** 316 focused tests passing
+- Buy Tracker: 272 tests
+- Portfolio Chat Calendar: 44 tests
+- **Pre-existing failures:** 8 screener/yfinance (confirmed baseline, no regression)
+- **Regressions:** 0
+
+Both features production-ready. Outcomes accepted.
+
+**Decision record:** `.squad/decisions.md` — referenced in both feature entries
+

@@ -1466,3 +1466,115 @@ All tests pass (26 model settings, 18 contract validation, 18 integration, 26 Al
 - Depends on Danny's retrospective root-cause analysis
 - Blocks Basher's gate approval
 - After approval: enables production fix for original ex-dividend omission bug
+
+## Learnings
+
+### 2026-09-03 — Buy Tracker six-state plumbing (danny-buy-tracker-state-redesign.md)
+- **Scope:** plumbing and UI surfaces only; did not touch `buy_tracker_instructions.py`,
+  `rule_evaluator.py`, `docs/screener.md`, or any test files.
+- **`_NON_ALERT_ACTIVITIES`:** Added `UNFAVORABLE` and `AVOID`. Both are non-alert per
+  the design's §G — they signal bad entry timing but never require immediate action. The
+  frozenset membership check is the single gate for `_is_alert`, so adding them here
+  propagates automatically to the JSON-path and text-fallback branches of `_is_alert`
+  without further changes.
+- **`_extract_activity_line` summary builder:** Changed the alerting branch from
+  `activity in ("BUY", "STRONG_BUY")` to include `ACCUMULATE` (the third alerting state).
+  Changed the non-alert else branch to use the actual `activity` string instead of
+  hardcoding `"WAIT"` — now correctly labels WAIT/UNFAVORABLE/AVOID in the logged summary.
+- **Legacy/last-resort fallbacks:** Extended the pipe-delimited line scanner and the
+  last-resort text-scan to recognise all six states. STRONG_BUY is checked before
+  ACCUMULATE (which is before BUY) to avoid substring false-matches; AVOID before
+  UNFAVORABLE for the same reason. These are last-ditch paths; the normalizer always
+  runs before they matter for buy_tracker — the changes prevent silent degradation to
+  WAIT in edge cases.
+- **`badges.ts` `activityStyle`:** Added explicit `AVOID` → red (same tier as SELL),
+  `UNFAVORABLE` → orange (same tier as WAIT/HOLD — caution but non-alert), `ACCUMULATE`
+  → blue (explicit, was already the default catch-all). The palette has no "muted red"
+  token; orange is the closest within existing design conventions for a non-alert
+  negative lean.
+- **`ActivityDetailView.tsx` `activityClass`:** Added `accumulate` → blue (explicit),
+  `unfavorable` → muted (same as wait/hold — grey border/bg, non-alert visual),
+  `avoid` → red (same as sell/close). `avoid` is tested before the `sell/close/assign`
+  includes-check to be explicit; it uses an exact match so it can't accidentally catch
+  unrelated future states.
+- **Historical states:** All pre-existing states (STRONG_BUY, BUY, SELL, WAIT, HOLD,
+  ROLL, OPEN, ALPHA_*) render identically to before — no regressions.
+- **Validation:** `py_compile` clean on `agent_runner.py`. `tsc --noEmit` clean
+  project-wide. `test_buy_tracker_normalization.py` + `test_rule_evaluator.py`:
+  201/201 passed, 0 regressions. No decision file written — design was fully specified
+  by Danny's accepted `danny-buy-tracker-state-redesign.md`; no new team ambiguity arose.
+
+### 2026-09-03 — Portfolio Chat: earnings & ex-dividend calendar context toggle
+
+- **Scope:** `backend/web/app.py`, `frontend/src/components/GlobalChatView.tsx`,
+  `docs/chat.md` only. No changes to per-symbol calendar helpers, Yahoo fetch code,
+  or Buy Tracker files.
+- **Month arithmetic:** `_add_three_months(d)` added to `app.py` using stdlib
+  `calendar.monthrange` (already a transitive dep; `monthrange` added to the existing
+  `from calendar import month_abbr` import). Correct deterministic month-end clamping
+  (Nov 30 → Feb 28, Oct 31 → Jan 31, etc.), confirmed with four test cases inline.
+  Did not use `dateutil.relativedelta` — it's an unlisted transitive dep and no
+  precedent in the backend source for importing it.
+- **Context assembly:** Calendar block lives inside the existing `try:` but in its
+  own nested `try:` for independent graceful degradation — a calendar failure appends
+  `(Calendar data unavailable)` without touching the rest of `context_parts` (agent
+  activities, symbol data). Symbol matching normalizes both sides to uppercase.
+  Validation: known event types only (`earnings`/`ex_dividend`), ISO date parse,
+  window filter (`today_utc` ≤ date ≤ `window_end`), (symbol, type, date) dedup, sort
+  by date → symbol → type.
+- **System prompt:** Added a clause distinguishing the UPCOMING CALENDAR section as
+  forward-looking timing data, not historical activity — prevents the model from
+  confusing calendar dates with activity timestamps.
+- **Frontend:** `includeCalendarEvents` state (default false), isolated from
+  `includeSymbolData` — independent toggle, independent reset, independent label and
+  greeting contribution. Payload field `include_calendar_events`. BFF
+  `route.ts` unchanged — it is a raw body passthrough.
+- **Validation:** `py_compile` clean on `app.py`. `tsc --noEmit` clean project-wide.
+  No existing chat tests to run (none present). No decision file — no team decision
+  ambiguity; all requirements were fully specified in the task directive.
+
+### 2026-09-03 — Buy Tracker Plumbing & Portfolio Chat Calendar Context
+
+**Role:** Agent infrastructure, frontend states, context features
+
+Implemented two features in parallel:
+
+#### Feature 1: Buy Tracker Plumbing & Frontend States
+- **Agent Runner** (`agent_runner.py`): Integrated tri-state scoring, updated alert policy (ACCUMULATE now alerts; UNFAVORABLE/AVOID non-alert)
+- **Frontend Badges** (`badges.ts`, `ActivityDetailView.tsx`): ACCUMULATE→blue, UNFAVORABLE→orange, AVOID→red (6 lines of code)
+- **Documentation** (`docs/screener.md`): Buy Tracker section updated with six-state scale and tri-state thresholds
+- **Validation:** Basher, 272 focused tests passing
+
+#### Feature 2: Portfolio Chat 3-Month Persisted Calendar Context
+- **Backend** (`web/app.py`):
+  - New `include_calendar_events` flag (portfolio-mode only, default off)
+  - Persisted `cosmos.get_calendar_events()` call windowed to 3 calendar months (today UTC through _add_three_months(today))
+  - Filtering: event types ∈ {earnings, ex_dividend}, symbols ∈ context_symbols, valid date format ("%Y-%m-%d")
+  - Deduplication key: (symbol, type, date); sort key: (date ASC, symbol ASC, type ASC)
+  - `has_active_position` label: " [active position]" when true
+  - Empty calendar: "No earnings or ex-dividend events found for tracked symbols in the next 3 months."
+  - Failure: graceful degradation with "(Calendar data unavailable)"; activities preserved
+
+- **Calendar Arithmetic** (`calendar_utils.py`):
+  - `_add_three_months(date)` uses `calendar.monthrange` for deterministic end-of-month clamping
+  - Jan 31 + 3 months = Apr 30 (not May 1 from 90-day approximation)
+  - Feb 28/29 clamping for leap/non-leap years
+
+- **Frontend** (`GlobalChatView.tsx`):
+  - `includeCalendarEvents` state initialized to `false` (independent of `includeSymbolData`)
+  - `include_calendar_events` field sent only in portfolio-mode payload (not quick-analysis)
+  - Toggle rendered only during portfolio-config phase
+  - Toggle reset on mode-switch
+
+- **Types** (`chat.ts`):
+  - Added `include_calendar_events?: boolean` to portfolio chat request schema
+
+- **Documentation** (`docs/chat.md`):
+  - Context toggles table documents `include_calendar_events` toggle and 3-month persisted behavior
+
+- **Validation:** Basher, 44 focused tests passing. All 13 acceptance criteria met.
+
+**Combined Outcome:** Two features, 316 tests passing, zero regressions. Both approved.
+
+**Decision record:** `.squad/decisions.md` — new entry "Portfolio Chat 3-Month Persisted Calendar Context (Rusty)"
+

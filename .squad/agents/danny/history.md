@@ -924,3 +924,45 @@ Decision: `.squad/decisions/inbox/danny-chain-aware-validation-design.md` (accep
 - Holds on Livingston's fix (provider hang + test fixture rewrite)
 - Holds on Rusty's revision (calendar extractors + exception flow)
 - Both gate on Basher's second review
+
+### 2026-09-03 — Buy Tracker State Redesign (design review)
+
+**Problem:** Buy Tracker recommends BUY ~95% of the time. Three-state vocabulary (WAIT/BUY/STRONG_BUY) + 5 binary dimensions with asymmetric OR/AND scoring → structural inflation.
+
+**Diagnosis — scoring inflation root causes:**
+1. Each dimension Score 0 requires extreme AND conjunctions (rare); Score 1 requires any single OR disjunction (easy) → 4–5/5 is the norm.
+2. Threshold `score ≥ 3` → BUY is trivially reachable when most dimensions default to 1.
+3. Binary {0,1} has no "mixed/neutral" zone — everything is either catastrophic (0) or favorable (1).
+4. STRONG_BUY exceptional gate is effectively unreachable in practice (<1%).
+5. `docs/screener.md` §Buy Tracker is stale: says 4/5=STRONG_BUY but code says 3-4=BUY, 5=BUY unless exceptional gate passes.
+
+**Design decisions:**
+- Replace {0,1} with tri-state {-1, 0, +1} per dimension. Score range -5 to +5.
+- Six-state ordered scale: STRONG_BUY > BUY > ACCUMULATE > WAIT > UNFAVORABLE > AVOID.
+- Hard AVOID gates (dividend cut, triple bearish) as a new tier above Hard WAIT.
+- ACCUMULATE is alerting (low priority); UNFAVORABLE/AVOID are non-alerting.
+- Missing data → 0 (neutral); ≥3 missing → cap at WAIT.
+- Agent remains entry-timing only — AVOID ≠ SELL.
+- Normalizer stays deterministic source of truth. Fully deterministic dimension scoring deferred to v2.
+
+**Key learning: asymmetric pass/fail rules in LLM-scored dimensions create inflation.** When "fail" requires proving extreme conditions and "pass" only needs one weak positive signal, the dimension almost never fails. The fix is a tri-state with a meaningful neutral zone that requires real evidence for both headwinds and tailwinds.
+
+**Artifact:** `.squad/decisions/inbox/danny-buy-tracker-state-redesign.md`
+
+### 2026-09-03 — Buy Tracker Six-State Redesign: Design Review (Accepted)
+
+**Role:** Design lead, tri-state scoring specification
+
+Designed six-state ordered scale (STRONG_BUY > BUY > ACCUMULATE > WAIT > UNFAVORABLE > AVOID) with tri-state {-1,0,+1} per dimension. Replaced binary {0,1} inflated scoring with three-way hedging:
+- Tailwind (+1): actively supports accumulation
+- Neutral (0): mixed signals or insufficient evidence
+- Headwind (-1): actively argues against entry
+
+Score range -5 to +5 via 5 dimensions (Value Entry, Trend, Momentum, Income, Calendar). Hard gates tier: AVOID gates (dividend cut, triple bearish) > WAIT gates (earnings ≤2d, RSI>80, price extended) > exceptional gate (+5 only) > score-based state. Expected distribution shift: BUY drops from ~95% to ~10–20%; new neutral WAIT zone ~25–35%; ACCUMULATE absorbs "lean positive" ~20–30%.
+
+**Specification:** `.squad/decisions/inbox/danny-buy-tracker-state-redesign.md` (16.6 KB, accepted)
+
+**Implementation timeline:** Linus (normalization/prompt), Rusty (agent runner/frontend), Basher (272 tests). All outcomes approved.
+
+**Decision record:** `.squad/decisions.md` — new entry "Buy Tracker Six-State Redesign (Danny)"
+
