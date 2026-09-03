@@ -175,43 +175,87 @@ The watchlist provides predefined filter pills combining Entry (technical timing
 
 ## Buy Tracker
 
-The Buy Tracker is an AI-powered DCA timing agent that helps determine optimal accumulation timing for DGI stocks. Unlike the Entry tag (pure technical timing score), the Buy Tracker evaluates **5 dimensions** holistically:
+The Buy Tracker is an AI-powered DCA timing agent that determines optimal
+accumulation timing for DGI stocks. Unlike the Entry tag (pure technical timing
+score), the Buy Tracker evaluates **5 dimensions** holistically and returns one
+of six entry-timing states.
 
-### Scoring Dimensions (0 or 1 each)
+### Six-State Scale
 
-| Dimension | Scores 1 if... |
-|-----------|----------------|
-| **Value Entry / Pullback** | Price pulled back ≥5% from high, near SMA50, RSI < 45, or yield above typical range |
-| **Trend Not Broken** | Price > SMA200, or golden cross structure, or testing major support |
-| **Momentum Not Extreme** | RSI 20–65, or oversold (< 30), or oscillators neutral/sell |
-| **Income & Fundamentals** | Yield ≥ 2%, payout < 75%, analyst consensus not bearish, no imminent earnings |
-| **Calendar & Risk Context** | No earnings within 7 days, ex-div approaching, beta ≤ 1.5, orderly price action |
+The Buy Tracker uses a six-state ordered scale from most to least favorable for
+**entry timing**. `UNFAVORABLE` and `AVOID` are not sell signals — they flag
+poor timing for opening a *new* position.
+
+| State | Entry Timing Meaning | Alert? | Sizing Guidance |
+|-------|----------------------|--------|-----------------|
+| `STRONG_BUY` | Exceptional confluence — all dimensions confirm + exceptional gate | Yes (high) | 2–3× normal DCA |
+| `BUY` | Clear favorable window for accumulation | Yes (normal) | Normal DCA |
+| `ACCUMULATE` | Acceptable but not compelling — lean positive | Yes (low) | ½ DCA or limit order |
+| `WAIT` | Neutral — insufficient signal in either direction | No | Patient default |
+| `UNFAVORABLE` | Conditions lean negative — poor timing for new entry | No | Avoid new buys now |
+| `AVOID` | Actively bad setup — hard gate or deep headwinds | No | Do not enter |
+
+### Tri-State Dimension Scoring (−1 / 0 / +1)
+
+Each of the five dimensions scores **−1 (headwind)**, **0 (neutral)**, or
+**+1 (tailwind)**. The signed total score ranges from **−5 to +5**.
+
+| Dimension | Score +1 (Tailwind) | Score 0 (Neutral) | Score −1 (Headwind) |
+|-----------|--------------------|--------------------|----------------------|
+| **Value Entry / Pullback** | Pullback ≥5% from 52wH; or price ≤3% above SMA50; or price below SMA200 by ≤5% | No clear signal, or data missing | Price >5% above SMA50 AND >8% above SMA200 |
+| **Trend** | Price ≥ SMA200 AND SMA50 ≥ SMA200 | Mixed or transitioning | Price >8% below SMA200 AND SMA50 < SMA200 |
+| **Momentum** | RSI ≤50 AND (MACD Buy, Stoch Buy, or oscillator Sell/Neutral) | RSI 50–70 without confirmation | RSI >70 OR oscillator = STRONG_BUY |
+| **Income & Fundamentals** | Yield ≥2% OR payout <60%; AND analyst ∈ {BUY, HOLD}; AND no cut | Some but not all conditions met | Dividend cut/suspended; OR analyst = STRONG_SELL with target >15% below price |
+| **Calendar & Risk** | Earnings >14 days away; no calendar risk | Earnings 4–14 days away; data missing | Earnings ≤3 days away; or gap-down on volume |
 
 ### Activity Determination
 
-| Score | Signal | Meaning |
-|-------|--------|---------|
-| 5/5 | `STRONG_BUY` | All dimensions confirm — high-conviction larger entry |
-| 4/5 | `STRONG_BUY` | Near-perfect — strong entry |
-| 3/5 | `BUY` | Good DCA setup — small add |
-| 2/5 | `WAIT` | Mixed signals — wait |
-| 1/5 | `WAIT` | Weak setup |
-| 0/5 | `WAIT` | Bearish — stay away |
+| Score | Base State |
+|-------|-----------|
+| −5 to −3 | `AVOID` |
+| −2 to −1 | `UNFAVORABLE` |
+| 0 to +1 | `WAIT` |
+| +2 to +3 | `ACCUMULATE` |
+| +4 to +5 | `BUY` (→ `STRONG_BUY` only via exceptional gate) |
 
-### WAIT Triggers (Override)
+The score is displayed as a signed value: `"+3/5"`, `"-2/5"`, `"0/5"`.
 
-Any ONE of these forces WAIT regardless of score:
-- Earnings within 2 days
-- RSI > 80 (severely overbought)
+### Hard Gates (Override Score)
+
+Gates take precedence in this order: Hard AVOID → Hard WAIT → Exceptional STRONG_BUY → score-based.
+
+**Hard AVOID** (force `AVOID` regardless of score):
+
+- Dividend cut or suspended (`dividend_cut_or_suspended`)
+- Triple bearish: oscillator = STRONG_SELL, MA = STRONG_SELL, price >10% below SMA200 (`triple_bearish_breakdown`)
+
+**Hard WAIT** (cap to `WAIT` if score-based state would be ACCUMULATE or better):
+
+- Earnings ≤ 2 days (`earnings_within_2_days`)
+- RSI > 80 (`rsi_over_80`)
+- Price >10% above SMA50 AND >15% above SMA200 (`price_extended_above_mas`)
+
+### Exceptional STRONG_BUY Gate
+
+Score +5 with all dimensions confirming. Requires also: pullback 8–20% from
+52wH, price within SMA50 band, RSI 25–45, MACD+Stoch Buy confirmed, dividend
+current, payout ≤75%, analyst upside ≥5%, earnings >7 days away. If any check
+fails, score +5 remains `BUY`.
+
+### Missing Data Behavior
+
+- Missing data for a dimension → score `0` (neutral).
+- If ≥ 3 dimensions score 0 due to missing evidence → state capped at `WAIT`,
+  risk flag `insufficient_data` added.
 
 ### Entry Tag vs Buy Tracker
 
 | Aspect | Entry Tag | Buy Tracker |
 |--------|-----------|-------------|
-| Method | Deterministic (tech timing score thresholds) | AI (LLM interprets 5 dimensions) |
-| Inputs | RSI, SMA, pivot supports, volume | + dividend yield, earnings calendar, analyst consensus, payout ratio, Fear & Greed |
-| Output | Strong Buy / Buy / Accumulate / Hold / Wait | STRONG_BUY / BUY / WAIT |
-| When they diverge | Normal — Entry may say "Strong Buy" while Buy Tracker says "WAIT" (e.g., earnings tomorrow) |
+| Method | Deterministic (technical timing score thresholds) | AI (LLM interprets 5 dimensions; normalizer enforces deterministic gates) |
+| Inputs | RSI, SMA, pivot supports, volume | + dividend yield, earnings calendar, analyst consensus, payout ratio |
+| Output | Strong Buy / Buy / Accumulate / Hold / Wait | STRONG_BUY / BUY / ACCUMULATE / WAIT / UNFAVORABLE / AVOID |
+| AVOID/UNFAVORABLE | Not applicable | Entry-timing signals only — never sell recommendations |
 
 
 ## Category-Based Strategy Skills

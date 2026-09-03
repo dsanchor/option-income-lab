@@ -7,9 +7,10 @@ import type { ActivityDetail, ActivityDoc } from "@/types/activity-detail";
 function activityClass(a: string | undefined): string {
   const s = (a ?? "").toLowerCase();
   if (s.includes("strong_buy") || s === "buy" || s.includes("open")) return "border-accent-green/40 bg-accent-green/10 text-accent-green";
-  if (s.includes("sell") || s.includes("close") || s.includes("assign")) return "border-accent-red/40 bg-accent-red/10 text-accent-red";
+  if (s === "accumulate") return "border-accent-blue/40 bg-accent-blue/10 text-accent-blue";
+  if (s === "avoid" || s.includes("sell") || s.includes("close") || s.includes("assign")) return "border-accent-red/40 bg-accent-red/10 text-accent-red";
   if (s.includes("roll")) return "border-accent-orange/40 bg-accent-orange/10 text-accent-orange";
-  if (s.includes("wait") || s.includes("hold")) return "border-border bg-bg-input text-text-muted";
+  if (s === "unfavorable" || s.includes("wait") || s.includes("hold")) return "border-border bg-bg-input text-text-muted";
   return "border-accent-blue/40 bg-accent-blue/10 text-accent-blue";
 }
 

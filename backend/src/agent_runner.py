@@ -735,7 +735,7 @@ class AgentRunner:
                     f"Strike ${strike} exp {exp} | IV {iv}% (Rank {iv_rank}) | "
                     f"Premium ${premium} ({premium_pct}%)"
                 )
-            elif activity in ("BUY", "STRONG_BUY"):
+            if activity in ("BUY", "STRONG_BUY", "ACCUMULATE"):
                 price = json_data.get("underlying_price", "?")
                 entry_zone = json_data.get("entry_zone", "?")
                 score = json_data.get("score", "?")
@@ -750,23 +750,30 @@ class AgentRunner:
                 reason_short = (json_data.get("reason") or "")[:80]
                 waiting = json_data.get("waiting_for") or ""
                 summary = (
-                    f"SUMMARY: {ticker} | WAIT | IV {iv}% (Rank {iv_rank}) "
+                    f"SUMMARY: {ticker} | {activity} | IV {iv}% (Rank {iv_rank}) "
                     f"{reason_short} | Waiting for: {waiting}"
                 )
             return summary, json_data
 
         # Fallback: legacy pipe-delimited line
+        _bt_keywords = ('SELL', 'BUY', 'WAIT', 'ACCUMULATE', 'UNFAVORABLE', 'AVOID')
         for line in response_text.split('\n'):
             upper_line = line.upper()
-            if ticker in line and ('SELL' in upper_line or 'BUY' in upper_line or 'WAIT' in upper_line):
+            if ticker in line and any(kw in upper_line for kw in _bt_keywords):
                 return line.strip(), None
 
         # Last resort: synthesise a summary
         upper_text = response_text.upper()
         if "STRONG_BUY" in upper_text:
             activity = "STRONG_BUY"
+        elif "ACCUMULATE" in upper_text:
+            activity = "ACCUMULATE"
         elif "BUY" in upper_text:
             activity = "BUY"
+        elif "AVOID" in upper_text:
+            activity = "AVOID"
+        elif "UNFAVORABLE" in upper_text:
+            activity = "UNFAVORABLE"
         elif "SELL" in upper_text and "CLEAR SELL ALERT" in upper_text:
             activity = "SELL"
         else:
@@ -1050,9 +1057,13 @@ class AgentRunner:
 
         return json_data
 
-    # Activities that are NOT alerts (non-actionable states)
+    # Activities that are NOT alerts (non-actionable states).
+    # UNFAVORABLE and AVOID are non-alert per the six-state buy-tracker
+    # redesign (danny-buy-tracker-state-redesign.md §G): they signal poor
+    # entry timing but never require immediate action.
     _NON_ALERT_ACTIVITIES = frozenset({
         "WAIT", "HOLD", "DO_NOTHING", "DOING_NOTHING", "SKIPPED",
+        "UNFAVORABLE", "AVOID",
     })
 
     # Roll activities that trigger alerts (position monitors)

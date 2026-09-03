@@ -1153,12 +1153,15 @@ BUY_TRACKER_EVIDENCE_FIELDS = (
     "ma_summary", "oscillator_summary",
 )
 
+BUY_TRACKER_HARD_AVOID_FLAGS = {
+    "dividend_cut": "dividend_cut_or_suspended",
+    "triple_bear": "triple_bearish_breakdown",
+}
+
 BUY_TRACKER_HARD_WAIT_FLAGS = {
     "earnings": "earnings_within_2_days",
     "rsi": "rsi_over_80",
     "extended": "price_extended_above_mas",
-    "dividend_cut": "dividend_cut_or_suspended",
-    "triple_bear": "triple_bearish_breakdown",
 }
 
 _BUY_TRACKER_SUMMARIES = {
@@ -1169,6 +1172,23 @@ _BUY_TRACKER_ENTRY_ZONE_RE = re.compile(
     r"^\s*\$?\s*([0-9]+(?:\.[0-9]+)?)\s*-\s*"
     r"\$?\s*([0-9]+(?:\.[0-9]+)?)\s*$"
 )
+
+_BUY_TRACKER_HARD_AVOID_META = {
+    "dividend_cut": {
+        "rule_id": "bt_avoid_div_cut",
+        "label": "AVOID: Dividend Cut",
+        "expected": "No dividend cut or suspension",
+        "reason": "a dividend cut or suspension is present",
+        "waiting_for": "confirmation that the dividend is current and not cut or suspended",
+    },
+    "triple_bear": {
+        "rule_id": "bt_avoid_triple_bear",
+        "label": "AVOID: Triple Bearish",
+        "expected": "The oscillator, MA, and SMA200 breakdown conditions are not all bearish",
+        "reason": "oscillators and moving averages are Strong Sell while price is >10% below SMA200",
+        "waiting_for": "the triple-bearish oscillator, MA, and SMA200 breakdown to clear",
+    },
+}
 
 _BUY_TRACKER_HARD_WAIT_META = {
     "earnings": {
@@ -1192,20 +1212,17 @@ _BUY_TRACKER_HARD_WAIT_META = {
         "reason": "price is more than 10% above SMA50 and 15% above SMA200",
         "waiting_for": "price to move back within 10% of SMA50 or 15% of SMA200",
     },
-    "dividend_cut": {
-        "rule_id": "bt_wait_div_cut",
-        "label": "WAIT: Dividend Cut",
-        "expected": "No dividend cut or suspension",
-        "reason": "a dividend cut or suspension is present",
-        "waiting_for": "confirmation that the dividend is current and not cut or suspended",
-    },
-    "triple_bear": {
-        "rule_id": "bt_wait_triple_bear",
-        "label": "WAIT: Triple Bearish",
-        "expected": "The oscillator, MA, and SMA200 breakdown conditions are not all bearish",
-        "reason": "oscillators and moving averages are Strong Sell while price is >10% below SMA200",
-        "waiting_for": "the triple-bearish oscillator, MA, and SMA200 breakdown to clear",
-    },
+}
+
+# Minimum evidence fields required for a non-zero dimension score.  A dimension
+# whose score is 0 and all listed fields are None is counted as data-missing for
+# the global ≥3-missing cap (see _count_missing_data_dimensions).
+_DIMENSION_PRIMARY_EVIDENCE: Dict[str, tuple] = {
+    "value_entry": ("current_price", "sma50", "sma200"),
+    "trend": ("current_price", "sma50", "sma200"),
+    "momentum": ("rsi_14",),
+    "income": ("annual_dividend_rate", "payout_ratio_pct", "analyst_target_price"),
+    "calendar": ("days_to_earnings",),
 }
 
 
@@ -1464,7 +1481,6 @@ def _buy_tracker_hard_wait_checks(
     price_vs_sma200 = _percent_from_baseline(
         canonical["current_price"], canonical["sma200"]
     )
-    explicit_dividend_cut = canonical["dividend_cut_or_suspended"]
 
     raw_checks = {
         "earnings": (
@@ -1492,12 +1508,45 @@ def _buy_tracker_hard_wait_checks(
                 "price_vs_sma200_pct": price_vs_sma200,
             },
         ),
+    }
+
+    checks: Dict[str, Dict[str, Any]] = {}
+    for key, (available, raw_triggered, data_refs) in raw_checks.items():
+        canonical_flag = BUY_TRACKER_HARD_WAIT_FLAGS[key]
+        fallback_triggered = not available and canonical_flag in risk_flags
+        checks[key] = {
+            "available": available,
+            "triggered": bool(raw_triggered or fallback_triggered),
+            "source": (
+                "deterministic" if available
+                else "llm" if fallback_triggered
+                else "unavailable"
+            ),
+            "canonical_flag": canonical_flag,
+            "data_refs": data_refs if available else {},
+        }
+    return checks
+
+
+def _buy_tracker_hard_avoid_checks(
+    activity_data: Any,
+    evidence: Any,
+) -> Dict[str, Dict[str, Any]]:
+    """Check hard AVOID gates: dividend cut and triple bearish breakdown."""
+    canonical = _canonical_buy_tracker_evidence(evidence)
+    activity = activity_data if isinstance(activity_data, dict) else {}
+    risk_flags = set(_risk_flags(activity))
+
+    price_vs_sma200 = _percent_from_baseline(
+        canonical["current_price"], canonical["sma200"]
+    )
+    explicit_dividend_cut = canonical["dividend_cut_or_suspended"]
+
+    raw_checks = {
         "dividend_cut": (
             explicit_dividend_cut is not None,
             explicit_dividend_cut is True,
-            {
-                "dividend_cut_or_suspended": explicit_dividend_cut,
-            },
+            {"dividend_cut_or_suspended": explicit_dividend_cut},
         ),
         "triple_bear": (
             canonical["oscillator_summary"] is not None
@@ -1519,7 +1568,7 @@ def _buy_tracker_hard_wait_checks(
 
     checks: Dict[str, Dict[str, Any]] = {}
     for key, (available, raw_triggered, data_refs) in raw_checks.items():
-        canonical_flag = BUY_TRACKER_HARD_WAIT_FLAGS[key]
+        canonical_flag = BUY_TRACKER_HARD_AVOID_FLAGS[key]
         fallback_triggered = not available and canonical_flag in risk_flags
         checks[key] = {
             "available": available,
@@ -1629,7 +1678,7 @@ def _validate_buy_tracker_breakdown(
             not isinstance(value, bool)
             and isinstance(value, (int, float))
             and math.isfinite(float(value))
-            and float(value) in (0.0, 1.0)
+            and float(value) in (-1.0, 0.0, 1.0)
         )
         breakdown[key] = int(value) if valid else 0
         if not valid:
@@ -1639,7 +1688,8 @@ def _validate_buy_tracker_breakdown(
 
 def _buy_tracker_reason_prefix(score: int, breakdown: Dict[str, int]) -> str:
     values = ", ".join(f"{key}:{breakdown[key]}" for key in BUY_TRACKER_DIMENSIONS)
-    return f"Score {score}/5 ({values})."
+    sign = "+" if score > 0 else ""
+    return f"Score {sign}{score}/5 ({values})."
 
 
 def _existing_reason_tail(reason: Any) -> str:
@@ -1659,17 +1709,33 @@ def _existing_reason_tail(reason: Any) -> str:
 def _deterministic_buy_tracker_explanation(
     activity: str,
     score: int,
+    hard_avoid_keys: List[str],
     hard_wait_keys: List[str],
     exceptional_passed: bool,
+    missing_data_cap: bool = False,
 ) -> str:
+    if hard_avoid_keys:
+        reasons = [
+            _BUY_TRACKER_HARD_AVOID_META[key]["reason"] for key in hard_avoid_keys
+        ]
+        return (
+            "Hard AVOID: "
+            + "; ".join(reasons)
+            + ". This is not a sell signal — it flags poor entry timing only."
+        )
     if hard_wait_keys:
         reasons = [
             _BUY_TRACKER_HARD_WAIT_META[key]["reason"] for key in hard_wait_keys
         ]
         return "Hard WAIT override: " + "; ".join(reasons) + "."
+    if missing_data_cap:
+        return (
+            "Three or more dimensions have no usable evidence; insufficient data "
+            "to justify an actionable entry signal."
+        )
     if activity == "STRONG_BUY":
         return (
-            "The validated 5/5 score passed every required exceptional "
+            "The validated +5/5 score passed every required exceptional "
             "price, trend, momentum, dividend, analyst, and calendar gate."
         )
     if activity == "BUY" and score == 5 and not exceptional_passed:
@@ -1680,9 +1746,24 @@ def _deterministic_buy_tracker_explanation(
         )
     if activity == "BUY":
         return "The validated score supports a normal DCA-sized accumulation entry."
+    if activity == "ACCUMULATE":
+        return (
+            "Conditions lean positive but are not compelling; "
+            "a small limit order or half-DCA is appropriate."
+        )
+    if activity == "UNFAVORABLE":
+        return (
+            "Multiple dimensions show headwinds; entry timing is poor. "
+            "This is not a sell signal — it flags poor entry timing only."
+        )
+    if activity == "AVOID":
+        return (
+            "Deep headwinds across multiple dimensions; do not open a new "
+            "position now. This is not a sell signal."
+        )
     return (
-        "The validated score is below the BUY threshold; wait for more "
-        "scoring dimensions to confirm."
+        "The validated score is neutral; wait for more dimensions to "
+        "confirm a directional edge before entering."
     )
 
 
@@ -1709,33 +1790,104 @@ def _generated_buy_tracker_entry_zone(price: float) -> str:
     return f"${price * 0.98:.2f}-${price * 1.02:.2f}"
 
 
+def _score_to_base_activity(score: int) -> str:
+    """Map signed score (−5..+5) to base activity per Danny's threshold table."""
+    if score <= -3:
+        return "AVOID"
+    if score <= -1:
+        return "UNFAVORABLE"
+    if score <= 1:
+        return "WAIT"
+    if score <= 3:
+        return "ACCUMULATE"
+    return "BUY"  # +4 or +5; STRONG_BUY requires the exceptional gate
+
+
+def _signed_score_text(score: int) -> str:
+    """Format a signed score as '+3/5', '-2/5', '0/5'."""
+    sign = "+" if score > 0 else ""
+    return f"{sign}{score}/5"
+
+
+def _count_missing_data_dimensions(
+    breakdown: Dict[str, int],
+    canonical_evidence: Dict[str, Any],
+    validation_flags: List[str],
+) -> int:
+    """Count dimensions whose 0 score is due to invalid or absent LLM breakdown output.
+
+    A dimension is data-missing when its score is 0 AND the LLM either omitted
+    the key entirely or provided an invalid value (captured by validation_flags).
+    A deliberate 0 (explicitly provided by the LLM) is genuine neutrality and
+    is never counted here regardless of evidence availability.
+    """
+    return sum(
+        1 for dim in BUY_TRACKER_DIMENSIONS
+        if breakdown.get(dim, 0) == 0
+        and f"score_breakdown_{dim}_invalid" in validation_flags
+    )
+
+
 def normalize_buy_tracker_activity(
     activity_data: Any,
     evidence: Any,
 ) -> Dict[str, Any]:
-    """Return a normalized Buy Tracker activity without mutating either input."""
+    """Return a normalized Buy Tracker activity without mutating either input.
+
+    Implements the six-state model from danny-buy-tracker-state-redesign.md:
+    - Validates tri-state breakdown {-1, 0, +1} and computes signed score −5..+5.
+    - Applies threshold table: AVOID/UNFAVORABLE/WAIT/ACCUMULATE/BUY/STRONG_BUY.
+    - Hard AVOID gates (highest precedence) override to AVOID.
+    - Hard WAIT gates cap ACCUMULATE/BUY to WAIT.
+    - Missing-data cap (≥3 dimensions): cap ACCUMULATE/BUY to WAIT.
+    - Exceptional STRONG_BUY gate (score +5, no hard gates, full evidence).
+    """
     source = activity_data if isinstance(activity_data, dict) else {}
     normalized = copy.deepcopy(source)
     canonical_evidence = _canonical_buy_tracker_evidence(evidence)
     breakdown, validation_flags = _validate_buy_tracker_breakdown(source)
     score = sum(breakdown.values())
-    score_text = f"{score}/5"
+    score_text = _signed_score_text(score)
 
-    exceptional_passed, exceptional_checks = _buy_tracker_exceptional_gate(
-        canonical_evidence
-    )
-    base_activity = "WAIT" if score <= 2 else "BUY"
-    final_activity = (
-        "STRONG_BUY" if score == 5 and exceptional_passed else base_activity
-    )
+    # Base activity from signed score threshold table.
+    base_activity = _score_to_base_activity(score)
 
+    # Missing-data cap: if ≥3 dimensions scored 0 solely due to absent evidence
+    # or invalid LLM breakdown, downgrade ACCUMULATE/BUY to WAIT and flag it.
+    missing_count = _count_missing_data_dimensions(breakdown, canonical_evidence, validation_flags)
+    missing_data_cap = missing_count >= 3
+    if missing_data_cap and base_activity in {"ACCUMULATE", "BUY"}:
+        base_activity = "WAIT"
+
+    # Hard AVOID gates (dividend cut / triple bearish) — highest precedence.
+    hard_avoid_checks = _buy_tracker_hard_avoid_checks(source, canonical_evidence)
+    hard_avoid_keys = [
+        key for key in _BUY_TRACKER_HARD_AVOID_META
+        if hard_avoid_checks[key]["triggered"]
+    ]
+
+    # Hard WAIT gates (earnings / RSI / extended) — only apply when score-based
+    # state would be ACCUMULATE or better.
     hard_wait_checks = _buy_tracker_hard_wait_checks(source, canonical_evidence)
     hard_wait_keys = [
         key for key in _BUY_TRACKER_HARD_WAIT_META
         if hard_wait_checks[key]["triggered"]
     ]
-    if hard_wait_keys:
+
+    # Exceptional STRONG_BUY gate.
+    exceptional_passed, exceptional_checks = _buy_tracker_exceptional_gate(
+        canonical_evidence
+    )
+
+    # Precedence: Hard AVOID > Hard WAIT > Exceptional STRONG_BUY > score-based.
+    if hard_avoid_keys:
+        final_activity = "AVOID"
+    elif hard_wait_keys and base_activity in {"ACCUMULATE", "BUY"}:
         final_activity = "WAIT"
+    elif score == 5 and not hard_avoid_keys and not hard_wait_keys and exceptional_passed:
+        final_activity = "STRONG_BUY"
+    else:
+        final_activity = base_activity
 
     original_activity = _upper(source.get("activity"))
     original_score = source.get("score")
@@ -1752,7 +1904,7 @@ def normalize_buy_tracker_activity(
     if canonical_price is not None:
         normalized["underlying_price"] = canonical_price
 
-    if final_activity in {"BUY", "STRONG_BUY"}:
+    if final_activity in {"BUY", "STRONG_BUY", "ACCUMULATE"}:
         entry_zone = source.get("entry_zone")
         if not _valid_buy_tracker_entry_zone(entry_zone, canonical_price):
             entry_zone = (
@@ -1769,61 +1921,103 @@ def normalize_buy_tracker_activity(
 
     if final_activity == "STRONG_BUY":
         normalized["confidence"] = "high"
-    elif final_activity == "BUY" or hard_wait_keys or score == 2:
+    elif final_activity in {"BUY", "ACCUMULATE", "AVOID"}:
         normalized["confidence"] = "medium"
     else:
         normalized["confidence"] = "low"
 
-    if final_activity in {"BUY", "STRONG_BUY"}:
+    if final_activity in {"BUY", "STRONG_BUY", "ACCUMULATE"}:
         normalized["waiting_for"] = ""
+    elif hard_avoid_keys:
+        conditions = [
+            _BUY_TRACKER_HARD_AVOID_META[key]["waiting_for"]
+            for key in hard_avoid_keys
+        ]
+        normalized["waiting_for"] = "Wait for " + "; ".join(conditions) + "."
     elif hard_wait_keys:
         conditions = [
             _BUY_TRACKER_HARD_WAIT_META[key]["waiting_for"]
             for key in hard_wait_keys
         ]
         normalized["waiting_for"] = "Wait for " + "; ".join(conditions) + "."
-    else:
-        failed = [key for key in BUY_TRACKER_DIMENSIONS if breakdown[key] == 0]
+    elif missing_data_cap:
+        normalized["waiting_for"] = "Insufficient data to evaluate entry timing."
+    elif final_activity == "UNFAVORABLE":
+        negative_dims = [
+            key for key in BUY_TRACKER_DIMENSIONS if breakdown[key] == -1
+        ]
         normalized["waiting_for"] = (
-            "Wait for enough scoring confirmation to reach at least 3/5"
-            + (f"; improve: {', '.join(failed)}." if failed else ".")
+            "Headwinds in: " + ", ".join(negative_dims) + "."
+            if negative_dims else ""
+        )
+    elif final_activity == "AVOID":
+        negative_dims = [
+            key for key in BUY_TRACKER_DIMENSIONS if breakdown[key] == -1
+        ]
+        normalized["waiting_for"] = (
+            "Multiple headwinds: " + ", ".join(negative_dims)
+            + ". This is not a sell signal."
+            if negative_dims else "Do not open a new position now."
+        )
+    else:
+        non_positive = [key for key in BUY_TRACKER_DIMENSIONS if breakdown[key] < 1]
+        normalized["waiting_for"] = (
+            "Improve dimensions: " + ", ".join(non_positive) + "."
+            if non_positive else "Wait for scoring confirmation."
         )
 
     prefix = _buy_tracker_reason_prefix(score, breakdown)
     if semantic_changed:
         tail = _deterministic_buy_tracker_explanation(
-            final_activity, score, hard_wait_keys, exceptional_passed,
+            final_activity, score, hard_avoid_keys, hard_wait_keys,
+            exceptional_passed, missing_data_cap,
         )
     else:
         tail = _existing_reason_tail(source.get("reason"))
         if not tail:
             tail = _deterministic_buy_tracker_explanation(
-                final_activity, score, hard_wait_keys, exceptional_passed,
+                final_activity, score, hard_avoid_keys, hard_wait_keys,
+                exceptional_passed, missing_data_cap,
             )
     normalized["reason"] = f"{prefix} {tail}".strip()
 
     original_flags = _risk_flags(source)
-    all_hard_flags = set(BUY_TRACKER_HARD_WAIT_FLAGS.values())
-    triggered_flags = [
+    all_hard_flags = (
+        set(BUY_TRACKER_HARD_WAIT_FLAGS.values())
+        | set(BUY_TRACKER_HARD_AVOID_FLAGS.values())
+    )
+    triggered_avoid_flags = [
+        hard_avoid_checks[key]["canonical_flag"] for key in hard_avoid_keys
+    ]
+    triggered_wait_flags = [
         hard_wait_checks[key]["canonical_flag"] for key in hard_wait_keys
     ]
+    triggered_flags = triggered_avoid_flags + triggered_wait_flags
+
     if semantic_changed:
         risk_flags: List[str] = []
-        if final_activity == "WAIT" and not hard_wait_keys:
+        if final_activity in {"BUY", "STRONG_BUY", "ACCUMULATE"}:
+            if final_activity == "BUY" and score == 5 and not exceptional_passed:
+                risk_flags.append("exceptional_gate_not_met")
+        elif final_activity == "WAIT" and not hard_wait_keys and not missing_data_cap:
             risk_flags.append("score_below_buy_threshold")
-        elif final_activity == "BUY" and score == 5 and not exceptional_passed:
-            risk_flags.append("exceptional_gate_not_met")
+        elif final_activity == "UNFAVORABLE":
+            risk_flags.append("score_unfavorable")
+        elif final_activity == "AVOID" and not hard_avoid_keys:
+            risk_flags.append("score_below_avoid_threshold")
     else:
         risk_flags = [
             flag for flag in original_flags if flag not in all_hard_flags
         ]
+    if missing_data_cap and "insufficient_data" not in risk_flags:
+        risk_flags.append("insufficient_data")
     for flag in triggered_flags + validation_flags:
         if flag not in risk_flags:
             risk_flags.append(flag)
     normalized["risk_flags"] = risk_flags
 
     original_triggers = source.get("technical_triggers")
-    if final_activity == "WAIT":
+    if final_activity in {"WAIT", "UNFAVORABLE", "AVOID"}:
         normalized["technical_triggers"] = []
     elif final_activity == "STRONG_BUY":
         normalized["technical_triggers"] = [
@@ -1847,16 +2041,23 @@ def _bt_scoring_rule(
 ) -> Dict[str, Any]:
     breakdown = activity_data.get("score_breakdown")
     value = breakdown.get(dimension_key) if isinstance(breakdown, dict) else None
-    expected = f"Score 1 if {label.lower()} supports accumulation"
-    if value not in (0, 1) or isinstance(value, bool):
+    expected = "Tri-state: +1 tailwind, 0 neutral, -1 headwind"
+    if value not in (-1, 0, 1) or isinstance(value, bool):
         return _rule(
             rule_id, label, "scoring", STATUS_UNKNOWN, expected,
             "Validated score breakdown unavailable", "deterministic",
             blocking=False, data_refs={},
         )
-    status = STATUS_PASS if value == 1 else STATUS_FAIL
+    if value == 1:
+        status = STATUS_PASS
+    elif value == 0:
+        status = STATUS_WARNING
+    else:
+        status = STATUS_FAIL
+    sign = "+" if value == 1 else ""
     return _rule(
-        rule_id, label, "scoring", status, expected, f"{value}/1",
+        rule_id, label, "scoring", status, expected,
+        f"{sign}{value}",
         "deterministic", blocking=False, data_refs={dimension_key: value},
     )
 
@@ -1866,6 +2067,7 @@ def build_buy_tracker_rules(
     enrichment_data: Optional[Dict],
 ) -> List[Dict[str, Any]]:
     evidence = build_buy_tracker_evidence(enrichment_data)
+    hard_avoid_checks = _buy_tracker_hard_avoid_checks(activity_data, evidence)
     hard_wait_checks = _buy_tracker_hard_wait_checks(activity_data, evidence)
 
     rules: List[Dict[str, Any]] = [
@@ -1875,6 +2077,34 @@ def build_buy_tracker_rules(
         _bt_scoring_rule("bt_income", "Income Quality", "income", activity_data),
         _bt_scoring_rule("bt_calendar", "Calendar", "calendar", activity_data),
     ]
+
+    for key, meta in _BUY_TRACKER_HARD_AVOID_META.items():
+        check = hard_avoid_checks[key]
+        if check["triggered"]:
+            status = STATUS_BLOCKED
+            observed = (
+                f"Triggered from {check['source']} evidence"
+                if check["source"] == "deterministic"
+                else f"Triggered by exact canonical flag "
+                     f"{check['canonical_flag']!r}"
+            )
+        elif check["available"]:
+            status = STATUS_NOT_APPLICABLE
+            observed = "Raw evidence available; AVOID trigger not present"
+        else:
+            status = STATUS_UNKNOWN
+            observed = "Required raw evidence unavailable; no canonical flag present"
+        rules.append(_rule(
+            meta["rule_id"],
+            meta["label"],
+            "trigger",
+            status,
+            meta["expected"],
+            observed,
+            check["source"],
+            blocking=check["triggered"],
+            data_refs=check["data_refs"],
+        ))
 
     for key, meta in _BUY_TRACKER_HARD_WAIT_META.items():
         check = hard_wait_checks[key]

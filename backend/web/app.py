@@ -8,7 +8,7 @@ import os
 import re
 import threading
 import time
-from calendar import month_abbr
+from calendar import month_abbr, monthrange
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import defaultdict
@@ -481,6 +481,20 @@ def _sort_by_updated_at_desc(items: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
 def _local_now() -> datetime:
     return datetime.now().astimezone()
+
+
+def _add_three_months(d) -> object:
+    """Return d + 3 calendar months with deterministic month-end day clamping.
+
+    Works on any object with .year, .month, .day, .replace() — i.e.
+    datetime.date or datetime.datetime.  Uses stdlib calendar.monthrange so
+    month-end cases like Jan 31 → Apr 30 are handled without approximation.
+    """
+    m = d.month - 1 + 3     # 0-based offset arithmetic
+    year = d.year + m // 12
+    month = m % 12 + 1
+    day = min(d.day, monthrange(year, month)[1])
+    return d.replace(year=year, month=month, day=day)
 
 
 def _format_time(dt: datetime) -> str:
@@ -6643,6 +6657,7 @@ async def chat_api(request: Request):
     if mode == "portfolio":
         selected_agents = body.get("selected_agents")
         include_symbol_data = bool(body.get("include_symbol_data", False))
+        include_calendar_events = bool(body.get("include_calendar_events", False))
         if selected_agents:
             selected_agent_set = set(selected_agents)
             selected_agent_keys = [
@@ -6770,6 +6785,74 @@ async def chat_api(request: Request):
                             context_parts.append(
                                 "No enrichment data available."
                             )
+
+                if include_calendar_events:
+                    try:
+                        today_utc = datetime.now(timezone.utc).date()
+                        window_end = _add_three_months(today_utc)
+                        today_str = today_utc.isoformat()
+                        end_str = window_end.isoformat()
+                        context_symbol_set = {s.upper() for s in context_symbols}
+                        raw_cal = cosmos.get_calendar_events()
+                        seen_cal: set = set()
+                        cal_events: List[dict] = []
+                        for ev in raw_cal:
+                            ev_type = str(ev.get("type", "")).lower().strip()
+                            if ev_type not in ("earnings", "ex_dividend"):
+                                continue
+                            ev_sym = str(ev.get("symbol", "")).upper().strip()
+                            if not ev_sym or ev_sym not in context_symbol_set:
+                                continue
+                            ev_date = str(ev.get("date", "")).strip()
+                            try:
+                                datetime.strptime(ev_date, "%Y-%m-%d")
+                            except ValueError:
+                                continue
+                            if not (today_str <= ev_date <= end_str):
+                                continue
+                            key = (ev_sym, ev_type, ev_date)
+                            if key in seen_cal:
+                                continue
+                            seen_cal.add(key)
+                            cal_events.append({
+                                "symbol": ev_sym,
+                                "type": ev_type,
+                                "date": ev_date,
+                                "has_active_position": ev.get("has_active_position"),
+                            })
+                        cal_events.sort(
+                            key=lambda x: (x["date"], x["symbol"], x["type"])
+                        )
+                        context_parts.append(
+                            "\n=== UPCOMING CALENDAR (NEXT 3 MONTHS) ==="
+                        )
+                        if cal_events:
+                            for ev in cal_events:
+                                label = (
+                                    "Earnings"
+                                    if ev["type"] == "earnings"
+                                    else "Ex-Dividend"
+                                )
+                                pos_note = (
+                                    " [active position]"
+                                    if ev.get("has_active_position")
+                                    else ""
+                                )
+                                context_parts.append(
+                                    f"{ev['date']}  {ev['symbol']}  "
+                                    f"{label}{pos_note}"
+                                )
+                        else:
+                            context_parts.append(
+                                "No earnings or ex-dividend events found "
+                                "for tracked symbols in the next 3 months."
+                            )
+                    except Exception:
+                        context_parts.append(
+                            "\n=== UPCOMING CALENDAR (NEXT 3 MONTHS) ==="
+                        )
+                        context_parts.append("(Calendar data unavailable)")
+
             except Exception:
                 context_parts.append("(Error loading context from CosmosDB)")
 
@@ -6786,6 +6869,10 @@ async def chat_api(request: Request):
             f"{activities_limit} recent activities or alerts for each row. "
             "When present, the SYMBOL DATA section provides fundamentals, "
             "technicals, and quality metrics per symbol. "
+            "When present, the UPCOMING CALENDAR section lists earnings and "
+            "ex-dividend dates for context symbols over the next 3 months — "
+            "this is forward-looking timing information only and must not be "
+            "confused with historical activity dates in the agent records. "
             "Answer questions about positions, risks, and recommended actions "
             "based on this data.\n\n"
             f"Portfolio context:\n{context_text}"

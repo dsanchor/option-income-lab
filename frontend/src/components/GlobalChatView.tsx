@@ -39,6 +39,7 @@ export default function GlobalChatView() {
   );
   const [activitiesLimit, setActivitiesLimit] = useState(3);
   const [includeSymbolData, setIncludeSymbolData] = useState(false);
+  const [includeCalendarEvents, setIncludeCalendarEvents] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
 
   // Quick-analysis config
@@ -71,6 +72,7 @@ export default function GlobalChatView() {
     setAgentChecked(Object.fromEntries(PORTFOLIO_AGENTS.map((a) => [a.value, true])));
     setActivitiesLimit(3);
     setIncludeSymbolData(false);
+    setIncludeCalendarEvents(false);
     setConfigError(null);
     setSymbol("");
     setMarket("");
@@ -107,7 +109,8 @@ export default function GlobalChatView() {
     setModeLabel("💼 Portfolio Chat");
     setSymbolLabel(
       `Last ${activitiesLimit} · ${selectedAgents.length} agent(s)` +
-        (includeSymbolData ? " · symbol data" : ""),
+        (includeSymbolData ? " · symbol data" : "") +
+        (includeCalendarEvents ? " · calendar" : ""),
     );
     setMessages([
       {
@@ -119,6 +122,9 @@ export default function GlobalChatView() {
           `with up to ${activitiesLimit} recent activities each. ` +
           (includeSymbolData
             ? "Symbol fundamentals, technicals, and quality metrics are included. "
+            : "") +
+          (includeCalendarEvents
+            ? "Upcoming earnings and ex-dividend calendar (next 3 months) is included. "
             : "") +
           "Ask me about your positions, follow-ups, risks, or recommended actions.",
       },
@@ -223,6 +229,7 @@ export default function GlobalChatView() {
         payload.selected_agents = selectedAgents.map((a) => a.value);
         payload.activities_limit = activitiesLimit;
         payload.include_symbol_data = includeSymbolData;
+        payload.include_calendar_events = includeCalendarEvents;
       }
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -386,6 +393,31 @@ export default function GlobalChatView() {
                     <span
                       className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${
                         includeSymbolData ? "left-[18px]" : "left-0.5"
+                      }`}
+                    />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIncludeCalendarEvents((v) => !v)}
+                  className={`flex items-center justify-between gap-4 rounded-[var(--radius)] border px-4 py-3 text-left transition-all ${
+                    includeCalendarEvents
+                      ? "border-accent-blue/50 bg-accent-blue/10"
+                      : "border-border bg-bg-input hover:bg-bg-hover"
+                  }`}
+                >
+                  <div>
+                    <div className="text-sm font-medium">Include earnings &amp; ex-dividend calendar</div>
+                    <div className="text-xs text-text-muted">Next 3 months · from persisted calendar data</div>
+                  </div>
+                  <span
+                    className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+                      includeCalendarEvents ? "bg-accent-blue" : "bg-bg-card"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${
+                        includeCalendarEvents ? "left-[18px]" : "left-0.5"
                       }`}
                     />
                   </span>

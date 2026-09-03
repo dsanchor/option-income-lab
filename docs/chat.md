@@ -19,6 +19,15 @@ Perfect for in-depth analysis of symbols you're actively tracking.
 3. Select a tracked symbol or ask general questions about your portfolio
 4. Get insights based on your historical data and positions
 
+**Context toggles (all default OFF, independent of each other):**
+
+| Toggle | Label | What it adds |
+|--------|-------|-------------|
+| `include_symbol_data` | Include symbol data | Fundamentals, technicals, and quality metrics from stored enrichment |
+| `include_calendar_events` | Include earnings & ex-dividend calendar | Persisted earnings and ex-dividend dates from the current UTC date through the next 3 calendar months |
+
+The calendar toggle reads from `cosmos.get_calendar_events()` (already-synced data only — no live Yahoo Finance calls). Events are filtered to the symbols present in the assembled agent context. If enabled but no matching events exist, the advisor is informed explicitly. If the calendar read fails, a compact unavailable marker is appended and the rest of the portfolio context remains intact.
+
 ### Quick Analysis
 
 Analyze any symbol (tracked or not) using live Yahoo Finance data, without saving to your database. Quick Analysis fetches:

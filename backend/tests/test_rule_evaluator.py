@@ -453,11 +453,23 @@ def _gate_price_evidence(
 
 def _assert_reason_prefix_matches_breakdown(normalized: dict) -> None:
     score = sum(normalized["score_breakdown"].values())
+    # Signed score format: "+3/5", "0/5", "-2/5" (spec: danny-buy-tracker-state-redesign)
+    if score == 0:
+        score_str = "0/5"
+    elif score > 0:
+        score_str = f"+{score}/5"
+    else:
+        score_str = f"{score}/5"
     reason = normalized["reason"]
-    assert reason.startswith(f"Score {score}/5")
+    assert reason.startswith(f"Score {score_str}"), (
+        f"Expected reason to start with 'Score {score_str}', got: {reason!r}"
+    )
     prefix = reason.split(").", 1)[0]
     for key, value in normalized["score_breakdown"].items():
-        assert re.search(rf"\b{re.escape(key)}\s*:\s*{value}\b", prefix)
+        assert re.search(
+            rf"\b{re.escape(key)}\s*:\s*{re.escape(str(value))}",
+            prefix,
+        ), f"Expected '{key}:{value}' in reason prefix, got: {prefix!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -783,12 +795,14 @@ class TestWaitNotApplicable:
     def test_buy_tracker_wait_trigger_without_raw_evidence_is_unknown(self):
         activity = _buy_tracker_activity(waiting_for=None, risk_flags=[])
         evaluation = build_rule_evaluation("buy_tracker", activity)
+        # Hard WAIT gates: bt_wait_earnings, bt_wait_rsi_80, bt_wait_extended
+        # Hard AVOID gates: bt_avoid_div_cut, bt_avoid_triple_bear (new gate tier)
         for trigger_id in (
             "bt_wait_earnings",
             "bt_wait_rsi_80",
             "bt_wait_extended",
-            "bt_wait_div_cut",
-            "bt_wait_triple_bear",
+            "bt_avoid_div_cut",      # renamed from bt_wait_div_cut (Hard AVOID)
+            "bt_avoid_triple_bear",  # renamed from bt_wait_triple_bear (Hard AVOID)
         ):
             rule = _find_rule(evaluation, trigger_id)
             assert rule["status"] == "unknown"
@@ -939,20 +953,21 @@ class TestOpenPutMonitor:
 
 class TestBuyTracker:
     def test_score_dimensions_map_from_score_breakdown(self):
+        # Tri-state {-1, 0, +1} dimension scores map to: +1=pass, 0=warning, -1=fail.
         activity = _buy_tracker_activity(
             score_breakdown={
                 "value_entry": 1,
                 "trend": 0,
                 "momentum": 1,
-                "income": 0,
+                "income": -1,
                 "calendar": 1,
             }
         )
         evaluation = build_rule_evaluation("buy_tracker", activity)
         assert _find_rule(evaluation, "bt_value_entry")["status"] == "pass"
-        assert _find_rule(evaluation, "bt_trend")["status"] == "fail"
+        assert _find_rule(evaluation, "bt_trend")["status"] == "warning"   # neutral dim
         assert _find_rule(evaluation, "bt_momentum")["status"] == "pass"
-        assert _find_rule(evaluation, "bt_income")["status"] == "fail"
+        assert _find_rule(evaluation, "bt_income")["status"] == "fail"     # negative dim
         assert _find_rule(evaluation, "bt_calendar")["status"] == "pass"
 
     def test_bt_wait_earnings_deterministic(self):
@@ -1197,10 +1212,14 @@ class TestBuyTrackerNormalizationScoreMapping:
     @pytest.mark.parametrize(
         "score,expected_activity,expected_confidence",
         [
+            # Six-state thresholds (spec: danny-buy-tracker-state-redesign):
+            #   -5..-3 → AVOID, -2..-1 → UNFAVORABLE, 0..+1 → WAIT,
+            #   +2..+3 → ACCUMULATE, +4 → BUY, +5 → BUY (STRONG_BUY via exceptional gate)
+            # _buy_tracker_for_score uses {0,1} breakdowns; {0,1} ⊂ {-1,0,+1} (backward compat).
             (0, "WAIT", "low"),
             (1, "WAIT", "low"),
-            (2, "WAIT", "medium"),
-            (3, "BUY", "medium"),
+            (2, "ACCUMULATE", "medium"),  # was WAIT — superseded by new thresholds
+            (3, "ACCUMULATE", "medium"),  # was BUY  — superseded by new thresholds
             (4, "BUY", "medium"),
             (5, "BUY", "medium"),
         ],
@@ -1213,11 +1232,15 @@ class TestBuyTrackerNormalizationScoreMapping:
             None,
         )
 
-        assert normalized["score"] == f"{score}/5"
+        expected_score_str = "0/5" if score == 0 else f"+{score}/5"
+        assert normalized["score"] == expected_score_str
         assert normalized["activity"] == expected_activity
         assert normalized["confidence"] == expected_confidence
-        assert normalized["waiting_for"] == ("" if score >= 3 else normalized["waiting_for"])
-        if score < 3:
+        assert normalized["waiting_for"] == (
+            "" if expected_activity in {"BUY", "STRONG_BUY", "ACCUMULATE"}
+            else normalized["waiting_for"]
+        )
+        if expected_activity in {"WAIT", "UNFAVORABLE", "AVOID"}:
             assert normalized["waiting_for"]
         _assert_reason_prefix_matches_breakdown(normalized)
 
@@ -1227,7 +1250,7 @@ class TestBuyTrackerNormalizationScoreMapping:
             _exceptional_evidence(),
         )
 
-        assert normalized["score"] == "5/5"
+        assert normalized["score"] == "+5/5"
         assert normalized["activity"] == "STRONG_BUY"
         assert normalized["confidence"] == "high"
         assert normalized["waiting_for"] == ""
@@ -1253,9 +1276,10 @@ class TestBuyTrackerNormalizationScoreMapping:
         )
 
         assert normalized["activity"] == "STRONG_BUY"
-        assert normalized["score"] == "5/5"
+        assert normalized["score"] == "+5/5"
 
-    def test_explicit_dividend_cut_survives_adaptation_and_forces_wait(self):
+    def test_explicit_dividend_cut_survives_adaptation_and_forces_avoid(self):
+        # Dividend cut is now a Hard AVOID gate (supersedes old Hard WAIT behaviour).
         fetch_data = _provider_shaped_exceptional_fetch_data()
         fetch_data["buy_tracker"] = {"dividend_cut_or_suspended": True}
 
@@ -1269,8 +1293,8 @@ class TestBuyTrackerNormalizationScoreMapping:
         )
 
         assert evidence["dividend_cut_or_suspended"] is True
-        assert normalized["activity"] == "WAIT"
-        assert normalized["score"] == "5/5"
+        assert normalized["activity"] == "AVOID"  # Hard AVOID, not WAIT
+        assert normalized["score"] == "+5/5"
         assert "dividend_cut_or_suspended" in normalized["risk_flags"]
 
     def test_missing_provider_dividend_state_evidence_fails_closed(self):
@@ -1291,7 +1315,7 @@ class TestBuyTrackerNormalizationScoreMapping:
         assert evidence["latest_dividend"] == 1.0
         assert evidence["dividend_growth_years"] is None
         assert normalized["activity"] == "BUY"
-        assert normalized["score"] == "5/5"
+        assert normalized["score"] == "+5/5"
 
 
 class TestBuyTrackerExceptionalGate:
@@ -1476,7 +1500,7 @@ class TestBuyTrackerExceptionalGate:
             evidence,
         )
 
-        assert normalized["score"] == "5/5", case
+        assert normalized["score"] == "+5/5", case
         if passes:
             assert normalized["activity"] == "STRONG_BUY", case
         else:
@@ -1510,7 +1534,7 @@ class TestBuyTrackerExceptionalGate:
         )
 
         assert normalized["activity"] != "STRONG_BUY"
-        assert normalized["score"] == "5/5"
+        assert normalized["score"] == "+5/5"
 
     @pytest.mark.parametrize(
         "field,invalid_value",
@@ -1541,7 +1565,7 @@ class TestBuyTrackerExceptionalGate:
         )
 
         assert normalized["activity"] != "STRONG_BUY"
-        assert normalized["score"] == "5/5"
+        assert normalized["score"] == "+5/5"
 
     @pytest.mark.parametrize(
         "overrides",
@@ -1574,7 +1598,7 @@ class TestBuyTrackerExceptionalGate:
         )
 
         assert normalized["activity"] == "BUY"
-        assert normalized["score"] == "5/5"
+        assert normalized["score"] == "+5/5"
 
 
 class TestBuyTrackerHardWaitOverrides:
@@ -1654,7 +1678,8 @@ class TestBuyTrackerHardWaitOverrides:
                 _nonexceptional_safe_evidence(
                     dividend_cut_or_suspended=True,
                 ),
-                "WAIT",
+                # Dividend cut is now a Hard AVOID gate → AVOID (not WAIT).
+                "AVOID",
             ),
             (
                 "dividend_not_cut",
@@ -1675,7 +1700,8 @@ class TestBuyTrackerHardWaitOverrides:
                     oscillator_summary="STRONG_SELL",
                     ma_summary="STRONG_SELL",
                 ),
-                "WAIT",
+                # Triple bearish is now a Hard AVOID gate → AVOID (not WAIT).
+                "AVOID",
             ),
             (
                 "triple_bear_exactly_ten_below",
@@ -1728,9 +1754,14 @@ class TestBuyTrackerHardWaitOverrides:
         )
 
         assert normalized["activity"] == expected_activity, case
-        assert normalized["score"] == "5/5", case
-        assert normalized["confidence"] == "medium", case
-        if expected_activity == "WAIT":
+        assert normalized["score"] == "+5/5", case
+        # New confidence mapping: WAIT/UNFAVORABLE → low; BUY/ACCUMULATE/AVOID → medium.
+        expected_confidence = (
+            "low" if expected_activity in {"WAIT", "UNFAVORABLE"} else "medium"
+        )
+        assert normalized["confidence"] == expected_confidence, case
+        # WAIT and AVOID both carry a non-empty waiting_for explaining the gate.
+        if expected_activity in {"WAIT", "AVOID"}:
             assert normalized["waiting_for"], case
         else:
             assert normalized["waiting_for"] == "", case
@@ -1760,14 +1791,19 @@ class TestBuyTrackerHardWaitOverrides:
         ],
         ids=["earnings", "rsi", "extended", "dividend", "triple_bear"],
     )
-    def test_canonical_hard_wait_flag_is_fallback_only_when_raw_is_unavailable(
+    def test_canonical_hard_gate_flag_is_fallback_only_when_raw_is_unavailable(
         self, trigger_evidence
     ):
+        """Dividend cut and triple bear are now Hard AVOID gates; others are Hard WAIT.
+        In all cases, the canonical risk flag must function as a fallback when
+        raw evidence is unavailable, and raw evidence must win when available.
+        """
         raw_triggered = normalize_buy_tracker_activity(
             _buy_tracker_for_score(5, risk_flags=[]),
             trigger_evidence,
         )
-        assert raw_triggered["activity"] == "WAIT"
+        # Hard AVOID gates produce AVOID; Hard WAIT gates produce WAIT.
+        assert raw_triggered["activity"] in {"WAIT", "AVOID"}
         emitted_flags = raw_triggered["risk_flags"]
         assert emitted_flags
 
@@ -1777,20 +1813,23 @@ class TestBuyTrackerHardWaitOverrides:
                 _buy_tracker_for_score(5, risk_flags=[flag]),
                 None,
             )
-            if fallback["activity"] == "WAIT":
+            if fallback["activity"] in {"WAIT", "AVOID"}:
                 fallback_flags.append(flag)
-        assert fallback_flags, "raw hard-WAIT output must expose its canonical fallback flag"
+        assert fallback_flags, "raw hard-gate output must expose its canonical fallback flag"
 
         for flag in fallback_flags:
             safe_evidence = _nonexceptional_safe_evidence()
             if flag == "dividend_cut_or_suspended":
                 safe_evidence["dividend_cut_or_suspended"] = False
+            elif flag == "triple_bearish_breakdown":
+                safe_evidence.setdefault("oscillator_summary", "BUY")
+                safe_evidence.setdefault("ma_summary", "BUY")
             raw_safe = normalize_buy_tracker_activity(
                 _buy_tracker_for_score(5, risk_flags=[flag]),
                 safe_evidence,
             )
             assert raw_safe["activity"] == "BUY", "available raw evidence must win"
-            assert raw_safe["score"] == "5/5"
+            assert raw_safe["score"] == "+5/5"
 
     def test_vague_prose_and_legacy_heuristics_cannot_force_wait(self):
         activity = _buy_tracker_for_score(
@@ -1807,7 +1846,7 @@ class TestBuyTrackerHardWaitOverrides:
         normalized = normalize_buy_tracker_activity(activity, None)
 
         assert normalized["activity"] == "BUY"
-        assert normalized["score"] == "5/5"
+        assert normalized["score"] == "+5/5"
 
     @pytest.mark.parametrize(
         "field,value",
@@ -1830,18 +1869,19 @@ class TestBuyTrackerHardWaitOverrides:
         )
 
         assert normalized["activity"] == "BUY"
-        assert normalized["score"] == "5/5"
+        assert normalized["score"] == "+5/5"
         assert "exceptional_gate_not_met" in normalized["risk_flags"]
         assert "dividend_cut_or_suspended" not in normalized["risk_flags"]
 
-    def test_explicit_dividend_cut_forces_wait(self):
+    def test_explicit_dividend_cut_forces_avoid(self):
+        # Dividend cut is a Hard AVOID gate in the new design (not Hard WAIT).
         normalized = normalize_buy_tracker_activity(
             _buy_tracker_for_score(5),
             _exceptional_evidence(dividend_cut_or_suspended=True),
         )
 
-        assert normalized["activity"] == "WAIT"
-        assert normalized["score"] == "5/5"
+        assert normalized["activity"] == "AVOID"
+        assert normalized["score"] == "+5/5"
         assert "dividend_cut_or_suspended" in normalized["risk_flags"]
 
     def test_exact_dividend_cut_flag_is_used_only_when_explicit_state_missing(self):
@@ -1856,7 +1896,8 @@ class TestBuyTrackerHardWaitOverrides:
             _nonexceptional_safe_evidence(dividend_cut_or_suspended=False),
         )
 
-        assert unavailable["activity"] == "WAIT"
+        # With no raw evidence, LLM flag triggers Hard AVOID (new gate tier).
+        assert unavailable["activity"] == "AVOID"
         assert explicit_safe["activity"] == "BUY"
 
 
@@ -1882,16 +1923,22 @@ class TestBuyTrackerPromptContract:
             assert "MACD.signal" not in prompt
             assert "Stoch.D" not in prompt
 
-    def test_hard_wait_examples_use_only_canonical_flags(self):
+    def test_hard_wait_and_avoid_examples_use_only_canonical_flags(self):
+        # In the new design, hard gates split into Hard AVOID (div cut, triple bear)
+        # and Hard WAIT (earnings, rsi, extended).
         from src.buy_tracker_instructions import BUY_TRACKER_INSTRUCTIONS
 
-        canonical_hard_wait_flags = {
+        hard_wait_flags = {
             "earnings_within_2_days",
             "rsi_over_80",
             "price_extended_above_mas",
+        }
+        hard_avoid_flags = {
             "dividend_cut_or_suspended",
             "triple_bearish_breakdown",
         }
+        all_canonical_flags = hard_wait_flags | hard_avoid_flags
+
         examples = [
             json.loads(block)
             for block in re.findall(
@@ -1900,19 +1947,34 @@ class TestBuyTrackerPromptContract:
                 flags=re.DOTALL,
             )
         ]
-        wait_examples = [
-            example for example in examples if example.get("activity") == "WAIT"
-        ]
-        assert wait_examples
+        wait_examples = [e for e in examples if e.get("activity") == "WAIT"]
+        assert wait_examples, "Instructions must include at least one WAIT example"
 
-        example_flags = {
-            flag
-            for example in wait_examples
-            for flag in example.get("risk_flags", [])
+        wait_flags = {
+            flag for e in wait_examples for flag in e.get("risk_flags", [])
         }
-        assert example_flags <= canonical_hard_wait_flags
-        assert "earnings_within_2_days" in example_flags
-        assert "calendar_risk_nearby" not in example_flags
+        assert wait_flags <= all_canonical_flags, (
+            f"WAIT example uses non-canonical flags: {wait_flags - all_canonical_flags}"
+        )
+        assert "earnings_within_2_days" in wait_flags, (
+            "At least one WAIT example must use the earnings_within_2_days flag"
+        )
+        assert "calendar_risk_nearby" not in wait_flags, (
+            "Vague heuristic 'calendar_risk_nearby' is banned from WAIT examples"
+        )
+
+        # AVOID examples (once instructions are updated) must only use hard-AVOID flags.
+        avoid_examples = [e for e in examples if e.get("activity") == "AVOID"]
+        if avoid_examples:  # enforced once Linus updates the instructions
+            avoid_flags = {
+                flag for e in avoid_examples for flag in e.get("risk_flags", [])
+            }
+            assert avoid_flags <= all_canonical_flags, (
+                f"AVOID example uses non-canonical flags: {avoid_flags - all_canonical_flags}"
+            )
+            assert avoid_flags & hard_avoid_flags, (
+                "AVOID examples must use at least one Hard AVOID canonical flag"
+            )
 
 
 class TestBuyTrackerMalformedBreakdown:
@@ -1930,17 +1992,18 @@ class TestBuyTrackerMalformedBreakdown:
                 ("trend", "momentum", "income", "calendar"),
             ),
             (
+                # In tri-state {-1, 0, +1}: -1 is NOW VALID; 2, True, "1" are still invalid.
                 {
                     "value_entry": 1,
-                    "trend": 2,
-                    "momentum": -1,
-                    "income": True,
-                    "calendar": "1",
+                    "trend": 2,      # invalid: not in {-1, 0, +1}
+                    "momentum": -1,  # VALID in new tri-state schema
+                    "income": True,  # invalid: boolean
+                    "calendar": "1", # invalid: string
                     "extra_dimension": 1,
                 },
-                [1, 0, 0, 0, 0],
-                1,
-                ("trend", "momentum", "income", "calendar"),
+                [1, 0, -1, 0, 0],  # value_entry=1, trend=0 (invalid), momentum=-1 (valid!)
+                0,  # sum = 1 + 0 + (-1) + 0 + 0 = 0
+                ("trend", "income", "calendar"),  # only these three are invalid
             ),
             (
                 {
@@ -1967,6 +2030,19 @@ class TestBuyTrackerMalformedBreakdown:
                 3,
                 ("value_entry", "trend"),
             ),
+            (
+                # All -1 values: valid in tri-state, sum = -5
+                {
+                    "value_entry": -1,
+                    "trend": -1,
+                    "momentum": -1,
+                    "income": -1,
+                    "calendar": -1,
+                },
+                [-1, -1, -1, -1, -1],
+                -5,
+                (),  # no invalid keys
+            ),
         ],
     )
     def test_breakdown_is_canonicalized_and_invalid_dimensions_are_flagged(
@@ -1982,8 +2058,25 @@ class TestBuyTrackerMalformedBreakdown:
             normalized["score_breakdown"][key]
             for key in BUY_TRACKER_SCORE_KEYS
         ] == expected_values
-        assert normalized["score"] == f"{expected_score}/5"
-        assert normalized["activity"] == ("BUY" if expected_score >= 3 else "WAIT")
+        # New signed score format
+        expected_score_str = (
+            "0/5" if expected_score == 0
+            else f"+{expected_score}/5" if expected_score > 0
+            else f"{expected_score}/5"
+        )
+        assert normalized["score"] == expected_score_str
+        # New six-state mapping
+        if expected_score >= 4:
+            expected_activity = "BUY"
+        elif expected_score in (2, 3):
+            expected_activity = "ACCUMULATE"
+        elif expected_score in (0, 1):
+            expected_activity = "WAIT"
+        elif expected_score in (-1, -2):
+            expected_activity = "UNFAVORABLE"
+        else:
+            expected_activity = "AVOID"
+        assert normalized["activity"] == expected_activity
         flags_text = " ".join(map(str, normalized["risk_flags"])).lower()
         for key in invalid_keys:
             assert key in flags_text
@@ -2066,17 +2159,18 @@ class TestBuyTrackerNormalizedOutputCoherence:
     @pytest.mark.parametrize(
         "score,evidence,expected_activity,expected_confidence",
         [
+            # Six-state thresholds: {0,1} breakdowns use backward-compat subset of {-1,0,+1}.
             (0, None, "WAIT", "low"),
             (1, None, "WAIT", "low"),
-            (2, None, "WAIT", "medium"),
-            (3, None, "BUY", "medium"),
+            (2, None, "ACCUMULATE", "medium"),   # was WAIT — superseded
+            (3, None, "ACCUMULATE", "medium"),   # was BUY  — superseded
             (5, None, "BUY", "medium"),
             (5, _exceptional_evidence(), "STRONG_BUY", "high"),
             (
                 5,
                 _nonexceptional_safe_evidence(rsi_14=81.0),
-                "WAIT",
-                "medium",
+                "WAIT",   # Hard WAIT caps BUY → WAIT; WAIT confidence is "low" (new design)
+                "low",
             ),
         ],
     )
@@ -2088,13 +2182,16 @@ class TestBuyTrackerNormalizedOutputCoherence:
             evidence,
         )
 
-        assert normalized["score"] == f"{score}/5"
+        expected_score_str = "0/5" if score == 0 else f"+{score}/5"
+        assert normalized["score"] == expected_score_str
         assert normalized["activity"] == expected_activity
         assert normalized["confidence"] == expected_confidence
         assert normalized["waiting_for"] == (
-            "" if expected_activity in {"BUY", "STRONG_BUY"} else normalized["waiting_for"]
+            ""
+            if expected_activity in {"BUY", "STRONG_BUY", "ACCUMULATE"}
+            else normalized["waiting_for"]
         )
-        if expected_activity == "WAIT":
+        if expected_activity in {"WAIT", "UNFAVORABLE", "AVOID"}:
             assert normalized["waiting_for"]
         assert isinstance(normalized["risk_flags"], list)
         assert isinstance(normalized["technical_triggers"], list)

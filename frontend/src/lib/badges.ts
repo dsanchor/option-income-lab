@@ -25,9 +25,12 @@ export function styleFor(color: keyof typeof C): Style {
 export function activityStyle(activity?: string): Style {
   const a = (activity || "").toUpperCase();
   if (a === "SELL" || a === "ROLL") return tone(C.red);
+  if (a === "AVOID") return tone(C.red);
   if (a === "WAIT" || a === "HOLD") return tone(C.orange);
+  if (a === "UNFAVORABLE") return tone(C.orange);
   if (a.includes("ALPHA")) return tone(C.purple);
   if (a === "OPEN" || a === "BUY") return tone(C.green);
+  if (a === "ACCUMULATE") return tone(C.blue);
   return tone(C.blue);
 }
 
