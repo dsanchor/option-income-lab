@@ -966,3 +966,16 @@ Score range -5 to +5 via 5 dimensions (Value Entry, Trend, Momentum, Income, Cal
 
 **Decision record:** `.squad/decisions.md` — new entry "Buy Tracker Six-State Redesign (Danny)"
 
+
+### 2026-09-05 — Options Screener Share Availability: Design Authority & D1 Revision
+
+**Role:** Design lead for share-availability model; fixed D1 backend defect after Linus lockout
+
+Authored comprehensive design replacing boolean `no_shares_held` with three-state model (`no_shares`, `shares_committed`, `available`). Specified per-symbol calculation logic, API contract (query parameter + row fields), UI contract (MultiSelect filter + per-row badges), and TypeScript types.
+
+Initial feature rejected by Basher (D0) due to two contract gaps. Pulled forward from design authority to fix D1: missing `committed_shares` and `free_shares` fields in backend row enrichment (`app.py` ~lines 3488–3501). Linus locked out as original implementer; Danny's fix enabled 6 previously-failing tests to pass.
+
+**Specification:** `.squad/decisions/decisions.md` — "Options Screener — Share Availability Redesign"
+
+**Final Outcome:** All 73 gate tests pass (53 core + 20 extended); all 13 original + extended requirements verified; feature approved and production-ready.
+

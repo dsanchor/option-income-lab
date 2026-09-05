@@ -1578,3 +1578,55 @@ Implemented two features in parallel:
 
 **Decision record:** `.squad/decisions.md` — new entry "Portfolio Chat 3-Month Persisted Calendar Context (Rusty)"
 
+
+---
+
+## 2026-09-05: Options Screener — Share Availability Frontend
+
+Implemented Danny's accepted share-availability redesign (`danny-options-screener-share-availability.md`) for the frontend layer only. Backend/tests are out of scope (Linus/Basher).
+
+**Files changed:**
+
+- **`frontend/src/types/screener.ts`**
+  - Added `export type ShareStatus = "available" | "shares_committed" | "no_shares"` with JSDoc.
+  - Removed `no_shares_held?: boolean` from `ScreenerOptionRow`; replaced with `share_status?: ShareStatus`, `total_shares?: number`, `active_call_count?: number`, `free_lots?: number` (all call-rows only, optional).
+  - Added `share_availability: ShareStatus[] | null` to `ScreenerFilters` (null = no filter).
+  - Updated file-level comment to reference the new design doc.
+
+- **`frontend/src/lib/options-row-format.tsx`**
+  - Removed `no_shares_held: "No shares held"` from `FLAG_LABELS`; updated comment to note share_status is rendered as a dedicated badge, not a flag.
+
+- **`frontend/src/components/OptionsScreenerView.tsx`**
+  - Imported `ShareStatus`.
+  - Added `SHARE_AVAILABILITY_OPTIONS` with labels: `✅ 100+ shares free`, `🔒 Shares committed`, `⚠️ <100 total shares`.
+  - Added `shareAvailability: ShareStatus[]` to `AppliedFilters` interface and `DEFAULT_APPLIED` (default `[]` = show all).
+  - `buildQuery`: emits `share_availability=...` only when `side === "call"` and selection is non-empty (empty = omit param = show all; never sent on put side).
+  - Filter bar: added `<MultiSelect>` for "Share Availability" wrapped in `{applied.side === "call" && ...}` — hidden entirely on Puts tab, preserved on return to Calls.
+  - Flags cell: replaced `row.no_shares_held` conditional badge with two `share_status`-driven badges: `shares_committed` → `🔒 Shares committed` (amber, tooltip shows active call count + committed/free shares), `no_shares` → `⚠️ No shares` (amber, tooltip shows total shares vs 100-share requirement); `available` renders no badge.
+  - Updated Calls/Puts tab comment to remove `no_shares_held` reference.
+
+**Validation:** `npx tsc --noEmit --incremental false` — exit 0. `npm run lint` — 1 pre-existing error + 3 pre-existing warnings (lines 290, 318, 320, 321, all untouched by this work).
+
+**Key patterns:**
+- `shareAvailability` lives in `AppliedFilters` (not a separate state variable) so the existing `setFilter` machinery preserves it across tab switches naturally — switching to Puts hides the widget but doesn't reset the value; returning to Calls restores the user's selection.
+- Tooltip for `shares_committed` derives `committed_shares` inline as `active_call_count * 100` (not a new API field — computable from `active_call_count` per the design).
+- `free_lots` from the design spec is not included in the `ScreenerOptionRow` tooltip calculation directly — the committed count is derived; `free_lots` field is typed but used only if referenced in future UI.
+
+### 2026-09-05 — Options Screener Share Availability: Frontend Implementation
+
+**Role:** Frontend implementation; locked out after D2 defect, Linus applied fixes
+
+Implemented frontend for share-availability feature:
+- Type definitions: `ShareStatus` type, `ScreenerOptionRow` fields (`share_status`, `total_shares`, `active_call_count`, `free_lots`)
+- UI components: MultiSelect filter widget (calls-only, hidden on puts), per-row badge rendering (`shares_committed`, `no_shares`, no badge for `available`)
+- Query param plumbing: wired `share_availability` query parameter through component
+- Cleanup: removed legacy `no_shares_held` field and FLAG_LABELS entry
+
+Initial feature rejected by Basher (D0) with D2 defect: TypeScript types and tooltip missing backend field declarations. Locked out after own implementation; Linus pulled forward to fix D2 (added type fields, fixed tooltip to consume backend field). After Linus fix, all 3 D2 tests pass and feature approved.
+
+**Implementation:** `frontend/src/types/screener.ts`, `frontend/src/components/OptionsScreenerView.tsx`, `options-row-format.tsx`
+
+**Revision:** Applied by Linus (D2 fix)
+
+**Final Outcome:** All 73 gate tests pass; feature approved and production-ready.
+

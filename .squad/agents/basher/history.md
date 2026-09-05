@@ -20,8 +20,40 @@
   values; ratios, per-share values, counts, filters, and ordering stay unscaled.
 - Provider fetch tests no longer enforce retired DTE windows; expiration and
   roll-candidate limits are separate concerns.
+- **Screener test pattern (precomputed-only):** The screener endpoint reads
+  `BestOptionsCache` (not `OptionsChainCache`). Tests must inject precomputed
+  envelopes via `BestOptionsCache.publish_snapshot()` + `set_best_options_cache()`,
+  NOT `_warm_symbol`. The old `_warm_symbol` pattern in `test_options_screener_endpoint.py`
+  is broken against the precomputed-only endpoint (5 pre-existing failures).
 
 ## Recent Learnings
+
+### 2026-09-05 — Share Availability Redesign Final Gate (re-gate): APPROVE
+- Re-ran after D1 fix by Danny and D2 fix by Linus.
+- **53/53 pass** in `test_options_screener_share_availability.py`.
+- **73/73 pass** across broader gate (+ query-param validation, gap filters, best-options contract).
+- D1 confirmed fixed: `committed_shares` and `free_shares` now forwarded in enrichment loop.
+- D2 confirmed fixed: `screener.ts` declares both fields; tooltip reads `row.committed_shares`.
+- Issued APPROVE in `.squad/decisions/inbox/basher-options-screener-share-validation.md`.
+
+
+- Issued **REJECT** in `.squad/decisions/inbox/basher-options-screener-share-validation.md`.
+- **D1 (Backend, Linus):** `committed_shares` and `free_shares` computed by
+  `_build_share_availability_map` but NOT forwarded to call-row API response. The enrichment
+  loop sets only `share_status`, `total_shares`, `active_call_count`, `free_lots`. 6 tests fail.
+  Revision assigned to **Danny** (Linus lockout).
+- **D2 (Frontend, Rusty):** `ScreenerOptionRow` in `screener.ts` missing `committed_shares?`
+  and `free_shares?` type declarations. Tooltip in `OptionsScreenerView.tsx` recomputes
+  `committed_shares` as `(active_call_count ?? 0) * 100` instead of reading `row.committed_shares`.
+  3 tests fail. Revision assigned to **Linus** (Rusty lockout).
+- **All other verifications pass (44/53):** classification logic, filter, pagination (both default
+  and non-default sort), unknown-value 400, put-side isolation, no_shares_held removed, best-options
+  regression intact, frontend MultiSelect call-only, query key correct, row badges correct.
+- Key technique for future: OI sort test requires envelopes with DISTINCT OI values — default
+  chain uses oi=500 for all, making sort order undefined. Build custom `_entry_with_oi` for sort tests.
+- Tests remain at full strength; 9 failing tests must pass before re-review.
+
+
 
 ### 2026-08-17 — Buy Tracker Normalization Contract
 - Added parameterized coverage for all score mappings, exceptional-gate inputs
@@ -2799,4 +2831,34 @@ Verification checklist:
 Both features production-ready. Outcomes accepted.
 
 **Decision record:** `.squad/decisions.md` — referenced in both feature entries
+
+
+### 2026-09-05 — Options Screener Share Availability: Comprehensive Testing & Review
+
+**Role:** Tester and reviewer; D0 rejection and final approval
+
+Authored comprehensive test suite covering all 13 original requirements plus extended gate verification:
+- 53 core tests across 16 test classes (share status classification, filter semantics, pagination, put-side isolation, edge cases, frontend contract)
+- 20 extended tests (query parameter validation, gap percentage filters, Best Options contract safety)
+- Total: 73/73 pass
+
+D0 Review & Rejection: Independently identified two contract defects:
+- D1: Backend missing `committed_shares` and `free_shares` fields in row enrichment (6 test failures)
+- D2: Frontend missing type declarations and tooltip recomputing value instead of consuming backend (3 test failures)
+
+Provided detailed defect evidence, design references, and clear revision instructions (fix owners: Danny for D1, Linus for D2).
+
+Final Gate Approval (2026-09-05): After D1/D2 revisions:
+- All 53 core tests pass
+- All 73 extended gate tests pass
+- All 13 original requirements verified
+- All extended verification passed (numeric row fields, tooltip contract)
+- Best Options single-symbol surface confirmed unaffected
+- Feature approved production-ready
+
+**Test Implementation:** `backend/tests/test_options_screener_share_availability.py`
+
+**Decision Record:** `.squad/decisions/decisions.md` — "Options Screener — Share Availability Redesign"
+
+**Final Outcome:** ✅ Approved with confidence; 73/73 tests pass.
 

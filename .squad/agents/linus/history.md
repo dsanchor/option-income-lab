@@ -901,3 +901,18 @@ Implemented Danny's six-state tri-state redesign across strategy, prompt, rule e
 
 **Decision record:** `.squad/decisions.md` — new entries "Buy Tracker Six-State Redesign (Danny)" and "Decision: Buy Tracker Implementation Details (Linus)"
 
+
+### 2026-09-05 — Options Screener Share Availability: Backend Implementation & D2 Revision
+
+**Role:** Backend implementation; fixed D2 frontend defect after Rusty lockout
+
+Implemented backend share-availability calculation in `app.py` screener endpoint: `_build_share_availability_map` (per-symbol fields), per-row enrichment, `share_availability` query parameter, and filter logic (applied after aggregator, before pagination). Designed position-counting logic to filter active calls only (ignore closed/puts).
+
+Initial feature rejected by Basher (D0) due to two contract gaps. After D1 fix, pulled forward to fix D2: TypeScript type declarations missing `committed_shares` and `free_shares` fields; tooltip recomputed value instead of consuming backend field (`OptionsScreenerView.tsx`). Rusty locked out as original implementer; Linus's fix updated both `screener.ts` and tooltip to read backend metadata, enabling 3 previously-failing tests to pass.
+
+**Implementation:** `backend/web/app.py` (share availability calculation & enrichment)
+
+**Revision:** `frontend/src/types/screener.ts`, `frontend/src/components/OptionsScreenerView.tsx` (D2 fix)
+
+**Final Outcome:** All 73 gate tests pass (53 core + 20 extended); feature approved and production-ready.
+

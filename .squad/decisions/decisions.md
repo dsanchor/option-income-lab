@@ -4178,3 +4178,202 @@ Modified `RecentCell` to check `recommendationSource === "alpha"` and, when true
 - Contract tests: `backend/tests/test_dashboard_alpha_fallback.py`
 - Type definitions: `frontend/src/types/dashboard.ts`
 - Design context: Alpha agents can recommend SELL on nearby contracts by relaxing one parameter
+
+---
+
+## Options Screener — Share Availability Redesign
+
+**Primary Author:** Danny (Design Authority)  
+**Contributors:** Linus (Backend), Rusty (Frontend), Basher (Testing & Review)  
+**Date:** 2026-09-05  
+**Status:** ✅ **APPROVED** (after D1/D2 revisions)  
+**Feature Scope:** Replace `no_shares_held` with a precise three-state share-availability model for covered calls.
+
+---
+
+### Problem Statement
+
+The current boolean `no_shares_held = total_shares < 100` conflates two distinct situations:
+1. User owns 0–99 shares — cannot write *any* covered call (insufficient shares)
+2. User owns ≥100 shares but all lots are committed to active calls — cannot write an *additional* covered call (shares tied up)
+
+Users need to filter the screener to symbols where writing a new covered call is possible and distinguish *why* a symbol isn't available.
+
+### Solution Overview
+
+**Three-State Model:** `no_shares`, `shares_committed`, `available`
+
+| Status | Condition | Meaning |
+|---|---|---|
+| `no_shares` | `total_shares < 100` | Fewer than one full lot owned |
+| `shares_committed` | `total_shares >= 100` AND `free_lots == 0` | All lots tied to active calls |
+| `available` | `free_lots >= 1` | At least one lot free for a new call |
+
+**Calculation:** In `app.py` screener endpoint (not aggregator/evaluator)
+- `active_call_count` = count of positions with `status == "active"` AND `type == "call"`
+- `committed_shares` = `active_call_count * 100`
+- `free_shares` = `max(total_shares - committed_shares, 0)`
+- `free_lots` = `free_shares // 100`
+- `share_status` = classification based on `total_shares` and `free_lots`
+
+**API Contract:**
+- New query parameter: `share_availability` (comma-separated, optional)
+- Per-row fields (call rows only): `share_status`, `total_shares`, `active_call_count`, `committed_shares`, `free_shares`, `free_lots`
+- Filter position: Applied after aggregator, before re-sort and pagination
+- Put rows: Unaffected (no fields, filter ignored)
+
+**UI Contract:**
+- MultiSelect filter: Labeled "Share Availability", calls-only, hidden on puts
+- Per-row badge: `shares_committed` (orange) or `no_shares` (orange), no badge for `available`
+- Tooltip for `shares_committed`: `"{active_call_count} active call(s) covering {committed_shares} shares — {free_lots} free lot(s)"`
+- Tooltip for `no_shares`: `"{total_shares} shares held — need 100 for a covered call"`
+
+**Scope Out:**
+- Best Options single-symbol view: `no_shares_held` (section-level) unchanged
+- Option scoring, admission, gating: Unaffected
+- `best_options.py` / `options_screener.py`: No changes
+
+---
+
+### Revision Cycle
+
+#### D0 — Initial Submission (2026-09-04)
+
+**Verdict:** ❌ **REJECTED** by Basher (2 contract defects)
+
+**Test Results:** 44 pass / 9 fail
+
+**Defects:**
+
+**D1 — Backend Row Contract Gap:** Linus's `app.py` enrichment loop computed `committed_shares` and `free_shares` in `_build_share_availability_map` but failed to forward them to the per-row response. The two fields were missing from the API output, causing 6 test failures in `TestNumericRowContract`.
+
+**D2 — Frontend Type & Tooltip Gap:** Rusty's `ScreenerOptionRow` type was missing declarations for `committed_shares` and `free_shares`. Additionally, the tooltip in `OptionsScreenerView.tsx` recomputed `committed_shares` as `active_call_count * 100` instead of consuming the backend-provided field. Caused 3 test failures in `TestFrontendContractExtended`.
+
+---
+
+#### D1 Revision (2026-09-05) — Backend Row Enrichment
+
+**Owner:** Danny (Linus locked out as original implementer)  
+**File:** `backend/web/app.py` (~lines 3488–3501)
+
+**Fix:** Added missing fields to per-row enrichment:
+```python
+row["committed_shares"] = avail.get("committed_shares", 0)
+row["free_shares"] = avail.get("free_shares", 0)
+```
+
+**Outcome:** ✅ 6 previously-failing D1 tests now pass
+
+---
+
+#### D2 Revision (2026-09-05) — Frontend Type & Tooltip
+
+**Owner:** Linus (Rusty locked out as original implementer)  
+**Files:** `frontend/src/types/screener.ts`, `frontend/src/components/OptionsScreenerView.tsx`
+
+**Fixes:**
+1. Added to `ScreenerOptionRow`:
+   ```typescript
+   committed_shares?: number;
+   free_shares?: number;
+   ```
+
+2. Updated tooltip to consume backend field:
+   ```typescript
+   title={`${row.active_call_count ?? 0} active call(s) covering ${row.committed_shares ?? 0} shares — ${row.free_lots ?? 0} free lot(s)`}
+   ```
+
+**Outcome:** ✅ 3 previously-failing D2 tests now pass
+
+---
+
+#### Final Gate (2026-09-05) — ✅ **APPROVED** by Basher
+
+**Test Results:** **73 / 73 pass** (53 core + 20 extended)
+
+**Core Suite (53 tests):**
+- `TestNoSharesStatus` (2) — Zero/partial shares detection
+- `TestAvailableStatus` (1) — Free lot availability
+- `TestSharesCommittedStatus` (1) — All-committed detection
+- `TestUserKeyExample` (1) — User's 200/1 example
+- `TestTwoActiveCallsCommit` (1) — Two-contract commitment
+- `TestNonActivePositionsIgnored` (3) — Closed/put filtering
+- `TestMalformedShareCounts` (4) — Defensive clamping
+- `TestShareStatusPutSideDefect` (4) — Put-side isolation
+- `TestShareAvailabilityFilter` (9) — Filter logic + OR semantics
+- `TestFilterBeforePagination` (2) — Pagination correctness
+- `TestShowAll` (2) — Unfiltered behavior
+- `TestNumericRowContract` (7) — Committed/free fields (D1 focus)
+- `TestPaginationWithFilter` (2) — Pagination + filter integration
+- `TestBestOptionsNoSharesHeldUnchanged` (2) — Single-symbol contract safety
+- `TestFrontendContract` (8) — MultiSelect, badges, query key
+- `TestFrontendContractExtended` (3) — Committed/free types + tooltip (D2 focus)
+
+**Extended Gate:**
+- `TestQueryParamValidation` (7 tests) ✅
+- `TestGapPercentageFilters` (2 tests) ✅
+- `test_best_options_frontend_contract.py` (11 tests) ✅
+
+**All 13 Original Requirements Confirmed:**
+
+| # | Requirement | Status |
+|---|---|---|
+| 1 | `total=0` and `total=99` → `no_shares`; exact metadata | ✅ |
+| 2 | `total=100, 0 calls` → `available`, `free_lots=1` | ✅ |
+| 3 | `total=100, 1 call` → `shares_committed`, `free_lots=0` | ✅ |
+| 4 | `total=200, 1 call` → `available`, `free_lots=1` (user key) | ✅ |
+| 5 | `total=200, 2 calls` → `shares_committed` | ✅ |
+| 6 | Closed calls & active puts ignored | ✅ |
+| 7 | Malformed/negative clamped; overcommit clamped | ✅ |
+| 8 | Fields call-only; puts unaffected; filter ignored on puts | ✅ |
+| 9 | Filter values (OR, omit=all, unknown=400) | ✅ |
+| 10 | Filter before pagination; `total_matching` reflects post-filter | ✅ |
+| 11 | Show-all: every admitted contract visible when unfiltered | ✅ |
+| 12 | Best Options section-level `no_shares_held` unchanged | ✅ |
+| 13 | Frontend contract: MultiSelect, query key, badges, no legacy field | ✅ |
+
+**Extended Verification:**
+- `committed_shares` and `free_shares` present on all call rows ✅
+- Tooltip consumes backend field, not recomputed ✅
+
+---
+
+### Implementation Summary
+
+| Task | Owner | File(s) | Status |
+|---|---|---|---|
+| Backend calculation & per-row enrichment | Linus | `backend/web/app.py` | ✅ Complete |
+| D1 fix: missing row fields | Danny | `backend/web/app.py` | ✅ Complete |
+| Frontend types | Rusty | `frontend/src/types/screener.ts` | ✅ Complete |
+| D2 fix: type fields + tooltip | Linus | `frontend/src/types/screener.ts`, `OptionsScreenerView.tsx` | ✅ Complete |
+| Frontend widget & rendering | Rusty | `frontend/src/components/OptionsScreenerView.tsx`, `options-row-format.tsx` | ✅ Complete |
+| Test suite (53 core + extended) | Basher | `backend/tests/test_options_screener_share_availability.py` | ✅ Complete |
+
+---
+
+### Deployment Status
+
+**✅ Production-Ready**
+- All tests passing (73/73)
+- All original + extended requirements verified
+- No breaking changes
+- TypeScript compilation successful
+- Ready for merge
+
+**Related Documentation:**
+- Orchestration Log: `.squad/orchestration-log/2026-09-05T10:08:27Z-options-screener-share-availability.md`
+- Session Log: `.squad/session-log/2026-09-05T10:08:27Z-options-screener-share-availability.md`
+
+---
+
+### Design Details (Full Specification)
+
+For the complete calculation model, API contract, UI contract, type definitions, edge cases, and test plan, refer to the full design specification embedded in the orchestration and session logs. Key sections:
+
+- §2: Calculation Model (per-symbol fields, `share_status` classification, worked examples)
+- §3: API Contract (query parameter, per-row fields, filter position, backward compatibility)
+- §4: UI Contract (filter widget, per-row badge, tooltips)
+- §6: Edge Cases & Defensive Rules
+- §7: TypeScript Types
+- §8: Test Coverage
+
