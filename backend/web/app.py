@@ -3139,6 +3139,50 @@ _SCREENER_SORT_FIELDS = {
 }
 
 
+_SHARE_AVAILABILITY_VALUES = frozenset({"no_shares", "shares_committed", "available"})
+
+
+def _classify_share_status(total_shares: int, free_lots: int) -> str:
+     if total_shares < 100:
+         return "no_shares"
+     if free_lots == 0:
+         return "shares_committed"
+     return "available"
+
+
+def _build_share_availability_map(docs: list) -> dict:
+     """Compute per-symbol share-availability metadata from Cosmos docs.
+     Returns a dict keyed by symbol (uppercase) with total_shares,
+     active_call_count, committed_shares, free_shares, free_lots, share_status.
+     """
+     share_availability: dict = {}
+     for doc in docs:
+         symbol = (doc.get("symbol") or "").strip().upper()
+         if not symbol:
+             continue
+         try:
+             total_shares = max(int(doc.get("total_shares", 0) or 0), 0)
+         except (TypeError, ValueError):
+             total_shares = 0
+         active_positions = [
+             p for p in doc.get("positions", [])
+             if p.get("status") == "active" and p.get("type") == "call"
+         ]
+         active_call_count = len(active_positions)
+         committed_shares = active_call_count * 100
+         free_shares = max(total_shares - committed_shares, 0)
+         free_lots = free_shares // 100
+         share_availability[symbol] = {
+             "total_shares": total_shares,
+             "active_call_count": active_call_count,
+             "committed_shares": committed_shares,
+             "free_shares": free_shares,
+             "free_lots": free_lots,
+             "share_status": _classify_share_status(total_shares, free_lots),
+         }
+     return share_availability
+
+
 def _resort_screener_rows(rows: list, sort_field: str, direction: str) -> list:
      """Re-orders already-filtered, already-scored rows by a caller-chosen
      column. A stable sort; missing values on the chosen field always sort
@@ -3294,6 +3338,7 @@ async def api_screener_options(
      sort_dir: str = Query(default="desc", alias="dir"),
      offset: int = Query(default=0, ge=0),
      limit: int = Query(default=100, ge=1, le=500),
+     share_availability: Optional[str] = Query(default=None),
 ):
      """Options Screener — precomputed-only (binding directive
      `.squad/decisions/inbox/copilot-options-screener-precomputed-only.md`).
@@ -3325,6 +3370,19 @@ async def api_screener_options(
          )
      if sort_dir not in ("asc", "desc"):
          return JSONResponse({"error": "dir must be one of: asc, desc"}, status_code=400)
+
+     # Parse and validate share_availability filter (call-side only; ignored on puts)
+     share_availability_filter = None
+     if share_availability is not None:
+         requested_values = [v.strip() for v in share_availability.split(",") if v.strip()]
+         unknown = [v for v in requested_values if v not in _SHARE_AVAILABILITY_VALUES]
+         if unknown:
+             return JSONResponse(
+                 {"error": f"Unknown share_availability value(s): {', '.join(sorted(unknown))}. "
+                            f"Allowed: {', '.join(sorted(_SHARE_AVAILABILITY_VALUES))}"},
+                 status_code=400,
+             )
+         share_availability_filter = set(requested_values) if requested_values else None
 
      try:
          cosmos = _get_cosmos(request)
@@ -3387,9 +3445,13 @@ async def api_screener_options(
      # A non-default sort needs every matching row in hand before it can be
      # re-ordered and re-paginated here — the aggregator's own offset/limit
      # pagination is only valid against its own canonical order.
+     # Need all matching rows before our own filter/pagination when either
+     # resorting (non-default sort) OR share_availability filtering on calls.
+     share_filtering = share_availability_filter is not None and side == "call"
      resorting = sort != "default"
-     fetch_offset = 0 if resorting else offset
-     fetch_limit = _SCREENER_UNBOUNDED_FETCH_LIMIT if resorting else limit
+     needs_unbounded = resorting or share_filtering
+     fetch_offset = 0 if needs_unbounded else offset
+     fetch_limit = _SCREENER_UNBOUNDED_FETCH_LIMIT if needs_unbounded else limit
 
      try:
          result = await asyncio.get_event_loop().run_in_executor(
@@ -3421,9 +3483,32 @@ async def api_screener_options(
      rows = section["rows"]
      pagination = section["pagination"]
 
-     if resorting:
-         rows = _resort_screener_rows(rows, sort, sort_dir)
-         total_matching = pagination["total_matching"]
+     # Per-row enrichment: attach share-availability metadata to call rows;
+     # put rows never receive these fields.
+     share_avail_map = _build_share_availability_map(docs)
+     stale_by_symbol = {sym: entry.get("chain_stale_at_compute", False) for sym, entry in precomputed_entries.items()}
+
+     for row in rows:
+         if side == "call":
+             sym = row.get("symbol", "")
+             avail = share_avail_map.get(sym, {})
+             row["share_status"] = avail.get("share_status", "no_shares")
+             row["total_shares"] = avail.get("total_shares", 0)
+             row["active_call_count"] = avail.get("active_call_count", 0)
+             row["committed_shares"] = avail.get("committed_shares", 0)
+             row["free_shares"] = avail.get("free_shares", 0)
+             row["free_lots"] = avail.get("free_lots", 0)
+         row["chain_stale"] = stale_by_symbol.get(row["symbol"], False)
+
+     # Apply share_availability filter (calls only; silently ignored on puts)
+     if share_filtering:
+         rows = [r for r in rows if r.get("share_status") in share_availability_filter]
+
+     # Re-sort and paginate (covers both resorting and share_filtering cases)
+     if needs_unbounded:
+         if resorting:
+             rows = _resort_screener_rows(rows, sort, sort_dir)
+         total_matching = len(rows) if share_filtering else pagination["total_matching"]
          rows = rows[offset: offset + limit]
          pagination = {
              "offset": offset, "limit": limit,
@@ -3431,15 +3516,6 @@ async def api_screener_options(
              "returned": len(rows),
              "has_more": (offset + len(rows)) < total_matching,
          }
-
-     # Per-row enrichment (no shares check, chain_stale from cached entry)
-     shares_by_symbol = {(doc.get("symbol") or "").strip().upper(): int(doc.get("total_shares", 0) or 0) for doc in docs}
-     stale_by_symbol = {sym: entry.get("chain_stale_at_compute", False) for sym, entry in precomputed_entries.items()}
-
-     for row in rows:
-         if side == "call":
-             row["no_shares_held"] = shares_by_symbol.get(row["symbol"], 0) < 100
-         row["chain_stale"] = stale_by_symbol.get(row["symbol"], False)
 
      # Build status summary (X and N per §11b)
      total_symbols = len(docs)  # X: configured universe (filtered by symbols=)
@@ -3468,7 +3544,11 @@ async def api_screener_options(
          "schema_version": result["schema_version"],
          "generated_at": result["generated_at"],
          "side": side,
-         "filters": {**result["filters"], "sort": sort, "dir": sort_dir, "offset": offset, "limit": limit},
+         "filters": {
+             **result["filters"],
+             "sort": sort, "dir": sort_dir, "offset": offset, "limit": limit,
+             "share_availability": sorted(share_availability_filter) if share_availability_filter else None,
+         },
          "symbols": {"counts": counts, "next_run": next_run_iso},
          "rows": rows,
          "nearest_miss": section["nearest_miss"],

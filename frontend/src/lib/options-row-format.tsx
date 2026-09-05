@@ -19,7 +19,8 @@ export const COLOR_ICON: Record<BestOptionColor, typeof CheckCircle2> = {
 
 // Human labels for backend flags (design §4/§5). Colour is never derived
 // from these — they render as neutral badges alongside the backend's own
-// `color`/`label`.
+// `color`/`label`. Share-availability (share_status) is not a flag — it is
+// rendered as a dedicated badge in OptionsScreenerView using row.share_status.
 export const FLAG_LABELS: Record<string, string> = {
   earnings_date_unknown: "Earnings date unknown",
   stale_quote: "Stale quote",
@@ -27,7 +28,6 @@ export const FLAG_LABELS: Record<string, string> = {
   exceeds_system_dte_cap: "Beyond agents' 45d cap",
   below_category_floor: "Below category premium floor",
   ex_div_within_dte: "Ex-dividend within DTE",
-  no_shares_held: "No shares held",
   below_support: "Strike at/below support",
   insufficient_data: "Insufficient data for a score",
 };

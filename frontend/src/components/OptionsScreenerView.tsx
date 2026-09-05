@@ -15,12 +15,18 @@ import type {
   ScreenerSide,
   ScreenerSortDir,
   ScreenerSortField,
+  ShareStatus,
 } from "@/types/screener";
 
 const PREFERENCE_OPTIONS: MultiSelectOption[] = [
   { value: "Preferred", label: "Preferred" },
   { value: "Acceptable", label: "Acceptable" },
   { value: "Avoid", label: "Avoid" },
+];
+const SHARE_AVAILABILITY_OPTIONS: MultiSelectOption[] = [
+  { value: "available", label: "✅ 100+ shares free" },
+  { value: "shares_committed", label: "🔒 Shares committed" },
+  { value: "no_shares", label: "⚠️ <100 total shares" },
 ];
 const DEFAULT_PREFERENCES: ScreenerPreference[] = ["Preferred", "Acceptable"];
 const DEFAULT_DTE_MIN = 0;
@@ -66,6 +72,8 @@ interface AppliedFilters {
   minOi?: number;
   minGapPct?: number;
   maxGapPct?: number;
+  /** Call-side only: empty = show all (MultiSelect "0 selected == all" convention). */
+  shareAvailability: ShareStatus[];
   sort: ScreenerSortField;
   dir: ScreenerSortDir;
   offset: number;
@@ -78,6 +86,7 @@ const DEFAULT_APPLIED: AppliedFilters = {
   symbols: [],
   minDte: DEFAULT_DTE_MIN,
   maxDte: DEFAULT_DTE_MAX,
+  shareAvailability: [],
   sort: "default",
   dir: "desc",
   offset: 0,
@@ -112,6 +121,10 @@ function buildQuery(applied: AppliedFilters): string {
   if (applied.minOi != null) p.set("min_open_interest", String(applied.minOi));
   if (applied.minGapPct != null) p.set("min_gap_pct", String(applied.minGapPct));
   if (applied.maxGapPct != null) p.set("max_gap_pct", String(applied.maxGapPct));
+  // share_availability is call-only; empty selection = show all (omit param).
+  if (applied.side === "call" && applied.shareAvailability.length > 0) {
+    p.set("share_availability", applied.shareAvailability.join(","));
+  }
   p.set("sort", applied.sort);
   p.set("dir", applied.dir);
   p.set("offset", String(applied.offset));
@@ -342,8 +355,10 @@ export default function OptionsScreenerView() {
       </div>
 
       {/* Calls/Puts tabs — every symbol stays on the Calls tab regardless of
-          share count (design: "keep all symbols on Calls"); `no_shares_held`
-          renders as a per-row badge for symbols that can't currently cover. */}
+          share count (design: "keep all symbols on Calls"); share_status
+          renders as a per-row badge for symbols that can't currently cover,
+          and a Share Availability filter widget (Calls tab only) lets the
+          user narrow by availability state. */}
       <div className="flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1">
         {(["call", "put"] as ScreenerSide[]).map((s) => (
           <button
@@ -387,6 +402,17 @@ export default function OptionsScreenerView() {
               allLabel="All Symbols"
             />
           </div>
+          {applied.side === "call" && (
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-text-muted">Share Availability</span>
+              <MultiSelect
+                options={SHARE_AVAILABILITY_OPTIONS}
+                selected={applied.shareAvailability}
+                onChange={(next) => setFilter({ shareAvailability: next as ShareStatus[] })}
+                allLabel="Show All"
+              />
+            </div>
+          )}
           <div className="flex flex-col gap-1">
             <span className="text-xs text-text-muted">Min ann. return %</span>
             <input
@@ -641,12 +667,20 @@ function ResultsTable({
                   <td className="px-2 py-1 text-right font-mono">{row.score != null ? Math.round(row.score) : "—"}</td>
                   <td className="px-2 py-1 text-left">
                     <div className="flex flex-wrap gap-1">
-                      {row.no_shares_held && (
+                      {row.share_status === "shares_committed" && (
                         <span
-                          title="0 shares held — not currently coverable"
+                          title={`${row.active_call_count ?? 0} active call(s) covering ${row.committed_shares ?? 0} shares — ${row.free_lots ?? 0} free lot(s)`}
                           className="rounded border border-accent-orange/40 bg-accent-orange/10 px-1 py-0.5 text-[10px] text-accent-orange"
                         >
-                          no shares held
+                          🔒 Shares committed
+                        </span>
+                      )}
+                      {row.share_status === "no_shares" && (
+                        <span
+                          title={`${row.total_shares ?? 0} shares held — need 100 for a covered call`}
+                          className="rounded border border-accent-orange/40 bg-accent-orange/10 px-1 py-0.5 text-[10px] text-accent-orange"
+                        >
+                          ⚠️ No shares
                         </span>
                       )}
                       {row.flags.map((f) => (
