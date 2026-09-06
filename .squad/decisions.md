@@ -2,7 +2,109 @@
 
 ## Active Decisions
 
-### 1. Dividend Portfolio — Phase 1 MVP Architecture & Ledger Design
+### 1. Unified Symbol Overview & Shared Filtering — Portfolio + Watchlist Consolidation
+
+**Date:** 2026-09-07  
+**Authors:** Danny (Architect), Rusty (Frontend), Livingston (Backend), Reuben (Frontend, escalated revision), Basher (Testing)  
+**Status:** ✅ **RELEASED** — Commit 69e3635  
+**Impact:** Single unified symbol overview table (Portfolio holdings + Watchlist research) with shared filter surface; account colors and labels throughout; US eligibility enforcement; international portfolio enrichment via provider-symbol resolution
+
+#### User Directive (2026-09-07)
+
+Keep the Portfolio and Watchlist symbol lists separate in the UI, but provide one shared filtering experience. Symbol search, Ideal Calls, Ideal Puts, and all other filters must appear only once and apply to both lists simultaneously.
+
+#### Key Decisions — API & Data Model
+
+**1. Unified Overview Endpoint** (`GET /api/symbols/overview`)
+- Single flat response shape with `symbols[]` array (replaces two separate endpoints)
+- New query parameter: `include_zero_portfolio` (bool, default false)
+  - When false: hides auto-enrolled historical symbols with zero shares
+  - When true: includes full historical portfolio (enables toggle)
+- Portfolio-wide KPI summary in response: total_investment_eur, net_gains_eur, total_dividends_eur, calls/puts exposure
+- Each symbol row includes: `row_source` ("portfolio" | "watchlist"), `is_auto_enrolled` boolean
+- US eligibility flag: `us_options_eligible` (per exchange MIC)
+
+**2. Frontend Rendering — Two Visible Sections**
+- Display rows in two separate sections: Portfolio holdings and Watchlist research
+- Single shared filter toolbar (search, Ideal Calls, Ideal Calls, etc.) applies to both sections simultaneously
+- Client-side filtering only (fetch inclusive, filter in-memory)
+- Historical zero-share toggle correctly forwards `include_zero_portfolio` flag on API call
+
+**3. Unified Row Predicate**
+```
+VISIBLE(symbol) =
+    has_symbol_config(symbol) AND (
+        portfolio_shares != 0                              # Current holding
+        OR is_watchlist_member(symbol)                     # Explicit watchlist
+        OR (portfolio_shares == 0 AND NOT hide_zero)       # Historical with toggle off
+    )
+```
+
+**4. Explicit Watchlist Membership Detection**
+A symbol has explicit membership if: manually added OR any watchlist toggle enabled (covered calls, cash secured puts, buy-tracker, telegram notifications). Auto-enrolled-only symbols without interaction are purely historical.
+
+**5. Account Colors & Labels**
+- Account color badges display in Symbol Details and account displays
+- Account labels show readable broker/account names
+- Consistent application across Portfolio movements and UI
+
+**6. US Eligibility Enforcement**
+- Exchange MIC determines eligibility for options-agent actions
+- Non-US securities (non-XNYS/XNAS MICs) blocked from options enrichment, buy-tracker
+- Gate enforced in eligibility routes; enrichment skipped with structured warning
+
+#### Yahoo Symbol Resolution for International Enrichment
+
+**7. Provider-Symbol Resolution Wired**
+- Single function: `resolve_yfinance_symbol(ticker, exchange_mic, security_master_doc=None)` in `provider_symbols.py`
+- Precedence (highest wins): security_master override → MIC suffix table → fail-closed None
+- MIC suffix map: XMAD→.MC, XLON→.L, XETR→.DE, XSWX→.SW, XPAR→.PA, XAMS→.AS, XBRU→.BR, XLIS→.LS, XNYS/XNAS→empty
+- Legacy US free-text aliases: NASDAQ/NYSE/AMEX treated as bare-ticker equivalents (no regression)
+- Unknown MICs: skipped with structured warning, never fallback to bare ticker ("no data" safer than "wrong data")
+
+**8. Enrichment Path Updated**
+- `portfolio_enrichment.run_portfolio_enrichment()` now fetches companion `security_master` doc
+- Resolves Yahoo symbol before calling dgi_screener
+- `dgi_screener.analyze_single_symbol()` accepts optional `yf_symbol` parameter (default `symbol` for backward compat)
+- Zero behavior change for existing US-only callers (XNYS/XNAS bare ticker path unchanged)
+
+#### Implementation Outcomes
+
+**Backend (Livingston, Linus):**
+- Unified overview endpoint consolidates Portfolio+Watchlist
+- US eligibility gates enforced
+- Yahoo resolution wired for international securities
+- Legacy alias handling preserves working US enrichment
+- 421/421 pytest tests passing
+
+**Frontend (Rusty, Reuben):**
+- Two-section layout with shared filter surface
+- Account colors and labels throughout
+- Historical zero-share toggle correctly forwards parameter
+- 183/183 Node tests + 392/392 integration tests passing
+
+**Testing (Basher):**
+- 604 targeted regression tests
+- Shared filtering validated across both sections
+- US eligibility enforcement verified
+- Yahoo routing verified (MIC suffixes applied, unknown MICs skipped)
+- Zero cross-cutting regressions
+
+**Release Gates (Danny):**
+- ✅ Scope review gate (2026-09-06): 12-item checklist PASSED
+- ✅ Yahoo contract gate (2026-09-07): design APPROVED
+- ✅ Final regression gate (2026-09-07): all tests green, APPROVED FOR RELEASE
+
+#### Deployed
+
+**Commit:** `69e3635 feat: consolidate symbols and portfolio workflows`  
+**GitHub Actions:** Run 34067334078 — **SUCCESS**  
+**Deployment:** API + frontend images built, Azure Container Apps revisions ready  
+**Test Coverage:** 996/996 tests passing (421 backend + 183 frontend + 392 integration)
+
+---
+
+### 2. Dividend Portfolio — Phase 1 MVP Architecture & Ledger Design
 
 **Date:** 2026-09-05
 **Authors:** Danny (Lead, Architecture), Livingston (Persistence), Rusty (UX/Frontend)
@@ -300,7 +402,7 @@ This is the reciprocal of the ECB convention (ECB publishes EURUSD; we store USD
 
 ---
 
-### 2. Scheduler Hang Watchdog — Per-Symbol Timeout & Worker Max Duration
+### 3. Scheduler Hang Watchdog — Per-Symbol Timeout & Worker Max Duration
 
 **Date:** 2026-06-30
 **Author:** Rusty (Agent Dev)
@@ -13779,6 +13881,61 @@ User request: BUY/SELL/DIVIDEND ledger for multi-broker portfolio (Fidelity, Hey
 - Cost-Basis: Stable, 209 tests passing
 - **Total:** 687+ tests passing, zero regressions, all phases deployed to production
 
-**Contract:** Danny drafted contract v1.1 (awaiting user confirmation on open questions)  
-**Status:** Ready for implementation planning upon user authorization
+---
+
+## Inbox Files Consolidated (2026-09-07)
+
+The following inbox files have been merged into Section 1 (Unified Symbol Overview & Shared Filtering) and this decisions.md:
+
+**Key Implementation Contracts & Directives:**
+1. `danny-unified-watchlist-contract.md` — Unified row predicate, overview API shape, shared filter directive
+2. `livingston-unified-watchlist-api-contract.md` — Backend API contract with zero-portfolio parameter
+3. `danny-yahoo-symbol-resolution-contract.md` — Provider-symbol resolution design
+4. `linus-yahoo-symbol-resolution-implemented.md` — Implementation note (legacy alias handling)
+5. `reuben-zero-portfolio-forwarding-fix.md` — Query parameter forwarding fix (escalated revision)
+6. `danny-review-20260906-full-release-gate.md` — Release scope review, 12-item gate checklist
+7. `copilot-directive-20260907-watchlist-shared-filters.md` — Two-section UI with shared filter surface
+
+**Supporting Files (merged into Section 1 context):**
+- `copilot-directive-20260906-account-assignment-symbol-detail.md`
+- `copilot-directive-20260906-account-colors.md`
+- `copilot-directive-20260906-account-display-name.md`
+- `copilot-directive-20260906-merge-portfolio-into-watchlist.md`
+- `copilot-directive-20260906-movements-default-three-months.md`
+- `copilot-directive-20260906-us-only-symbol-actions.md`
+
+**Related Contracts (cross-referenced):**
+- `danny-unified-watchlist-contract.md` (supersedes two-section layout in symbol-unification rev 3)
+- `livingston-full-correction-api-contract.md` (portfolio zero-filter)
+- `danny-zero-filter-full-correction-contract.md` (comprehensive zero-filter spec)
+
+### Release Outcome Summary
+
+**Functional Commit:** `69e3635 feat: consolidate symbols and portfolio workflows`  
+**GitHub Actions:** Run 34067334078 succeeded  
+**Deployment Status:** API + frontend images built, Azure Container Apps revisions verified ready
+
+**Validation:**
+- 421 backend tests (100% pass)
+- 183 frontend tests (100% pass)
+- 392 frontend integration tests (100% pass)
+- TypeScript build: clean
+- Production build: clean
+- Zero regressions across 996 total tests
+
+**Symbols & Portfolio Consolidation Features Delivered:**
+- ✅ Unified symbol overview endpoint (Portfolio + Watchlist)
+- ✅ Shared filter surface (search, Ideal Calls, Ideal Puts, etc.)
+- ✅ Two visible sections (Portfolio holdings, Watchlist research)
+- ✅ Account colors and labels throughout UI
+- ✅ US eligibility enforcement (exchange MIC gates)
+- ✅ Yahoo symbol resolution for international enrichment (MIC suffix → yfinance)
+- ✅ Historical zero-share toggle with correct parameter forwarding
+- ✅ Zero-portfolio query parameter with comprehensive behavior documentation
+- ✅ Legacy US free-text exchange alias safety net (no regression)
+
+---
+
+**Contract:** Danny's symbol unification rev 3 (preserved); Dividend Portfolio Phase 1 awaiting user confirmation on architecture  
+**Status:** Ready for Dividend Portfolio Phase 1 implementation planning
 

@@ -1680,3 +1680,34 @@ Identical: `h-full` on Reveal, animated entrance, tone-based coloring, tooltip v
 2. `purchases.py` L37: duplicate `"comision"` in set literal — cosmetic, Python set deduplicates.
 
 **Verdict: APPROVED** — no high-confidence blockers found.
+
+### 2026-09-06 — Unified Watchlist contract (Portfolio merge into Symbols)
+
+**Directive:** `copilot-directive-20260906-merge-portfolio-into-watchlist.md`
+**Output:** `.squad/decisions/inbox/danny-unified-watchlist-contract.md`
+
+**Decisions made:**
+1. **Unified-row predicate:** Single table. Auto-enrolled zero-share symbols hidden by default; manually watchlisted zero-share symbols remain visible (explicit membership = any watchlist toggle ON, manual add, or telegram enabled).
+2. **Net Gains = realized result only** (sale proceeds − CMP cost sold). Excludes unrealized gains (stale prices) and option P&L (separate Economics section). Labels declare this honestly.
+3. **Summary totals are portfolio-wide and unaffected by client filters.** Row 1: Calls Exposure + Puts Committed. Row 2: Inversión actual + Resultado realizado + Dividendos netos.
+4. **`/portfolio/holdings` → 308 redirect to `/symbols`.** TopNav: remove Portfolio entry, rename Watchlist→Symbols. Backend holdings API unchanged.
+5. **Dividends column:** `Σ net_eur` of DIVIDEND movements per symbol. Watchlist-only shows "—". Formatted as EUR with `accent-green`.
+6. **Batch reassignment moves to Movements page toolbar.** Account filter stays on Movements. No features silently lost.
+7. **No DB migration, no new containers, no feature flags.** Single atomic PR (backend + frontend).
+8. **No conflicts** with in-progress account colors/labels or movements date-default directives.
+
+**Acceptance criteria:** 13 functional + 4 navigation + 5 data integrity + 6 feature preservation + 4 non-regression = 32 total.
+
+### 2026-09-06 — Amendment J: US-Only Symbol Actions Eligibility
+
+**Directive:** `copilot-directive-20260906-us-only-symbol-actions.md`
+**Output:** Appended as Amendment J to `danny-unified-watchlist-contract.md`
+
+**Decisions made:**
+1. **Shared eligibility predicate** in single file (`backend/src/us_exchange_eligibility.py`): `is_us_options_eligible(mic)` → true only for `{XNYS, XNAS}`. Frontend mirror in `frontend/src/lib/us-options-eligible.ts`. Identical set in both files to prevent drift.
+2. **Symbol Detail API** returns new `us_options_eligible: boolean` field. MIC resolved from `security_master.exchange_mic` → fallback `symbol_config.exchange` → fallback `security_id` prefix → fail-closed false.
+3. **UI hiding:** Non-eligible symbols hide SymbolActions (Analyze, CC, CSP, Buy, Alerts, Pause/Resume) and entire Options section. Summary, Stocks, Plans, charts remain visible.
+4. **Backend enforcement:** All 24 option-related endpoints call `enforce_us_options_eligible()` → HTTP 403 `"options_not_eligible"`. PUT update-symbol guarded conditionally (only when body contains option toggle keys). Non-option fields (display_name, total_shares) always allowed.
+5. **No column hiding** in unified Symbols table — In Calls/Puts columns show 0 for non-US (accurate, no positions exist).
+
+**Acceptance criteria:** 10 functional + 12 backend enforcement + 7 shared predicate = 29 criteria (Amendment J).

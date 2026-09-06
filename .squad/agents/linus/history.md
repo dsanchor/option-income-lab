@@ -1248,3 +1248,95 @@ The offending movement that explains most of the discrepancy:
 
 4. **Write guards for import safety prevent subtle data corruption.** Silent restoration of voided movements is a real production risk; detecting it at write time is efficient and correct.
 
+
+---
+
+## 2026-09-07 — Portfolio Enrichment: Yahoo Symbol Resolution Fix (non-US securities)
+
+**Role:** Implementation (danny-yahoo-symbol-resolution-contract.md)
+**Status:** ✅ COMPLETE
+
+### Problem
+
+`run_portfolio_enrichment()` read only `sym_doc["symbol"]` (bare local
+ticker — e.g. `ULVR`, `NESN`, `DGE`) and passed it straight through
+`analyze_single_symbol()` → `YFinanceFetcher.get_ticker_data()` → `yf.Ticker()`.
+The security's MIC (`symbol_config.exchange`) was never consulted, so every
+non-US portfolio holding either failed enrichment or (worse) risked
+resolving to the wrong Yahoo-listed instrument.
+
+### Fix — single resolution point, no duplicated suffix table
+
+1. **`resolve_yfinance_symbol(ticker, exchange_mic, security_master_doc=None)`**
+   added to `backend/src/portfolio/provider_symbols.py` (same module that
+   already owned `MIC_TO_YFINANCE_SUFFIX`/`suggest_yfinance_symbol`).
+   Precedence: explicit `security_master.provider_symbols["yfinance"]`
+   override → MIC suffix table → `None` (fail closed for unknown/missing MIC).
+2. **Legacy exchange alias safety net.** Discovered mid-implementation: the
+   pre-security_master `/api/symbols` add flow (DGI-screener-sourced, always
+   US) stores `exchange` as a free-text display name (`"NASDAQ"`, `"NYSE"`,
+   `"AMEX"`), never a MIC code. Without special-casing these, the new
+   fail-closed behavior would have silently broken enrichment for every
+   legacy US watchlist symbol added through that path (a real production
+   regression, not just a test gap — no existing test covered this, so it
+   would have shipped undetected). Added a tiny, well-documented
+   `_LEGACY_US_EXCHANGE_ALIASES` set in `resolve_yfinance_symbol` that maps
+   these three known-safe labels to bare-ticker (same as XNYS/XNAS) — not a
+   second suffix table, since the resolved suffix is always empty.
+3. **`portfolio_enrichment.run_portfolio_enrichment()`** now builds a
+   `CosmosSecuritiesService(cosmos.container)` (symbols container — security
+   master docs co-locate there) and, per symbol, resolves
+   `security_id = sym_doc.get("security_id") or f"{exchange}:{symbol}"`,
+   fetches the security_master doc, calls `resolve_yfinance_symbol`, and
+   skips with a structured warning (counted in `errors`) on `None` — never
+   falls back to the bare ticker for a non-US MIC.
+4. **`enrich_symbol(symbol, yf_symbol=None)`** and
+   **`dgi_screener.analyze_single_symbol(symbol, filters=None, yf_symbol=None)`**
+   both gained an optional resolved-symbol parameter used only for the
+   fetch call; `symbol` remains the storage/display/log key throughout.
+   Defaulting `yf_symbol` to `symbol` preserves 100% backward compatibility
+   for the US-only DGI screener universe (never called with the new param).
+
+### Key Insight
+
+**A "fail closed" contract for MIC resolution must be checked against every
+document-creation path that populates the field it inspects, not just the
+new one being fixed.** The bug being fixed only affected the newer
+security_master-linked add path; the older DGI-screener add path uses a
+different, non-MIC vocabulary for the same field name (`exchange`). Fixing
+the newer path's ambiguity without accounting for the older path's
+different-but-valid vocabulary would have introduced a regression more
+severe than the one being fixed (breaking working US symbols instead of
+just non-US ones). Always grep every writer of a field before tightening
+how a reader interprets it.
+
+### Verification
+
+- `test_provider_symbols.py`: 41/41 pass (added 12 new cases for
+  `resolve_yfinance_symbol` — override precedence, missing/empty override
+  fallthrough, unknown/missing MIC → None, XNYS/XNAS bare, legacy US alias
+  bare).
+- `test_dgi_momentum.py`: 15/15 pass (confirms `analyze_single_symbol`
+  signature change is backward compatible).
+- Targeted sweep (dgi/provider_symbols/portfolio_enrichment/
+  watchlist_symbols/us_options_eligibility/securities_catalog): 174 passed.
+  4 pre-existing failures in `test_watchlist_symbols.py::TestWatchlistStrategyFilter`
+  are unrelated — caused by another agent's in-progress, uncommitted
+  `us_exchange_eligibility` 403-gate wiring already present in the shared
+  working tree before this task started (confirmed via `git stash`: those
+  4 tests still fail with my diff fully reverted). Not touched, per scope
+  boundary ("Do not modify unrelated active-agent work").
+
+### Follow-up (same day) — Added missing test_portfolio_enrichment.py
+
+Verified my Yahoo resolution diff was still present in the shared working
+tree (`git diff HEAD` non-empty for all 4 files) despite a report of it
+appearing absent — likely a transient view during another agent's
+concurrent write. Since Basher had not yet created the §7-required
+`test_portfolio_enrichment.py`, added it myself: 10 focused tests (XMAD/
+XLON/XETR/XSWX suffix routing, override precedence, unknown-MIC and
+missing-exchange fail-closed skip with no crash, mixed-batch partial
+success, XNYS bare, legacy free-text US exchange alias bare) using an
+in-memory FakeContainer/FakeCosmos — no network, no real Cosmos. All 10
+pass; full targeted sweep unchanged at 184 passed / 4 pre-existing
+unrelated failures.
