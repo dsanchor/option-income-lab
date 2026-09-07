@@ -207,10 +207,15 @@ class FakeShareAvailabilityCosmos:
         total_shares: int | None = 0,
         positions: list[dict] | None = None,
         category: str = "balanced",
+        exchange: str = "XNYS",
     ) -> None:
+        # exchange defaults to XNYS so every test symbol is US-eligible.
+        # _auto_enrolled is absent (not set) — is_watchlist_member treats
+        # absent/_auto_enrolled=False as manually added → always a member.
         self._docs.append(
             {
                 "symbol": symbol,
+                "exchange": exchange,
                 "enrichment": {"category": category},
                 "total_shares": total_shares,
                 "positions": positions if positions is not None else [],
@@ -490,7 +495,13 @@ class TestMalformedShareCounts:
         _setup_cache("SYM7D")
         cosmos = FakeShareAvailabilityCosmos()
         cosmos._docs.append(
-            {"symbol": "SYM7D", "enrichment": {"category": "balanced"}, "total_shares": 100}
+            {
+                "symbol": "SYM7D",
+                "exchange": "XNYS",   # US-eligible; _auto_enrolled absent → watchlist member
+                "enrichment": {"category": "balanced"},
+                "total_shares": 100,
+                # deliberately no 'positions' key — this is what the test verifies
+            }
         )
         _set_cosmos(client, cosmos)
         resp = client.get("/api/screener/options", params={"side": "call"})
@@ -1195,4 +1206,256 @@ class TestFrontendContract:
         assert flag_entry is None, (
             "FLAG_LABELS in options-row-format.tsx still contains 'no_shares_held'; "
             "this was removed in the share-availability redesign"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Universe Filter Exclusion — non-US, unknown MIC, and auto-enrolled zero-share
+# symbols must be excluded from the live screener route.
+# These tests are additive (not a relaxation) and exercise the exact same
+# inline filter path that api_screener_options uses in app.py.
+# ---------------------------------------------------------------------------
+
+class TestUniverseFilterExclusionViaLiveRoute:
+    """OSU universe filter is enforced inline in api_screener_options.
+    Non-US, unknown-exchange, and US-auto-enrolled-zero-shares symbols
+    must never appear in screener rows or summary counts.
+    Contract: danny-options-screener-universe-contract.md §2.1, §2.2
+    """
+
+    def _seed_eligible(self, cosmos, symbol, exchange="XNYS"):
+        cosmos.add_symbol(symbol, total_shares=100, positions=[], exchange=exchange)
+
+    def _seed_ineligible(self, cosmos, symbol, exchange=None):
+        """Non-US / unknown exchange.  _auto_enrolled absent → is_watchlist_member=True,
+        but exchange check still fails closed."""
+        doc = {
+            "symbol": symbol,
+            "enrichment": {"category": "balanced"},
+            "total_shares": 500,
+            "positions": [],
+        }
+        if exchange is not None:
+            doc["exchange"] = exchange
+        cosmos._docs.append(doc)
+
+    def _seed_auto_enrolled_zero(self, cosmos, symbol):
+        """US exchange but auto-enrolled with zero portfolio shares and no
+        watchlist toggles → not a watchlist member AND not in portfolio → excluded."""
+        cosmos._docs.append({
+            "symbol": symbol,
+            "exchange": "XNYS",
+            "_auto_enrolled": True,
+            "total_shares": 0,
+            "positions": [],
+            "watchlist": {"covered_call": False, "cash_secured_put": False, "buy_tracker": False},
+            "telegram_notifications_enabled": False,
+            "enrichment": {"category": "balanced"},
+        })
+
+    def _assert_symbol_absent(self, resp, symbol):
+        body = resp.json()
+        row_syms = {r.get("symbol") for r in body.get("rows", [])}
+        assert symbol not in row_syms, (
+            f"Universe filter: '{symbol}' must not appear in screener rows. "
+            f"Rows: {sorted(row_syms)}"
+        )
+
+    def test_non_us_xmad_excluded_from_live_route(self, client):
+        """XMAD symbol must be absent; XNYS anchor counted in symbols.counts."""
+        _setup_cache("ELIG_MAD", "INELIG_MAD")
+        cosmos = FakeShareAvailabilityCosmos()
+        self._seed_eligible(cosmos, "ELIG_MAD")
+        self._seed_ineligible(cosmos, "INELIG_MAD", exchange="XMAD")
+        _set_cosmos(client, cosmos)
+
+        resp = client.get("/api/screener/options", params={"side": "call"})
+        assert resp.status_code == 200
+        self._assert_symbol_absent(resp, "INELIG_MAD")
+        body = resp.json()
+        counts = body["symbols"]["counts"]
+        total_counted = counts.get("total", 0)
+        assert total_counted >= 1, (
+            "ELIG_MAD (XNYS) must be counted; INELIG_MAD (XMAD) must not inflate the count."
+        )
+
+    def test_non_us_xlon_excluded_from_live_route(self, client):
+        _setup_cache("ELIG_LON", "INELIG_LON")
+        cosmos = FakeShareAvailabilityCosmos()
+        self._seed_eligible(cosmos, "ELIG_LON")
+        self._seed_ineligible(cosmos, "INELIG_LON", exchange="XLON")
+        _set_cosmos(client, cosmos)
+
+        resp = client.get("/api/screener/options", params={"side": "call"})
+        assert resp.status_code == 200
+        self._assert_symbol_absent(resp, "INELIG_LON")
+
+    def test_unknown_exchange_excluded_fail_closed(self, client):
+        """Missing exchange key → None → fails closed; symbol excluded."""
+        _setup_cache("ELIG_UNK", "INELIG_UNK")
+        cosmos = FakeShareAvailabilityCosmos()
+        self._seed_eligible(cosmos, "ELIG_UNK")
+        self._seed_ineligible(cosmos, "INELIG_UNK", exchange=None)
+        _set_cosmos(client, cosmos)
+
+        resp = client.get("/api/screener/options", params={"side": "call"})
+        assert resp.status_code == 200
+        self._assert_symbol_absent(resp, "INELIG_UNK")
+
+    def test_auto_enrolled_zero_shares_no_toggles_excluded(self, client):
+        """US auto-enrolled symbol with zero portfolio shares and no watchlist toggles
+        must not appear — fails both the shares>0 and is_watchlist_member checks."""
+        _setup_cache("ELIG_AE", "AUTO_ZERO")
+        cosmos = FakeShareAvailabilityCosmos()
+        self._seed_eligible(cosmos, "ELIG_AE")
+        self._seed_auto_enrolled_zero(cosmos, "AUTO_ZERO")
+        _set_cosmos(client, cosmos)
+
+        resp = client.get("/api/screener/options", params={"side": "call"})
+        assert resp.status_code == 200
+        self._assert_symbol_absent(resp, "AUTO_ZERO")
+
+    def test_xnas_symbol_included_when_eligible(self, client):
+        """XNAS (Nasdaq) is US-options-eligible and must be included."""
+        _setup_cache("NASDAQ_SYM")
+        cosmos = FakeShareAvailabilityCosmos()
+        self._seed_eligible(cosmos, "NASDAQ_SYM", exchange="XNAS")
+        _set_cosmos(client, cosmos)
+
+        resp = client.get("/api/screener/options", params={"side": "call"})
+        assert resp.status_code == 200
+        body = resp.json()
+        counts = body["symbols"]["counts"]
+        assert counts.get("total", 0) >= 1, "XNAS symbol must appear in screener."
+
+    def test_legacy_nyse_alias_eligible(self, client):
+        """Legacy 'NYSE' string folds to XNYS via _LEGACY_US_EXCHANGE_TO_MIC."""
+        _setup_cache("LEGACY_NYSE")
+        cosmos = FakeShareAvailabilityCosmos()
+        cosmos.add_symbol("LEGACY_NYSE", total_shares=100, positions=[], exchange="NYSE")
+        _set_cosmos(client, cosmos)
+
+        resp = client.get("/api/screener/options", params={"side": "call"})
+        assert resp.status_code == 200
+        body = resp.json()
+        counts = body["symbols"]["counts"]
+        assert counts.get("total", 0) >= 1, "Legacy 'NYSE' must be treated as XNYS-eligible."
+
+    def test_legacy_amex_excluded_not_folded(self, client):
+        """'AMEX' is NOT in _LEGACY_US_EXCHANGE_TO_MIC — must be excluded."""
+        _setup_cache("LEGACY_AMEX", "ELIG_AMEX_PAIR")
+        cosmos = FakeShareAvailabilityCosmos()
+        self._seed_eligible(cosmos, "ELIG_AMEX_PAIR")
+        self._seed_ineligible(cosmos, "LEGACY_AMEX", exchange="AMEX")
+        _set_cosmos(client, cosmos)
+
+        resp = client.get("/api/screener/options", params={"side": "call"})
+        assert resp.status_code == 200
+        self._assert_symbol_absent(resp, "LEGACY_AMEX")
+
+
+# ---------------------------------------------------------------------------
+# Scheduled path — main.py universe filter runs before cache.refresh_all
+# Contract: danny-options-screener-universe-contract.md §2.2
+# ---------------------------------------------------------------------------
+
+class TestScheduledPathUniverseFilter:
+    """The scheduler's _run_options_chain_fetch_async must apply
+    compute_options_screener_universe before calling cache.refresh_all,
+    so ineligible symbols never trigger a chain fetch.
+    """
+
+    class _FakeSchedulerCosmos:
+        def __init__(self):
+            self._docs = []
+
+        def list_symbols(self):
+            return list(self._docs)
+
+        def add_doc(self, symbol, exchange, auto_enrolled=False):
+            self._docs.append({
+                "symbol": symbol,
+                "exchange": exchange,
+                "_auto_enrolled": auto_enrolled,
+                "total_shares": 100,
+                "enrichment": {"category": "balanced"},
+            })
+
+    @pytest.mark.asyncio
+    async def test_scheduler_passes_only_eligible_symbols_to_refresh_all(self, monkeypatch):
+        """Non-US and auto-enrolled-zero-shares symbols must not appear in
+        the symbol_names passed to cache.refresh_all."""
+        from src.main import OptionsAgentScheduler
+
+        cosmos = self._FakeSchedulerCosmos()
+        cosmos.add_doc("AAPL", exchange="XNYS")
+        cosmos.add_doc("MSFT", exchange="XNAS")
+        cosmos.add_doc("ACS",  exchange="XMAD")   # non-US → excluded
+        cosmos._docs.append({
+            "symbol": "AUTO0",
+            "exchange": "XNYS",
+            "_auto_enrolled": True,
+            "total_shares": 0,
+            "watchlist": {"covered_call": False, "cash_secured_put": False, "buy_tracker": False},
+            "telegram_notifications_enabled": False,
+            "enrichment": {"category": "balanced"},
+        })
+
+        refreshed_with = []
+
+        class _FakeCache:
+            async def refresh_all(self, symbol_names):
+                refreshed_with.append(list(symbol_names))
+                return {"success": len(symbol_names), "errors": 0}
+
+        monkeypatch.setattr("src.options_chain_cache.get_options_chain_cache", lambda: _FakeCache())
+
+        scheduler = OptionsAgentScheduler()
+        scheduler.cosmos = cosmos
+        # Provide minimal config so self.config.config.get('options_chain_scheduler') works
+        class _FakeCfg:
+            config = {"options_chain_scheduler": {"enabled": True}}
+        scheduler.config = _FakeCfg()
+
+        await scheduler._run_options_chain_fetch_async()
+
+        assert len(refreshed_with) == 1, "refresh_all must be called exactly once"
+        called = set(refreshed_with[0])
+        assert "AAPL" in called,  "AAPL (XNYS) must reach refresh_all"
+        assert "MSFT" in called,  "MSFT (XNAS) must reach refresh_all"
+        assert "ACS" not in called, (
+            "ACS (XMAD) must be excluded — universe filter must run before refresh_all"
+        )
+        assert "AUTO0" not in called, (
+            "AUTO0 (auto-enrolled, zero-shares, no toggles) must be excluded"
+        )
+
+    @pytest.mark.asyncio
+    async def test_scheduler_all_ineligible_passes_empty_list(self, monkeypatch):
+        """All-ineligible cosmos: refresh_all receives [] not the full ineligible list."""
+        from src.main import OptionsAgentScheduler
+
+        cosmos = self._FakeSchedulerCosmos()
+        cosmos.add_doc("ACS", exchange="XMAD")
+        cosmos.add_doc("VOD", exchange="XLON")
+
+        refreshed_with = []
+
+        class _FakeCache:
+            async def refresh_all(self, symbol_names):
+                refreshed_with.append(list(symbol_names))
+                return {"success": 0, "errors": 0}
+
+        monkeypatch.setattr("src.options_chain_cache.get_options_chain_cache", lambda: _FakeCache())
+
+        scheduler = OptionsAgentScheduler()
+        scheduler.cosmos = cosmos
+        class _FakeCfg:
+            config = {"options_chain_scheduler": {"enabled": True}}
+        scheduler.config = _FakeCfg()
+        await scheduler._run_options_chain_fetch_async()
+
+        assert len(refreshed_with) == 1
+        assert refreshed_with[0] == [], (
+            "All ineligible: refresh_all must receive [], not the ineligible symbols."
         )

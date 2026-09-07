@@ -8,6 +8,7 @@ import type {
   DgiScorePoint,
 } from "@/types/dgi";
 import { categoryClass, entryClass } from "@/lib/badges";
+import { addSymbol } from "@/lib/portfolio-api";
 
 type SortState = { col: string; asc: boolean };
 
@@ -246,6 +247,16 @@ function DetailModal({ entry, onClose }: { entry: DgiEntry; onClose: () => void 
 
 // ── Row action button (CSP / TBuy) ────────────────────────────────────
 
+// Maps DGI free-text exchange field to a canonical ISO 10383 MIC.
+// Returns null when the exchange cannot be mapped to XNYS or XNAS —
+// callers must abort rather than fall back to a guessed MIC.
+export function toExchangeMic(exchange: string | undefined): string | null {
+  const ex = (exchange ?? "").toUpperCase().replace(/\s+/g, "");
+  if (ex === "NYSE") return "XNYS";
+  if (ex.startsWith("NASDAQ") || ex === "NMS" || ex === "NGM" || ex === "NCM") return "XNAS";
+  return null;
+}
+
 function AddButton({ entry, mode }: { entry: DgiEntry; mode: "csp" | "buy" }) {
   const [label, setLabel] = useState(mode === "csp" ? "CSP" : "TBuy");
   const [busy, setBusy] = useState(false);
@@ -254,24 +265,36 @@ function AddButton({ entry, mode }: { entry: DgiEntry; mode: "csp" | "buy" }) {
     e.stopPropagation();
     setBusy(true);
     setLabel("⏳");
-    const exchange = entry.exchange || "NYSE";
     const flag = mode === "csp" ? { cash_secured_put: true } : { buy_tracker: true };
     try {
-      const res = await fetch("/api/symbols", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: entry.symbol, exchange, ...flag }),
-      });
-      if (res.status === 409) {
-        const put = await fetch(`/api/symbols/${encodeURIComponent(entry.symbol)}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(flag),
-        });
-        setLabel(put.ok ? "✓" : "✗");
-      } else {
-        setLabel(res.ok ? "✓" : "✗");
+      const mic = toExchangeMic(entry.exchange);
+      if (mic === null) {
+        // Exchange cannot be resolved to XNYS/XNAS — do not call addSymbol or PUT.
+        setLabel("✗");
+        return;
       }
+      // Step 1: canonical add via /api/symbols/add. All tracker flags default OFF (§2.6).
+      // 409 means security already exists in SecurityMaster — proceed to toggle below.
+      try {
+        await addSymbol({
+          create: {
+            ticker: entry.symbol,
+            exchange_mic: mic,
+            company_name: String((entry as Record<string, unknown>).company_name ?? entry.symbol),
+            listing_currency: "USD",
+          },
+        });
+      } catch (addErr) {
+        if ((addErr as { status?: number }).status !== 409) throw addErr;
+      }
+
+      // Step 2: explicit single-flag toggle PUT — separate from creation (§2.7).
+      const put = await fetch(`/api/symbols/${encodeURIComponent(entry.symbol)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(flag),
+      });
+      setLabel(put.ok ? "✓" : "✗");
     } catch {
       setLabel("✗");
     } finally {

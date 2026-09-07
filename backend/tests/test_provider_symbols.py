@@ -278,3 +278,153 @@ class TestResolveYfinanceSymbolPerMic:
             assert result == override, (
                 f"Override must win over suffix for MIC {mic}"
             )
+
+
+# ---------------------------------------------------------------------------
+# TestResolveTradingviewSymbol — danny-tradingview-symbol-contract.md §2.1–2.3
+# ---------------------------------------------------------------------------
+
+class TestResolveTradingviewSymbol:
+    """TV-1 through TV-18: resolve_tradingview_symbol contract coverage.
+
+    Ref: danny-tradingview-symbol-contract.md §2.1 (table), §2.2 (precedence),
+         §2.3 (backward compat for legacy configs), §2.5 (fail-closed None).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        from src.portfolio.provider_symbols import (
+            resolve_tradingview_symbol,
+            MIC_TO_TRADINGVIEW_EXCHANGE,
+        )
+        self.resolve = resolve_tradingview_symbol
+        self.table = MIC_TO_TRADINGVIEW_EXCHANGE
+
+    # TV-1..6: all six required MIC mappings
+    @pytest.mark.parametrize("mic,code,ticker,expected", [
+        ("XMAD", "BME",      "ACS",  "BME-ACS"),
+        ("XAMS", "EURONEXT", "AD",   "EURONEXT-AD"),
+        ("XLON", "LSE",      "BATS", "LSE-BATS"),
+        ("XSWX", "SIX",      "NESN", "SIX-NESN"),
+        ("XNYS", "NYSE",     "ABBV", "NYSE-ABBV"),
+        ("XNAS", "NASDAQ",   "MSFT", "NASDAQ-MSFT"),
+    ])
+    def test_tv1_6_all_six_mic_mappings(self, mic, code, ticker, expected):
+        """TV-1..6: all six contracted MIC → exchange-code mappings."""
+        result = self.resolve(ticker, mic)
+        assert result == expected, (
+            f"TV: MIC {mic} must resolve to {expected!r}, got {result!r}"
+        )
+
+    def test_tv1_6_table_has_exactly_six_entries(self):
+        """TV: MIC_TO_TRADINGVIEW_EXCHANGE has exactly the six contracted MICs.
+        XPAR/XETR/XBRU/XLIS are deliberately absent pending TradingView code verification.
+        """
+        expected_keys = {"XMAD", "XAMS", "XLON", "XSWX", "XNYS", "XNAS"}
+        assert set(self.table.keys()) == expected_keys, (
+            f"MIC_TO_TRADINGVIEW_EXCHANGE must contain exactly {expected_keys}, "
+            f"got {set(self.table.keys())}"
+        )
+
+    def test_tv7_xpar_absent_from_table(self):
+        """TV-7: XPAR must NOT be in MIC_TO_TRADINGVIEW_EXCHANGE (unverified code)."""
+        assert "XPAR" not in self.table, (
+            "XPAR was added to MIC_TO_TRADINGVIEW_EXCHANGE without verification — "
+            "remove it until the real TradingView exchange code is confirmed."
+        )
+
+    def test_tv8_xetr_absent_from_table(self):
+        """TV-8: XETR must NOT be in MIC_TO_TRADINGVIEW_EXCHANGE (unverified code)."""
+        assert "XETR" not in self.table, "XETR must not be in TV table (pending verification)"
+
+    # TV-9: explicit override wins over MIC mapping (precedence step 1)
+    def test_tv9_explicit_override_beats_mic_mapping(self):
+        """TV-9: provider_symbols.tradingview wins over MIC table entry."""
+        sec_doc = {"provider_symbols": {"tradingview": "BME-ACS3"}}
+        result = self.resolve("ACS", "XMAD", sec_doc)
+        assert result == "BME-ACS3", (
+            f"TV-9: explicit override must beat MIC mapping, got {result!r}"
+        )
+
+    def test_tv9_override_beats_mic_for_every_mapped_mic(self):
+        """TV-9: override wins for every one of the six MICs."""
+        override = "CUSTOM-OVERRIDE"
+        for mic in ("XMAD", "XAMS", "XLON", "XSWX", "XNYS", "XNAS"):
+            sec_doc = {"provider_symbols": {"tradingview": override}}
+            result = self.resolve("TICK", mic, sec_doc)
+            assert result == override, (
+                f"TV-9: Override must win over MIC table for {mic}, got {result!r}"
+            )
+
+    # TV-10: empty override falls through to MIC mapping
+    def test_tv10_empty_override_falls_through_to_mic(self):
+        """TV-10: empty-string tradingview override falls through to MIC mapping."""
+        sec_doc = {"provider_symbols": {"tradingview": ""}}
+        result = self.resolve("ABBV", "XNYS", sec_doc)
+        assert result == "NYSE-ABBV", (
+            f"TV-10: empty override must fall through to MIC mapping, got {result!r}"
+        )
+
+    # TV-11..13: legacy US alias fallback (step 3) — pre-unification configs
+    def test_tv11_legacy_nyse_alias_resolves(self):
+        """TV-11: legacy exchange='NYSE' → NYSE-{TICKER} (step 3 fallback)."""
+        result = self.resolve("AAPL", "NYSE")
+        assert result == "NYSE-AAPL", (
+            f"TV-11: legacy 'NYSE' alias must resolve to NYSE-AAPL, got {result!r}"
+        )
+
+    def test_tv12_legacy_nasdaq_alias_resolves(self):
+        """TV-12: legacy exchange='NASDAQ' → NASDAQ-{TICKER}."""
+        result = self.resolve("MSFT", "NASDAQ")
+        assert result == "NASDAQ-MSFT", (
+            f"TV-12: legacy 'NASDAQ' alias must resolve to NASDAQ-MSFT, got {result!r}"
+        )
+
+    def test_tv13_legacy_amex_alias_resolves(self):
+        """TV-13: legacy exchange='AMEX' → AMEX-{TICKER} (step 3 fallback).
+        Note: AMEX is not Amendment-J options-eligible; this resolves the TradingView
+        symbol correctly (widget/link), but the screener/eligibility layer separately
+        excludes AMEX-linked symbols from options paths.
+        """
+        result = self.resolve("SPY", "AMEX")
+        assert result == "AMEX-SPY", (
+            f"TV-13: legacy 'AMEX' alias must resolve to AMEX-SPY, got {result!r}"
+        )
+
+    # TV-14..16: fail-closed cases — unknown/missing MIC → None
+    def test_tv14_unknown_mic_returns_none(self):
+        """TV-14: unrecognized MIC → None (fail-closed, never guess)."""
+        result = self.resolve("TICKER", "XPAR")
+        assert result is None, (
+            f"TV-14: XPAR (unverified MIC) must return None, got {result!r}"
+        )
+
+    def test_tv15_xetr_returns_none(self):
+        """TV-15: XETR → None (deliberately not in table; TradingView code unverified)."""
+        result = self.resolve("SAP", "XETR")
+        assert result is None, (
+            f"TV-15: XETR must return None (not yet in table), got {result!r}"
+        )
+
+    def test_tv16_missing_mic_returns_none(self):
+        """TV-16: None/empty exchange_mic → None (fail-closed)."""
+        assert self.resolve("AAPL", None) is None
+        assert self.resolve("AAPL", "") is None
+
+    def test_tv17_no_bare_ticker_fallback_on_unknown_mic(self):
+        """TV-17: must never return bare ticker for unknown MIC (no guessing)."""
+        result = self.resolve("BAYGN", "XZZZ")
+        assert result != "BAYGN", "TV-17: bare ticker must never be returned as fallback"
+        assert result is None
+
+    # TV-18: hyphen format (never colon — colon conversion is the widget's job)
+    def test_tv18_result_uses_hyphen_not_colon(self):
+        """TV-18: resolved symbol uses hyphen format, e.g. 'NYSE-ABBV', not 'NYSE:ABBV'."""
+        for mic in ("XNYS", "XNAS", "XMAD"):
+            result = self.resolve("TEST", mic)
+            assert result is not None
+            assert "-" in result, f"TV-18: hyphen expected in {result!r}"
+            assert ":" not in result, (
+                f"TV-18: colon must not appear in resolve output {result!r}; "
+                "colon conversion is the widget component's job (tvSymbol.replace('-', ':'))"
+            )

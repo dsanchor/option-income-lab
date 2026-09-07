@@ -364,6 +364,7 @@ export interface AddSymbolResponse {
   config_existed: boolean;
   config_warning: string | null;
   navigate_to: string;
+  warmup_started?: boolean;
 }
 
 /** GET /api/securities/search?q=...&limit=... */

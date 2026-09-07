@@ -5,15 +5,20 @@ import { useEffect, useRef, useState } from "react";
 /**
  * Toggleable live TradingView advanced chart (daily, MACD/ADX/Divergence studies).
  * Mirrors the legacy "RT Chart" toolbar toggle.
+ *
+ * Accepts the backend-resolved `tvSymbol` in hyphen format (e.g. "NYSE-ABBV",
+ * "NASDAQ-MSFT"). Renders nothing (button and chart omitted) when null — never
+ * falls back to a guessed symbol.
  */
-export default function RtChart({ symbol, exchange }: { symbol: string; exchange?: string }) {
+export default function RtChart({ tvSymbol }: { tvSymbol: string | null }) {
   const [open, setOpen] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const hostRef = useRef<HTMLDivElement>(null);
-  const tvSymbol = exchange ? `${exchange}:${symbol}` : symbol;
+  // Hyphen → colon: "NASDAQ-MSFT" → "NASDAQ:MSFT" (TradingView widget format)
+  const widgetSymbol = tvSymbol?.replace("-", ":") ?? null;
 
   useEffect(() => {
-    if (!open || loaded || !hostRef.current) return;
+    if (!open || loaded || !hostRef.current || !widgetSymbol) return;
     const host = hostRef.current;
 
     const widget = document.createElement("div");
@@ -40,7 +45,7 @@ export default function RtChart({ symbol, exchange }: { symbol: string; exchange
       locale: "en",
       save_image: true,
       style: "1",
-      symbol: tvSymbol,
+      symbol: widgetSymbol,
       theme: "dark",
       timezone: "Etc/UTC",
       backgroundColor: "#191c1f",
@@ -65,7 +70,9 @@ export default function RtChart({ symbol, exchange }: { symbol: string; exchange
 
     host.appendChild(widget);
     setLoaded(true);
-  }, [open, loaded, tvSymbol]);
+  }, [open, loaded, widgetSymbol]);
+
+  if (!widgetSymbol) return null;
 
   return (
     <div className="space-y-2">

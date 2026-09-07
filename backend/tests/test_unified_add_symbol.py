@@ -149,6 +149,8 @@ class FakeCosmos:
         self.container = FakeSymbolsContainer()
         self.portfolio_container = FakePortfolioContainer()
         self.import_sessions_container = None
+        self.enrichment_calls: list = []
+        self.snapshot_calls: list = []
 
     def list_symbols(self):
         return []
@@ -156,14 +158,48 @@ class FakeCosmos:
     def get_symbol(self, symbol):
         return None
 
+    def update_symbol_enrichment(self, symbol, enrichment):
+        self.enrichment_calls.append((symbol, enrichment))
+        return enrichment
+
+    def record_enrichment_snapshot(self, symbol, tech_timing, momentum):
+        self.snapshot_calls.append((symbol, tech_timing, momentum))
+        return None
+
+
+class _NoOpThread:
+    """Thread stub — never actually runs the target (no network, no I/O).
+
+    ``warmup_started`` is determined synchronously (before ``start()`` is
+    called) by ``_start_symbol_warmup``'s ``resolve_yfinance_symbol`` check,
+    so stubbing thread execution away does not affect that assertion — it
+    only prevents the *body* of the background enrichment/backfill work
+    (which would otherwise hit real yfinance/network) from ever running in
+    tests that don't specifically want to exercise it.
+    """
+    def __init__(self, target=None, daemon=None):
+        self.target = target
+        self.daemon = daemon
+
+    def start(self):
+        pass
+
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
     from web.app import app
+    import web.portfolio_routes as portfolio_routes
+
+    # Default: warm-up threads are scheduled (so `warmup_started` reflects
+    # real resolution outcomes) but never actually executed — keeps this
+    # suite hermetic (no network) unless a test opts into running them.
+    monkeypatch.setattr(portfolio_routes.threading, "Thread", _NoOpThread)
+
     fake_cosmos = FakeCosmos()
     with TestClient(app) as c:
         app.state.cosmos = fake_cosmos
         app.state.cosmos_error = None
+        app.state.yf_provider = None
         yield c, fake_cosmos
 
 
@@ -463,3 +499,127 @@ class TestSecuritiesSearchEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data.get("candidates", [])) <= 5
+
+
+# ---------------------------------------------------------------------------
+# danny-single-add-symbol-contract.md §2.4/§2.3 — Relocated warm-up
+# ---------------------------------------------------------------------------
+
+class _SyncThread:
+    """Runs the target synchronously on start() — for tests that need to
+    observe warm-up side effects deterministically without real threading."""
+    def __init__(self, target=None, daemon=None):
+        self.target = target
+        self.daemon = daemon
+
+    def start(self):
+        if self.target is not None:
+            self.target()
+
+
+class TestAddSymbolWarmup:
+    def test_warmup_started_true_on_new_config_resolvable_mic(self, client, monkeypatch):
+        """config_created=True + resolvable MIC (XNYS bare) → warmup_started."""
+        c, fake = client
+        fake.container.seed_security("XNYS:AAPL", "Apple Inc.")
+
+        resp = c.post("/api/symbols/add", json={"security_id": "XNYS:AAPL"})
+        data = resp.json()
+
+        assert data.get("config_created") is True
+        assert data.get("warmup_started") is True
+
+    def test_warmup_started_false_when_mic_unresolvable(self, client):
+        """Unknown MIC → resolve_yfinance_symbol fails closed → warmup skipped,
+        not an error (response still 201/200, config still created)."""
+        c, fake = client
+        fake.container.seed_security("XZZZ:FOO", "Foo Corp")
+
+        resp = c.post("/api/symbols/add", json={"security_id": "XZZZ:FOO"})
+        data = resp.json()
+
+        assert resp.status_code == 200
+        assert data.get("config_created") is True
+        assert data.get("warmup_started") is False
+
+    def test_warmup_never_fires_on_config_existed(self, client, monkeypatch):
+        """Second add_symbol call for the same security (config already
+        exists) → config_created=False, config_existed=True,
+        warmup_started=False — never re-triggers enrichment/backfill."""
+        c, fake = client
+        fake.container.seed_security("XNYS:AAPL", "Apple Inc.")
+
+        first = c.post("/api/symbols/add", json={"security_id": "XNYS:AAPL"})
+        assert first.json().get("config_created") is True
+
+        enrich_calls = []
+        monkeypatch.setattr(
+            "src.portfolio_enrichment.enrich_symbol",
+            lambda *a, **kw: enrich_calls.append((a, kw)),
+        )
+
+        second = c.post("/api/symbols/add", json={"security_id": "XNYS:AAPL"})
+        data = second.json()
+
+        assert data.get("config_created") is False
+        assert data.get("config_existed") is True
+        assert data.get("warmup_started") is False
+        assert enrich_calls == []
+
+    def test_warmup_calls_enrich_symbol_with_resolved_yf_symbol(self, client, monkeypatch):
+        """Warm-up must call enrich_symbol with the resolved Yahoo symbol,
+        not the bare local ticker, for a non-US MIC."""
+        import web.portfolio_routes as portfolio_routes
+
+        c, fake = client
+        monkeypatch.setattr(portfolio_routes.threading, "Thread", _SyncThread)
+        fake.container.seed_security("XMAD:ENG", "Enagas")
+
+        calls = []
+
+        def _fake_enrich(ticker, yf_symbol=None):
+            calls.append((ticker, yf_symbol))
+            return {
+                "quality_score": 10, "quality_detail": {}, "category": "core",
+                "entry_tag": "Hold", "momentum": "Neutral", "metrics": {},
+                "technicals": {"score": 40}, "has_dividends": False,
+                "filter_detail": None,
+            }
+        monkeypatch.setattr(portfolio_routes, "resolve_yfinance_symbol",
+                           lambda ticker, mic, sec: "ENG.MC")
+        monkeypatch.setattr("src.portfolio_enrichment.enrich_symbol", _fake_enrich)
+
+        async def _fake_backfill(*a, **kw):
+            return {"status": "ok"}
+        monkeypatch.setattr(
+            "src.forecast_cron.backfill_symbol_forecasts", _fake_backfill,
+        )
+
+        resp = c.post("/api/symbols/add", json={"security_id": "XMAD:ENG"})
+
+        assert resp.json().get("warmup_started") is True
+        assert calls == [("ENG", "ENG.MC")]
+        assert fake.enrichment_calls and fake.enrichment_calls[0][0] == "ENG"
+
+    def test_enrichment_exception_is_logged_not_swallowed(self, client, monkeypatch, caplog):
+        """Enrichment failure during warm-up must be logged (not a silent
+        `except Exception: pass`) and must never affect the already-returned
+        response."""
+        import logging
+        import web.portfolio_routes as portfolio_routes
+
+        c, fake = client
+        monkeypatch.setattr(portfolio_routes.threading, "Thread", _SyncThread)
+        fake.container.seed_security("XNYS:AAPL", "Apple Inc.")
+
+        def _raise(*a, **kw):
+            raise RuntimeError("yfinance boom")
+        monkeypatch.setattr("src.portfolio_enrichment.enrich_symbol", _raise)
+
+        with caplog.at_level(logging.WARNING, logger="web.portfolio_routes"):
+            resp = c.post("/api/symbols/add", json={"security_id": "XNYS:AAPL"})
+
+        assert resp.status_code == 200
+        assert resp.json().get("config_created") is True
+        assert any("yfinance boom" in rec.message or "enrichment failed" in rec.message
+                  for rec in caplog.records)

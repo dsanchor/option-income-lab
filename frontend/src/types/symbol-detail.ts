@@ -182,5 +182,7 @@ export interface SymbolDetail {
   symbol_state?: SymbolState | null;
   // Unified Watchlist — backend-resolved eligibility flag (Amendment J)
   us_options_eligible?: boolean | null;
+  // TradingView — backend-resolved provider symbol (e.g. "BME-ACS", "NASDAQ-MSFT"); null when unresolved
+  tradingview_symbol?: string | null;
   error?: string;
 }

@@ -7,9 +7,12 @@ Storage-unavailable: 503 with { "error": "storage_unavailable", "detail": "..." 
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from typing import Any, Dict, Optional
 
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from fastapi import APIRouter, Request, Query, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 
@@ -18,7 +21,11 @@ from src.portfolio.cosmos_portfolio import (
     StorageUnavailableError,
     InsufficientSharesError,
 )
-from src.portfolio.cosmos_securities import CosmosSecuritiesService, _CollisionError
+from src.portfolio.cosmos_securities import (
+    CosmosSecuritiesService,
+    _CollisionError,
+    security_id_to_ticker,
+)
 from src.portfolio.holdings_service import HoldingsService
 from src.portfolio.import_service import (
     ImportService,
@@ -26,7 +33,10 @@ from src.portfolio.import_service import (
     UnresolvedQuestionsError,
     AlreadyCommittedError,
 )
-from src.portfolio.provider_symbols import validate_provider_symbols
+from src.portfolio.provider_symbols import (
+    validate_provider_symbols,
+    resolve_yfinance_symbol,
+)
 from src.portfolio.symbol_config_sync import ensure_symbol_config
 from src.portfolio.fx_service import (
     FxUnavailableError,
@@ -1095,6 +1105,93 @@ async def batch_reassign_movements(request: Request):
 # Symbol Unification — Unified Add Symbol  (R6)
 # ===========================================================================
 
+def _start_symbol_warmup(request: Request, cosmos, ticker: str, security: dict) -> bool:
+    """Fire-and-forget enrichment + forecast-backfill warm-up for a brand-new
+    symbol_config (never for a pre-existing one — caller must gate on
+    ``config_created is True``).
+
+    Relocated verbatim (behavior-preserving) from the legacy
+    ``POST /api/symbols`` handler (danny-single-add-symbol-contract.md §2.4).
+    Resolves the Yahoo provider symbol first via the single resolution
+    point (``resolve_yfinance_symbol`` — no duplicated suffix table); if the
+    MIC can't be resolved (fail-closed), warm-up is skipped entirely and
+    logged at info level — this is not an error.
+
+    Returns:
+        True iff a yf_symbol was resolved and both background threads were
+        scheduled (``warmup_started``); False if skipped.
+    """
+    exchange_mic = security.get("exchange_mic") if security else None
+    yf_symbol = resolve_yfinance_symbol(ticker, exchange_mic, security)
+    if yf_symbol is None:
+        logger.info(
+            "add_symbol warm-up skipped for %s — no Yahoo symbol mapping for MIC=%s",
+            ticker, exchange_mic or "unknown",
+        )
+        return False
+
+    def _enrich():
+        try:
+            from src.portfolio_enrichment import enrich_symbol
+            enrichment = enrich_symbol(ticker, yf_symbol=yf_symbol)
+            if enrichment:
+                cosmos.update_symbol_enrichment(ticker, enrichment)
+                cosmos.record_enrichment_snapshot(
+                    ticker,
+                    (enrichment.get("technicals") or {}).get("score"),
+                    enrichment.get("momentum", ""),
+                )
+        except Exception as exc:
+            logger.warning(
+                "add_symbol warm-up: enrichment failed for %s (yf_symbol=%s): %s",
+                ticker, yf_symbol, exc, exc_info=True,
+            )
+    threading.Thread(target=_enrich, daemon=True).start()
+
+    yf_provider = getattr(request.app.state, "yf_provider", None)
+
+    def _seed_forecasts():
+        try:
+            from src.forecast_cron import (
+                DEFAULT_BACKFILL_SESSIONS,
+                backfill_symbol_forecasts,
+            )
+            backfill = backfill_symbol_forecasts(
+                cosmos, yf_provider, ticker,
+                sessions=DEFAULT_BACKFILL_SESSIONS,
+            )
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                result = asyncio.run(backfill)
+                logger.info("Forecast backfill completed for %s: %s", ticker, result)
+            else:
+                task = loop.create_task(backfill)
+
+                def _log_backfill_result(completed):
+                    try:
+                        logger.info(
+                            "Forecast backfill completed for %s: %s",
+                            ticker,
+                            completed.result(),
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Forecast backfill failed for newly created symbol %s: %s",
+                            ticker, exc, exc_info=True,
+                        )
+
+                task.add_done_callback(_log_backfill_result)
+        except Exception as exc:
+            logger.warning(
+                "Forecast backfill failed for newly created symbol %s: %s",
+                ticker, exc, exc_info=True,
+            )
+    threading.Thread(target=_seed_forecasts, daemon=True).start()
+
+    return True
+
+
 @router.post("/api/symbols/add")
 async def add_symbol(request: Request):
     """POST /api/symbols/add — create-or-select SecurityMaster + ensure symbol_config.
@@ -1162,10 +1259,26 @@ async def add_symbol(request: Request):
         )
 
     # ensure symbol_config (idempotent — existing configs are never touched)
+    # Pre-check whether a config already exists *before* this call so
+    # config_created/config_existed reflect the transition on THIS request,
+    # not the persisted `_auto_enrolled` flag (which never resets on an
+    # already-auto-enrolled doc and would otherwise misreport "created"
+    # forever on every subsequent re-add of the same security — breaking
+    # the exactly-once warm-up gate in §2.3 of the contract).
     config_warning = None
     config = None
+    cosmos = None
+    ticker = security_id_to_ticker(security_id)
     try:
-        symbols_container = _get_cosmos(request).container
+        cosmos = _get_cosmos(request)
+        symbols_container = cosmos.container
+        try:
+            symbols_container.read_item(
+                item=f"config_{ticker}", partition_key=ticker,
+            )
+            pre_existed = True
+        except CosmosResourceNotFoundError:
+            pre_existed = False
         config = ensure_symbol_config(symbols_container, security_id, source="add_symbol")
     except Exception as exc:
         logger.warning(
@@ -1175,9 +1288,22 @@ async def add_symbol(request: Request):
             exc_info=True,
         )
         config_warning = str(exc)
+        pre_existed = None
 
-    config_created = config is not None and bool(config.get("_auto_enrolled"))
-    config_existed = config is not None and not bool(config.get("_auto_enrolled"))
+    config_created = config is not None and pre_existed is False
+    config_existed = config is not None and pre_existed is True
+
+    warmup_started = False
+    if config_created and cosmos is not None:
+        try:
+            warmup_started = _start_symbol_warmup(request, cosmos, ticker, security)
+        except Exception as exc:
+            # Warm-up scheduling itself must never fail the request.
+            logger.warning(
+                "add_symbol warm-up scheduling failed for %s: %s",
+                security_id, exc, exc_info=True,
+            )
+            warmup_started = False
 
     return JSONResponse(
         {
@@ -1185,6 +1311,7 @@ async def add_symbol(request: Request):
             "config_created": config_created,
             "config_existed": config_existed,
             "config_warning": config_warning,
+            "warmup_started": warmup_started,
             "navigate_to": f"/symbols/{security_id}",
         },
         status_code=201 if created_new else 200,

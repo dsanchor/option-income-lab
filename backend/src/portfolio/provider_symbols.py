@@ -56,6 +56,22 @@ def suggest_yfinance_symbol(ticker: str, exchange_mic: str) -> Optional[str]:
 # This is NOT a second suffix table: the resolved suffix is always empty.
 _LEGACY_US_EXCHANGE_ALIASES = frozenset({"NYSE", "NASDAQ", "AMEX"})
 
+# Single source-of-truth alias→MIC table for the legacy symbol_config
+# migration (danny-legacy-symbol-config-migration-contract.md §3.1).
+# Keys are exactly _LEGACY_US_EXCHANGE_ALIASES (asserted below); values are
+# the canonical ISO 10383 MIC codes these aliases map to.
+# AMEX → XASE (NYSE American) is NOT in US_OPTIONS_ELIGIBLE_MICS — that
+# is an honest, correct outcome: the migration tool doesn't expand the
+# eligible set, it just normalises free text to the truthful MIC.
+LEGACY_ALIAS_TO_MIC: Dict[str, str] = {
+    "NYSE":   "XNYS",
+    "NASDAQ": "XNAS",
+    "AMEX":   "XASE",
+}
+assert frozenset(LEGACY_ALIAS_TO_MIC) == _LEGACY_US_EXCHANGE_ALIASES, (
+    "LEGACY_ALIAS_TO_MIC keys must exactly match _LEGACY_US_EXCHANGE_ALIASES"
+)
+
 
 def resolve_yfinance_symbol(
     ticker: str,
@@ -100,6 +116,80 @@ def resolve_yfinance_symbol(
         return ticker.upper()
 
     return suggest_yfinance_symbol(ticker, exchange_mic)
+
+
+# ---------------------------------------------------------------------------
+# TradingView symbol resolution (danny-tradingview-symbol-contract.md)
+# ---------------------------------------------------------------------------
+
+# §2.1 — only the six MICs explicitly approved by Danny. XPAR/XETR/XBRU/XLIS
+# are deliberately NOT included here even though they exist in
+# MIC_TO_YFINANCE_SUFFIX (a separate, unrelated table) — their real
+# TradingView exchange codes have not yet been verified and guessing risks
+# silently wrong widget/links. This is a tracked, non-blocking follow-up.
+MIC_TO_TRADINGVIEW_EXCHANGE: Dict[str, str] = {
+    "XMAD": "BME",
+    "XAMS": "EURONEXT",
+    "XLON": "LSE",
+    "XSWX": "SIX",
+    "XNYS": "NYSE",
+    "XNAS": "NASDAQ",
+}
+
+
+def resolve_tradingview_symbol(
+    ticker: str,
+    exchange_mic: Optional[str],
+    security_master_doc: Optional[dict] = None,
+) -> Optional[str]:
+    """Resolve the TradingView symbol (hyphen form, e.g. "BME-ACS").
+
+    Mirrors ``resolve_yfinance_symbol``'s precedence exactly so both
+    resolvers are auditable side-by-side. Reuses ``MIC_TO_TRADINGVIEW_EXCHANGE``
+    and ``_LEGACY_US_EXCHANGE_ALIASES`` — no second mapping table.
+
+    Precedence (highest wins):
+      1. ``security_master_doc["provider_symbols"]["tradingview"]`` —
+         explicit per-security override.
+      2. ``MIC_TO_TRADINGVIEW_EXCHANGE.get(exchange_mic.upper())`` →
+         ``f"{code}-{ticker.upper()}"``.
+      3. ``exchange_mic`` in ``_LEGACY_US_EXCHANGE_ALIASES`` (reused
+         verbatim, no new alias set) → ``f"{alias}-{ticker.upper()}"``.
+      4. Unknown/missing MIC → ``None`` (fail closed; never guess, never
+         fall back to the bare ticker or raw MIC text as the exchange code).
+
+    Args:
+        ticker: Local/canonical ticker symbol (e.g. "ACS").
+        exchange_mic: The security's exchange MIC (e.g. "XMAD"), or falsy
+            if unknown/unavailable.
+        security_master_doc: Optional security_master projection/document
+            that may carry a ``provider_symbols`` override map.
+
+    Returns:
+        The resolved TradingView symbol in hyphen form, or None if it
+        cannot be resolved safely (unknown/unmapped MIC, missing MIC, and
+        no override present).
+    """
+    if security_master_doc:
+        override = (security_master_doc.get("provider_symbols") or {}).get(
+            "tradingview"
+        )
+        if override:
+            return override
+
+    if not exchange_mic:
+        return None
+
+    mic = exchange_mic.strip().upper()
+
+    code = MIC_TO_TRADINGVIEW_EXCHANGE.get(mic)
+    if code:
+        return f"{code}-{ticker.upper()}"
+
+    if mic in _LEGACY_US_EXCHANGE_ALIASES:
+        return f"{mic}-{ticker.upper()}"
+
+    return None
 
 
 # ---------------------------------------------------------------------------

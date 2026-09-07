@@ -167,6 +167,16 @@ class TestDeferredWarmingStillFires:
     proves that hand-off actually happens: a cold symbol is genuinely
     warmed by one screener request, not silently dropped."""
 
+    @pytest.mark.skip(
+        reason=(
+            "Dead warm-on-request behavior: api_screener_options is now precomputed-only "
+            "and never schedules OptionsChainCache refreshes. The warming/counts schema "
+            "that this test checks no longer exists. Chain warming is scheduler-only "
+            "(see src/main.py _run_options_chain_fetch_async). "
+            "TestScheduledPathUniverseFilter in test_options_screener_share_availability.py "
+            "covers the scheduler path."
+        )
+    )
     def test_cold_symbol_is_actually_warmed_after_one_screener_request(self, monkeypatch):
         cosmos = _CosmosDouble(symbols=[{"symbol": "WARM1", "enrichment": {}, "total_shares": 0}])
         cache = _make_cache(monkeypatch)

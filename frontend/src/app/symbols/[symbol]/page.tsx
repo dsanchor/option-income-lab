@@ -147,8 +147,8 @@ export default async function SymbolDetailPage({
       )}
 
       {/* TradingView symbol info + RT chart */}
-      <TradingViewSymbolInfo symbol={d.symbol} exchange={d.exchange} />
-      <RtChart symbol={d.symbol} exchange={d.exchange} />
+      <TradingViewSymbolInfo tvSymbol={d.tradingview_symbol ?? null} />
+      <RtChart tvSymbol={d.tradingview_symbol ?? null} />
 
       {/* ── Summary Section ────────────────────────────────────────────── */}
       <DetailSection title="Summary">

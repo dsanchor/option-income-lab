@@ -12,5 +12,8 @@ src/__pycache__/
 __pycache__/
 .venv/
 
+# Migration backup files — operational artifacts, not source
+backend/scripts/migration_backups/
+
 # OneDrive sync conflict files
 *-LAPTOP-*

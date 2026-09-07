@@ -396,6 +396,40 @@ class OptionsAgentScheduler:
         print(f"{'~'*70}\n")
 
         symbols = self.cosmos.list_symbols()
+
+        # ── Options Screener universe filter (danny-options-screener-universe-
+        # contract.md §2.2) — filter down to the eligible subset before
+        # building symbol_names for cache.refresh_all(), so the scheduled
+        # job never fetches/caches chains for ineligible symbols.
+        from decimal import Decimal
+        from src.options_screener_universe import compute_options_screener_universe
+
+        portfolio_shares_by_ticker = {}
+        try:
+            portfolio_container = getattr(self.cosmos, "portfolio_container", None)
+            if portfolio_container is not None:
+                from src.portfolio.cosmos_portfolio import CosmosPortfolioService
+                from src.portfolio.cosmos_securities import CosmosSecuritiesService
+                from src.portfolio.holdings_service import HoldingsService
+
+                portfolio_svc = CosmosPortfolioService(portfolio_container, None)
+                securities_svc = CosmosSecuritiesService(self.cosmos.container)
+                holdings_svc = HoldingsService(portfolio_svc, securities_svc)
+                holdings_result = holdings_svc.compute_holdings()
+                for h in holdings_result.get("holdings", []):
+                    ticker = (h.get("ticker") or "").strip().upper()
+                    if not ticker:
+                        continue
+                    try:
+                        portfolio_shares_by_ticker[ticker] = Decimal(str(h.get("total_shares", 0)))
+                    except Exception:
+                        portfolio_shares_by_ticker[ticker] = Decimal("0")
+        except Exception as exc:
+            print(f"⚠️  Options chain scheduler: holdings load failed: {exc}")
+
+        eligible_universe = compute_options_screener_universe(symbols, portfolio_shares_by_ticker)
+        symbols = [s for s in symbols if (s.get("symbol") or "").strip().upper() in eligible_universe]
+
         symbol_names = [s["symbol"] for s in symbols]
 
         print(f"Refreshing options chain cache for {len(symbol_names)} symbols...")

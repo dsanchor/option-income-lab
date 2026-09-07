@@ -139,31 +139,13 @@ class CosmosDBService:
             self.calendar_container = None
 
     # ── Symbol Config CRUD ─────────────────────────────────────────────
-
-    def create_symbol(self, symbol: str, exchange: str,
-                      display_name: str = "",
-                      covered_call: bool = False,
-                      cash_secured_put: bool = False,
-                      buy_tracker: bool = False) -> dict:
-        """Create a new symbol config document."""
-        now = datetime.utcnow().isoformat() + "Z"
-        doc = {
-            "id": f"config_{symbol}",
-            "symbol": symbol,
-            "doc_type": "symbol_config",
-            "exchange": exchange,
-            "display_name": display_name or symbol,
-            "watchlist": {
-                "covered_call": covered_call,
-                "cash_secured_put": cash_secured_put,
-                "buy_tracker": buy_tracker,
-            },
-            "telegram_notifications_enabled": True,
-            "positions": [],
-            "created_at": now,
-            "updated_at": now,
-        }
-        return self.container.create_item(doc)
+    #
+    # create_symbol() was removed (danny-single-add-symbol-contract.md §2.7):
+    # it bypassed SecurityMaster (no canonical security_id/MIC:TICKER
+    # identity) and violated the all-disabled invariant. Symbol config
+    # creation is now exclusively via ensure_symbol_config() (called from
+    # POST /api/symbols/add), which never accepts caller-supplied
+    # watchlist/notification flags at creation time.
 
     def get_symbol(self, symbol: str) -> Optional[dict]:
         """Get symbol config by ticker."""

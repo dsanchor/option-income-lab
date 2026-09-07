@@ -673,23 +673,12 @@ async def api_list_symbols(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-def _is_watchlist_member(config: dict) -> bool:
-    """Return True if the symbol has explicit watchlist membership.
-
-    Explicit membership = manually added OR any watchlist toggle on OR
-    telegram enabled.  An auto-enrolled symbol with no interactions is
-    purely historical (not explicit).
-
-    Contract: danny-unified-watchlist-contract.md §1.2
-    """
-    if not config.get("_auto_enrolled", False):
-        return True  # manually added
-    wl = config.get("watchlist") or {}
-    if wl.get("covered_call") or wl.get("cash_secured_put") or wl.get("buy_tracker"):
-        return True
-    if config.get("telegram_notifications_enabled", False):
-        return True
-    return False
+# Relocated to src/portfolio/watchlist_membership.py (danny-options-screener-
+# universe-contract.md §2.1) so src/main.py's scheduler can reuse the exact
+# same predicate without importing the web module. Thin re-export kept here
+# so every existing internal call site (_compute_symbols_overview, etc.) is
+# unaffected.
+from src.portfolio.watchlist_membership import is_watchlist_member as _is_watchlist_member  # noqa: E402
 
 
 def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_portfolio: bool = False):
@@ -953,105 +942,6 @@ async def api_economics(request: Request,
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@app.post("/api/symbols")
-async def api_create_symbol(request: Request):
-    try:
-        cosmos = _get_cosmos(request)
-        body = await request.json()
-        symbol = body.get("symbol", "").strip().upper()
-        exchange = body.get("exchange", "").strip().upper()
-        display_name = body.get("display_name", "").strip()
-        if not display_name:
-            display_name = f"{exchange}:{symbol}"
-        covered_call = bool(body.get("covered_call", False))
-        cash_secured_put = bool(body.get("cash_secured_put", False))
-        buy_tracker = bool(body.get("buy_tracker", False))
-
-        if not symbol or not exchange:
-            return JSONResponse({"error": "symbol and exchange are required"},
-                                status_code=400)
-
-        existing = cosmos.get_symbol(symbol)
-        if existing:
-            return JSONResponse({"error": f"Symbol {symbol} already exists"},
-                                status_code=409)
-
-        doc = cosmos.create_symbol(symbol, exchange, display_name,
-                                   covered_call, cash_secured_put, buy_tracker)
-
-        # Enrich the new symbol in background (non-blocking)
-        import threading
-        def _enrich():
-            try:
-                from src.portfolio_enrichment import enrich_symbol
-                enrichment = enrich_symbol(symbol)
-                if enrichment:
-                    cosmos.update_symbol_enrichment(symbol, enrichment)
-                    cosmos.record_enrichment_snapshot(
-                        symbol,
-                        (enrichment.get("technicals") or {}).get("score"),
-                        enrichment.get("momentum", ""),
-                    )
-            except Exception:
-                pass
-        threading.Thread(target=_enrich, daemon=True).start()
-
-        # Seed the deterministic price-forecast history (last ~45 sessions ≈ 60
-        # calendar days) so the forecast table/chart are populated from day one
-        # instead of waiting for the daily cron to accumulate them. Enough depth
-        # for the 40-session long trend window and to resolve 4w endpoints.
-        # Point-in-time, no look-ahead, no LLM.
-        yf_provider = getattr(request.app.state, "yf_provider", None)
-        def _seed_forecasts():
-            try:
-                from src.forecast_cron import (
-                    DEFAULT_BACKFILL_SESSIONS,
-                    backfill_symbol_forecasts,
-                )
-                backfill = backfill_symbol_forecasts(
-                    cosmos, yf_provider, symbol,
-                    sessions=DEFAULT_BACKFILL_SESSIONS,
-                )
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    result = asyncio.run(backfill)
-                    logger.info("Forecast backfill completed for %s: %s", symbol, result)
-                else:
-                    task = loop.create_task(backfill)
-
-                    def _log_backfill_result(completed):
-                        try:
-                            logger.info(
-                                "Forecast backfill completed for %s: %s",
-                                symbol,
-                                completed.result(),
-                            )
-                        except Exception as exc:
-                            logger.warning(
-                                "Forecast backfill failed for newly created symbol %s: %s",
-                                symbol,
-                                exc,
-                                exc_info=True,
-                            )
-
-                    task.add_done_callback(_log_backfill_result)
-            except Exception as exc:
-                logger.warning(
-                    "Forecast backfill failed for newly created symbol %s: %s",
-                    symbol,
-                    exc,
-                    exc_info=True,
-                )
-        threading.Thread(target=_seed_forecasts, daemon=True).start()
-
-        return JSONResponse(_clean_doc(doc), status_code=201)
-    except RuntimeError as e:
-        return JSONResponse({"error": str(e)}, status_code=503)
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
 @app.get("/api/symbols/{symbol}")
 async def api_get_symbol(request: Request, symbol: str):
     try:
@@ -1226,7 +1116,9 @@ def _compute_symbol_detail(
         }
         symbol_state = "portfolio_only" if portfolio_field else "watchlist_only"
         from src.us_exchange_eligibility import is_us_options_eligible as _is_elig
+        from src.portfolio.provider_symbols import resolve_tradingview_symbol as _resolve_tv
         _po_mic = security_doc.get("exchange_mic") or ""
+        _po_tv_symbol = _resolve_tv(sym, _po_mic, security_doc)
         return {
             "symbol": sym,
             "display_name": security_doc.get("company_name", sym),
@@ -1249,6 +1141,7 @@ def _compute_symbol_detail(
             "portfolio": portfolio_field,
             "symbol_state": symbol_state,
             "us_options_eligible": _is_elig(_po_mic),
+            "tradingview_symbol": _po_tv_symbol,
         }
 
     plans = _sort_by_updated_at_desc(cosmos.get_plans(sym))
@@ -1416,12 +1309,14 @@ def _compute_symbol_detail(
 
     # ── US-options eligibility flag (§J.2 danny-unified-watchlist-contract.md) ──
     from src.us_exchange_eligibility import is_us_options_eligible
+    from src.portfolio.provider_symbols import resolve_tradingview_symbol
     _effective_mic = (
         (security_field.get("exchange_mic") if security_field else None)
         or clean.get("exchange")
         or ""
     )
     us_options_eligible = is_us_options_eligible(_effective_mic)
+    tradingview_symbol = resolve_tradingview_symbol(sym, _effective_mic, security_doc)
 
     return {
         "symbol": clean.get("symbol", sym),
@@ -1460,6 +1355,8 @@ def _compute_symbol_detail(
         "symbol_state": symbol_state,
         # US-options eligibility (Amendment J)
         "us_options_eligible": us_options_eligible,
+        # TradingView symbol (danny-tradingview-symbol-contract.md)
+        "tradingview_symbol": tradingview_symbol,
     }
 
 
@@ -3958,6 +3855,39 @@ def _build_screener_symbol_inputs(cosmos, cache, symbol_filter):
      `to_warm` for the caller to actually schedule back on the event loop.
      """
      docs = cosmos.list_symbols()
+
+     # ── Options Screener universe filter (danny-options-screener-universe-
+     # contract.md §2.2) — applied immediately after list_symbols() and
+     # before the symbol_filter narrowing/per-doc loop.
+     from decimal import Decimal as _Decimal
+     from src.options_screener_universe import compute_options_screener_universe
+
+     portfolio_shares_by_ticker: Dict[str, _Decimal] = {}
+     try:
+         portfolio_container = getattr(cosmos, "portfolio_container", None)
+         if portfolio_container is not None:
+             from src.portfolio.cosmos_portfolio import CosmosPortfolioService
+             from src.portfolio.cosmos_securities import CosmosSecuritiesService
+             from src.portfolio.holdings_service import HoldingsService
+
+             portfolio_svc = CosmosPortfolioService(portfolio_container, None)
+             securities_svc = CosmosSecuritiesService(cosmos.container)
+             holdings_svc = HoldingsService(portfolio_svc, securities_svc)
+             holdings_result = holdings_svc.compute_holdings()
+             for h in holdings_result.get("holdings", []):
+                 ticker = (h.get("ticker") or "").strip().upper()
+                 if not ticker:
+                     continue
+                 try:
+                     portfolio_shares_by_ticker[ticker] = _Decimal(str(h.get("total_shares", 0)))
+                 except Exception:
+                     portfolio_shares_by_ticker[ticker] = _Decimal("0")
+     except Exception as exc:
+         logger.warning("_build_screener_symbol_inputs: holdings load failed: %s", exc)
+
+     eligible_universe = compute_options_screener_universe(docs, portfolio_shares_by_ticker)
+     docs = [d for d in docs if (d.get("symbol") or "").strip().upper() in eligible_universe]
+
      if symbol_filter is not None:
          docs = [d for d in docs if (d.get("symbol") or "").strip().upper() in symbol_filter]
 
@@ -4124,6 +4054,42 @@ async def api_screener_options(
 
      # Compute X (total configured universe, filtered by symbols= if supplied)
      docs = cosmos.list_symbols()
+
+     # ── Options Screener universe filter (danny-options-screener-universe-
+     # contract.md §2.2) — applied immediately after list_symbols() and
+     # before the symbol_filter narrowing/per-doc loop, so ineligible
+     # symbols never reach the cache-hydration check, never get a warm-up
+     # scheduled, and never enter symbol_inputs (counts are correct by
+     # construction, zero changes needed in options_screener.py itself).
+     from decimal import Decimal as _Decimal
+     from src.options_screener_universe import compute_options_screener_universe
+
+     portfolio_shares_by_ticker: Dict[str, _Decimal] = {}
+     try:
+         portfolio_container = getattr(cosmos, "portfolio_container", None)
+         if portfolio_container is not None:
+             from src.portfolio.cosmos_portfolio import CosmosPortfolioService
+             from src.portfolio.cosmos_securities import CosmosSecuritiesService
+             from src.portfolio.holdings_service import HoldingsService
+
+             portfolio_svc = CosmosPortfolioService(portfolio_container, None)
+             securities_svc = CosmosSecuritiesService(cosmos.container)
+             holdings_svc = HoldingsService(portfolio_svc, securities_svc)
+             holdings_result = holdings_svc.compute_holdings()
+             for h in holdings_result.get("holdings", []):
+                 ticker = (h.get("ticker") or "").strip().upper()
+                 if not ticker:
+                     continue
+                 try:
+                     portfolio_shares_by_ticker[ticker] = _Decimal(str(h.get("total_shares", 0)))
+                 except Exception:
+                     portfolio_shares_by_ticker[ticker] = _Decimal("0")
+     except Exception as exc:
+         logger.warning("api_screener_options: holdings load failed: %s", exc)
+
+     eligible_universe = compute_options_screener_universe(docs, portfolio_shares_by_ticker)
+     docs = [d for d in docs if (d.get("symbol") or "").strip().upper() in eligible_universe]
+
      if symbol_filter is not None:
          docs = [d for d in docs if (d.get("symbol") or "").strip().upper() in symbol_filter]
 

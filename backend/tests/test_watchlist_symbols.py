@@ -7,7 +7,6 @@ Pattern mirrors test_activity_chat.py: TestClient + FakeCosmos + monkeypatch.
 
 import pytest
 from starlette.testclient import TestClient
-from threading import Thread as RealThread
 
 from src.options_chain_filters import (
     filter_options_chain_by_delta,
@@ -98,190 +97,42 @@ def _make_client_with_cosmos(cosmos: FakeCosmos) -> TestClient:
 
 
 # ===========================================================================
-# POST /api/symbols — Add symbol
+# POST /api/symbols — REMOVED (danny-single-add-symbol-contract.md §2.7)
+#
+# The legacy create endpoint bypassed SecurityMaster entirely (no canonical
+# security_id/MIC:TICKER identity) and violated the all-disabled invariant
+# (accepted covered_call/cash_secured_put/buy_tracker + defaulted
+# telegram_notifications_enabled=True at creation time). All creation now
+# routes exclusively through POST /api/symbols/add (see
+# test_unified_add_symbol.py). GET /api/symbols (list) is untouched.
 # ===========================================================================
 
-class TestCreateSymbol:
+class TestCreateSymbolEndpointRemoved:
 
-    def test_create_symbol_returns_201_with_valid_body(self, monkeypatch):
-        """Happy path: symbol + exchange → 201 with the new doc."""
+    def test_post_api_symbols_no_longer_exists(self, monkeypatch):
         cosmos = FakeCosmos()
-        # Patch out background threads (enrichment + forecast seeding)
-        import threading
-        monkeypatch.setattr(threading, "Thread", lambda target, daemon: _FakeThread())
-
         client = _make_client_with_cosmos(cosmos)
         res = client.post("/api/symbols",
                           json={"symbol": "AAPL", "exchange": "NASDAQ"})
 
-        assert res.status_code == 201
-        body = res.json()
-        assert body["symbol"] == "AAPL"
-        assert body["exchange"] == "NASDAQ"
-        assert "AAPL" in cosmos._docs
+        assert res.status_code in (404, 405)
+        assert "AAPL" not in cosmos._docs
 
-    def test_create_symbol_missing_symbol_returns_400(self, monkeypatch):
-        """symbol field missing → 400."""
-        cosmos = FakeCosmos()
-        client = _make_client_with_cosmos(cosmos)
-        res = client.post("/api/symbols", json={"exchange": "NASDAQ"})
-
-        assert res.status_code == 400
-        assert "symbol" in res.json()["error"].lower()
-
-    def test_create_symbol_missing_exchange_returns_400(self, monkeypatch):
-        """exchange field missing → 400."""
-        cosmos = FakeCosmos()
-        client = _make_client_with_cosmos(cosmos)
-        res = client.post("/api/symbols", json={"symbol": "MSFT"})
-
-        assert res.status_code == 400
-        assert "exchange" in res.json()["error"].lower()
-
-    def test_create_symbol_empty_symbol_returns_400(self, monkeypatch):
-        """Blank symbol after strip → 400."""
-        cosmos = FakeCosmos()
-        client = _make_client_with_cosmos(cosmos)
-        res = client.post("/api/symbols", json={"symbol": "   ", "exchange": "NYSE"})
-
-        assert res.status_code == 400
-
-    def test_create_duplicate_symbol_returns_409(self, monkeypatch):
-        """Second POST for the same ticker → 409 Conflict."""
-        existing = {"AAPL": _make_symbol_doc("AAPL")}
-        cosmos = FakeCosmos(existing)
-        client = _make_client_with_cosmos(cosmos)
-        res = client.post("/api/symbols",
-                          json={"symbol": "AAPL", "exchange": "NASDAQ"})
-
-        assert res.status_code == 409
-        assert "AAPL" in res.json()["error"]
-
-    def test_create_symbol_normalises_ticker_to_uppercase(self, monkeypatch):
-        """Lowercase ticker in request → stored as uppercase."""
-        cosmos = FakeCosmos()
-        import threading
-        monkeypatch.setattr(threading, "Thread", lambda target, daemon: _FakeThread())
-        client = _make_client_with_cosmos(cosmos)
-        res = client.post("/api/symbols",
-                          json={"symbol": "aapl", "exchange": "nasdaq"})
-
-        assert res.status_code == 201
-        assert res.json()["symbol"] == "AAPL"
-        assert res.json()["exchange"] == "NASDAQ"
-
-    def test_create_symbol_with_watchlist_flags(self, monkeypatch):
-        """Watchlist flags passed on creation are stored."""
-        cosmos = FakeCosmos()
-        import threading
-        monkeypatch.setattr(threading, "Thread", lambda target, daemon: _FakeThread())
-        client = _make_client_with_cosmos(cosmos)
-        res = client.post("/api/symbols", json={
-            "symbol": "T",
-            "exchange": "NYSE",
-            "covered_call": True,
-            "cash_secured_put": False,
-        })
-
-        assert res.status_code == 201
-        doc = cosmos.get_symbol("T")
-        assert doc["watchlist"]["covered_call"] is True
-        assert doc["watchlist"]["cash_secured_put"] is False
-
-    def test_successful_creation_backfills_only_created_symbol(self, monkeypatch):
-        """A successful POST launches one forecast backfill with default depth."""
-        cosmos = FakeCosmos()
-        calls = []
-
-        async def _record_backfill(cosmos_arg, provider_arg, symbol_arg, *, sessions):
-            calls.append((cosmos_arg, provider_arg, symbol_arg, sessions))
-
-        import src.forecast_cron as forecast_cron
-        import threading
-        monkeypatch.setattr(forecast_cron, "DEFAULT_BACKFILL_SESSIONS", 17)
-        monkeypatch.setattr(forecast_cron, "backfill_symbol_forecasts", _record_backfill)
-        monkeypatch.setattr(threading, "Thread", _ForecastOnlyThread)
-
-        client = _make_client_with_cosmos(cosmos)
-        res = client.post(
-            "/api/symbols",
-            json={"symbol": " msft ", "exchange": " nasdaq ", "buy_tracker": True},
-        )
-
-        assert res.status_code == 201
-        assert calls == [(cosmos, None, "MSFT", 17)]
-
-    @pytest.mark.parametrize(
-        "payload, expected_status",
-        [
-            ({"exchange": "NASDAQ"}, 400),
-            ({"symbol": "   ", "exchange": "NASDAQ"}, 400),
-            ({"symbol": "AAPL", "exchange": "NASDAQ"}, 409),
-        ],
-    )
-    def test_invalid_or_duplicate_creation_does_not_backfill(
-        self, monkeypatch, payload, expected_status
-    ):
-        """Rejected POSTs must not launch forecast work."""
+    def test_get_api_symbols_list_still_works(self, monkeypatch):
         cosmos = FakeCosmos({"AAPL": _make_symbol_doc("AAPL")})
-        calls = []
-
-        async def _record_backfill(*args, **kwargs):
-            calls.append((args, kwargs))
-
-        import src.forecast_cron as forecast_cron
-        import threading
-        monkeypatch.setattr(forecast_cron, "backfill_symbol_forecasts", _record_backfill)
-        monkeypatch.setattr(threading, "Thread", _ForecastOnlyThread)
-
         client = _make_client_with_cosmos(cosmos)
-        res = client.post("/api/symbols", json=payload)
+        res = client.get("/api/symbols")
 
-        assert res.status_code == expected_status
-        assert calls == []
+        assert res.status_code == 200
 
-    def test_backfill_failure_does_not_undo_creation(self, monkeypatch):
-        """Forecast seeding is best-effort after the symbol has been persisted."""
-        cosmos = FakeCosmos()
-        calls = []
+    def test_cosmos_db_create_symbol_removed(self):
+        """cosmos_db.CosmosDBService no longer exposes create_symbol; other
+        watchlist operations (get_symbol/update_watchlist/replace) remain."""
+        import src.cosmos_db as cosmos_db_module
 
-        async def _failing_backfill(*args, **kwargs):
-            calls.append((args, kwargs))
-            raise RuntimeError("forecast unavailable")
-
-        import src.forecast_cron as forecast_cron
-        import threading
-        monkeypatch.setattr(forecast_cron, "backfill_symbol_forecasts", _failing_backfill)
-        monkeypatch.setattr(threading, "Thread", _ForecastOnlyThread)
-
-        client = _make_client_with_cosmos(cosmos)
-        res = client.post(
-            "/api/symbols", json={"symbol": "VZ", "exchange": "NYSE"}
-        )
-
-        assert res.status_code == 201
-        assert cosmos.get_symbol("VZ") is not None
-        assert len(calls) == 1
-
-
-class _FakeThread:
-    """Thread stub — does nothing, prevents background enrichment in tests."""
-    def start(self):
-        pass
-
-
-class _ForecastOnlyThread:
-    """Run forecast thread targets synchronously; suppress enrichment work."""
-
-    def __init__(self, target, daemon):
-        self.target = target
-        self.daemon = daemon
-
-    def start(self):
-        if self.target.__name__ == "_seed_forecasts":
-            thread = RealThread(target=self.target, daemon=self.daemon)
-            thread.start()
-            thread.join()
+        assert not hasattr(cosmos_db_module.CosmosDBService, "create_symbol")
+        assert hasattr(cosmos_db_module.CosmosDBService, "get_symbol")
+        assert hasattr(cosmos_db_module.CosmosDBService, "update_watchlist")
 
 
 # ===========================================================================
