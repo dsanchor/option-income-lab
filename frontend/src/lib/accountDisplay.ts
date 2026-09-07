@@ -38,6 +38,42 @@ export function getAccountLabel(accountId: string, accounts: BrokerAccount[]): s
   return accountId;
 }
 
+/**
+ * Format an account for informational display: account name only, no broker prefix.
+ * Use this everywhere a visible account label appears (tables, badges, summaries,
+ * selectors, dialogs). Reserve formatAccountLabel for account-metadata management UIs.
+ *
+ * Falls back gracefully:
+ *   name present        → trimmed name
+ *   name absent         → raw account_id (last resort, never broker/type)
+ *   null/undefined      → "—"
+ */
+export function formatAccountName(account: BrokerAccount | null | undefined): string {
+  if (!account) return "—";
+  const name = account.name?.trim() || null;
+  if (name) return name;
+  return account.account_id || "—";
+}
+
+/**
+ * Name-only lookup for informational account labels.
+ *
+ * - "_unassigned" → UNASSIGNED_LABEL ("Sin asignar")
+ * - Found account → account name only via formatAccountName
+ * - Not found (legacy) → raw accountId (last resort, never blank)
+ */
+export function getAccountName(accountId: string, accounts: BrokerAccount[]): string {
+  if (!accountId || accountId === "_unassigned") return UNASSIGNED_LABEL;
+  const account = accounts.find((a) => a.account_id === accountId);
+  if (account) return formatAccountName(account);
+  return accountId;
+}
+
+/** @deprecated Use formatAccountName for informational display. */
+export const formatMovementAccountLabel = formatAccountName;
+/** @deprecated Use getAccountName for informational display. */
+export const getMovementAccountLabel = getAccountName;
+
 // ── Deterministic account badge colors ────────────────────────────────────────
 
 /**

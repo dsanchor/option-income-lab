@@ -9,7 +9,7 @@ import ReassignmentDialog from "./ReassignmentDialog";
 import StatCard from "@/components/StatCard";
 import Reveal from "@/components/Reveal";
 import AccountBadge from "@/components/AccountBadge";
-import { formatAccountLabel, getAccountLabel } from "@/lib/accountDisplay";
+import { formatAccountName, getAccountName } from "@/lib/accountDisplay";
 
 const WARNING_SHORT: Record<WarningType, string> = {
   NEGATIVE_INVENTORY: "Negative inventory",
@@ -214,7 +214,7 @@ export default function PortfolioHoldingsTable() {
           <option value="">All accounts</option>
           <option value="_unassigned">Sin asignar</option>
           {accounts.map((a) => (
-            <option key={a.account_id} value={a.account_id}>{formatAccountLabel(a)}</option>
+            <option key={a.account_id} value={a.account_id}>{formatAccountName(a)}</option>
           ))}
         </select>
 
@@ -267,7 +267,7 @@ export default function PortfolioHoldingsTable() {
             <div className="flex items-center gap-2 border-b border-border/40 bg-bg-card/60 px-4 py-2 text-xs text-text-muted">
               <span>Showing {visibleHoldings.length} of {data.holdings.length} holdings</span>
               {accountFilter && (
-                <span>· Account: <strong>{getAccountLabel(accountFilter, accounts)}</strong></span>
+                <span>· Account: <strong>{getAccountName(accountFilter, accounts)}</strong></span>
               )}
               <button
                 type="button"

@@ -119,22 +119,29 @@ const SUITABILITY_FILTERS: { key: SymbolSuitabilityFilter; label: string }[] = [
 
 type ViewMode = "portfolio" | "options";
 
-const COLUMNS: { key: SortKey; label: string; align?: "right"; modes?: ViewMode[] }[] = [
-  { key: "symbol", label: "Symbol" },
-  { key: "category", label: "Category" },
-  { key: "dgi_score", label: "DGI", align: "right" },
-  { key: "tech_timing", label: "Tech", align: "right" },
-  { key: "entry_tag", label: "Entry" },
-  { key: "momentum", label: "Momentum" },
-  { key: "price", label: "Price", align: "right" },
-  { key: "price_eur", label: "Price €", align: "right", modes: ["portfolio"] },
-  { key: "portfolio_shares", label: "Shares", align: "right", modes: ["portfolio"] },
-  { key: "portfolio_avg_cost_eur", label: "Avg Cost", align: "right", modes: ["portfolio"] },
-  { key: "portfolio_invested_eur", label: "Invested", align: "right", modes: ["portfolio"] },
-  { key: "current_value_eur", label: "Value €", align: "right", modes: ["portfolio"] },
-  { key: "portfolio_dividends_eur", label: "Dividends", align: "right", modes: ["portfolio"] },
-  { key: "in_calls", label: "In Calls", align: "right", modes: ["options"] },
-  { key: "put_exposure", label: "Puts $", align: "right", modes: ["options"] },
+const COLUMNS: {
+  key: SortKey;
+  label: string;
+  align?: "right";
+  modes?: ViewMode[];
+  width?: string;
+  nowrap?: true;
+}[] = [
+  { key: "symbol",                   label: "Symbol",    width: "160px" },
+  { key: "category",                 label: "Category",  width: "110px" },
+  { key: "dgi_score",               label: "DGI",      modes: ["options"], align: "right", width: "64px",  nowrap: true },
+  { key: "tech_timing",             label: "Tech",     modes: ["options"], align: "right", width: "64px",  nowrap: true },
+  { key: "entry_tag",               label: "Entry",    modes: ["options"],                 width: "88px",  nowrap: true },
+  { key: "momentum",                 label: "Momentum",                                     width: "104px", nowrap: true },
+  { key: "price",                    label: "Price",     align: "right",                    width: "96px",  nowrap: true },
+  { key: "price_eur",               label: "Price €",  align: "right", modes: ["portfolio"], width: "84px",  nowrap: true },
+  { key: "portfolio_shares",         label: "Shares",   align: "right", modes: ["portfolio"], width: "72px",  nowrap: true },
+  { key: "portfolio_avg_cost_eur",  label: "Avg Cost", align: "right", modes: ["portfolio"], width: "84px",  nowrap: true },
+  { key: "portfolio_invested_eur",  label: "Invested", align: "right", modes: ["portfolio"], width: "84px",  nowrap: true },
+  { key: "current_value_eur",       label: "Value €",  align: "right", modes: ["portfolio"], width: "84px",  nowrap: true },
+  { key: "portfolio_dividends_eur", label: "Dividends",align: "right", modes: ["portfolio"], width: "84px",  nowrap: true },
+  { key: "in_calls",                 label: "In Calls", align: "right", modes: ["options"],  width: "72px",  nowrap: true },
+  { key: "put_exposure",             label: "Puts $",   align: "right", modes: ["options"],  width: "80px",  nowrap: true },
 ];
 
 export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
@@ -268,6 +275,11 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
     () => COLUMNS.filter((c) => !c.modes || c.modes.includes(viewMode)),
     [viewMode],
   );
+  // cols alias: drives cols.map for header/colgroup; guards body cells via COLUMNS metadata
+  const cols = visibleColumns;
+  // Computed min-width — sums each visible col's declared width + 52px Actions.
+  // Updates atomically with viewMode so Options' compact set doesn't inherit Portfolio spacing.
+  const tableMinWidth = cols.reduce((sum, c) => sum + (c.width ? parseInt(c.width, 10) : 120), 52);
 
   /** Switch view mode; reset sort key if it becomes hidden. */
   function changeViewMode(mode: ViewMode) {
@@ -306,7 +318,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
         onClick={() => setModalSymbol(r.security_id ?? r.symbol)}
         className={`cursor-pointer border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/50 ${isZeroHistorical ? "opacity-60" : ""}`}
       >
-        <td className="px-4 py-3">
+        <td className="px-3 py-3">
           <Link
             href={href}
             onClick={(e) => e.stopPropagation()}
@@ -315,12 +327,18 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
             {r.symbol}
           </Link>
         </td>
-        <td className="px-4 py-3"><Pill text={r.category} className={categoryClass(r.category)} /></td>
-        <td className="px-4 py-3 text-right font-mono">{num(r.dgi_score)}</td>
-        <td className="px-4 py-3 text-right font-mono">{num(r.tech_timing)}</td>
-        <td className="px-4 py-3"><Pill text={r.entry_tag} className={entryClass(r.entry_tag)} /></td>
-        <td className="px-4 py-3"><Pill text={r.momentum} className={momentumClass(r.momentum)} /></td>
-        <td className="px-4 py-3 text-right font-mono">
+        <td className="px-3 py-3"><Pill text={r.category} className={categoryClass(r.category)} /></td>
+        {viewMode === "options" && (
+          <td className="px-3 py-3 text-right font-mono whitespace-nowrap">{num(r.dgi_score)}</td>
+        )}
+        {viewMode === "options" && (
+          <td className="px-3 py-3 text-right font-mono whitespace-nowrap">{num(r.tech_timing)}</td>
+        )}
+        {viewMode === "options" && (
+          <td className="px-3 py-3 whitespace-nowrap"><Pill text={r.entry_tag} className={entryClass(r.entry_tag)} /></td>
+        )}
+        <td className="px-3 py-3 whitespace-nowrap"><Pill text={r.momentum} className={momentumClass(r.momentum)} /></td>
+        <td className="px-3 py-3 text-right font-mono whitespace-nowrap">
           <span
             className={r.pricing_status === "stale" ? "opacity-60" : undefined}
             title={
@@ -335,13 +353,13 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
           </span>
         </td>
         {viewMode === "portfolio" && (
-          <td className="px-4 py-3 text-right font-mono text-xs">{eur(r.price_eur)}</td>
+          <td className="px-3 py-3 text-right font-mono text-xs whitespace-nowrap">{eur(r.price_eur)}</td>
         )}
 
         {/* Shares — portfolio: read-only ledger value; watchlist-only: editable override */}
         {viewMode === "portfolio" && (
           <td
-            className="px-4 py-3 text-right font-mono"
+            className="px-3 py-3 text-right font-mono whitespace-nowrap"
             onClick={(e) => { if (!isPortfolio) e.stopPropagation(); }}
           >
             {isPortfolio ? (
@@ -382,23 +400,23 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
         )}
 
         {viewMode === "portfolio" && (
-          <td className="px-4 py-3 text-right font-mono text-xs">{isPortfolio ? eur(r.portfolio_avg_cost_eur) : "—"}</td>
+          <td className="px-3 py-3 text-right font-mono text-xs whitespace-nowrap">{isPortfolio ? eur(r.portfolio_avg_cost_eur) : "—"}</td>
         )}
         {viewMode === "portfolio" && (
-          <td className="px-4 py-3 text-right font-mono text-xs">{isPortfolio ? eur(r.portfolio_invested_eur) : "—"}</td>
+          <td className="px-3 py-3 text-right font-mono text-xs whitespace-nowrap">{isPortfolio ? eur(r.portfolio_invested_eur) : "—"}</td>
         )}
         {viewMode === "portfolio" && (
-          <td className="px-4 py-3 text-right font-mono text-xs">{isPortfolio ? eur(r.current_value_eur) : "—"}</td>
+          <td className="px-3 py-3 text-right font-mono text-xs whitespace-nowrap">{isPortfolio ? eur(r.current_value_eur) : "—"}</td>
         )}
         {viewMode === "portfolio" && (
-          <td className={`px-4 py-3 text-right font-mono text-xs ${divClass}`}>
+          <td className={`px-3 py-3 text-right font-mono text-xs whitespace-nowrap ${divClass}`}>
             {isPortfolio ? eur(r.portfolio_dividends_eur) : "—"}
           </td>
         )}
 
         {/* In Calls — options mode only */}
         {viewMode === "options" && (
-          <td className="px-4 py-3 text-right font-mono">
+          <td className="px-3 py-3 text-right font-mono whitespace-nowrap">
             {isPortfolio ? (
               <span className={portfolioSharesNum > 0 && r.in_calls >= portfolioSharesNum ? "text-accent-orange" : ""}>
                 {r.in_calls > 0 ? r.in_calls : portfolioSharesNum >= 100 ? "0" : "—"}
@@ -411,10 +429,10 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
           </td>
         )}
         {viewMode === "options" && (
-          <td className="px-4 py-3 text-right font-mono">{r.put_exposure > 0 ? `$${usd(r.put_exposure)}` : "—"}</td>
+          <td className="px-3 py-3 text-right font-mono whitespace-nowrap">{r.put_exposure > 0 ? `$${usd(r.put_exposure)}` : "—"}</td>
         )}
         <td
-          className="px-4 py-3 text-right"
+          className="px-3 py-3 text-right"
           onClick={(e) => e.stopPropagation()}
         >
           <button
@@ -511,26 +529,32 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       )}
 
       <div className="surface table-modern overflow-x-auto">
-        <table className="w-full min-w-[1200px] text-sm">
+        <table className="w-full text-sm" style={{ minWidth: `${tableMinWidth}px` }}>
+          <colgroup>
+            {cols.map((c) => (
+              <col key={c.key} style={c.width ? { width: c.width } : undefined} />
+            ))}
+            <col style={{ width: "52px" }} />
+          </colgroup>
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
-              {visibleColumns.map((c) => (
+              {cols.map((c) => (
                 <th
                   key={c.key}
                   onClick={() => toggleSort(c.key)}
-                  className={`cursor-pointer select-none px-4 py-3 font-medium transition-colors hover:text-text ${c.align === "right" ? "text-right" : ""}`}
+                  className={`cursor-pointer select-none px-3 py-3 font-medium transition-colors hover:text-text ${c.align === "right" ? "text-right" : ""}${c.nowrap ? " whitespace-nowrap" : ""}`}
                 >
                   {c.label}
                   <span className="ml-1 text-[0.65rem]">{sort === c.key ? (dir === "asc" ? "▲" : "▼") : ""}</span>
                 </th>
               ))}
-              <th className="px-4 py-3 text-right font-medium">Actions</th>
+              <th className="px-3 py-3 text-right font-medium whitespace-nowrap">Actions</th>
             </tr>
           </thead>
           <tbody>
             {portfolioFiltered.length === 0 && watchlistFiltered.length === 0 && (
               <tr>
-                <td colSpan={visibleColumns.length + 1} className="px-4 py-8 text-center text-text-muted">
+                <td colSpan={cols.length + 1} className="px-4 py-8 text-center text-text-muted">
                   No symbols match.
                 </td>
               </tr>
@@ -538,7 +562,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
             {portfolioFiltered.length > 0 && (
               <tr>
                 <td
-                  colSpan={visibleColumns.length + 1}
+                  colSpan={cols.length + 1}
                   className="border-b border-border/60 bg-bg-hover/40 px-4 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-text-muted select-none"
                 >
                   Portfolio
@@ -549,7 +573,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
             {watchlistFiltered.length > 0 && (
               <tr>
                 <td
-                  colSpan={visibleColumns.length + 1}
+                  colSpan={cols.length + 1}
                   className="border-b border-border/60 bg-bg-hover/40 px-4 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-text-muted select-none"
                 >
                   Watchlist

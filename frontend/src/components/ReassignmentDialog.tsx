@@ -5,15 +5,11 @@ import { X } from "lucide-react";
 import { reassignMovement, batchReassignMovements, getBatchReassignmentPreview, listAccounts, listSecurities } from "@/lib/portfolio-api";
 import type { BrokerAccount, BatchReassignmentPreviewResponse } from "@/types/portfolio";
 import type { SecurityMaster } from "@/types/portfolio";
-import { formatAccountLabel } from "@/lib/accountDisplay";
+import { formatAccountName, getAccountName } from "@/lib/accountDisplay";
 
 const inputCls =
   "w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent-blue focus:outline-none";
 const labelCls = "mb-1 block text-xs font-medium text-text-muted";
-
-function accountLabel(id: string): string {
-  return id === "_unassigned" ? "Sin asignar" : id;
-}
 
 interface IndividualModeProps {
   movementId: string;
@@ -56,14 +52,14 @@ function IndividualMode({ movementId, currentAccountId, accounts, onReassigned, 
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
         <label className={labelCls}>Current account</label>
-        <div className="text-sm text-text font-medium">{accountLabel(currentAccountId)}</div>
+        <div className="text-sm text-text font-medium">{getAccountName(currentAccountId, accounts)}</div>
       </div>
       <div>
         <label className={labelCls}>Assign to *</label>
         <select value={newAccountId} onChange={(e) => setNewAccountId(e.target.value)} className={inputCls} required>
           <option value="_unassigned">Sin asignar</option>
           {accounts.map((a) => (
-            <option key={a.account_id} value={a.account_id}>{formatAccountLabel(a)}</option>
+            <option key={a.account_id} value={a.account_id}>{formatAccountName(a)}</option>
           ))}
         </select>
       </div>
@@ -251,7 +247,7 @@ function BatchMode({ accounts, securities, lockedSecurityId, onReassigned, onCan
           >
             <option value="_unassigned">Sin asignar</option>
             {accounts.map((a) => (
-              <option key={a.account_id} value={a.account_id}>{formatAccountLabel(a)}</option>
+              <option key={a.account_id} value={a.account_id}>{formatAccountName(a)}</option>
             ))}
           </select>
         </div>
@@ -265,7 +261,7 @@ function BatchMode({ accounts, securities, lockedSecurityId, onReassigned, onCan
           >
             <option value="_unassigned">Sin asignar</option>
             {accounts.map((a) => (
-              <option key={a.account_id} value={a.account_id}>{formatAccountLabel(a)}</option>
+              <option key={a.account_id} value={a.account_id}>{formatAccountName(a)}</option>
             ))}
           </select>
         </div>

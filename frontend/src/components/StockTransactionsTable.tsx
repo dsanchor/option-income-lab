@@ -8,7 +8,7 @@ import type { LedgerMovement, BrokerAccount } from "@/types/portfolio";
 import { SALES_TYPE_LABELS } from "@/types/portfolio";
 import MovementDetailDialog from "./MovementDetailDialog";
 import ReassignmentDialog from "./ReassignmentDialog";
-import { formatAccountLabel } from "@/lib/accountDisplay";
+import { getAccountName } from "@/lib/accountDisplay";
 
 const PAGE_SIZE = 20;
 
@@ -112,7 +112,7 @@ export default function StockTransactionsTable({ securityId }: Props) {
   }, []);
 
   const accountMap = useMemo(() =>
-    Object.fromEntries(accounts.map((a) => [a.account_id, formatAccountLabel(a)])),
+    Object.fromEntries(accounts.map((a) => [a.account_id, getAccountName(a.account_id, accounts)])),
     [accounts]
   );
 

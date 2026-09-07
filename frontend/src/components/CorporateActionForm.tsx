@@ -14,7 +14,7 @@ import type {
   LedgerMovement,
 } from "@/types/portfolio";
 import type { SecurityMaster } from "@/types/portfolio";
-import { formatAccountLabel } from "@/lib/accountDisplay";
+import { formatAccountName } from "@/lib/accountDisplay";
 
 const inputCls =
   "w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent-blue focus:outline-none";
@@ -744,7 +744,7 @@ export default function CorporateActionForm({
             >
               <option value="_unassigned">Unassigned</option>
               {accounts.map((a) => (
-                <option key={a.account_id} value={a.account_id}>{formatAccountLabel(a)}</option>
+                <option key={a.account_id} value={a.account_id}>{formatAccountName(a)}</option>
               ))}
             </select>
           )}

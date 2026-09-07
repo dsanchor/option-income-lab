@@ -175,55 +175,59 @@ describe("SC-4: effective symbols are read-only (span, not input)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// SC-5: ToggleRow ARIA attributes
+// SC-5: ToggleRow ARIA attributes — toggles removed, ARIA patterns absent
 // ---------------------------------------------------------------------------
 
 describe("SC-5: ToggleRow has role=switch and aria-checked", () => {
-  it('role="switch" present on the toggle button/element', () => {
+  // ToggleRow and its ARIA attributes are intentionally absent from
+  // SymbolConfigurationCard per the Symbol Details redesign directive
+  // (Agent & Alert Toggles removed; see AT group in symbolDetailRedesign.test.mjs).
+  // These tests now guard against re-introduction of toggle UI.
+  it('role="switch" absent — toggle controls removed from SymbolConfigurationCard', () => {
     assert.ok(
-      cardSrc.includes('role="switch"'),
-      'SC-5 FAIL: ToggleRow must have role="switch" per ARIA APG switch pattern',
+      !cardSrc.includes('role="switch"'),
+      'SC-5 DEFECT: role="switch" found in SymbolConfigurationCard. ' +
+      'Toggle controls must be fully absent per the Symbol Details redesign directive.',
     );
   });
 
-  it("aria-checked present on the toggle button/element", () => {
+  it("aria-checked absent — toggle ARIA removed from SymbolConfigurationCard", () => {
     assert.ok(
-      cardSrc.includes("aria-checked"),
-      "SC-5 FAIL: ToggleRow must have aria-checked attribute",
+      !cardSrc.includes("aria-checked"),
+      "SC-5 DEFECT: aria-checked found in SymbolConfigurationCard. " +
+      "Toggle controls must be fully absent per the Symbol Details redesign directive.",
     );
   });
 });
 
 // ---------------------------------------------------------------------------
-// SC-6: ToggleRow disabled + disabledReason rendered conditionally
+// SC-6: ToggleRow disabled + disabledReason — removed from SymbolConfigurationCard
 // ---------------------------------------------------------------------------
 
 describe("SC-6: ToggleRow disabled prop and disabledReason conditional rendering", () => {
-  it("disabled prop accepted by ToggleRow", () => {
-    // The ToggleRow definition should mention disabled as a prop
+  // ToggleRow is intentionally absent from SymbolConfigurationCard; these tests
+  // guard against the toggle-specific disabled/disabledReason logic being re-added.
+  it("ToggleRow absent — toggle component not re-introduced", () => {
     assert.ok(
-      cardSrc.includes("disabled"),
-      "SC-6 FAIL: ToggleRow must accept a disabled prop",
+      !cardSrc.includes("ToggleRow"),
+      "SC-6 DEFECT: ToggleRow re-introduced in SymbolConfigurationCard. " +
+      "Toggle UI must remain absent per redesign directive.",
     );
   });
 
-  it("disabledReason rendered only when disabled && disabledReason truthy", () => {
+  it("disabledReason absent — toggle conditional rendering fully removed", () => {
     assert.ok(
-      cardSrc.includes("disabledReason"),
-      "SC-6 FAIL: ToggleRow must accept a disabledReason prop",
-    );
-    // The render should be conditional: {disabled && disabledReason && ...}
-    assert.ok(
-      /disabled\s*&&\s*disabledReason/.test(cardSrc),
-      "SC-6 FAIL: disabledReason must only render when both disabled and disabledReason are truthy",
+      !cardSrc.includes("disabledReason"),
+      "SC-6 DEFECT: disabledReason found in SymbolConfigurationCard. " +
+      "Toggle-specific disabled logic must be absent — all toggle rendering removed.",
     );
   });
 
-  it("disabledReason is passed to ToggleRow for non-US option toggles", () => {
-    // Covered calls/CSP toggles pass disabledReason when !usOptionsEligible
+  it("disabledReason={!usOptionsEligible} toggle pattern absent", () => {
     assert.ok(
-      cardSrc.includes("disabledReason={!usOptionsEligible"),
-      "SC-6 FAIL: option-toggle ToggleRow must supply disabledReason when !usOptionsEligible",
+      !cardSrc.includes("disabledReason={!usOptionsEligible"),
+      "SC-6 DEFECT: Toggle disabledReason prop pattern found in SymbolConfigurationCard. " +
+      "All toggle-related rendering must be absent per redesign directive.",
     );
   });
 });

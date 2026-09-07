@@ -12,7 +12,7 @@ import type { MovementsFilter } from "@/lib/portfolio-api";
 import MovementDetailDialog from "./MovementDetailDialog";
 import AddMovementDialog from "./AddMovementDialog";
 import AccountBadge from "./AccountBadge";
-import { formatAccountLabel } from "@/lib/accountDisplay";
+import { formatAccountName } from "@/lib/accountDisplay";
 import NativeSelect from "./ui/NativeSelect";
 
 const TXN_BADGE: Record<TxnType, string> = {
@@ -300,7 +300,7 @@ export default function PortfolioMovementsTable() {
             <option value="">All accounts</option>
             <option value="_unassigned">Sin asignar</option>
             {accounts.map((a) => (
-              <option key={a.account_id} value={a.account_id}>{formatAccountLabel(a)}</option>
+              <option key={a.account_id} value={a.account_id}>{formatAccountName(a)}</option>
             ))}
           </NativeSelect>
         </div>
