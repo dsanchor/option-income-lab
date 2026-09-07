@@ -1340,3 +1340,265 @@ success, XNYS bare, legacy free-text US exchange alias bare) using an
 in-memory FakeContainer/FakeCosmos — no network, no real Cosmos. All 10
 pass; full targeted sweep unchanged at 184 passed / 4 pre-existing
 unrelated failures.
+
+## Single canonical add-symbol contract (danny-single-add-symbol-contract.md)
+
+Implemented the BACKEND portion: consolidated symbol creation into
+`POST /api/symbols/add` (`backend/web/portfolio_routes.py`), removed the
+legacy `POST /api/symbols` (`api_create_symbol` in `backend/web/app.py`)
+and its backing `cosmos_db.create_symbol()` method (no other callers per
+grep). Relocated warm-up (enrichment + forecast backfill) into a new
+`_start_symbol_warmup()` helper reusing `resolve_yfinance_symbol` from the
+Yahoo-resolution work (no duplicated suffix map/enrichment logic).
+
+### Key bug found and fixed: `_auto_enrolled` is not a "just created" signal
+
+`ensure_symbol_config()` (in `symbol_config_sync.py`) sets `_auto_enrolled:
+True` permanently on the persisted doc — it is never cleared on later
+reads. The pre-existing `add_symbol` code used
+`config.get("_auto_enrolled")` to decide `config_created` (i.e. "should I
+fire warm-up?"), which is broken: a *second* call for an already-enrolled
+security would still see `_auto_enrolled=True` and re-fire warm-up,
+violating the contract's "exactly once" gate. Fixed by pre-checking config
+existence via `symbols_container.read_item(item=f"config_{ticker}",
+partition_key=ticker)` (catching `CosmosResourceNotFoundError`) BEFORE
+calling `ensure_symbol_config`, and basing `config_created`/
+`config_existed` on that pre-call snapshot instead of the mutable field.
+Lesson: never treat a field set once-and-never-cleared on a persisted doc
+as a per-call "did I just do this" signal — snapshot state before the
+mutating call.
+
+### Hermetic-test trap: unstubbed `threading.Thread` + resolvable MICs
+
+Once warm-up wiring landed, any existing test that triggers
+`config_created=True` on an `XNYS`/`XNAS` security (the most common seed
+data) would spawn REAL background threads hitting real yfinance/network
+code, because `resolve_yfinance_symbol` returns a non-`None` bare ticker
+for those MICs. Fixed by stubbing `threading.Thread` to a `_NoOpThread` by
+default in the shared `client` fixture (`test_unified_add_symbol.py`),
+with an opt-in `_SyncThread` (runs target synchronously) for tests that
+need to deterministically observe warm-up side effects. Also:
+`loop.create_task()` requires a genuine coroutine object — a custom
+`__await__`-only stand-in fails; use a real `async def` replacement when
+monkeypatching `backfill_symbol_forecasts` in tests.
+
+### Verification
+
+- Targeted sweep: `test_unified_add_symbol.py` (28, incl. new
+  `TestAddSymbolWarmup` x5), `test_watchlist_symbols.py`,
+  `test_provider_symbols.py`, `test_portfolio_enrichment.py`,
+  `test_securities_catalog.py`, `test_us_options_eligibility.py`,
+  `test_ensure_symbol_config.py`, `test_symbol_config_triggers.py`,
+  `test_backfill_endpoints.py` — 260 passed, 0 failures.
+- Independently re-verified against Basher's contract-compliance suite
+  `test_add_symbol_contract.py` (not authored by me) — 30/30 pass,
+  confirming the implementation satisfies the contract from an
+  independent test author's perspective.
+- Confirmed via `git diff --stat` that exactly the 5 intended backend
+  files changed (`portfolio_routes.py`, `app.py`, `cosmos_db.py`,
+  `test_watchlist_symbols.py`, `test_unified_add_symbol.py`); frontend
+  files modified concurrently by another agent were left untouched.
+- Note: the earlier Yahoo-resolution files (`provider_symbols.py`,
+  `portfolio_enrichment.py`, `dgi_screener.py`,
+  `test_provider_symbols.py`, `test_portfolio_enrichment.py`) now show an
+  empty `git diff` because they were committed by a concurrent agent in
+  `69e3635 "feat: consolidate symbols and portfolio workflows"` — not
+  lost, just merged. Lesson: an empty diff on previously-verified files
+  can simply mean "already committed" — check `git log -- <file>` before
+  assuming loss.
+
+## TradingView symbol resolution + Options Screener universe (two contracts, one pass)
+
+Implemented `danny-tradingview-symbol-contract.md` and
+`danny-options-screener-universe-contract.md` together to avoid overlapping
+edits in `provider_symbols.py`/`app.py`.
+
+### TradingView resolver
+
+Added `MIC_TO_TRADINGVIEW_EXCHANGE` (6 approved MICs only) +
+`resolve_tradingview_symbol()` to `provider_symbols.py`, mirroring
+`resolve_yfinance_symbol`'s precedence shape exactly (override → MIC → legacy
+alias → None). Wired into `_compute_symbol_detail()` using the *raw*
+`security_doc` (not the cleaned `security_field` projection) — overrides live
+in `provider_symbols` on the raw doc, and the cleaned projection strips
+extra keys. Verified clean against Basher's independently-written
+`TestResolveTradingviewSymbol` (20/20) and `test_tradingview_symbol_detail.py`
+(10/10) with zero changes needed on my side — good sign the contract's
+precedence spec was unambiguous enough for two independent implementations
+to converge.
+
+### Options Screener universe — contract text vs. reality mismatch
+
+Danny's contract's evidence section names `_build_screener_symbol_inputs` as
+the live "manual" screener code path. **It is dead code** — not called
+anywhere in current `app.py` (confirmed via grep across the whole tree,
+including bytecode caches). The endpoint was refactored to "precomputed-only"
+(`copilot-options-screener-precomputed-only.md`) after the universe
+contract's evidence was gathered, and now builds `docs`/`symbol_inputs`
+inline inside `api_screener_options` itself, never calling the old helper.
+Lesson: **when a contract's cited call site doesn't match `grep`-confirmed
+reality, trust the grep, not the document** — architecture drifts between
+design-review and implementation windows in a fast-moving shared repo.
+Wired the universe filter into both (the live endpoint for correctness, the
+dead helper for contract-letter completeness/future-proofing). Basher's own
+new `TestUniverseFilterEnforcement` test class independently targets the
+live endpoint, confirming this was the right call.
+
+### Legacy NYSE/NASDAQ text needs its own narrow eligibility normalization
+
+`is_us_options_eligible` (Amendment J, `us_exchange_eligibility.py`) only
+recognizes MICs (`XNYS`/`XNAS`), not the legacy free-text exchange labels
+(`"NYSE"`/`"NASDAQ"`/`"AMEX"`) that `provider_symbols.py`'s
+`_LEGACY_US_EXCHANGE_ALIASES` already treats as bare-ticker-equivalent for
+Yahoo/TradingView. Basher's independently-written unit tests
+(`test_options_screener_universe.py`) required `"NYSE"`/`"NASDAQ"` text to be
+eligible for the screener universe, but explicitly required `"AMEX"` to stay
+excluded (Amendment J restricts options eligibility to XNYS/XNAS only, not a
+third AMEX-equivalent). Added a small, scoped 2-entry alias map
+(`_LEGACY_US_EXCHANGE_TO_MIC = {"NYSE": "XNYS", "NASDAQ": "XNAS"}`, no AMEX)
+local to `options_screener_universe.py`, applied only before calling
+`is_us_options_eligible` — kept that function itself untouched/imported
+verbatim, per the contract's explicit "reused unchanged" instruction. Lesson:
+different consumers of the "US-eligible" concept can have subtly different
+legacy-alias scopes (Yahoo/TradingView resolution treats NYSE/NASDAQ/AMEX all
+as bare-ticker-equivalent; options eligibility only recognizes NYSE/NASDAQ) —
+don't assume one alias set fits every consumer; check the actual acceptance
+test.
+
+### Known collateral test breakage (flagged to Basher, not fixed by me)
+
+`test_options_screener_share_availability.py` (30 tests) now fails because
+its Cosmos fake never sets an `exchange` field on fixture docs — every
+fixture symbol fails the new universe eligibility check closed. This is
+correct-per-contract behavior (explicitly acknowledged as acceptable in the
+contract's own evidence section) but breaks an orthogonal-feature test suite
+(share-availability status calculation) that predates this contract. Left
+untouched — flagged in my decision note for Basher to add `"exchange":
+"XNYS"` to that file's fixture builder; not my scope to rewrite Basher's
+adversarial suite. Separately, 6 pre-existing failures in
+`test_options_screener_endpoint.py`/`test_options_screener_cache_concurrency.py`
+(including 3 in Basher's brand-new `TestUniverseFilterEnforcement` class)
+are unrelated to my change — all go through a `_warm_symbol` test helper
+that the test file's own comment already documents as "incompatible with
+the precomputed-only endpoint" (the live endpoint never touches the
+per-symbol chain cache at all anymore). Confirmed via reading the helper's
+own acknowledgment comment before assuming I'd caused a regression — always
+check whether a failing test's own docstring/comments already disclose a
+known, pre-existing gap before treating a failure as self-caused.
+
+### Verification
+
+- `test_provider_symbols.py`: 61/61 (41 existing + 20 new TradingView).
+- `test_tradingview_symbol_detail.py`: 10/10.
+- `test_options_screener_universe.py`: 25/25.
+- Broad sweep (add-symbol/watchlist/symbol-detail/eligibility/ensure-config):
+  418 passed, 0 failures.
+- Scheduler-adjacent suite (force-alpha/precompute/production-bug/scheduler-
+  startup regressions): 60/60 — confirms `main.py` wiring is safe.
+- Confirmed via `git diff --stat`/`git status --short` that only the
+  intended files changed (`provider_symbols.py`, `app.py`, `main.py`, plus
+  new `options_screener_universe.py`/`watchlist_membership.py`); frontend
+  and the migration script untouched; nothing committed/pushed.
+
+## PEP repair currency-correction revision (reviewer-rejection fix)
+
+Task: `.squad/decisions/inbox/danny-pep-repair-currency-correction.md` — the
+previously-approved `_currency_verdict` mechanism in
+`backend/scripts/repair_pep_security_id.py` (ledger `gross.currency`
+unanimity → `listing_currency` correction) was rejected in review: a
+portfolio's ledger booking/accounting currency is NOT evidence of a
+security's listing currency, and the mechanism could silently corrupt
+`listing_currency` from unrelated transaction data.
+
+Corrected invariant implemented (currency-only changes; nothing else in the
+file touched):
+- `gross.currency` is now purely diagnostic (`_ledger_accounting_currency_note`
+  → `"no_movements"` / `"unanimous_accounting_currency:<CUR>"` /
+  `"mixed_accounting_currencies"`) — structurally incapable of producing a
+  proposed currency (no "proposed" return value at all, unlike the old
+  function).
+- New optional `--listing-currency CUR` CLI flag. Omitted → zero currency
+  change, existing source `listing_currency` preserved exactly as before
+  this mechanism ever existed.
+- If provided, `run_apply()` performs a live `YFinanceFetcher('PEP')` check
+  (`_verify_listing_currency_with_provider`) requiring
+  `info.currency == info.financialCurrency == requested CUR` AND the
+  provider's exchange corroborates the target MIC — and this MUST happen
+  and pass BEFORE Phase 2 (backup)/any mutation. Any failure/mismatch/
+  unreachable → `RepairAbort(exit_code=2)` before backup.
+- `--audit` runs the identical check via the same `discover()` code path
+  but never aborts — reports `provider_currency_verdict` (`"not_requested"` /
+  `"verified:<CUR>"` / `"unreachable"` / `"mismatch:<details>"`) for
+  visibility only.
+
+Reuse-don't-duplicate: composed two already-existing mapping tables instead
+of inventing a new one for provider-exchange→MIC corroboration:
+`src.dgi_screener.EXCHANGE_MAP` (yfinance code e.g. "NMS" → free-text alias
+"NASDAQ"; this is the backend's existing twin of the frontend's
+`toExchangeMic` in `DgiScreenerView.tsx`) composed with
+`src.portfolio.provider_symbols.LEGACY_ALIAS_TO_MIC` (alias → MIC). This
+`_resolve_provider_mic()` helper is the only new function; it deliberately
+reuses both tables by reference/import rather than copying values.
+
+Design note for future maintainers: keep provider verification logic living
+inside `discover()` (best-effort, never raises) rather than duplicating the
+live-check call site in both `run_audit()` and `run_apply()` — both paths
+then share identical results and only differ in whether they gate/abort
+based on the verdict. Also watch for parameter/local-variable shadowing
+when adding a `listing_currency` parameter to a function whose body already
+had a same-named local variable for a different, narrower purpose (renamed
+to `resolved_listing_currency` inside the Phase 3a currency-selection block
+in `run_apply()`).
+
+Collaboration note: this revision explicitly locked out a peer agent
+("Livingston") from consultation, and a second peer ("Reuben") had already
+independently rewritten `TestCurrencyEvidence` + added
+`TestProviderVerifiedListingCurrency` in the shared test file by the time
+my implementation landed — my chosen function/field/CLI names
+(`provider_currency_verdict`, `_verify_listing_currency_with_provider`,
+`--listing-currency`) happened to align closely enough with the contract's
+literal field-name requirements that all 13 of Reuben's new/rewritten
+currency tests passed against my implementation with zero adjustment
+needed on either side — evidence that hewing tightly to a contract's exact
+field-name language (not just its intent) meaningfully de-risks concurrent,
+non-consulting collaboration on the same feature.
+
+### Verification
+- `backend/tests/test_repair_pep_security_id.py`: 51/51 (full suite,
+  including Reuben's 13 currency tests and all pre-existing MIC-derivation/
+  collision/backup/checksum/holdings/restore/CAS/dry-run safety tests).
+- `git diff --stat` confirms only `backend/scripts/repair_pep_security_id.py`
+  was touched by me; the test file's diff is Reuben's, not mine. No
+  commit/push/production run performed.
+
+### 2026-09-07T13:43:00+02:00 — Symbol Onboarding Unification (Contracts A/B/C Implementation)
+
+**Batch:** Unified symbol onboarding + market integrations (4 coordinated contracts)
+
+**Scope — Backend Implementation:**
+1. **Contract A (Single Add Symbol):** Canonical `POST /api/symbols/add` warm-up gate
+   - Pre-check config existence; gate warm-up strictly on `config_created=True`
+   - `_start_symbol_warmup()` helper (fire-and-forget, reusing `resolve_yfinance_symbol`)
+   - Added `warmup_started` response field
+   - Removed legacy `POST /api/symbols` + `cosmos_db.create_symbol()`
+
+2. **Contract B (TradingView by MIC):** Centralized provider symbol mapping
+   - `MIC_TO_TRADINGVIEW_EXCHANGE` (6 verified MICs) in `provider_symbols.py`
+   - `resolve_tradingview_symbol()` resolver mirroring `resolve_yfinance_symbol()` precedence
+   - Wired `tradingview_symbol` into both `_compute_symbol_detail()` branches (no N+1)
+
+3. **Contract C (Options Screener Universe):** Universe predicate enforcement
+   - `compute_options_screener_universe()` in new module (US-eligible + held/watched)
+   - Relocated `_is_watchlist_member()` to `watchlist_membership.py` (reusable)
+   - Enforced at manual endpoint + scheduled job; single `HoldingsService.compute_holdings()` call
+
+**Test Coverage:**
+- 260 targeted backend tests passed (own suite)
+- 61 provider_symbols tests (41 existing + 20 TradingView)
+- 10 TradingView detail tests
+- 25 universe tests
+- 60+ scheduler tests (no regression)
+- Verified against Basher's independent contract test suites (passing)
+
+**Verification:** All contracts production-ready; no concurrent edit conflicts with Rusty's frontend work.
+

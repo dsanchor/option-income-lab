@@ -2017,3 +2017,30 @@ Initial feature rejected by Basher (D0) with D2 defect: TypeScript types and too
 - ✅ All ARIA labels present; keyboard navigation functional
 - ✅ Backward compatibility: old clients using `rows` unaffected
 
+
+### 2026-09-07T14:54:00+02:00 — Symbol Onboarding Frontend (Contracts A/B Implementation)
+
+**Batch:** Unified symbol onboarding + market integrations (frontend portion)
+
+**Scope — Frontend Implementation:**
+1. **Contract A (Single Add Symbol):** Canonical add-symbol UX
+   - Rewired `DgiScreenerView.tsx` `AddButton` → `addSymbol()` canonical flow
+   - Separate follow-up `PUT /api/symbols/{symbol}` toggle for individual flags (CSP/Buy Tracker)
+   - Removed `POST /api/symbols` handler from `frontend/src/app/api/symbols/route.ts`
+   - `toExchangeMic()` correctly guards all MIC returns; fail-closed fallback is `null`
+
+2. **Contract B (TradingView by MIC):** Symbol widget resolution
+   - Changed `TradingViewSymbolInfo.tsx`/`RtChart.tsx` to single `tvSymbol: string | null` prop
+   - Fail-closed: render nothing on `null` (unmapped/unverified MIC)
+   - Mechanical `.replace('-', ':')` transform retained (format conversion, not mapping logic)
+   - Added `tradingview_symbol` to `SymbolDetail` type (`frontend/src/types/symbol-detail.ts`)
+   - No client-side mapping table
+
+**Test Coverage & Fixes:**
+- `tradingViewSourceContract.test.mjs`: Revised by Reuben under lockout
+  - DGI-4 false positive fixed: whole-file substring scan → real execution + structural assertions
+  - 23/23 TradingView contract tests passed
+  - TVF-1–10 coverage (type, prop, null-guard, transform, no mapping table) all passing
+
+**Verification:** Frontend TypeScript clean; no regression on unrelated components; coordinated with Linus's backend work.
+

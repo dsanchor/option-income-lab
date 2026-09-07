@@ -1711,3 +1711,38 @@ Identical: `h-full` on Reveal, animated entrance, tone-based coloring, tooltip v
 5. **No column hiding** in unified Symbols table — In Calls/Puts columns show 0 for non-US (accurate, no positions exist).
 
 **Acceptance criteria:** 10 functional + 12 backend enforcement + 7 shared predicate = 29 criteria (Amendment J).
+
+### 2026-09-07T15:52:00+02:00 — Symbol Onboarding & Market Integration Unification (Design Review + Final Gates)
+
+**Batch:** Single Add Symbol (A), TradingView by MIC (B), Options Screener Universe (C), Legacy Migration (D), PEP Security Identity Repair
+
+**Scope & Contracts:**
+- Contract A: Canonical add-symbol flow, warm-up relocation, legacy endpoint removal — APPROVED
+- Contract B: TradingView symbol resolution by MIC centralized mapping — APPROVED
+- Contract C: Options screener universe predicate (US-eligible + held/watched) — APPROVED
+- Contract D: Legacy symbol_config migration tool (audit/backup/apply/restore) — APPROVED
+- PEP Repair: NNYS:PEP → XNAS:PEP with provider-verified currency, cross-container repointing — APPROVED
+
+**Review Gates:**
+1. Final A–D Review: Contracts A/B/C/D all production code approved ✅; blocker: `DGI-4` false positive (whole-file substring scan matched legitimate `if` guard)
+2. PEP Repair Design: NNYS:PEP fix architecture + currency derivation approved ✅; blocker: PEP-12a dead closure test
+3. PEP Repair Gate (post-12a revision): All product code approved ✅
+4. PEP Currency Amendment (Linus): Provider triple-check (currency/financialCurrency/exchange + MIC) fail-closed before mutations — APPROVED ✅
+
+**Lockout Protocol Outcomes:**
+- DGI-4 false positive assigned to Reuben (test-file-only) — revision: real execution + structural assertions (23/23 pass) ✅
+- PEP-12a dead closure assigned to Reuben (test-file-only) — revision: instrumentation + checksum re-read (42/42 pass) ✅
+
+**Test Coverage:**
+- 303+ backend targeted tests passed
+- 23 frontend TradingView contract tests passed (DGI-4 fixed)
+- 51 PEP repair tests passed (PEP-12a + currency classes fixed)
+- 399+ total batch tests passing
+
+**Production Status:**
+- Contracts A/B/C in commits e1de94e, 7db1cbe, f9e8851 (main, all workflows passed)
+- PEP repair executed: XNAS:PEP created, config linked, 76 ledgers repointed, provider-verified USD currency
+- Both migrations: Backups reversible via `--restore`
+
+**Recommendation:** All four contracts + PEP repair ready for close-out.
+

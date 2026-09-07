@@ -48,3 +48,44 @@ Frontend: npx tsc --noEmit — 0 errors
 **Archived to:** `.squad/decisions/archive/inbox-2026-09-06/` (audit trail preserved)
 
 **Final Status:** ✅ All Round 2 findings resolved. Feature ready for production.
+
+### 2026-09-07T14:54:00+02:00 — Test Revisions Under Lockout (DGI-4 False Positive & PEP-12a Dead Closure)
+
+**Batch:** Symbol onboarding & PEP repair (test-file-only revisions, independent from Basher)
+
+**Lockout Assignment 1: DGI-4 False Positive Fix**
+- **Original defect:** `frontend/tests/tradingViewSourceContract.test.mjs` whole-file substring scan matched legitimate `if (ex === "NYSE") return "XNYS";` guard
+- **Scope:** Test-file-only; no product code changes
+- **Revision strategy:** Real execution + structural assertions
+  1. Extract `toExchangeMic()` function body via balanced-brace parsing; execute directly with `new Function`
+  2. Call with guard-case inputs (`"OTC"`, `"PINK"`, `"FOREIGN"`, etc.); assert `null` for all
+  3. Structurally assert function's final statement is unconditional `return null;`
+  4. Textually assert every `"XNYS"`/`"XNAS"` return is guarded by `if (...)` on same line
+  5. Independently verify source order: `toExchangeMic()` → `if (mic === null) return;` → `addSymbol()` → `fetch()` PUT
+- **Result:** 23/23 TradingView contract tests pass; no product code regressions ✅
+
+**Lockout Assignment 2: PEP-12a Backup-Ordering Test Rewrite**
+- **Original defect:** Dead closure `_backup_then_apply()` never invoked; `backup_completed` flag logic unreachable
+- **Scope:** `backend/tests/test_repair_pep_security_id.py` only; no product code changes
+- **Revision strategy:** Real instrumentation
+  1. Capture real `write_backup` call; monkeypatch to read back checksum immediately after write
+  2. Instrument container mutation methods (`create_item`, `replace_item`, `delete_item`)
+  3. Build single event trace across backup + mutations
+  4. Assert `backup_indices[0] < first_mutation_idx` (real ordering proof, not dead flag)
+  5. Fixture deliberately shaped to exercise all three mutation kinds across both containers (symbols + portfolio)
+- **Result:** 42/42 PEP repair tests pass; all 3 mutation kinds + both containers verified ✅
+
+**Secondary: Currency Test Revision (Reuben, coordinated with Linus)**
+- Rewrite `TestCurrencyEvidence` class (5 tests): Ledger `gross.currency` never determines `listing_currency`, in either direction
+- Add `TestProviderVerifiedListingCurrency` class (8 tests): Provider triple-check (currency/financialCurrency/exchange + MIC) mandatory before any currency change
+- Add capability gate (`_CURRENCY_FLAG_AVAILABLE`): Runtime signature introspection confirms `apply_repair` accepts `listing_currency` kwarg; tests execute for real (not skipped)
+- Fake provider injection: Real `_verify_listing_currency_with_provider()` logic exercised; only data source faked
+- **Result:** 13/13 currency tests pass; 51/51 total PEP repair tests pass ✅
+
+**Cross-Batch Impact:**
+- All revisions are test-file-only; no product code modified by Reuben in this cycle
+- Lockout protocol respected; Basher (original author) excluded from all revisions
+- Independent verification: Reuben's real-execution assertions prove product code is sound
+
+**Verification:** All product code (Linus, Livingston) remains unchanged in revision cycles; test defects were scaffolding issues (false patterns, dead code), not implementation bugs.
+

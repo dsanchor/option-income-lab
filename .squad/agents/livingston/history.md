@@ -1866,3 +1866,42 @@ Full implementation of Danny's Amendments G, H, I per the frozen contract.
 - `test_portfolio_parsers.py`: **96/96** (unchanged)
 - Full portfolio suite (excluding unrelated yfinance): **216 passed, 1 xfailed**
 
+
+### 2026-09-07T13:43:00+02:00 — Legacy Migration Tool & PEP Repair (Contracts D + Security Identity Repair)
+
+**Batch:** Unified symbol onboarding + migration + data-integrity repair
+
+**Scope — Migration & Repair Scripts:**
+
+1. **Contract D (Legacy symbol_config Migration Tool):** `backend/scripts/migrate_legacy_symbol_config.py`
+   - Audit/backup/apply/restore modes (mutually exclusive)
+   - Normalizes `exchange` (legacy free-text) → MIC via canonical `LEGACY_ALIAS_TO_MIC` (no duplicate table)
+   - Link or create `security_master` with fail-closed collision handling (same ticker, different MIC)
+   - ETag-gated compare-and-swap; idempotent resume
+   - Exit codes: 0 (normal/flagged), 1 (bad CLI), 2 (collision/discovery), 3 (verification failed)
+   - Design-only approval in this gate; no production execution authorized
+
+2. **PEP Security Identity Repair:** `backend/scripts/repair_pep_security_id.py`
+   - NNYS:PEP (corrupt MIC, unlinked config) → XNAS:PEP (new, properly linked, provider-verified)
+   - MIC derived from `config_PEP.exchange="NASDAQ"` → `LEGACY_ALIAS_TO_MIC` (not hardcoded)
+   - Currency verified against live provider (Yahoo): unanimous ledger evidence + triple-check (currency/financialCurrency/exchange + MIC)
+   - Fail-closed on mismatch: abort before backup/mutations (exit 2)
+   - Ledger accounting currency (EUR) explicitly preserved unchanged
+   - Repointing: config link + 76 ledger patches + zero import_session refs
+   - Verification: holdings aggregation identical before/after
+   - Idempotent: re-run skips already-repaired docs
+
+**Test Authorship & Coverage:**
+- **Basher** (original author): `test_migrate_legacy_symbol_config.py` (22/22), `test_repair_pep_security_id.py` (41→51 after revision)
+- **Reuben** (revision under lockout): PEP-12a backup-ordering test (dead closure → real instrumentation + checksum re-read)
+- Product code: Livingston (unchanged in test revision cycles; all product logic sound)
+
+**Production Execution (Post-Gate Authorization):**
+- Symbol config migration audit: 65 scanned → 18 normalized (13 linked, 5 new securities), 1 skipped (PEP, targeted separately), 46 already-canonical
+- Backup: `symbol_config_migration_20260907T130010Z.json`
+- PEP repair apply: MIC → XNAS, currency → USD (provider-verified), config linked, 76 ledgers repointed, sec_NNYS_PEP deleted
+- Backup: `pep_security_id_repair_20260907T135235Z.json`
+- Both backups: Reversible via `--restore` flag
+
+**Verification:** Backups intact; idempotent re-run confirmed safe.
+
