@@ -91,6 +91,10 @@ portfolio_enrichment:
   enabled: true
   cron: "0 9-17 * * 1-5"  # Hourly 9-17 Mon-Fri (UTC)
 
+symbol_pricing:
+  enabled: true
+  cron: "0 9-23 * * 1-5"  # Hourly, 09:00–23:00 UTC, Mon–Fri
+
 price_forecast:
   enabled: true
   cron: "0 21 * * 1-5"  # 9 PM weekdays (UTC) — after US market close

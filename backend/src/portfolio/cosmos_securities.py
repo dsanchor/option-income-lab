@@ -179,6 +179,138 @@ class CosmosSecuritiesService:
 
     # ── Helpers ────────────────────────────────────────────────────────
 
+    # ── Update ─────────────────────────────────────────────────────────
+
+    def update_security(
+        self,
+        security_id: str,
+        updates: Dict[str, Any],
+        etag: str,
+    ) -> Dict[str, Any]:
+        """ETag-guarded metadata update for an existing security_master.
+
+        Editable fields (contract §security-field/PATCH):
+          company_name, isin, cusip, sedol, listing_currency, country,
+          asset_class, provider_symbols.
+
+        Read-only (rejected): security_id, exchange_mic, ticker.
+
+        Args:
+            security_id: Canonical ``MIC:TICKER`` identity (e.g. ``"XAMS:AD"``).
+            updates:     Partial update body — only the fields that should change.
+            etag:        Client-held ETag for optimistic concurrency.
+
+        Returns:
+            Updated doc (cleaned of Cosmos system keys) with ``_etag`` injected.
+
+        Raises:
+            CosmosResourceNotFoundError: security_master not found → 404.
+            _ETagConflictError:          ETag mismatch → 409 (etag_conflict).
+            _CollisionError:             ISIN/CUSIP/SEDOL already in use by
+                                         another security → 409 (collision).
+            ValueError:                  Malformed listing_currency, invalid
+                                         provider_symbols, or read-only field
+                                         attempted → 400/422.
+        """
+        from azure.core import MatchConditions
+        from azure.cosmos.exceptions import CosmosHttpResponseError
+
+        ticker = security_id_to_ticker(security_id)
+        doc_id = security_id_to_doc_id(security_id)
+
+        # Read current doc (raises CosmosResourceNotFoundError → 404)
+        raw = self.container.read_item(item=doc_id, partition_key=ticker)
+
+        # Reject identity fields
+        _READ_ONLY = {"security_id", "exchange_mic", "ticker"}
+        rejected = [f for f in _READ_ONLY if f in updates]
+        if rejected:
+            raise ValueError(
+                f"Identity fields are read-only — use the migration/repair workflow: "
+                f"{rejected}"
+            )
+
+        # Validate listing_currency format (ISO 4217 3-letter code)
+        new_currency = updates.get("listing_currency")
+        if new_currency is not None:
+            import re as _re
+            if not _re.match(r"^[A-Z]{3}$", str(new_currency).strip().upper()):
+                raise ValueError(
+                    f"listing_currency must be a 3-letter ISO 4217 code, got {new_currency!r}"
+                )
+            updates = {**updates, "listing_currency": str(new_currency).strip().upper()}
+
+        # Validate provider_symbols (reuse existing validator — no reimplementation)
+        new_ps = updates.get("provider_symbols")
+        if new_ps is not None:
+            from src.portfolio.provider_symbols import validate_provider_symbols
+            validated_ps = validate_provider_symbols(new_ps)  # raises ValueError on bad input
+            updates = {**updates, "provider_symbols": validated_ps}
+
+        # ISIN collision check (skip if value is null/empty or unchanged)
+        new_isin = updates.get("isin")
+        if new_isin:
+            existing_isin = self._find_by_isin(new_isin)
+            if existing_isin and existing_isin.get("security_id") != security_id:
+                raise _CollisionError("isin", _clean(existing_isin))
+
+        # CUSIP/SEDOL collision checks (narrowly-scoped lookups mirroring _find_by_isin)
+        new_cusip = updates.get("cusip")
+        if new_cusip:
+            existing_cusip = self._find_by_cusip(new_cusip)
+            if existing_cusip and existing_cusip.get("security_id") != security_id:
+                raise _CollisionError("cusip", _clean(existing_cusip))
+
+        new_sedol = updates.get("sedol")
+        if new_sedol:
+            existing_sedol = self._find_by_sedol(new_sedol)
+            if existing_sedol and existing_sedol.get("security_id") != security_id:
+                raise _CollisionError("sedol", _clean(existing_sedol))
+
+        # Merge updates onto current doc (only editable fields)
+        _EDITABLE = {
+            "company_name", "isin", "cusip", "sedol",
+            "listing_currency", "country", "asset_class", "provider_symbols",
+        }
+        merged = dict(raw)
+        for field, value in updates.items():
+            if field not in _EDITABLE:
+                continue  # silently ignore unknown/non-editable keys
+            if value is None:
+                merged.pop(field, None)  # null → remove optional field
+            else:
+                merged[field] = value
+
+        # Merge provider_symbols as dict overlay (not wholesale replace)
+        if new_ps is not None:
+            existing_ps = raw.get("provider_symbols") or {}
+            merged_ps = {**existing_ps, **updates["provider_symbols"]}
+            # Entries set to empty string are removed (validate_provider_symbols
+            # already strips them, but cover the raw overlay case too)
+            merged["provider_symbols"] = {k: v for k, v in merged_ps.items() if v}
+            if not merged["provider_symbols"]:
+                merged.pop("provider_symbols", None)
+
+        merged["updated_at"] = self._now()
+
+        try:
+            updated = self.container.replace_item(
+                item=doc_id,
+                body=merged,
+                etag=etag,
+                match_condition=MatchConditions.IfNotModified,
+            )
+        except CosmosHttpResponseError as exc:
+            if exc.status_code == 412:
+                # Re-read current doc so the caller can return it to the client
+                current_raw = self.container.read_item(item=doc_id, partition_key=ticker)
+                raise _ETagConflictError(_clean(current_raw)) from exc
+            raise
+
+        result = _clean(updated)
+        result["_etag"] = updated.get("_etag", "")
+        return result
+
     def _find_by_isin(self, isin: str) -> Optional[Dict[str, Any]]:
         query = (
             "SELECT * FROM c WHERE c.doc_type = 'security_master' "
@@ -191,6 +323,30 @@ class CosmosSecuritiesService:
         ))
         return results[0] if results else None
 
+    def _find_by_cusip(self, cusip: str) -> Optional[Dict[str, Any]]:
+        """Cross-partition lookup by CUSIP — mirrors _find_by_isin."""
+        results = list(self.container.query_items(
+            query=(
+                "SELECT * FROM c WHERE c.doc_type = 'security_master' "
+                "AND c.cusip = @cusip"
+            ),
+            parameters=[{"name": "@cusip", "value": cusip}],
+            enable_cross_partition_query=True,
+        ))
+        return results[0] if results else None
+
+    def _find_by_sedol(self, sedol: str) -> Optional[Dict[str, Any]]:
+        """Cross-partition lookup by SEDOL — mirrors _find_by_isin."""
+        results = list(self.container.query_items(
+            query=(
+                "SELECT * FROM c WHERE c.doc_type = 'security_master' "
+                "AND c.sedol = @sedol"
+            ),
+            parameters=[{"name": "@sedol", "value": sedol}],
+            enable_cross_partition_query=True,
+        ))
+        return results[0] if results else None
+
 
 class _CollisionError(Exception):
     """Raised on ISIN or security_id collision during create_security."""
@@ -198,6 +354,13 @@ class _CollisionError(Exception):
         self.field = field
         self.existing = existing
         super().__init__(f"{field} collision: {existing.get('security_id')}")
+
+
+class _ETagConflictError(Exception):
+    """Raised when ETag optimistic concurrency check fails during update_security."""
+    def __init__(self, current_doc: Dict[str, Any]) -> None:
+        self.current_doc = current_doc
+        super().__init__("ETag conflict — document was modified concurrently")
 
 
 def _normalize_text(s: str) -> str:

@@ -113,6 +113,10 @@ class OptionsAgentScheduler:
         """Update portfolio enrichment cron expression."""
         self.registry.reschedule("portfolio_enrichment", new_cron, self.config)
 
+    def reschedule_symbol_pricing(self, new_cron: str):
+        """Update symbol pricing cron expression."""
+        self.registry.reschedule("symbol_pricing", new_cron, self.config)
+
     def reschedule_banner(self, new_cron: str):
         """Update banner agent cron expression. The run loop will pick it up on next iteration."""
         self.registry.reschedule("banner_agent", new_cron, self.config)
@@ -247,6 +251,17 @@ class OptionsAgentScheduler:
         print(f"  Enabled: {dps_enabled}")
         if dps_enabled:
             print(f"  Cron: {dps_cron}")
+        else:
+            print(f"  Status: Disabled in config")
+
+        sp_config = self.config.config.get('symbol_pricing', {})
+        sp_enabled = sp_config.get('enabled', True)
+        sp_cron = sp_config.get('cron', '0 9-23 * * 1-5')
+
+        print(f"\nSymbol Pricing Configuration:")
+        print(f"  Enabled: {sp_enabled}")
+        if sp_enabled:
+            print(f"  Cron: {sp_cron}")
         else:
             print(f"  Status: Disabled in config")
 
@@ -489,6 +504,37 @@ class OptionsAgentScheduler:
                   f"{result.get('errors', 0)} errors")
         except Exception as e:
             print(f"ERROR during Portfolio Enrichment: {e}")
+
+    def run_symbol_pricing_job(self):
+        """Execute symbol pricing cache job (bridges async to sync for scheduler)."""
+        _run_async(self._run_symbol_pricing_async())
+
+    async def _run_symbol_pricing_async(self):
+        """Run symbol pricing cache job if enabled in config."""
+        sp_config = self.config.config.get('symbol_pricing', {})
+        if not sp_config.get('enabled', True):
+            print("⏭️  Symbol Pricing disabled in config")
+            return
+
+        from .symbol_pricing import run_symbol_pricing
+
+        now_tz = _now_local()
+        print(f"\n{'💲'*1}{'='*68}")
+        print(f"💲 Symbol Pricing - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"{'='*70}\n")
+
+        try:
+            result = await run_symbol_pricing(self.cosmos)
+            if result.get("status") == "aborted":
+                print(f"Symbol Pricing ABORTED: {result.get('reason', 'unknown')}")
+            else:
+                print(
+                    f"Symbol Pricing complete: {result.get('success', 0)}/{result.get('total', 0)} success, "
+                    f"{result.get('errors', 0)} errors | "
+                    f"FX rates: {result.get('fx_rates_used', {})}"
+                )
+        except Exception as e:
+            print(f"ERROR during Symbol Pricing: {e}")
 
     def run_price_forecast_job(self):
         """Execute the deterministic price-forecast job (async→sync bridge)."""
@@ -813,6 +859,14 @@ class OptionsAgentScheduler:
             "portfolio_enrichment",
             "0 9-17 * * 1-5",
             self.run_portfolio_enrichment_job,
+            has_extra_config=False,
+        )
+        self.registry.register(
+            "symbol_pricing",
+            "Symbol Pricing",
+            "symbol_pricing",
+            "0 9-23 * * 1-5",
+            self.run_symbol_pricing_job,
             has_extra_config=False,
         )
         self.registry.register(

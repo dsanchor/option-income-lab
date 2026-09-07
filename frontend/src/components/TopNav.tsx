@@ -29,7 +29,7 @@ import type { SymbolsOverview } from "@/types/symbols";
 type Item = { href: string; label: string; icon: LucideIcon };
 
 const DROPDOWNS: Record<string, Item[]> = {
-  Symbols: [
+  Investments: [
     { href: "/symbols", label: "Symbols", icon: LineChart },
     { href: "/portfolio/movements", label: "Movements", icon: ArrowLeftRight },
     { href: "/portfolio/accounts", label: "Accounts", icon: Landmark },
@@ -104,7 +104,7 @@ export function TopNav() {
             <LayoutDashboard size={16} className="shrink-0" /> Dashboard
           </Link>
 
-          <Dropdown label="Symbols" items={DROPDOWNS.Symbols} active={symbolsActive} pathname={pathname} />
+          <Dropdown label="Investments" items={DROPDOWNS.Investments} active={symbolsActive} pathname={pathname} />
 
           <Link href="/economics" className={navClass(isActive(pathname, "/economics"))}>
             <Banknote size={16} className="shrink-0" /> Economics
@@ -144,7 +144,7 @@ export function TopNav() {
           </div>
           <div className="flex flex-col gap-1">
             <MobileLink href="/dashboard" label="Dashboard" icon={LayoutDashboard} active={dashboardActive} />
-            <MobileSection label="Symbols" items={DROPDOWNS.Symbols} pathname={pathname} />
+            <MobileSection label="Investments" items={DROPDOWNS.Investments} pathname={pathname} />
             <MobileLink href="/economics" label="Economics" icon={Banknote} active={isActive(pathname, "/economics")} />
             <MobileLink href="/chat" label="Chat" icon={MessageSquare} active={isActive(pathname, "/chat", true)} />
             <MobileSection label="Screener" items={DROPDOWNS.Screener} pathname={pathname} />

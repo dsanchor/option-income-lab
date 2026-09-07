@@ -65,9 +65,49 @@ function isHiddenZeroRow(r: SymbolRow): boolean {
 
 type SortKey =
   | "symbol" | "category" | "dgi_score" | "tech_timing" | "entry_tag"
-  | "momentum" | "price" | "total_shares" | "in_calls" | "put_exposure"
+  | "momentum" | "price" | "price_eur" | "total_shares" | "in_calls" | "put_exposure"
   | "portfolio_shares" | "portfolio_avg_cost_eur" | "portfolio_invested_eur"
-  | "portfolio_dividends_eur";
+  | "current_value_eur" | "portfolio_dividends_eur";
+
+/**
+ * Case-insensitive row search predicate.
+ * Checks symbol, display_name (company name), category, and entry_tag fields.
+ * Called from the main filter useMemo — colocated with display_name usage.
+ */
+function matchesSearchQuery(r: { symbol?: string | null; display_name?: string | null; category?: string | null; entry_tag?: string | null }, query: string): boolean {
+  if (!query) return true;
+  const q = query.trim().toUpperCase();
+  if (!q) return true;
+  return (
+    (r.symbol || "").toUpperCase().includes(q) ||
+    (r.display_name || "").toUpperCase().includes(q) ||
+    (r.category || "").toUpperCase().includes(q) ||
+    (r.entry_tag || "").toUpperCase().includes(q)
+  );
+}
+
+/**
+ * Currency-aware price formatter.
+ * - GBp/GBX: backend stores price_major (pounds); reconstruct pence display.
+ * - USD / EUR / CHF: prefix or "CHF " prefix.
+ * - null currency: legacy "$" fallback (no FX data yet).
+ * - Unknown currency: number + code suffix.
+ * Never divides or converts independently — only reconstructs the display unit.
+ */
+function formatPrice(price: number | null | undefined, currency: string | null | undefined): string {
+  if (price == null || !isFinite(price)) return "—";
+  if (!currency) return `$${num(price, 2)}`;
+  if (currency === "GBp" || currency === "GBX") {
+    // price is price_major (e.g. 48.15 GBP); display as whole-pence (e.g. "4,815 GBp")
+    const pence = Math.round(price * 100);
+    return `${new Intl.NumberFormat("en-US").format(pence)} GBp`;
+  }
+  const upper = currency.toUpperCase();
+  if (upper === "USD") return `$${num(price, 2)}`;
+  if (upper === "EUR") return `€${num(price, 2)}`;
+  if (upper === "CHF") return `CHF ${num(price, 2)}`;
+  return `${num(price, 2)} ${currency}`;
+}
 
 const SUITABILITY_FILTERS: { key: SymbolSuitabilityFilter; label: string }[] = [
   { key: "all", label: "All" },
@@ -77,7 +117,9 @@ const SUITABILITY_FILTERS: { key: SymbolSuitabilityFilter; label: string }[] = [
   { key: "no_calls", label: "No Calls" },
 ];
 
-const COLUMNS: { key: SortKey; label: string; align?: "right" }[] = [
+type ViewMode = "portfolio" | "options";
+
+const COLUMNS: { key: SortKey; label: string; align?: "right"; modes?: ViewMode[] }[] = [
   { key: "symbol", label: "Symbol" },
   { key: "category", label: "Category" },
   { key: "dgi_score", label: "DGI", align: "right" },
@@ -85,12 +127,14 @@ const COLUMNS: { key: SortKey; label: string; align?: "right" }[] = [
   { key: "entry_tag", label: "Entry" },
   { key: "momentum", label: "Momentum" },
   { key: "price", label: "Price", align: "right" },
-  { key: "portfolio_shares", label: "Shares", align: "right" },
-  { key: "portfolio_avg_cost_eur", label: "Avg Cost", align: "right" },
-  { key: "portfolio_invested_eur", label: "Invested", align: "right" },
-  { key: "portfolio_dividends_eur", label: "Dividends", align: "right" },
-  { key: "in_calls", label: "In Calls", align: "right" },
-  { key: "put_exposure", label: "Puts $", align: "right" },
+  { key: "price_eur", label: "Price €", align: "right", modes: ["portfolio"] },
+  { key: "portfolio_shares", label: "Shares", align: "right", modes: ["portfolio"] },
+  { key: "portfolio_avg_cost_eur", label: "Avg Cost", align: "right", modes: ["portfolio"] },
+  { key: "portfolio_invested_eur", label: "Invested", align: "right", modes: ["portfolio"] },
+  { key: "current_value_eur", label: "Value €", align: "right", modes: ["portfolio"] },
+  { key: "portfolio_dividends_eur", label: "Dividends", align: "right", modes: ["portfolio"] },
+  { key: "in_calls", label: "In Calls", align: "right", modes: ["options"] },
+  { key: "put_exposure", label: "Puts $", align: "right", modes: ["options"] },
 ];
 
 export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
@@ -101,6 +145,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
   const [suitabilityFilter, setSuitabilityFilter] = useState<SymbolSuitabilityFilter>("all");
   const [modalSymbol, setModalSymbol] = useState<string | null>(null);
   const [hideZero, setHideZero] = useState(true);
+  const [viewMode, setViewMode] = useState<ViewMode>("portfolio");
 
   // Inline shares editing (watchlist-only rows)
   const [editingShares, setEditingShares] = useState<string | null>(null);
@@ -191,13 +236,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       return true;
     });
     if (query) {
-      out = out.filter(
-        (r) =>
-          r.symbol?.toUpperCase().includes(query) ||
-          (r.display_name || "").toUpperCase().includes(query) ||
-          (r.category || "").toUpperCase().includes(query) ||
-          (r.entry_tag || "").toUpperCase().includes(query),
-      );
+      out = out.filter((r) => matchesSearchQuery(r, query));
     }
     if (suitabilityFilter !== "all") {
       out = out.filter((r) => matchesSymbolSuitability(r.entry_tag, r.momentum, suitabilityFilter));
@@ -223,6 +262,24 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
     () => rows.filter((r) => !removedSymbols.has(r.symbol) && isHiddenZeroRow(r)).length,
     [rows, removedSymbols],
   );
+
+  /** Columns visible in the current view mode (no-modes = always visible). */
+  const visibleColumns = useMemo(
+    () => COLUMNS.filter((c) => !c.modes || c.modes.includes(viewMode)),
+    [viewMode],
+  );
+
+  /** Switch view mode; reset sort key if it becomes hidden. */
+  function changeViewMode(mode: ViewMode) {
+    setViewMode(mode);
+    const newVisibleKeys = new Set(
+      COLUMNS.filter((c) => !c.modes || c.modes.includes(mode)).map((c) => c.key),
+    );
+    if (!newVisibleKeys.has(sort)) {
+      setSort("symbol");
+      setDir("asc");
+    }
+  }
 
   function toggleSort(key: SortKey) {
     if (sort === key) setDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -263,68 +320,99 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
         <td className="px-4 py-3 text-right font-mono">{num(r.tech_timing)}</td>
         <td className="px-4 py-3"><Pill text={r.entry_tag} className={entryClass(r.entry_tag)} /></td>
         <td className="px-4 py-3"><Pill text={r.momentum} className={momentumClass(r.momentum)} /></td>
-        <td className="px-4 py-3 text-right font-mono">{r.price != null ? `$${num(r.price, 2)}` : "—"}</td>
+        <td className="px-4 py-3 text-right font-mono">
+          <span
+            className={r.pricing_status === "stale" ? "opacity-60" : undefined}
+            title={
+              r.pricing_status === "stale"
+                ? "Price data is stale (>2h old)"
+                : r.pricing_status === "error"
+                  ? "Pricing unavailable — showing enrichment estimate"
+                  : undefined
+            }
+          >
+            {formatPrice(r.price, r.price_display_currency)}
+          </span>
+        </td>
+        {viewMode === "portfolio" && (
+          <td className="px-4 py-3 text-right font-mono text-xs">{eur(r.price_eur)}</td>
+        )}
 
         {/* Shares — portfolio: read-only ledger value; watchlist-only: editable override */}
-        <td
-          className="px-4 py-3 text-right font-mono"
-          onClick={(e) => { if (!isPortfolio) e.stopPropagation(); }}
-        >
-          {isPortfolio ? (
-            r.portfolio_shares != null ? (
-              parseFloat(r.portfolio_shares) === 0
-                ? <span className="text-text-muted text-xs">0</span>
-                : portfolioShares(r.portfolio_shares)
-            ) : "—"
-          ) : (
-            editingShares === r.symbol ? (
-              <input
-                type="number" min="0" step="1" value={sharesInput}
-                onChange={(e) => setSharesInput(e.target.value)}
-                onBlur={() => saveShares(r.symbol, r.total_shares)}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
-                  if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
-                }}
-                className="w-20 rounded border border-accent-blue bg-bg-input px-2 py-0.5 text-right font-mono text-sm focus:outline-none"
-                autoFocus
-                onClick={(e) => e.stopPropagation()}
-              />
-            ) : sharesSaving === r.symbol ? (
-              <span className="text-text-muted">…</span>
+        {viewMode === "portfolio" && (
+          <td
+            className="px-4 py-3 text-right font-mono"
+            onClick={(e) => { if (!isPortfolio) e.stopPropagation(); }}
+          >
+            {isPortfolio ? (
+              r.portfolio_shares != null ? (
+                parseFloat(r.portfolio_shares) === 0
+                  ? <span className="text-text-muted text-xs">0</span>
+                  : portfolioShares(r.portfolio_shares)
+              ) : "—"
             ) : (
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); startEdit(r.symbol, effectiveShares); }}
-                className="cursor-text hover:text-accent-blue hover:underline"
-                title="Click to edit shares"
-              >
-                {effectiveShares > 0 ? effectiveShares : <span className="text-text-muted">—</span>}
-              </button>
-            )
-          )}
-        </td>
+              editingShares === r.symbol ? (
+                <input
+                  type="number" min="0" step="1" value={sharesInput}
+                  onChange={(e) => setSharesInput(e.target.value)}
+                  onBlur={() => saveShares(r.symbol, r.total_shares)}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
+                    if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
+                  }}
+                  className="w-20 rounded border border-accent-blue bg-bg-input px-2 py-0.5 text-right font-mono text-sm focus:outline-none"
+                  autoFocus
+                  onClick={(e) => e.stopPropagation()}
+                />
+              ) : sharesSaving === r.symbol ? (
+                <span className="text-text-muted">…</span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); startEdit(r.symbol, effectiveShares); }}
+                  className="cursor-text hover:text-accent-blue hover:underline"
+                  title="Click to edit shares"
+                >
+                  {effectiveShares > 0 ? effectiveShares : <span className="text-text-muted">—</span>}
+                </button>
+              )
+            )}
+          </td>
+        )}
 
-        <td className="px-4 py-3 text-right font-mono text-xs">{isPortfolio ? eur(r.portfolio_avg_cost_eur) : "—"}</td>
-        <td className="px-4 py-3 text-right font-mono text-xs">{isPortfolio ? eur(r.portfolio_invested_eur) : "—"}</td>
-        <td className={`px-4 py-3 text-right font-mono text-xs ${divClass}`}>
-          {isPortfolio ? eur(r.portfolio_dividends_eur) : "—"}
-        </td>
+        {viewMode === "portfolio" && (
+          <td className="px-4 py-3 text-right font-mono text-xs">{isPortfolio ? eur(r.portfolio_avg_cost_eur) : "—"}</td>
+        )}
+        {viewMode === "portfolio" && (
+          <td className="px-4 py-3 text-right font-mono text-xs">{isPortfolio ? eur(r.portfolio_invested_eur) : "—"}</td>
+        )}
+        {viewMode === "portfolio" && (
+          <td className="px-4 py-3 text-right font-mono text-xs">{isPortfolio ? eur(r.current_value_eur) : "—"}</td>
+        )}
+        {viewMode === "portfolio" && (
+          <td className={`px-4 py-3 text-right font-mono text-xs ${divClass}`}>
+            {isPortfolio ? eur(r.portfolio_dividends_eur) : "—"}
+          </td>
+        )}
 
-        {/* In Calls */}
-        <td className="px-4 py-3 text-right font-mono">
-          {isPortfolio ? (
-            <span className={portfolioSharesNum > 0 && r.in_calls >= portfolioSharesNum ? "text-accent-orange" : ""}>
-              {r.in_calls > 0 ? r.in_calls : portfolioSharesNum >= 100 ? "0" : "—"}
-            </span>
-          ) : (
-            <span className={effectiveShares > 0 && r.in_calls >= effectiveShares ? "text-accent-orange" : ""}>
-              {r.in_calls > 0 ? r.in_calls : effectiveShares >= 100 ? "0" : "—"}
-            </span>
-          )}
-        </td>
-        <td className="px-4 py-3 text-right font-mono">{r.put_exposure > 0 ? `$${usd(r.put_exposure)}` : "—"}</td>
+        {/* In Calls — options mode only */}
+        {viewMode === "options" && (
+          <td className="px-4 py-3 text-right font-mono">
+            {isPortfolio ? (
+              <span className={portfolioSharesNum > 0 && r.in_calls >= portfolioSharesNum ? "text-accent-orange" : ""}>
+                {r.in_calls > 0 ? r.in_calls : portfolioSharesNum >= 100 ? "0" : "—"}
+              </span>
+            ) : (
+              <span className={effectiveShares > 0 && r.in_calls >= effectiveShares ? "text-accent-orange" : ""}>
+                {r.in_calls > 0 ? r.in_calls : effectiveShares >= 100 ? "0" : "—"}
+              </span>
+            )}
+          </td>
+        )}
+        {viewMode === "options" && (
+          <td className="px-4 py-3 text-right font-mono">{r.put_exposure > 0 ? `$${usd(r.put_exposure)}` : "—"}</td>
+        )}
         <td
           className="px-4 py-3 text-right"
           onClick={(e) => e.stopPropagation()}
@@ -348,14 +436,38 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
 
   return (
     <div className="space-y-3">
-      {/* Search + filter bar */}
-      <div className="flex flex-wrap items-center gap-3">
+      {/* Search + filter bar — surface card matching Economics filter section */}
+      <div className="surface p-3">
+        <div className="flex flex-wrap items-center gap-3">
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="🔍 Filter symbols…"
           className="w-full max-w-xs rounded-[var(--radius-pill)] border border-border bg-bg-input px-3.5 py-1.5 text-sm text-text placeholder:text-text-muted focus:border-accent-blue focus:outline-none"
         />
+        {/* View mode selector — controls column visibility only, not rows */}
+        <div
+          role="radiogroup"
+          aria-label="Table view mode"
+          className="flex items-center rounded-[var(--radius-pill)] border border-border bg-bg-card p-0.5"
+        >
+          {(["portfolio", "options"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              role="radio"
+              aria-checked={viewMode === mode}
+              onClick={() => changeViewMode(mode)}
+              className={`rounded-[var(--radius-pill)] px-3 py-1 text-xs transition-colors ${
+                viewMode === mode
+                  ? "bg-accent-blue text-white"
+                  : "text-text-muted hover:text-text"
+              }`}
+            >
+              {mode === "portfolio" ? "Portfolio" : "Options"}
+            </button>
+          ))}
+        </div>
         <div className="flex flex-wrap gap-1.5">
           {SUITABILITY_FILTERS.map(({ key, label }) => (
             <button
@@ -388,6 +500,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
         <span className="ml-auto shrink-0 text-xs text-text-muted">
           {portfolioFiltered.length} portfolio · {watchlistFiltered.length} watchlist
         </span>
+        </div>
       </div>
 
       {sharesError && (
@@ -398,10 +511,10 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       )}
 
       <div className="surface table-modern overflow-x-auto">
-        <table className="w-full min-w-[1040px] text-sm">
+        <table className="w-full min-w-[1200px] text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
-              {COLUMNS.map((c) => (
+              {visibleColumns.map((c) => (
                 <th
                   key={c.key}
                   onClick={() => toggleSort(c.key)}
@@ -417,7 +530,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
           <tbody>
             {portfolioFiltered.length === 0 && watchlistFiltered.length === 0 && (
               <tr>
-                <td colSpan={COLUMNS.length + 1} className="px-4 py-8 text-center text-text-muted">
+                <td colSpan={visibleColumns.length + 1} className="px-4 py-8 text-center text-text-muted">
                   No symbols match.
                 </td>
               </tr>
@@ -425,7 +538,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
             {portfolioFiltered.length > 0 && (
               <tr>
                 <td
-                  colSpan={COLUMNS.length + 1}
+                  colSpan={visibleColumns.length + 1}
                   className="border-b border-border/60 bg-bg-hover/40 px-4 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-text-muted select-none"
                 >
                   Portfolio
@@ -436,7 +549,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
             {watchlistFiltered.length > 0 && (
               <tr>
                 <td
-                  colSpan={COLUMNS.length + 1}
+                  colSpan={visibleColumns.length + 1}
                   className="border-b border-border/60 bg-bg-hover/40 px-4 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-text-muted select-none"
                 >
                   Watchlist

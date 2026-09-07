@@ -104,9 +104,23 @@ export interface SecurityMasterInfo {
   security_id: string;
   company_name: string;
   exchange_mic: string;
+  // ticker component extracted from security_id (returned by backend when available)
+  ticker?: string | null;
   isin?: string | null;
+  cusip?: string | null;
+  sedol?: string | null;
   listing_currency?: string;
+  country?: string | null;
+  asset_class?: string | null;
   status?: string;
+  // Provider symbol overrides (editable via PATCH /security)
+  provider_symbols?: Record<string, string> | null;
+  // Effective resolved values — computed backend-side, read-only in UI
+  effective_yfinance_symbol?: string | null;
+  effective_tradingview_symbol?: string | null;
+  // Optimistic concurrency token for PATCH
+  _etag?: string | null;
+  updated_at?: string | null;
 }
 
 export interface HoldingsByAccount {

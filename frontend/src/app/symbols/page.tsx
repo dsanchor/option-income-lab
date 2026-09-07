@@ -48,13 +48,22 @@ function KpiCard({
       : tone === "red"
         ? "text-accent-red"
         : "text-text";
+  const barStyle =
+    tone === "green"
+      ? "var(--grad-green)"
+      : tone === "red"
+        ? "var(--grad-warm)"
+        : "var(--grad-blue)";
   return (
     <div
-      className="rounded-[var(--radius)] border border-border bg-bg-card px-4 py-3 flex-1 min-w-[160px]"
+      className="relative overflow-hidden rounded-[var(--radius)] border border-border bg-bg-card p-4 flex-1 min-w-[160px]"
       title={tooltip}
     >
-      <div className="text-xs text-text-muted mb-1">{label}</div>
-      <div className={`text-base font-semibold font-mono ${valueClass}`}>{value}</div>
+      <span className="absolute inset-y-0 left-0 w-1" style={{ background: barStyle }} aria-hidden />
+      <div className="pl-1">
+        <div className="text-xs text-text-muted mb-1">{label}</div>
+        <div className={`text-xl font-semibold font-mono ${valueClass}`}>{value}</div>
+      </div>
     </div>
   );
 }
@@ -79,13 +88,12 @@ export default async function SymbolsPage() {
     d.rows ??
     [];
 
-  const totalCount = d.symbol_count ?? allSymbols.length;
-
   const ps: PortfolioSummary | null | undefined = d.portfolio_summary;
   // Resolve field names across both backend contracts
   const totalInvestment = ps?.total_investment_eur ?? (ps?.remaining_cost_basis_eur != null ? parseFloat(ps.remaining_cost_basis_eur) : null);
   const netGains = ps?.net_gains_eur ?? (ps?.realized_result_eur != null ? parseFloat(ps.realized_result_eur) : null);
   const totalDividends = ps?.total_dividends_eur;
+  const totalCurrentValue = ps?.total_current_value_eur ?? null;
   const hasPortfolioSummary = ps != null && (totalInvestment != null || netGains != null);
 
   const netGainsTone =
@@ -103,7 +111,6 @@ export default async function SymbolsPage() {
         </div>
         {/* Row 1 — Options exposure */}
         <div className="flex flex-wrap gap-4 text-sm text-text-muted">
-          <span>{totalCount} tracked</span>
           <span>
             Calls exposure <span className="text-text">${usd(d.total_call_exposure)}</span>
           </span>
@@ -115,32 +122,33 @@ export default async function SymbolsPage() {
 
       {/* Row 2 — Portfolio KPIs (visible only when holdings data exists) */}
       {hasPortfolioSummary && (
-        <div className="space-y-2">
-          <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap gap-3">
+          <KpiCard
+            label="Current Investment"
+            value={kpiEur(totalInvestment)}
+            tone="neutral"
+            tooltip="Base de coste CMP de las acciones que aún posees (remaining_cost_basis_eur)."
+          />
+          {totalCurrentValue != null && (
             <KpiCard
-              label="Inversión actual"
-              value={kpiEur(totalInvestment)}
+              label="Current Value"
+              value={kpiEur(totalCurrentValue)}
               tone="neutral"
-              tooltip="Base de coste CMP de las acciones que aún posees (remaining_cost_basis_eur)."
+              tooltip="Valor actual de mercado del portfolio en EUR (acciones × precio actual en EUR)."
             />
-            <KpiCard
-              label="Resultado realizado"
-              value={kpiEur(netGains)}
-              tone={netGainsTone}
-              tooltip="Ganancia o pérdida cerrada por ventas de acciones y derechos. No incluye ganancias no realizadas ni P&L de opciones."
-            />
-            <KpiCard
-              label="Dividendos netos"
-              value={kpiEur(totalDividends)}
-              tone="neutral"
-              tooltip="Total de dividendos netos recibidos (tras retenciones) en todos los activos."
-            />
-          </div>
-          {ps?.has_incomplete_cost_basis && (
-            <p className="text-xs text-accent-orange">
-              ⚠ Algunos valores tienen coste de adquisición incompleto — el resultado realizado puede estar subestimado.
-            </p>
           )}
+          <KpiCard
+            label="Realized Result"
+            value={kpiEur(netGains)}
+            tone={netGainsTone}
+            tooltip="Ganancia o pérdida cerrada por ventas de acciones y derechos. No incluye ganancias no realizadas ni P&L de opciones."
+          />
+          <KpiCard
+            label="Net Dividends"
+            value={kpiEur(totalDividends)}
+            tone="neutral"
+            tooltip="Total de dividendos netos recibidos (tras retenciones) en todos los activos."
+          />
         </div>
       )}
 

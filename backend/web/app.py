@@ -679,6 +679,11 @@ async def api_list_symbols(request: Request):
 # so every existing internal call site (_compute_symbols_overview, etc.) is
 # unaffected.
 from src.portfolio.watchlist_membership import is_watchlist_member as _is_watchlist_member  # noqa: E402
+from src.us_exchange_eligibility import is_us_options_eligible as _is_us_options_eligible  # noqa: E402
+from src.options_screener_universe import (  # noqa: E402
+    compute_options_screener_universe as _compute_screener_universe,
+    _resolve_eligibility_mic as _resolve_screener_mic,
+)
 
 
 def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_portfolio: bool = False):
@@ -727,6 +732,18 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_por
         except Exception as exc:
             logger.warning("_compute_symbols_overview: holdings load failed: %s", exc)
 
+    # ── Compute Options Screener universe (authoritative, once) ───────────
+    # Delegates to the canonical predicate in options_screener_universe.py so
+    # overview, manual endpoint, and scheduler cannot drift.
+    from decimal import Decimal as _Dsc
+    _screener_shares: Dict[str, _Dsc] = {}
+    for _t, _h in holdings_by_ticker.items():
+        try:
+            _screener_shares[_t] = _Dsc(str(_h.get("total_shares", 0)))
+        except Exception:
+            _screener_shares[_t] = _Dsc("0")
+    screener_universe: set = _compute_screener_universe(symbols, _screener_shares)
+
     total_call_exposure = 0.0
     total_put_exposure = 0.0
     enrichment_ts = ""
@@ -757,6 +774,12 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_por
         holding = holdings_by_ticker.get(sym)
         is_auto_enrolled = bool(s.get("_auto_enrolled", False))
         explicit_watchlist = _is_watchlist_member(s)
+
+        # Authoritative screener-eligibility booleans for this row
+        us_options_eligible: bool = _is_us_options_eligible(
+            _resolve_screener_mic(s.get("exchange"))
+        )
+        screener_eligible: bool = sym in screener_universe
 
         # Resolve portfolio_shares for visibility predicate
         portfolio_shares_str: str | None = holding.get("total_shares") if holding else None
@@ -822,7 +845,60 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_por
             "portfolio_invested_eur": holding.get("remaining_cost_basis_eur") if holding else None,
             "portfolio_dividends_eur": holding.get("total_dividends_eur") if holding else None,
             "portfolio_realized_eur": holding.get("realized_result_eur") if holding else None,
+            # Options Screener dropdown eligibility — authoritative booleans
+            # us_options_eligible: MIC ∈ {XNYS, XNAS}
+            # screener_eligible:   MIC ∈ {XNYS, XNAS} ∧ (shares>0 ∨ explicit watchlist member)
+            "us_options_eligible": us_options_eligible,
+            "screener_eligible": screener_eligible,
         }
+
+        # ── Pricing cache fields (Phase 3, contract §8) ────────────────────
+        pc = s.get("pricing_cache") or {}
+        pc_status = pc.get("status") if pc else None
+
+        # Staleness check: fetched_at older than 2h → override status to "stale"
+        if pc_status == "ok" and pc.get("fetched_at"):
+            try:
+                from datetime import timezone as _tz
+                import datetime as _dt_mod
+                fetched_dt = _dt_mod.datetime.fromisoformat(
+                    pc["fetched_at"].replace("Z", "+00:00")
+                )
+                age_seconds = (
+                    _dt_mod.datetime.now(_tz.utc) - fetched_dt
+                ).total_seconds()
+                if age_seconds > 7200:  # 2 hours
+                    pc_status = "stale"
+            except Exception:
+                pass  # keep original status on parse failure
+
+        # Price field: prefer pricing_cache when ok or stale; fall back to enrichment
+        if pc_status in ("ok", "stale") and pc.get("price_major") is not None:
+            row["price"] = pc["price_major"]
+        # else row["price"] already set to enrichment fallback above
+
+        # Additive pricing fields
+        row["price_display_currency"] = pc.get("quote_currency") if pc_status in ("ok", "stale") else None
+        row["price_currency"] = pc.get("price_currency") if pc_status in ("ok", "stale") else None
+        row["price_eur"] = pc.get("price_eur") if pc_status in ("ok", "stale") else None
+        row["pricing_fetched_at"] = pc.get("fetched_at") if pc else None
+        row["pricing_status"] = pc_status  # "ok" | "stale" | "error" | null
+
+        # current_value_eur: shares × price_eur (portfolio rows with shares > 0 only)
+        row["current_value_eur"] = None
+        if portfolio_shares_str is not None and row.get("price_eur") is not None:
+            try:
+                from decimal import Decimal as _D2
+                shares_d = _D2(str(portfolio_shares_str))
+                eur_d = _D2(str(row["price_eur"]))
+                if shares_d > 0:
+                    row["current_value_eur"] = str(
+                        (shares_d * eur_d).quantize(_D2("0.01"))
+                    )
+            except Exception:
+                pass
+        # ──────────────────────────────────────────────────────────────────
+
         all_rows.append(row)
 
     all_rows.sort(
@@ -837,11 +913,25 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_por
     # Portfolio-wide summary (§2.3) — computed over ALL holdings, unaffected by row filter
     portfolio_summary: Dict[str, Any] | None = None
     if holdings_summary:
+        # Sum current_value_eur across all rows for the total portfolio value KPI
+        from decimal import Decimal as _DSum
+        _total_cv = _DSum("0")
+        _has_cv = False
+        for _r in all_rows:
+            _cv = _r.get("current_value_eur")
+            if _cv is not None:
+                try:
+                    _total_cv += _DSum(str(_cv))
+                    _has_cv = True
+                except Exception:
+                    pass
+
         portfolio_summary = {
             "remaining_cost_basis_eur": holdings_summary.get("remaining_cost_basis_eur", "0.00"),
             "realized_result_eur": holdings_summary.get("realized_result_eur", "0.00"),
             "total_dividends_eur": holdings_summary.get("total_dividends_eur", "0.00"),
             "has_incomplete_cost_basis": bool(holdings_summary.get("has_incomplete_cost_basis", False)),
+            "total_current_value_eur": str(_total_cv.quantize(_DSum("0.01"))) if _has_cv else None,
         }
 
     return {
@@ -1106,23 +1196,37 @@ def _compute_symbol_detail(
             return None  # Neither config nor security → genuine 404
 
         # Build minimal portfolio_only response
+        from src.portfolio.provider_symbols import (
+            resolve_yfinance_symbol as _resolve_yf_po,
+            resolve_tradingview_symbol as _resolve_tv_po,
+        )
+        _po_mic = security_doc.get("exchange_mic") or ""
+        _po_ticker = security_doc.get("ticker") or sym
         security_field = {
             "security_id": security_doc.get("security_id"),
+            "ticker": security_doc.get("ticker"),
             "company_name": security_doc.get("company_name"),
-            "exchange_mic": security_doc.get("exchange_mic"),
+            "exchange_mic": _po_mic,
             "isin": security_doc.get("isin"),
+            "cusip": security_doc.get("cusip"),
+            "sedol": security_doc.get("sedol"),
             "listing_currency": security_doc.get("listing_currency"),
+            "country": security_doc.get("country"),
+            "asset_class": security_doc.get("asset_class"),
+            "provider_symbols": security_doc.get("provider_symbols") or {},
+            "effective_yfinance_symbol": _resolve_yf_po(_po_ticker, _po_mic, security_doc),
+            "effective_tradingview_symbol": _resolve_tv_po(_po_ticker, _po_mic, security_doc),
             "status": security_doc.get("status", "ACTIVE"),
+            "updated_at": security_doc.get("updated_at"),
+            "_etag": security_doc.get("_etag", ""),
         }
         symbol_state = "portfolio_only" if portfolio_field else "watchlist_only"
         from src.us_exchange_eligibility import is_us_options_eligible as _is_elig
-        from src.portfolio.provider_symbols import resolve_tradingview_symbol as _resolve_tv
-        _po_mic = security_doc.get("exchange_mic") or ""
-        _po_tv_symbol = _resolve_tv(sym, _po_mic, security_doc)
+        _po_tv_symbol = security_field["effective_tradingview_symbol"]
         return {
             "symbol": sym,
             "display_name": security_doc.get("company_name", sym),
-            "exchange": security_doc.get("exchange_mic", ""),
+            "exchange": _po_mic,
             "total_shares": 0,
             "watchlist": {"covered_call": False, "cash_secured_put": False, "buy_tracker": False},
             "telegram_notifications_enabled": False,
@@ -1214,13 +1318,29 @@ def _compute_symbol_detail(
             )
     security_field = None
     if security_doc:
+        from src.portfolio.provider_symbols import (
+            resolve_yfinance_symbol as _resolve_yf_main,
+            resolve_tradingview_symbol as _resolve_tv_main,
+        )
+        _main_mic = security_doc.get("exchange_mic") or ""
+        _main_ticker = security_doc.get("ticker") or sym
         security_field = {
             "security_id": security_doc.get("security_id"),
+            "ticker": security_doc.get("ticker"),
             "company_name": security_doc.get("company_name"),
-            "exchange_mic": security_doc.get("exchange_mic"),
+            "exchange_mic": _main_mic,
             "isin": security_doc.get("isin"),
+            "cusip": security_doc.get("cusip"),
+            "sedol": security_doc.get("sedol"),
             "listing_currency": security_doc.get("listing_currency"),
+            "country": security_doc.get("country"),
+            "asset_class": security_doc.get("asset_class"),
+            "provider_symbols": security_doc.get("provider_symbols") or {},
+            "effective_yfinance_symbol": _resolve_yf_main(_main_ticker, _main_mic, security_doc),
+            "effective_tradingview_symbol": _resolve_tv_main(_main_ticker, _main_mic, security_doc),
             "status": security_doc.get("status", "ACTIVE"),
+            "updated_at": security_doc.get("updated_at"),
+            "_etag": security_doc.get("_etag", ""),
         }
 
     # ── Portfolio holdings for this symbol ───────────────────────────────
@@ -1519,6 +1639,219 @@ async def api_update_symbol(request: Request, symbol: str):
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.patch("/api/symbols/{symbol}/security")
+async def api_patch_security(request: Request, symbol: str):
+    """PATCH /api/symbols/{symbol}/security — ETag-guarded metadata update.
+
+    Edits company_name, isin, cusip, sedol, listing_currency, country,
+    asset_class, and/or provider_symbols on the security_master document.
+
+    Identity fields (security_id, exchange_mic, ticker) are read-only here;
+    passing them returns 400. Use the identity-repair migration workflow for
+    MIC/security_id corrections.
+
+    Requires `_etag` in the request body for optimistic concurrency.
+    """
+    try:
+        cosmos = _get_cosmos(request)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+
+    try:
+        ticker = _ticker_from_symbol_param(symbol)
+        sym_doc = cosmos.get_symbol(ticker)
+        if not sym_doc:
+            return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
+
+        body = await request.json()
+
+        # Guard: identity fields must never be patched via this endpoint.
+        _IDENTITY_FIELDS = {"security_id", "exchange_mic", "ticker"}
+        attempted_identity = [f for f in _IDENTITY_FIELDS if f in body]
+        if attempted_identity:
+            return JSONResponse(
+                {
+                    "error": "identity_fields_read_only",
+                    "detail": (
+                        f"Identity fields are read-only and can only be corrected via "
+                        f"the migration/repair workflow: {attempted_identity}"
+                    ),
+                },
+                status_code=400,
+            )
+
+        etag = body.get("_etag")
+        if not etag:
+            return JSONResponse(
+                {"error": "missing_etag", "detail": "_etag is required for optimistic concurrency"},
+                status_code=400,
+            )
+
+        # Resolve security_id from config
+        security_id = sym_doc.get("security_id")
+        if not security_id:
+            return JSONResponse(
+                {"error": "no_security_master", "detail": f"{ticker} has no security_id — cannot update security_master"},
+                status_code=404,
+            )
+
+        from src.portfolio.cosmos_securities import (
+            CosmosSecuritiesService,
+            _CollisionError,
+            _ETagConflictError,
+        )
+        securities_svc = CosmosSecuritiesService(cosmos.container)
+
+        # Extract only the editable fields from the body (ignore _etag and unknowns)
+        _EDITABLE = {
+            "company_name", "isin", "cusip", "sedol",
+            "listing_currency", "country", "asset_class", "provider_symbols",
+        }
+        updates = {k: v for k, v in body.items() if k in _EDITABLE}
+
+        updated_doc = securities_svc.update_security(
+            security_id=security_id,
+            updates=updates,
+            etag=etag,
+        )
+
+        # Return full security projection (same shape as _compute_symbol_detail)
+        from src.portfolio.provider_symbols import (
+            resolve_yfinance_symbol,
+            resolve_tradingview_symbol,
+        )
+        _mic = updated_doc.get("exchange_mic") or ""
+        _tkr = updated_doc.get("ticker") or ticker
+        projection = {
+            **{k: updated_doc.get(k) for k in (
+                "security_id", "ticker", "company_name", "exchange_mic",
+                "isin", "cusip", "sedol", "listing_currency", "country",
+                "asset_class", "provider_symbols", "status", "updated_at",
+            )},
+            "provider_symbols": updated_doc.get("provider_symbols") or {},
+            "effective_yfinance_symbol": resolve_yfinance_symbol(_tkr, _mic, updated_doc),
+            "effective_tradingview_symbol": resolve_tradingview_symbol(_tkr, _mic, updated_doc),
+            "_etag": updated_doc.get("_etag", ""),
+        }
+        return JSONResponse({"security": projection})
+
+    except ValueError as e:
+        return JSONResponse({"error": "validation_error", "detail": str(e)}, status_code=422)
+    except _ETagConflictError as e:
+        return JSONResponse(
+            {
+                "error": "etag_conflict",
+                "detail": "Document was modified concurrently — refresh and retry",
+                "current": e.current_doc,
+            },
+            status_code=409,
+        )
+    except _CollisionError as e:
+        return JSONResponse(
+            {
+                "error": "collision",
+                "detail": f"{e.field} already in use by another security",
+                "colliding_security": e.existing,
+            },
+            status_code=409,
+        )
+    except Exception as e:
+        logger.exception("api_patch_security: unexpected error for %s", symbol)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/symbols/{symbol}/enrichment/refresh")
+async def api_enrichment_refresh(request: Request, symbol: str):
+    """POST /api/symbols/{symbol}/enrichment/refresh — synchronous enrichment rerun.
+
+    Calls the existing enrich_symbol() with the same effective yfinance symbol
+    resolve_yfinance_symbol() produces (identical to the scheduled enrichment
+    job's own resolution — same function, same precedence, never drifts).
+
+    Returns:
+      200 {"status": "ok",    "enrichment": {...}} on success.
+      200 {"status": "error", "detail": "..."}     on fetch/analysis failure.
+      404 if the symbol or its security_master is not found.
+
+    Not gated by us_options_eligible — enrichment runs for any MIC with a
+    resolvable provider symbol (consistent with the scheduled job's behavior).
+    """
+    try:
+        cosmos = _get_cosmos(request)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+
+    try:
+        ticker = _ticker_from_symbol_param(symbol)
+        sym_doc = cosmos.get_symbol(ticker)
+        if not sym_doc:
+            return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
+
+        exchange_mic = sym_doc.get("exchange") or ""
+        security_id = sym_doc.get("security_id") or (
+            f"{exchange_mic}:{ticker}" if exchange_mic else ""
+        )
+
+        # Load security_master for provider_symbols override resolution
+        from src.portfolio.cosmos_securities import CosmosSecuritiesService
+        securities_svc = CosmosSecuritiesService(cosmos.container)
+        security_doc = None
+        if security_id:
+            try:
+                security_doc = securities_svc.get_security(security_id)
+            except Exception as exc:
+                logger.warning(
+                    "api_enrichment_refresh: security_master load failed for %s: %s",
+                    security_id, exc,
+                )
+
+        from src.portfolio.provider_symbols import resolve_yfinance_symbol
+        yf_symbol = resolve_yfinance_symbol(ticker, exchange_mic, security_doc)
+        if yf_symbol is None:
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "detail": (
+                        f"No Yahoo Finance symbol mapping for ticker={ticker!r} "
+                        f"MIC={exchange_mic!r} — cannot run enrichment"
+                    ),
+                },
+                status_code=200,
+            )
+
+        from src.portfolio_enrichment import enrich_symbol
+        enrichment = enrich_symbol(ticker, yf_symbol=yf_symbol)
+        if enrichment is None:
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "detail": f"Enrichment fetch failed for {ticker!r} (yf_symbol={yf_symbol!r})",
+                },
+                status_code=200,
+            )
+
+        # Persist enrichment (reuse cosmos.update_symbol_enrichment verbatim)
+        cosmos.update_symbol_enrichment(ticker, enrichment)
+
+        # Persist snapshot (tech_timing for enrichment_history time-series)
+        try:
+            cosmos.record_enrichment_snapshot(
+                ticker,
+                tech_timing=enrichment.get("tech_timing"),
+                momentum=enrichment.get("momentum", ""),
+            )
+        except Exception as exc:
+            logger.warning(
+                "api_enrichment_refresh: snapshot write failed for %s: %s", ticker, exc
+            )
+
+        return JSONResponse({"status": "ok", "enrichment": enrichment})
+
+    except Exception as e:
+        logger.exception("api_enrichment_refresh: unexpected error for %s", symbol)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -5722,6 +6055,34 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
             if scheduler is not None:
                 scheduler.reschedule_portfolio_enrichment(pe_cron)
                 scheduler.registry.update_task_enabled("portfolio_enrichment", pe_enabled, scheduler.config)
+        except (ValueError, KeyError):
+            pass
+
+    # Symbol Pricing settings
+    sp_enabled = form.get("sp_enabled") == "true"
+    sp_cron = str(form.get("sp_cron", "0 9-23 * * 1-5")).strip()
+
+    if sp_cron:
+        try:
+            croniter(sp_cron)
+            if cosmos:
+                cosmos_settings = _load_settings_from_cosmos(cosmos) or {}
+                cosmos_settings.setdefault("symbol_pricing", {})
+                cosmos_settings["symbol_pricing"]["enabled"] = sp_enabled
+                cosmos_settings["symbol_pricing"]["cron"] = sp_cron
+                _save_settings_to_cosmos(cosmos, cosmos_settings)
+
+            config = _load_config()
+            config.setdefault("symbol_pricing", {})
+            config["symbol_pricing"]["enabled"] = sp_enabled
+            config["symbol_pricing"]["cron"] = sp_cron
+            _write_config(config)
+            saved.append("Symbol pricing")
+
+            scheduler = getattr(request.app.state, "scheduler", None)
+            if scheduler is not None:
+                scheduler.reschedule_symbol_pricing(sp_cron)
+                scheduler.registry.update_task_enabled("symbol_pricing", sp_enabled, scheduler.config)
         except (ValueError, KeyError):
             pass
 

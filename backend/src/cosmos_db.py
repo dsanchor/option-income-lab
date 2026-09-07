@@ -191,6 +191,15 @@ class CosmosDBService:
         doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
         return self.container.replace_item(item=doc["id"], body=doc)
 
+    def update_symbol_pricing_cache(self, symbol: str, pricing_cache: dict) -> dict:
+        """Update the pricing_cache field on a symbol config document."""
+        doc = self.get_symbol(symbol)
+        if doc is None:
+            raise ValueError(f"Symbol {symbol} not found")
+        doc["pricing_cache"] = pricing_cache
+        doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        return self.container.replace_item(item=doc["id"], body=doc)
+
     # ── Enrichment History (Tech Timing / Momentum time-series) ────────
 
     def record_enrichment_snapshot(

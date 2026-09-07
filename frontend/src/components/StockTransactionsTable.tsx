@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { Link2 } from "lucide-react";
 import { getMovements, listAccounts } from "@/lib/portfolio-api";
+import { subCalendarMonths, toLocalDateString } from "@/lib/dateHelpers";
 import type { LedgerMovement, BrokerAccount } from "@/types/portfolio";
 import { SALES_TYPE_LABELS } from "@/types/portfolio";
 import MovementDetailDialog from "./MovementDetailDialog";
@@ -24,6 +25,23 @@ const TYPE_PILLS: Array<{ value: TypeFilter; label: string }> = [
   { value: "BUY", label: "Buy" },
   { value: "SELL", label: "Sell" },
   { value: "DIVIDEND", label: "Dividend" },
+];
+
+type TimeFilter = "1m" | "3m" | "6m" | "1y" | "ALL";
+
+const TIME_FILTER_MONTHS: Record<Exclude<TimeFilter, "ALL">, number> = {
+  "1m": 1,
+  "3m": 3,
+  "6m": 6,
+  "1y": 12,
+};
+
+const TIME_PILLS: Array<{ value: TimeFilter; label: string }> = [
+  { value: "1m", label: "1m" },
+  { value: "3m", label: "3m" },
+  { value: "6m", label: "6m" },
+  { value: "1y", label: "1y" },
+  { value: "ALL", label: "All" },
 ];
 
 function fmt(amount: string | null | undefined): string {
@@ -53,19 +71,24 @@ export default function StockTransactionsTable({ securityId }: Props) {
   const [totalCount, setTotalCount] = useState(0);
   const [page, setPage] = useState(0);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("ALL");
+  const [timeFilter, setTimeFilter] = useState<TimeFilter>("3m");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
   const [selected, setSelected] = useState<LedgerMovement | null>(null);
   const [showReassign, setShowReassign] = useState(false);
 
-  const load = useCallback(async (pg: number, tf: TypeFilter) => {
+  const load = useCallback(async (pg: number, tf: TypeFilter, timef: TimeFilter) => {
     setLoading(true);
     setError(null);
     try {
+      const date_from = timef !== "ALL"
+        ? toLocalDateString(subCalendarMonths(new Date(), TIME_FILTER_MONTHS[timef]))
+        : undefined;
       const data = await getMovements({
         security_id: securityId,
         txn_type: tf !== "ALL" ? tf : undefined,
+        date_from,
         limit: PAGE_SIZE,
         offset: pg * PAGE_SIZE,
       });
@@ -79,8 +102,8 @@ export default function StockTransactionsTable({ securityId }: Props) {
   }, [securityId]);
 
   useEffect(() => {
-    load(page, typeFilter);
-  }, [load, page, typeFilter]);
+    load(page, typeFilter, timeFilter);
+  }, [load, page, typeFilter, timeFilter]);
 
   useEffect(() => {
     listAccounts()
@@ -106,24 +129,47 @@ export default function StockTransactionsTable({ securityId }: Props) {
     setPage(0);
   }
 
+  function handleTimeFilter(tf: TimeFilter) {
+    setTimeFilter(tf);
+    setPage(0);
+  }
+
   return (
     <div className="space-y-3">
-      {/* Toolbar: type filter pills + batch reassign */}
+      {/* Toolbar: type filter pills + time period pills + batch reassign */}
       <div className="flex flex-wrap items-center gap-2">
-        {TYPE_PILLS.map((p) => (
-          <button
-            key={p.value}
-            type="button"
-            onClick={() => handleTypeFilter(p.value)}
-            className={`rounded-[var(--radius-pill)] border px-3 py-1 text-xs font-medium transition-colors ${
-              typeFilter === p.value
-                ? "border-accent-blue/50 bg-accent-blue/10 text-accent-blue"
-                : "border-border text-text-muted hover:bg-bg-hover hover:text-text"
-            }`}
-          >
-            {p.label}
-          </button>
-        ))}
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Transaction type filter">
+          {TYPE_PILLS.map((p) => (
+            <button
+              key={p.value}
+              type="button"
+              onClick={() => handleTypeFilter(p.value)}
+              className={`rounded-[var(--radius-pill)] border px-3 py-1 text-xs font-medium transition-colors ${
+                typeFilter === p.value
+                  ? "border-accent-blue/50 bg-accent-blue/10 text-accent-blue"
+                  : "border-border text-text-muted hover:bg-bg-hover hover:text-text"
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Time period">
+          {TIME_PILLS.map((p) => (
+            <button
+              key={p.value}
+              type="button"
+              onClick={() => handleTimeFilter(p.value)}
+              className={`rounded-[var(--radius-pill)] border px-3 py-1 text-xs font-medium transition-colors ${
+                timeFilter === p.value
+                  ? "border-accent-blue/50 bg-accent-blue/10 text-accent-blue"
+                  : "border-border text-text-muted hover:bg-bg-hover hover:text-text"
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
         <button
           type="button"
           onClick={() => setShowReassign(true)}
@@ -262,7 +308,7 @@ export default function StockTransactionsTable({ securityId }: Props) {
           onClose={() => setSelected(null)}
           onRefresh={() => {
             setSelected(null);
-            load(page, typeFilter);
+            load(page, typeFilter, timeFilter);
           }}
         />
       )}
@@ -273,7 +319,7 @@ export default function StockTransactionsTable({ securityId }: Props) {
           mode="batch"
           lockedSecurityId={securityId}
           onClose={() => setShowReassign(false)}
-          onReassigned={() => { setShowReassign(false); load(page, typeFilter); }}
+          onReassigned={() => { setShowReassign(false); load(page, typeFilter, timeFilter); }}
         />
       )}
     </div>

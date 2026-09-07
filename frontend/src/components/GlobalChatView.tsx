@@ -106,7 +106,7 @@ export default function GlobalChatView() {
       return;
     }
     setConfigError(null);
-    setModeLabel("💼 Portfolio Chat");
+    setModeLabel("📈 Options Chat");
     setSymbolLabel(
       `Last ${activitiesLimit} · ${selectedAgents.length} agent(s)` +
         (includeSymbolData ? " · symbol data" : "") +
@@ -285,7 +285,7 @@ export default function GlobalChatView() {
           <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2">
             <ModeCard
               icon="💼"
-              title="Portfolio Chat"
+              title="Options Chat"
               desc="Chat about your tracked symbols and recent analysis activities"
               onClick={() => selectMode("portfolio")}
               tone="blue"
@@ -304,7 +304,7 @@ export default function GlobalChatView() {
       {phase === "portfolio-config" && (
         <section className="surface overflow-hidden">
           <div className="flex items-center justify-between border-b border-border px-5 py-3">
-            <h2 className="text-base font-semibold">💼 Portfolio Chat</h2>
+            <h2 className="text-base font-semibold">📈 Options Chat</h2>
             <BackBtn onClick={reset} />
           </div>
           <div className="flex flex-col gap-6 px-5 py-5">

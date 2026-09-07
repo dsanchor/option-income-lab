@@ -13,6 +13,7 @@ import PortfolioHoldingsCard from "@/components/PortfolioHoldingsCard";
 import DetailSection from "@/components/DetailSection";
 import StockTransactionsTable from "@/components/StockTransactionsTable";
 import SymbolDisambiguation from "@/components/SymbolDisambiguation";
+import SymbolConfigurationCard from "@/components/SymbolConfigurationCard";
 import type { SymbolDetail, SymbolDisambiguationResult } from "@/types/symbol-detail";
 import type { Plan as PlanRow } from "@/types/plans";
 
@@ -174,6 +175,15 @@ export default async function SymbolDetailPage({
       {/* ── Stocks Section ─────────────────────────────────────────────── */}
       {stocksSecurityId && (
         <DetailSection title="Stocks">
+          {/* Symbol Configuration — first, above Holdings, per contract */}
+          <SymbolConfigurationCard
+            symbol={symbol}
+            security={d.security!}
+            enrichment={d.enrichment ?? {}}
+            watchlist={d.watchlist ?? { covered_call: false, cash_secured_put: false, buy_tracker: false }}
+            telegramEnabled={d.telegram_notifications_enabled ?? false}
+            usOptionsEligible={usOptionsEligible}
+          />
           {hasPortfolio && (
             <PortfolioHoldingsCard portfolio={d.portfolio!} symbolState={symbolState} />
           )}

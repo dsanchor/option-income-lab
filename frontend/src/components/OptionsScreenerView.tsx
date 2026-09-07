@@ -17,6 +17,20 @@ import type {
   ScreenerSortField,
   ShareStatus,
 } from "@/types/screener";
+import type { SymbolRow, SymbolsOverview } from "@/types/symbols";
+
+/**
+ * Fail-closed screener eligibility gate.
+ * Consumes the authoritative backend boolean `screener_eligible` directly.
+ * Only rows where the backend explicitly sets `screener_eligible === true`
+ * enter the dropdown — missing, false, null, or non-boolean values all
+ * exclude the row. No MIC guesses, share counts, or watchlist signals are
+ * reimplemented here; those predicates belong exclusively in the backend's
+ * `_compute_symbols_overview` single source of truth.
+ */
+function isScreenerEligible(r: SymbolRow): boolean {
+  return r.screener_eligible === true;
+}
 
 const PREFERENCE_OPTIONS: MultiSelectOption[] = [
   { value: "Preferred", label: "Preferred" },
@@ -201,14 +215,16 @@ export default function OptionsScreenerView() {
   // (independent of the screener's own response, which only lists symbols
   // matching the CURRENT filter — using that here would shrink the
   // available options as a user narrows down).
+  // Filtered to rows where the backend sets screener_eligible === true.
   useEffect(() => {
     let cancelled = false;
     fetch("/api/symbols/overview")
       .then((res) => res.json())
-      .then((body) => {
+      .then((body: SymbolsOverview) => {
         if (cancelled) return;
-        const rows = (body?.rows ?? []) as { symbol: string }[];
-        setSymbolOptions(rows.map((r) => ({ value: r.symbol, label: r.symbol })));
+        const allRows: SymbolRow[] = body?.symbols ?? body?.rows ?? [];
+        const eligible = allRows.filter(isScreenerEligible);
+        setSymbolOptions(eligible.map((r) => ({ value: r.symbol, label: r.symbol })));
       })
       .catch(() => {
         if (!cancelled) setSymbolOptions([]);
@@ -217,6 +233,18 @@ export default function OptionsScreenerView() {
       cancelled = true;
     };
   }, []);
+
+  // Stale-selection guard: when the eligible universe is (re)loaded, remove
+  // any selected symbol that is no longer in the approved list.
+  useEffect(() => {
+    if (symbolOptions.length === 0) return; // universe not yet loaded
+    const validSet = new Set(symbolOptions.map((o) => o.value));
+    setAppliedState((prev) => {
+      const cleaned = prev.symbols.filter((s) => validSet.has(s));
+      if (cleaned.length === prev.symbols.length) return prev;
+      return { ...prev, symbols: cleaned, offset: 0 };
+    });
+  }, [symbolOptions]);
 
   // Any filter change other than pagination itself resets to page 1 —
   // otherwise a narrower result set could leave `offset` pointing past the

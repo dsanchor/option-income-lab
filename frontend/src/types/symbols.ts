@@ -33,6 +33,14 @@ export interface SymbolRow {
   row_source?: "portfolio" | "watchlist" | "both";
   is_auto_enrolled?: boolean;
   us_options_eligible?: boolean;
+  screener_eligible?: boolean;
+  // Pricing cache fields (Phase 4 — danny-symbol-pricing-cache-contract.md)
+  price_display_currency?: string | null;  // quote currency as reported: "GBp", "USD", "EUR", "CHF"
+  price_currency?: string | null;          // ISO 4217 major-unit code: "GBP", "USD", "EUR", "CHF"
+  price_eur?: number | null;               // price_major × fx_rate, 2dp
+  pricing_fetched_at?: string | null;      // ISO 8601 UTC timestamp of cache fetch
+  pricing_status?: "ok" | "error" | "stale" | null;
+  current_value_eur?: string | null;       // Decimal string — portfolio_shares × price_eur
 }
 
 export interface PortfolioSummary {
@@ -46,6 +54,8 @@ export interface PortfolioSummary {
   // Danny field names (contract aliases — accept both)
   remaining_cost_basis_eur?: string | null;
   realized_result_eur?: string | null;
+  // Pricing Phase 4
+  total_current_value_eur?: string | null;
 }
 
 export interface SymbolsOverview {

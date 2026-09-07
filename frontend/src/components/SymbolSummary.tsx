@@ -81,8 +81,7 @@ export default function SymbolSummary({
 
   return (
     <>
-      <section className="surface overflow-hidden">
-        <div className="overflow-x-auto">
+      <div className="overflow-x-auto">
           <table className="w-full min-w-[820px] text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
@@ -128,8 +127,7 @@ export default function SymbolSummary({
               </tr>
             </tbody>
           </table>
-        </div>
-      </section>
+      </div>
 
       {open && (
         <div
