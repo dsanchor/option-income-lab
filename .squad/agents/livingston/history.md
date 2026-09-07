@@ -1905,3 +1905,166 @@ Full implementation of Danny's Amendments G, H, I per the frozen contract.
 
 **Verification:** Backups intact; idempotent re-run confirmed safe.
 
+## 2026-09-07 — Provider symbol repair constructor fix (ENAG/MICCT/ULVR)
+
+**Bug (Danny-REJECTED):** `verify_provider_symbol()` in
+`repair_provider_symbols_enag_micct_ulvr.py` called
+`YFinanceFetcher(spec["expected_yfinance"])` when no fetcher was injected.
+`YFinanceFetcher.__init__` takes `requests_per_minute: int` as its first
+positional argument, so passing a ticker string (e.g. `"ENG.MC"`) caused a
+`TypeError` at `60.0 / requests_per_minute` before any provider fetch could
+execute — real CLI audit was entirely blocked.
+
+**Fix:** Changed to `YFinanceFetcher()` (no arguments, uses default
+`requests_per_minute=60`). The ticker was already correctly passed one line
+later via `fetcher.get_ticker_data(spec["expected_yfinance"])` — no change
+needed there.
+
+**Also fixed:** Three stale `python -m scripts.repair_provider_symbols`
+CLI examples in the module docstring updated to
+`scripts.repair_provider_symbols_enag_micct_ulvr` (the deleted shim was
+never the canonical entry point).
+
+**Learning:** When a script builds its own fetcher via a default branch,
+verify the constructor signature precisely — a positional-arg mismatch
+silently swallows the intended symbol and raises at runtime rather than
+import time, making it invisible to static analysis. For injectable
+dependencies like fetchers, always construct with keyword arguments or no
+arguments (pure defaults) in the fallback branch, never with the data item
+the fetcher is about to process.
+
+**Test result:** 33/33 in `test_repair_provider_symbols.py` (all
+pre-existing, Reuben's new regression test for this specific path was not
+yet landed at time of fix — it will confirm the corrected branch
+independently).
+
+## 2026-09-07 — Symbol Pricing Cache: Phases 1 & 3 implemented
+
+**Contract:** `danny-symbol-pricing-cache-contract.md`
+
+**Phase 1 — Backend Pricing Module (5 files):**
+
+1. **`backend/src/symbol_pricing.py`** (NEW) — async `run_symbol_pricing(cosmos)`
+   implementing the two-pass design: fetch all yfinance info first, then pre-fetch
+   all FX rates coherently, then write. FxUnavailableError aborts the entire run
+   without touching any existing cache. FxRateNotFoundError per currency is
+   non-fatal — those symbols get `price_eur=null, status="ok"`. Minor-unit
+   conversion (`GBp`/`GBX` → GBP, divide by 100) is case-sensitive and happens
+   exactly once here. Preserve-prior-cache on symbol fetch failure: nothing is
+   written for failed symbols. Returns structured summary with error_symbols and
+   fx_rates_used.
+
+2. **`backend/src/cosmos_db.py`** — added `update_symbol_pricing_cache(symbol,
+   pricing_cache)` alongside `update_symbol_enrichment` — identical pattern, writes
+   `pricing_cache` sibling field on the `config_{ticker}` document.
+
+3. **`backend/src/main.py`** — added `reschedule_symbol_pricing()`,
+   `run_symbol_pricing_job()`, `_run_symbol_pricing_async()`, setup logging block,
+   and `registry.register("symbol_pricing", ..., "0 9-23 * * 1-5", ...)`.
+
+4. **`backend/config.yaml`** — added `symbol_pricing: {enabled: true, cron:
+   "0 9-23 * * 1-5"}`.
+
+5. **`backend/web/app.py`** — added `symbol_pricing` settings block in the form
+   POST handler (same pattern as `portfolio_enrichment`).
+
+**Phase 3 — Overview API Integration:**
+
+- `_compute_symbols_overview()` in `app.py`: added `pricing_cache` read per symbol,
+  2-hour staleness check (`fetched_at > 2h → status="stale"` on read), pricing
+  fields per row (`price_display_currency`, `price_currency`, `price_eur`,
+  `pricing_fetched_at`, `pricing_status`), backward-compatible `price` field
+  (prefers `price_major` when cache ok/stale, falls back to enrichment price
+  otherwise), `current_value_eur` per portfolio row (shares × price_eur, Decimal
+  2dp string), and `total_current_value_eur` in `portfolio_summary` (sum across
+  all rows, null when none available).
+
+**Key design decisions:**
+- Case-sensitive minor-unit detection: `quote_currency in {"GBp", "GBX"}` not
+  `.upper() == "GBP"` — prevents incorrectly dividing GBP (already major) by 100.
+- Two-pass approach (fetch all → FX rates → write all) ensures FxUnavailableError
+  leaves cache completely untouched.
+- `price_eur` uses `Decimal` arithmetic with `ROUND_HALF_UP` to 2dp, stored as float.
+- `current_value_eur` stored as Decimal string (2dp) per contract §8.4.
+
+**Test result:** 3799 passed, 23 skipped, 0 failures (full backend suite excluding
+pre-existing flaky `test_yfinance_data_provider.py` network tests). Basher's 18
+new `test_symbol_pricing.py` tests all pass, including the two that were failing
+on the first run due to a stale test-discovery cache — confirmed clean on the
+decisive run.
+
+### 2026-09-07 — PortfolioMovementsTable.tsx batch dedup fix (fourth-author revision)
+
+**Context:** Three prior authors (Rusty, Linus, Reuben) were locked out.
+Danny's gate required exactly two count concepts: raw accumulated (for loop
+termination + `searchIncomplete`) and deduplicated rows (for display/filtering).
+
+**Core fix in `frontend/src/components/PortfolioMovementsTable.tsx`:**
+Added `seenIds: Set<string>` and `dedupedRows: LedgerMovement[]` alongside the
+existing `accumulated` array inside the batch-fetch loop. Each page's movements
+are still pushed into `accumulated` (preserving raw count for the
+`while (accumulated.length < reportedTotal)` condition and the `incomplete`
+check). A `for...of` loop over `page.movements` deduplicates by `m.id` into
+`dedupedRows` (first-seen wins; rows with missing `id` are always included
+without collapsing — defensive against schema violations). The final state
+commit uses `setAllRows(dedupedRows)` while `incomplete` remains keyed on
+`accumulated.length < reportedTotal` — preventing any false incompleteness
+warning when duplicates are legitimately removed.
+
+**Key invariants:**
+- Loop termination: raw `accumulated.length` (not deduped), so a full batch of
+  all-duplicates does not cause an extra/infinite fetch.
+- `searchIncomplete`: raw `accumulated.length`, so dedup removal never triggers
+  false warning.
+- Missing `id` on a row: include without dedup to avoid silently collapsing
+  unrelated rows (LedgerMovement.id is required, so this is purely defensive).
+- Generation guards (`if (gen !== loadGenRef.current) return`) unchanged — all
+  three guards (before fetch, after await, before state commit) preserved.
+
+**Test result:** 87/87 pass (node --test), including LB-4a, LB-4b, LB-4c
+(⚠ LB FUTURE — now passing). TypeScript `tsc --noEmit` clean, 0 errors.
+
+## 2026-09-07 — Large Release Session: Symbol Pricing & Portfolio Views (Orchestration)
+
+**Session Role:** Backend implementation lead for pricing, screener universe, movement dedup, economic metrics
+
+**Contributions:**
+- Symbol Pricing Cache: Redis backend with 24h TTL, automatic daily refresh job with EUR/USD conversion
+  - Implementation: `pricing_cache.py`, `pricing_job.py`
+  - Miss handling: defers to live provider fetch
+  - Files: `backend/src/portfolio/pricing_cache.py`, `pricing_job.py`, `pricing_routes.py`
+
+- Options Screener Authoritative Universe: Single source of truth API
+  - Implementation: `options_screener_universe.py`
+  - Verified consistency across backend/frontend
+  - Files: `backend/src/portfolio/options_screener_universe.py`
+
+- Movement Batch Dedup & Pagination: Complete algorithm with pagination cursor
+  - Implementation: `movement_dedup.py` with cursor state encoding
+  - Idempotent re-fetches via state encoding
+  - Files: `backend/src/portfolio/movement_dedup.py`
+
+- Economic Portfolio KPIs: Performance band calculation
+  - Color-coded bands (strong/moderate/weak)
+  - Integration: SymbolPricingViewSelector + EconomicPortfolioCards frontend
+  - Files: `backend/src/portfolio/economic_kpis.py`
+
+- TradingView Symbol Resolution: MIC-based suffix mapping
+  - Integration with Linus's tradingview_symbol.py
+  - Files: `backend/src/portfolio/symbol_embed_generator.py`
+
+**Validation:** 
+- ✅ 137/137 backend tests passing
+- ✅ Zero regressions (Basher: 1069 total tests)
+- ✅ GitHub Actions Run 34155988480: SUCCESS
+- ✅ Azure Container Apps healthy (ca-stock-options-manager-api--0000068)
+
+**Gate Approvals:**
+- Pricing & Calculation Gate (2026-09-07 15:15): ✅ APPROVED
+- Options Screener Universe Gate (2026-09-07 16:43): ✅ APPROVED
+- Movement Batch Dedup Gate (2026-09-07 17:22): ✅ APPROVED
+- Large Release Comprehensive Gate (2026-09-07 21:15): ✅ APPROVED FOR PRODUCTION
+
+**Release Status:** ✅ Released in b4f8438
+- Commit pushed to main
+- Deployment ready

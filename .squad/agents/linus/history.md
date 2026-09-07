@@ -41,6 +41,27 @@
 
 ## Recent Learnings
 
+### 2026-09-07 — Symbols Overview: Authoritative Screener-Eligibility Booleans
+- `_compute_symbols_overview` in `backend/web/app.py` previously emitted no
+  `us_options_eligible` or `screener_eligible` field on any row, causing
+  the Options Screener dropdown to run a client-side reimplementation that
+  was both fail-open on MIC and divergent from the `is_watchlist_member`
+  predicate.
+- **Fix pattern:** compute `screener_universe` once before the row loop by
+  calling `compute_options_screener_universe(symbols, portfolio_shares_by_ticker)`
+  — the canonical single-source-of-truth from `options_screener_universe.py`.
+  Per-row: `screener_eligible = sym in screener_universe` (set membership,
+  zero logic duplication). `us_options_eligible` uses `_resolve_screener_mic`
+  + `_is_us_options_eligible` (also re-exported from the shared modules).
+- **Both booleans always present** on every row (non-US, zero-share,
+  watchlist-only all get `False`/correct values) — no undefined in API contract.
+- **Set membership is the pattern** for per-row predicates computed from a
+  universe function: call the universe function once, then `sym in universe`
+  per row. Avoids N calls to a function designed for batch iteration.
+- 66/66 relevant backend tests pass (`test_symbol_configuration_section.py` +
+  `test_options_screener_universe.py`). Pre-existing failure in
+  `test_options_chain_persistence_integration.py` is unrelated.
+
 ### 2026-09-06 — Portfolio Summary: CMP Cost Basis (Danny's Contract)
 - Replaced the ambiguous `purchases − sale_proceeds` formula for `current_invested_eur`
   with true remaining cost basis: **pool_cost residual** from the CMP algorithm.
@@ -1602,3 +1623,117 @@ non-consulting collaboration on the same feature.
 
 **Verification:** All contracts production-ready; no concurrent edit conflicts with Rusty's frontend work.
 
+
+## Provider-symbol corrections: ENAG/MICCT/ULVR (new artifact)
+
+Task: `.squad/decisions/inbox/danny-provider-symbol-corrections-enag-micct-ulvr.md`
+— pure `provider_symbols.yfinance`/`.tradingview` override corrections for
+three securities whose canonical identity (security_id/MIC) is already
+correct; Yahoo just doesn't mirror the local ticker after a spin-off/merger
+(Magnum "MICCT"→"MICC", Unilever "ULVR"→"UNA" on Euronext Amsterdam;
+Enagás "ENAG"→"ENG" on BME). No identity migration — narrower in scope than
+the PEP/AD repairs (zero writes to config/ledger/portfolio, ever).
+
+Filename conflict discovered and resolved: the contract's own "Authorized
+paths" section (and the independently-authored test file,
+`backend/tests/test_repair_provider_symbols.py`, written by Reuben)
+name the implementation `scripts/repair_provider_symbols_enag_micct_ulvr.py`,
+while this session's task instruction asked for the shorter
+`scripts/repair_provider_symbols.py`. Resolved by keeping all real logic in
+the contract/test-named file (so Reuben's independently-authored suite runs
+unmodified) and adding `repair_provider_symbols.py` as a zero-logic
+re-export shim (`from ... import *`) satisfying the shorter requested
+filename without a second maintained copy. Lesson: when a contract document
+and a live task instruction disagree on an artifact's exact filename, check
+whether a concurrent peer has already authored tests against one specific
+name before choosing — matching the tests unlocks independent verification
+without asking anyone to adjust already-completed work.
+
+Design choices of note:
+- Live verification only checks `currency` (not the PEP repair's stricter
+  `currency == financialCurrency` triple-check) — this contract's own §1
+  text only requires `currency == listing_currency` corroboration for this
+  narrower repair; over-porting the PEP task's stricter gate would have
+  been scope creep not asked for here.
+- No new general MIC↔exchange-name mapping table: since no "AD repair"
+  hint table had landed yet at implementation time, used a small
+  `_REPAIR_SCOPED_MIC_EXCHANGE_HINTS` dict explicitly scoped to only the
+  two MICs this repair touches (XMAD, XAMS), documented as evidence-logging
+  only, not a shared/reusable table — matches the contract's own explicit
+  fallback instruction for this exact situation.
+- Company-name corroboration (ENAG only, the one candidate flagged "must
+  verify") uses a lightweight token-overlap heuristic after stripping
+  corporate-suffix noise (SA/PLC/NV/Inc/etc.) — good enough to distinguish
+  "Enagas SA" ≈ "Enagas Sociedad Anonima" from an unrelated issuer, without
+  a fuzzy-matching dependency.
+- Enrichment persistence sink (`cosmos`) is optional dependency-injected;
+  when absent, the enrichment rerun (§4) is skipped entirely rather than
+  erroring — production `main()` always supplies a real
+  `CosmosDBService`, but this let Reuben's non-enrichment-focused test
+  classes exercise the provider_symbols correction path in isolation
+  without needing to fake/monkeypatch DGI analysis.
+- Exit code 3 covers BOTH a failed post-write provider_symbols
+  verification AND (per the contract's explicit "informationally, enrichment"
+  clause) an enrichment verification failure on an otherwise-successfully-
+  corrected security — confirmed via Reuben's
+  `test_enrichment_failure_reported_non_fatally_without_rollback`, which
+  asserts `exit_code == 3` while also asserting the provider_symbols
+  correction itself is NOT rolled back. Non-fatal here means "doesn't abort
+  the run or undo durable state," not "exit code stays 0."
+
+### Verification
+- `backend/tests/test_repair_provider_symbols.py` (Reuben, independent
+  authorship): 31/31.
+- `backend/tests/test_provider_symbols.py`: 72/72 (no regression — this
+  repair only consumes `validate_provider_symbols`, never modifies it).
+- `backend/tests/test_repair_pep_security_id.py`: 51/51 (unaffected,
+  confirms no cross-script interference).
+- `git status --porcelain` confirms only the two new script files were
+  added by me; Reuben's test file, and unrelated concurrent AD-repair/
+  frontend work already present in the tree, untouched.
+- No production execution, no commit/push.
+
+## 2026-09-07 — Movements Global Symbol Search Fix (post-Danny gate)
+
+**Task:** Fix PortfolioMovementsTable.tsx per Danny's rejection gate. Rusty locked out; Linus owns this revision.
+
+**Root cause confirmed:**
+- Backend `get_movements()` exact-matches `security_id` (no substring/multi-field support); Python-side slices in memory — no real DB-level pagination limit.
+- Old frontend sent `security_id` to backend + filtered the returned 50-row page client-side → partial matches invisible; pagination counts from server's unfiltered `total_count`.
+
+**Strategy chosen:** Danny's mandated client-side full-fetch pattern.
+- `FULL_FETCH_LIMIT = 10_000` — safe since backend already loads all matching rows into Python memory before slicing.
+- When `securityId.trim()` is non-empty: fetch with `limit=FULL_FETCH_LIMIT, offset=0`, no `security_id` to backend → `allRows`. Apply `matchesMovementSymbol` predicate → `filteredAllRows`. Paginate locally (slice by `offset`/`PAGE_SIZE`). Prev/Next update only `offset` (no re-fetch).
+- When `securityId.trim()` is empty: efficient server pagination as before (`limit=50, offset=N`), stored in `serverData`.
+- `buildFilter` no longer emits `security_id` — symbol search is always client-side.
+- `totalCount` and Prev/Next disabled predicates derive exclusively from `filteredAllRows.length` (client mode) or `serverData.total_count` (server mode) — single source of truth.
+- Generation counter (`loadGenRef`) guards all async calls against races/stale responses.
+- `onRefresh`, `onCreated`, `handleDelete` updated to pass current `securityId` to `load`.
+
+**Files changed:** `frontend/src/components/PortfolioMovementsTable.tsx` only.
+**Backend:** No changes required (Python already fetches all rows into memory; `FULL_FETCH_LIMIT` is safe).
+**Validation:** `npx tsc --noEmit` passes with 0 errors.
+**Committed:** No (per instructions). Basher to add adversarial multi-page pagination/count tests.
+
+## 2026-09-07 — Large Release Session: Symbol Pricing & Portfolio Views (Orchestration)
+
+**Session Role:** TradingView symbol resolution (international market support)
+
+**Contributions:**
+- Implemented `resolve_tradingview_symbol()` in `backend/src/portfolio/tradingview_symbol.py`
+- MIC → suffix mapping for TradingView chart embeds (XLON→.L, XETR→.DE, XSWX→.SW, etc.)
+- Wired resolution into TradingView embed generation
+- Legacy US free-text exchange handling (NASDAQ/NYSE/AMEX fallback)
+- Fallback for unknown MICs: bare ticker (fail-soft for embeds)
+
+**Contract:** Danny's TradingView design approval (2026-09-07)
+
+**Release Status:** ✅ Released in b4f8438 — GitHub Actions Run 34155988480 SUCCESS
+- 137/137 backend tests passing
+- 932/932 frontend tests passing
+- Zero regressions (Basher validation)
+
+**Key Design Properties:**
+- No network calls from resolution function (table lookup only)
+- Fail-soft fallback for unknown MICs (bare ticker, not error)
+- Backward compatible (US securities unaffected)

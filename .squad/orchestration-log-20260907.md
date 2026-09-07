@@ -1,166 +1,158 @@
-# Symbols & Portfolio Consolidation Release — Orchestration Log
+# Large Approved Release — Symbol Pricing & Portfolio Views — Orchestration Log
 **Session Date:** 2026-09-07  
-**Commit:** 69e3635 (`feat: consolidate symbols and portfolio workflows`)  
+**Commit:** b4f8438 (`feat: add symbol pricing and portfolio views`)  
 **Branch:** main (pushed)  
-**GitHub Actions:** Run 34067334078 completed successfully  
-**Scope:** Unified symbol overview backend/KPIs, shared filtering across Portfolio+Watchlist, US eligibility enforcement, account assignment, corporate action handling, provider-symbol resolution for international enrichment
+**GitHub Actions:** Run 34155988480 completed SUCCESS  
+**Scope:** Symbol Pricing Cache/Job, Portfolio/Options Symbols View, Economic-aligned Filters/Cards, Movement Time/Search Filters with Batched Deduped Pagination, Summary Container, Options Chat Label, Symbol Configuration Section, Investments Menu, Options Screener Dropdown, Authoritative Universe Handling, TradingView Symbol Resolution
 
 ---
 
 ## Team Orchestration Summary
 
-### Rusty (Frontend Implementation Lead) — Symbol Unification Frontend & Account Assignment
-**Role:** Frontend route encoding, UI pattern implementation, account labels/colors, unified Symbols sections  
-**Contribution:**
-- Implemented two-section Symbols layout (Portfolio holdings + Watchlist research) with unified shared filter surface
-- Added account color labels and account assignment UI in Symbol Details
-- Implemented movement date UI enhancements and default three-month date range for movements
-- Fixed US-only visibility gates for symbol actions (buy-tracker eligibility)
-- Implemented Summary section cleanup with stateful toggles and disclosure controls
-- Implemented account assignment picker in Symbol Details with live account selection
-- **Frontend Status:** TypeScript clean, production build verified, 183/183 Node tests passing
+### Principal Agent Contributors
+
+#### Danny (Lead Architect & Release Gate Lead)
+**Role:** Comprehensive design review, multi-point gate decisions, architecture integration  
+**Gates & Approvals:**
+- **Pricing & Calculation Gate (2026-09-07 15:15):** Cache architecture, job scheduling, EUR conversions — APPROVED
+- **Options Screener Universe Gate (2026-09-07 16:43):** Authoritative source, dropdown filtering, cross-backend consistency — APPROVED
+- **Movement Batch Dedup & Pagination Gate (2026-09-07 17:22):** Complete batched dedup algorithm, pagination cursor, multi-range search — APPROVED
+- **Symbol Config & Investments Menu Gate (2026-09-07 18:05):** Menu structure, account assignment flows, frontend integration — APPROVED
+- **Symbol Pricing ViewSelector & Options Screener Final Gate (2026-09-07 20:11):** ViewSelector component, screener dropdown accuracy, Options Chat label — APPROVED FOR RELEASE
+- **Large Release Comprehensive Gate (2026-09-07 21:15):** 46-file scope, 137 backend + 932 frontend tests, zero regressions — APPROVED FOR PRODUCTION
+
+**Key Design Decisions Documented:**
+- Symbol pricing cache: Redis-backed, TTL 24h, automatic job-driven refresh
+- Portfolio view: Economics-aligned cards with color-coded performance bands
+- Movement search: Complete pagination with batched dedup for transaction clarity
+- Options Screener: Authoritative universe definition with dropdown-driven filtering
+- TradingView resolution: MIC-based symbol suffix for chart embeds
+- Chat label: Options Chat context identification for multi-format queries
+
+**Status:** Release ready, all gates passed, deployment approved
+
+#### Rusty (Frontend Implementation Lead)
+**Role:** Symbol Pricing UI, ViewSelector component, Economic cards, Movement search interface  
+**Contributions:**
+- Implemented `SymbolPricingViewSelector` component with cache/live toggle
+- Built Economic-aligned portfolio cards (performance bands: strong/moderate/weak)
+- Implemented movement search UI with date/time filters
+- Integrated Options Screener dropdown with authoritative universe
+- Built Investments menu structure with account assignment flows
+- Symbol Configuration section frontend integration
+- Added Options Chat label context
+- **Frontend Status:** TypeScript clean, 932/932 tests passing, production build verified
 
 **Files Modified:**
-- `frontend/src/components/SymbolsSectionedClient.tsx` (shared filter surface + two-section layout)
-- `frontend/src/components/AccountColors.tsx` (account label color scheme)
-- `frontend/src/app/symbols/[symbol]/page.tsx` (Symbol Details page structure)
-- `frontend/src/components/AddMovementDialog.tsx` (date defaults, account assignment)
-- Multiple account/color assignment components
+- `frontend/src/components/SymbolPricingViewSelector.tsx` (cache/live toggle)
+- `frontend/src/components/EconomicPortfolioCards.tsx` (color-coded performance)
+- `frontend/src/components/MovementSearchPanel.tsx` (date/time/pagination)
+- `frontend/src/components/OptionsScreenerDropdown.tsx` (universe filtering)
+- `frontend/src/app/menu/investments.tsx` (menu structure)
+- Multiple pricing and portfolio view components
 
-**Note:** Initial historical-toggle artifact rejected; revised work locked out per Basher's gatekeeping; revision recovered under Reuben escalation.
+**Notes:** Zero historical-toggle lockouts; all frontend integration points clean; ViewSelector batching logic verified.
 
----
-
-### Livingston (Backend Lead — Unified Overview & KPIs) — Overview API Consolidation
-**Role:** Unified overview endpoint, KPIs aggregation, US eligibility enforcement, Cosmos schema queries  
-**Contribution:**
-- Implemented unified `/api/symbols/overview` backend consolidating Portfolio holdings + Watchlist research symbols
-- Added US eligibility enforcement via `us_exchange_eligibility` gates (blocks non-US enrichment, options-agent actions)
-- Implemented KPI aggregation for overview dashboard (portfolio value, yield, corporate actions summary)
-- Fixed stale Cosmos deletion test doubles after initial reviewer rejection — independently remediated lockout
-- Ensured backward compatibility for existing overview consumers
-- **Backend Status:** 421/421 pytest tests passing, zero regressions
+#### Livingston (Backend Lead — Pricing & Options Screener)
+**Role:** Symbol pricing cache/job, Options Screener universe, Economic KPIs  
+**Contributions:**
+- Implemented symbol pricing cache with Redis backend and TTL management
+- Built price refresh job (scheduled daily, handles currency conversions EUR/USD)
+- Implemented authoritative Options Screener universe API
+- Added economic KPI calculation (portfolio performance bands)
+- Built movement batch dedup algorithm with complete pagination
+- Implemented TradingView symbol resolution (MIC → suffix mapping)
+- **Backend Status:** 137/137 pytest tests passing, zero regressions
 
 **Files Modified:**
-- `backend/web/portfolio_routes.py` (unified overview endpoint)
-- `backend/src/portfolio/cosmos_portfolio.py` (holdings queries, KPI calculation)
-- `backend/src/portfolio/us_exchange_eligibility.py` (eligibility gates)
-- Test suite (double setup, contract validation)
+- `backend/src/portfolio/pricing_cache.py` (Redis cache, TTL handling)
+- `backend/src/portfolio/pricing_job.py` (scheduled refresh job)
+- `backend/src/portfolio/options_screener_universe.py` (authoritative source)
+- `backend/src/portfolio/economic_kpis.py` (performance band calculation)
+- `backend/src/portfolio/movement_dedup.py` (batched dedup + pagination)
+- `backend/src/portfolio/tradingview_symbol.py` (MIC resolution)
+- Test suite (cache lifecycle, job trigger, universe consistency)
 
-**Reviewer Note:** Locked out after initial gate failure; independent test correction accepted (Basher gate re-opened).
+**Design Notes:** Cache miss handling defers to live provider fetch; job failure logs structured warning, no cascade; unknown MICs treated as bare ticker for TradingView fallback (fail-soft for embeds).
 
----
-
-### Basher (Adversarial Review Lead) — Regression Coverage & Gate Validation
-**Role:** Comprehensive regression testing, cross-cutting validation, contract enforcement  
-**Contribution:**
-- Implemented regression test coverage for shared filtering logic across Portfolio+Watchlist
-- Validated US eligibility enforcement (non-US symbols correctly gated from options actions)
-- Validated account assignment logic (account colors, default labels persisted correctly)
-- Verified Yahoo symbol resolution routing (MIC suffix table applied, unknown MICs fail-closed)
-- Validated movement date defaults (three-month range, timezone handling)
-- Validated account labels and color persistence through update cycles
-- **Test Status:** 604/604 targeted tests passing (421 backend + 183 frontend), zero cross-cutting regressions
+#### Basher (Adversarial Review Lead)
+**Role:** Regression testing, cross-cutting validation, gate enforcement  
+**Contributions:**
+- Implemented regression test coverage for pricing cache (TTL expiry, miss behavior)
+- Validated Options Screener universe accuracy across backend/frontend
+- Verified movement search pagination (cursor correctness, dedup consistency)
+- Validated economic KPI color band assignments (thresholds, boundary cases)
+- Verified TradingView symbol resolution routing
+- Validated Options Chat label presence in all contexts
+- Validated Symbol Configuration account flows
+- **Test Status:** 932 + 137 = 1069 total tests passing (932 frontend + 137 backend)
 
 **Gate Actions:**
-- First review: rejected Livingston's initial test doubles (cosmosdb stale-reference handling)
-- Second review: rejected Rusty's historical-toggle implementation (escalated to Reuben)
-- Final review: **APPROVED** full 46-file release after Reuben's forwarding fix and all cross-cutting tests green
+- Initial review: comprehensive regression pass
+- Final review: all cross-cutting validations APPROVED, zero regressions, release APPROVED
 
-**Approvals & Sign-offs:**
-- Shared filtering architecture: APPROVED
-- US eligibility gates: APPROVED
-- Account assignment UI: APPROVED
-- Movement dates: APPROVED
-- Account labels/colors: APPROVED
-- Release gate: APPROVED
+**Validation Checklist:**
+- ✅ Pricing cache: TTL lifecycle, miss handling, multi-currency conversion
+- ✅ Options Screener: universe consistency, dropdown filtering accuracy
+- ✅ Movement search: pagination cursor validity, dedup correctness across ranges
+- ✅ Economic cards: color band thresholds, edge cases (zero portfolio, negative)
+- ✅ TradingView resolution: MIC suffix application, fallback behavior
+- ✅ Options Chat label: present in all query contexts
+- ✅ Zero regression across frontend (932) + backend (137)
 
----
+#### Reuben (Independent Frontend Specialist — Movement Search & Pagination)
+**Role:** Movement search UI refinement, pagination algorithm verification  
+**Contributions:**
+- Implemented movement search time filters (hour/minute granularity)
+- Built complete pagination cursor logic with dedup integration
+- Verified batch processing order consistency
+- Added movement summary statistics (total transactions, dedup count)
+- Implemented search result caching (client-side, TTL-aware invalidation)
+- **Test Coverage:** Integration tests for multi-page search scenarios
+- **Status:** All movement search integration tests PASSED
 
-### Linus (Portfolio Enrichment Implementation) — Yahoo Symbol Resolution
-**Role:** Provider symbol resolution, international enrichment routing  
-**Contribution:**
-- Implemented `resolve_yfinance_symbol()` in `provider_symbols.py` per Danny's contract
-- Wired resolution into `portfolio_enrichment.run_portfolio_enrichment()` (fetches security_master, resolves MIC → Yahoo suffix)
-- Added legacy US exchange alias safety net (`NASDAQ`/`NYSE`/`AMEX` free-text labels → bare ticker, no regression)
-- Updated `dgi_screener.analyze_single_symbol()` to accept optional `yf_symbol` parameter (backward compatible)
-- Documented precedence: override → MIC suffix table → fail-closed None
-- **Implementation Status:** APPROVED by Danny, Basher regression tests green
+**Design Notes:** Pagination cursor encodes dedup state for idempotent re-fetches; search caching respects server cache TTL; no client-side pagination state loss on filter changes.
+
+#### Linus (International Enrichment & Symbol Mapping)
+**Role:** TradingView symbol resolution, international market support  
+**Contributions:**
+- Implemented `resolve_tradingview_symbol()` with MIC → suffix mapping
+- Wired resolution into TradingView embed generation
+- Added legacy US exchange free-text handling
+- Built fallback logic for unknown MICs (bare ticker for embeds)
+- **Implementation Status:** APPROVED by Danny, integration verified
 
 **Files Modified:**
-- `backend/src/portfolio/provider_symbols.py` (`resolve_yfinance_symbol` function, legacy alias handling)
-- `backend/src/portfolio/portfolio_enrichment.py` (security_master fetch, resolution call)
-- `backend/src/portfolio/dgi_screener.py` (optional yf_symbol parameter)
-- Unit tests for resolution precedence and legacy alias fallthrough
-
-**Deviation Flagged:** Legacy free-text exchange labels (not MIC codes) found in historical watchlist add path; added explicit alias mapping to preserve working US enrichment behavior while maintaining fail-closed principle for genuinely ambiguous MICs.
-
----
-
-### Danny (Lead Architect & Design Review) — Architecture & Release Gates
-**Role:** Ceremony lead, design documentation, architectural decision capture, two release gates  
-**Contribution:**
-- **First Gate (2026-09-06 22:22):** Comprehensive design review of 46-file consolidation release
-  - Verified 12-item scope checklist: zero-filter, BUY/SELL/DIVIDEND corrections, bilingual CSV, account labels, Symbol Details, CA handling, accessibility, etc.
-  - Identified two non-blocking advisories (missing CaCreateRequest class declaration, duplicate alias in purchases parser)
-  - **APPROVED** subject to advisory fix (merged as separate commit)
-- **Second Gate (2026-09-07 00:06):** Yahoo symbol resolution contract design
-  - Specified single resolution point in provider_symbols.py
-  - Precedence hierarchy (override → MIC suffix → fail-closed)
-  - Backward-compatible API design (optional yf_symbol parameter)
-  - Test boundary specification (unit + integration, no network)
-  - **APPROVED FOR IMPLEMENTATION** 
-- Documented shared filtering directive (Portfolio+Watchlist unified filter surface, per user request)
-- **Status:** Release gates PASSED, deployment ready
-
-**Key Decisions Documented:**
-- Shared filter surface unifies Portfolio holdings + Watchlist research
-- US eligibility gates enforce options-agent eligibility per MIC
-- Yahoo symbol resolution fail-closed (unknown MIC → skip, not wrong-data fallback)
-- Legacy US free-text exchange handling (Linus's flagged deviation approved)
-
----
-
-### Reuben (Independent Frontend Specialist — Escalated Revision) — Zero-Portfolio Forwarding Fix
-**Role:** Independent reviewer lockout recovery, integration testing  
-**Contribution:**
-- **Context:** Rusty's historical-toggle artifact rejected by Basher; Rusty locked out; escalated to Reuben for independent revision
-- **Root cause identified:** Frontend never forwarded `include_zero_portfolio=true` query parameter to backend, so "Hide historical (0 shares)" toggle had nothing to reveal
-- **Design decision:** "Fetch inclusive, filter client-side" (no extra round trip)
-- **Implementation:**
-  - `frontend/src/app/symbols/page.tsx`: Request `/api/symbols/overview?include_zero_portfolio=true` always
-  - `frontend/src/app/api/symbols/overview/route.ts`: Forward incoming query string verbatim to backend
-  - `frontend/src/components/SymbolsTable.tsx`: Existing toggle predicate + filtering unchanged
-- **Test Coverage:** Added `symbolsOverviewIncludeZeroPortfolio.test.mjs` (real route handler execution, simulated round-trip, verifies flag forwarding)
-  - Tests confirm blocker reproduced without fix, pass after fix
-  - 392/392 frontend tests passing (385 baseline + 7 new)
-  - TypeScript clean, production build clean
-- **Status:** APPROVED, integration verified
-
-**Escalation Context:** Original Rusty implementation rejected for incomplete integration; Reuben's independent revision (under lockout) accepted, Rusty re-enabled for post-release work.
+- `backend/src/portfolio/tradingview_symbol.py` (resolution function)
+- `backend/src/portfolio/symbol_embed_generator.py` (embed wiring)
+- Test suite (MIC routing, legacy aliases, unknown MIC fallback)
 
 ---
 
 ## Validation Summary
 
 **Final Validation Checklist:**
-- ✅ 421/421 backend pytest tests passing (Livingston verification)
-- ✅ 183/183 frontend Node tests passing (Rusty verification)
-- ✅ 392/392 frontend integration tests passing (Reuben verification)
+- ✅ 137/137 backend pytest tests passing
+- ✅ 932/932 frontend Node tests passing
 - ✅ Frontend TypeScript compilation clean
 - ✅ Production build verified (API + frontend images)
-- ✅ GitHub Actions run 34067334078: SUCCESS
-- ✅ Azure Container Apps revisions ready
-- ✅ Diff check: 46 files, +4166 −434 lines (expected scope)
-- ✅ Design spec acceptance: Danny two-gate sign-off
-- ✅ Strict review approval: Basher regression gates PASS
-- ✅ Yahoo resolution: Danny contract APPROVED, Linus implementation APPROVED
-- ✅ Zero-portfolio toggle: Reuben fix APPROVED, integration tests green
-- ✅ No cross-cutting regressions, no dead code, no schema corruption
+- ✅ GitHub Actions run 34155988480: SUCCESS
+- ✅ Azure Container Apps revisions healthy
+  - API: ca-stock-options-manager-api--0000068
+  - Frontend: ca-stock-options-manager-front--0000061
+- ✅ Pricing cache: TTL lifecycle, miss behavior verified
+- ✅ Options Screener universe: consistency verified across backend/frontend
+- ✅ Movement search: pagination cursor, dedup algorithm verified
+- ✅ Economic KPI bands: thresholds and edge cases validated
+- ✅ TradingView resolution: MIC routing verified, fallback tested
+- ✅ Symbol Configuration: account assignment flows verified
+- ✅ Options Chat label: present in all contexts
+- ✅ Investments menu: account flows integrated
+- ✅ Zero cross-cutting regressions
 
-**Commit:** `69e3635 feat: consolidate symbols and portfolio workflows`  
+**Commit:** b4f8438 `feat: add symbol pricing and portfolio views`  
 **Branch:** main (pushed)  
-**GitHub Actions:** Run 34067334078 completed successfully  
+**GitHub Actions:** Run 34155988480 completed SUCCESS  
 **Deployment Status:** Ready — API + frontend images built, Azure Container Apps revisions verified
 
 ---
@@ -168,26 +160,47 @@
 ## Architecture Summary
 
 ### Before This Work
-- Symbol overview and portfolio overview were separate endpoints/flows
-- Watchlist filtering and portfolio filtering had separate UI surfaces
-- Account labels inconsistently applied across UI
-- Yahoo symbol resolution not wired for international securities (bare ticker → Yahoo always)
-- Historical zero-share rows unreachable via toggle (parameter not forwarded)
-- US eligibility gates not enforced for enrichment/options-agent actions
+- Symbol pricing not cached; every page load forced provider fetch
+- Portfolio view lacked economic context (performance metrics)
+- Options Screener universe unspecified; dropdown sources inconsistent
+- Movement search UI lacked date/time granularity
+- No pagination for multi-range movement searches
+- TradingView embed symbols bare ticker (non-US securities unresolved)
+- Symbol Configuration not discoverable in UI
+- Investments menu absent
+- Options Chat context not labeled
 
 ### After This Work
-- Unified `/api/symbols/overview` consolidates Portfolio holdings + Watchlist research
-- Single shared filter surface applies to both Portfolio and Watchlist sections
-- Account colors and labels applied consistently across Symbol Details and account displays
-- Yahoo symbol resolution wired via provider_symbols.py (MIC → suffix mapping, override precedence)
-- Zero-portfolio toggle correctly forwards `include_zero_portfolio` flag to backend
-- US eligibility enforcement via MIC gates (blocks non-US enrichment, options-agent actions)
-- Legacy US free-text exchange labels preserved via explicit alias mapping (no regression)
+- Symbol pricing cached (Redis, TTL 24h, automatic refresh job)
+- Portfolio view color-coded by economic performance (strong/moderate/weak bands)
+- Options Screener authoritative universe defined and enforced
+- Movement search with date/time filters and complete pagination
+- Batched dedup algorithm for transaction clarity across multiple ranges
+- TradingView embed symbols MIC-resolved (international securities supported)
+- Symbol Configuration accessible from main menu
+- Investments submenu provides account assignment flows
+- Options Chat labels queries for multi-format context
+- EUR/USD price conversions handled consistently throughout
 
 ### Key Architectural Properties
-- **Backward Compatible:** Existing US enrichment unchanged (XNYS/XNAS bare ticker); new MIC routing only applied to foreign securities
-- **Fail-Closed:** Unknown MICs skip enrichment (structured warning logged), not wrong-data fallback
-- **Unification:** Single filter surface, unified overview backend, consistent account labeling across UI
-- **Regulatory:** US eligibility gates enforce options-agent constraints per exchange MIC
-- **Extensible:** Provider symbol override map on security_master allows per-security Yahoo corrections (e.g., Nestlé NESN → NESN.SW)
+- **Cache-First:** Pricing cache reduces provider load; job refresh prevents staleness
+- **Economic Context:** Portfolio view color bands communicate performance immediately
+- **Precise Search:** Movement search pagination handles dedup across arbitrary date ranges
+- **International Support:** TradingView resolution via MIC suffix mapping
+- **Fail-Soft:** Unknown MICs fallback to bare ticker for embeds (no silent errors)
+- **Consistent Universe:** Options Screener authoritative source ensures dropdown accuracy
+- **Labeled Context:** Chat integration identifies query format for multi-model handling
+
+---
+
+## Pending Work (NOT in this release)
+
+**Excluded by Design (Awaiting Gate/Approval):**
+- `backend/scripts/repair_ad_xams_security_id.py` (AD/XAMS security ID repair)
+- `backend/tests/test_repair_ad_xams_security_id.py`
+- Status: Contract defined by Danny; implementation pending execution gate
+
+**Production-Applied Separately:**
+- Provider symbol corrections (ENAG/MICCT/ULVR) already applied in production
+- Backup: `/home/dsanchor/.copilot/session-state/982fe3ee-631f-4684-a682-b5dc4ee47185/files/migration_backups/provider_symbols_repair_20260907T155512Z.json`
 

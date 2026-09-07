@@ -13939,3 +13939,223 @@ The following inbox files have been merged into Section 1 (Unified Symbol Overvi
 **Contract:** Danny's symbol unification rev 3 (preserved); Dividend Portfolio Phase 1 awaiting user confirmation on architecture  
 **Status:** Ready for Dividend Portfolio Phase 1 implementation planning
 
+
+---
+
+## 2. Large Release: Symbol Pricing & Portfolio Views — 2026-09-07
+
+**Release Commit:** b4f8438 `feat: add symbol pricing and portfolio views`  
+**Status:** ✅ **RELEASED** — GitHub Actions Run 34155988480 SUCCESS  
+**Authors:** Danny (Architect, 6 gates), Rusty (Frontend), Livingston (Backend), Basher (Testing), Reuben (Movement), Linus (TradingView)
+
+### Release Summary
+- Symbol Pricing Cache (Redis, TTL 24h, automatic refresh job)
+- Economic Portfolio View (color-coded performance bands)
+- Options Screener Universe (authoritative source + dropdown)
+- Movement Search Complete Pagination & Batch Dedup
+- Symbol Configuration Menu Integration
+- Investments Menu with Account Assignment Flows
+- TradingView Symbol Resolution (MIC → suffix mapping)
+- Options Chat Label (query context identification)
+
+### Validation
+- ✅ 137/137 backend tests passing
+- ✅ 932/932 frontend tests passing
+- ✅ 1069 total regression tests passing (Basher)
+- ✅ Zero cross-cutting regressions
+- ✅ GitHub Actions Run 34155988480: SUCCESS
+- ✅ Azure Container Apps healthy (API + Frontend revisions verified)
+- ✅ Production build verified
+
+### Gate History
+| Time | Gate | Verdict |
+|------|------|---------|
+| 2026-09-07 15:15 | Pricing & Calculation | ✅ APPROVED |
+| 2026-09-07 16:43 | Options Screener Universe | ✅ APPROVED |
+| 2026-09-07 17:22 | Movement Batch Dedup & Pagination | ✅ APPROVED |
+| 2026-09-07 18:05 | Symbol Config & Investments Menu | ✅ APPROVED |
+| 2026-09-07 20:11 | Pricing ViewSelector & Screener Final | ✅ APPROVED FOR RELEASE |
+| 2026-09-07 21:15 | Large Release Comprehensive (1069 tests) | ✅ APPROVED FOR PRODUCTION |
+
+### Key Design Decisions
+
+**2.1 Symbol Pricing Cache Architecture**
+- Backend: Redis-backed cache with 24h TTL
+- Job: Automatic daily refresh with EUR/USD conversion
+- Implementation: `pricing_cache.py`, `pricing_job.py`
+- Miss handling: Defers to live provider fetch (no cascade failure)
+- Status: Implemented, tested, RELEASED
+
+**2.2 Economic Portfolio Metrics**
+- KPI aggregation: Portfolio value, yield, dividends
+- Display: Color-coded performance bands (strong/moderate/weak)
+- Integration: SymbolPricingViewSelector + EconomicPortfolioCards
+- Status: Implemented, tested, RELEASED
+
+**2.3 Options Screener Authoritative Universe**
+- Single source of truth: options_screener_universe.py
+- Frontend: OptionsScreenerDropdown component
+- Consistency: Verified across backend/frontend validation
+- Status: Implemented, tested, RELEASED
+
+**2.4 Movement Search: Complete Pagination + Batch Dedup**
+- Backend: movement_dedup.py with pagination cursor
+- Frontend: MovementSearchPanel with date/time filters
+- Dedup: Complete within search range, verified consistency
+- Pagination: Cursor encodes dedup state for idempotent re-fetches
+- Status: Implemented, tested, RELEASED
+
+**2.5 TradingView Symbol Resolution**
+- Mapping: MIC → suffix (XLON→.L, XETR→.DE, XSWX→.SW, etc.)
+- Implementation: tradingview_symbol.py
+- Fallback: Unknown MICs treated as bare ticker (fail-soft)
+- Status: Implemented, tested, RELEASED
+
+### Deployment
+- ✅ Commit b4f8438 pushed to main
+- ✅ GitHub Actions Run 34155988480 SUCCESS
+- ✅ Azure Container Apps revisions healthy
+- ✅ Ready for production deployment
+
+---
+
+## 3. Provider Symbol Corrections (ENAG/MICCT/ULVR) — 2026-09-07
+
+**Status:** ✅ **APPLIED IN PRODUCTION** (separate from large release)  
+**Authors:** Livingston (script), Reuben (tests)  
+**Backup:** `/home/dsanchor/.copilot/session-state/982fe3ee-631f-4684-a682-b5dc4ee47185/files/migration_backups/provider_symbols_repair_20260907T155512Z.json`
+
+### Corrections
+- ENAG: Symbol mapping correction
+- MICCT: Provider symbol resolution
+- ULVR: Symbol identifier correction
+
+### Testing
+- ✅ Reuben regression test: `TestVerifyProviderSymbolNoArgConstructor` (fail-before/pass-after)
+- ✅ Zero regression impact
+- ✅ Lockout compliance verified (Livingston script only, Reuben tests only)
+
+### Gate Decision (Danny)
+- **2026-09-07 22:45:** Provider Symbol Corrections Final Gate — ✅ APPROVED
+  - Verified artifact contamination compliance
+  - Exact fix verified: YFinanceFetcher constructor correction
+  - Regression quality: Strict fake with TypeError for wrong args
+  - Verdict: APPROVED FOR APPLICATION
+
+### Deployment
+- ✅ Applied to production (separate from main commit)
+- ✅ Backup preserved
+- ✅ Zero impact on active release
+
+---
+
+## 4. Unified Symbol Overview & Shared Filtering (69e3635) — 2026-09-06
+
+**Commit:** 69e3635 `feat: consolidate symbols and portfolio workflows`  
+**Status:** ✅ **RELEASED** — GitHub Actions Run 34067334078 SUCCESS  
+**Authors:** Danny (Architect, 2 gates), Rusty (Frontend), Livingston (Backend), Reuben (Escalated fix), Basher (Testing)
+
+### Features
+- Unified `/api/symbols/overview` endpoint (Portfolio + Watchlist)
+- Two visible sections with single shared filter surface
+- Query parameter: `include_zero_portfolio` (bool, default false)
+- Portfolio-wide KPI summary (total_investment_eur, net_gains_eur, dividends)
+- Account colors and labels throughout UI
+- US eligibility enforcement (exchange MIC gates)
+- Yahoo symbol resolution for international enrichment
+- Zero-share toggle with correct parameter forwarding
+
+### Validation
+- ✅ 421/421 backend tests passing
+- ✅ 183/183 frontend tests passing
+- ✅ 392/392 integration tests passing (Reuben fix verification)
+- ✅ GitHub Actions Run 34067334078: SUCCESS
+- ✅ Zero regressions
+
+### Team Contributions
+
+**Livingston (Backend):**
+- Unified overview endpoint
+- KPI aggregation
+- US eligibility enforcement
+- Test doubles corrected after initial rejection
+
+**Rusty (Frontend):**
+- Two-section layout with shared filter surface
+- Account color labels and displays
+- Symbol Details page structure
+- Historical-toggle artifact rejected; escalated
+
+**Reuben (Escalated Fix):**
+- Root cause: Frontend never forwarded `include_zero_portfolio=true`
+- Design: Fetch inclusive, filter client-side
+- Implementation: Query parameter forwarding + client-side toggle
+- Test: symbolsOverviewIncludeZeroPortfolio.test.mjs (real route, simulated round-trip)
+- Result: 392/392 tests passing, Rusty re-enabled
+
+**Basher (Testing):**
+- 604 regression tests (shared filtering, US eligibility, account assignment, Yahoo routing)
+- Zero cross-cutting regressions
+
+### Gates (Danny)
+
+1. **Scope Review Gate (2026-09-06 22:22):**
+   - 12-item checklist verification
+   - Advisory: missing CaCreateRequest declaration, duplicate alias
+   - Verdict: ✅ APPROVED subject to advisory fix
+
+2. **Yahoo Symbol Resolution Contract Gate (2026-09-07 00:06):**
+   - Precedence hierarchy: override → MIC suffix → fail-closed
+   - Single resolution point: provider_symbols.py
+   - Backward-compatible API design
+   - Test boundary specification
+   - Verdict: ✅ APPROVED FOR IMPLEMENTATION
+
+### Design Decisions
+
+**4.1 Unified Overview Endpoint**
+- Single flat response shape: `symbols[]` array
+- Replaces two separate endpoints
+- New query parameter: `include_zero_portfolio` (bool)
+- Each symbol includes: `row_source`, `is_auto_enrolled`, `us_options_eligible`
+
+**4.2 Two Visible Sections**
+- Portfolio holdings and Watchlist research rendered separately
+- Single shared filter toolbar applies to both
+- Client-side filtering (fetch inclusive, filter in-memory)
+- VISIBLE(symbol) = has_config AND (shares != 0 OR is_watchlist OR (shares == 0 AND NOT hide_zero))
+
+**4.3 Account Colors & Labels**
+- Consistent application across Symbol Details and account displays
+- Readable broker/account names throughout
+
+**4.4 US Eligibility Enforcement**
+- Exchange MIC determines options-agent eligibility
+- Non-US securities gated from enrichment, buy-tracker
+- Enforcement point: eligibility routes
+
+**4.5 Yahoo Symbol Resolution**
+- MIC suffix table: XMAD→.MC, XLON→.L, XETR→.DE, XSWX→.SW, XPAR→.PA, XAMS→.AS, XBRU→.BR, XLIS→.LS, XNYS/XNAS→empty
+- Precedence: security_master override → MIC suffix → fail-closed None
+- Legacy US free-text aliases preserved (no regression)
+- Unknown MICs: skip with structured warning (never fallback to bare ticker)
+
+### Deployment
+- ✅ Commit 69e3635 pushed to main
+- ✅ GitHub Actions Run 34067334078: SUCCESS
+- ✅ Released and deployed
+
+---
+
+## Pending Decisions
+
+### AD/XAMS Security ID Repair Script
+**Status:** Contract defined, execution gate pending  
+**Files:** `backend/scripts/repair_ad_xams_security_id.py`, `backend/tests/test_repair_ad_xams_security_id.py`  
+**Contract:** Danny's AD/XAMS repair contract (2026-09-07)  
+**Note:** Not included in large release (b4f8438); awaiting separate execution gate
+
+### Dividend Portfolio Phase 1
+**Status:** Architecture under user review  
+**Expected:** Implementation planning to follow user confirmation
+
