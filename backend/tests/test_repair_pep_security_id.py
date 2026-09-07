@@ -46,6 +46,7 @@ All tests are hermetic (no real Cosmos, no network).
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import pathlib
 import pytest
@@ -79,6 +80,37 @@ _skip = pytest.mark.skipif(
     reason=(
         "backend/scripts/repair_pep_security_id.py not yet created. "
         "Livingston: implement per §3-§7 of danny-pep-security-id-repair-contract.md."
+    ),
+)
+
+
+def _accepts_kwarg(func, name: str) -> bool:
+    """True if `func` declares a parameter named `name` (used to gate tests
+    on not-yet-implemented product API surface, rather than letting an
+    unsupported kwarg raise a raw TypeError)."""
+    if func is None:
+        return False
+    try:
+        return name in inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+# Gate for the corrected provider-verified currency mechanism from
+# .squad/decisions/inbox/danny-pep-repair-currency-correction.md (§3a-3d).
+# Linus has not implemented this yet as of this revision (no `listing_currency`
+# kwarg on apply_repair) — see TestProviderVerifiedListingCurrency below.
+_CURRENCY_FLAG_AVAILABLE = _SCRIPT_AVAILABLE and _accepts_kwarg(apply_repair, "listing_currency")
+
+_currency_skip = pytest.mark.skipif(
+    not _CURRENCY_FLAG_AVAILABLE,
+    reason=(
+        "scripts.repair_pep_security_id.apply_repair() does not yet accept a "
+        "listing_currency kwarg — Linus has not implemented "
+        "danny-pep-repair-currency-correction.md §3a-3d yet. These tests "
+        "define the expected, corrected contract for that implementation "
+        "(provider-verified currency correction only; ledger gross.currency "
+        "is never evidence)."
     ),
 )
 
@@ -495,107 +527,376 @@ class TestMicDerivation:
 
 
 # ---------------------------------------------------------------------------
-# PEP-3/4/5: currency evidence gating
+# PEP-3/4/5 (CORRECTED, Reuben — independent revision, Basher locked out):
+# currency correction is provider-verified only; ledger gross.currency
+# must NEVER determine listing_currency.
 # ---------------------------------------------------------------------------
+#
+# See .squad/decisions/inbox/danny-pep-repair-currency-correction.md. The
+# original TestCurrencyEvidence (REJECTED, authored by Basher) encoded a
+# "unanimous ledger gross.currency implies listing_currency" invariant that
+# Danny reopened: gross.currency is the portfolio's own accounting/booking
+# currency and is never evidence of a security's listing currency. The
+# corrected invariant is: listing_currency changes ONLY when the operator
+# explicitly passes --listing-currency, and even then only after a live,
+# three-way provider cross-check (currency == financialCurrency == the
+# requested value, with exchange/fullExchangeName corroborating the already
+# resolved target MIC). Absent the flag, the script must behave exactly as
+# if the ledger-based mechanism never existed.
+#
+# The tests below (PEP-3/3b/3c/4/5) assert the corrected NO-FLAG behavior
+# against the CURRENT script — they do not depend on Linus's not-yet-built
+# provider-verification code, since the no-flag path is just "preserve
+# listing_currency unconditionally". If any of these fail, the rejected
+# ledger-inference mechanism is still wired into discover()/run_apply and
+# Linus's fix (§3b) has not landed yet.
+#
+# TestProviderVerifiedListingCurrency (further below, gated by
+# @_currency_skip) defines the corrected --listing-currency / provider-
+# verification contract itself; it will skip gracefully until Linus adds a
+# `listing_currency` kwarg to apply_repair() per §3a-3d.
+# ---------------------------------------------------------------------------
+
+
+def _created_or_existing_target(syms: "FakeSymbolsContainer") -> dict:
+    """Returns the target sec_XNAS_PEP body as ultimately persisted (created
+    fresh, or patched in place) — mirrors the create-then-fallback-to-store
+    lookup pattern used throughout this file."""
+    try:
+        return next(c["body"] for c in syms.create_calls if c["id"] == "sec_XNAS_PEP")
+    except StopIteration:
+        return syms.read_item("sec_XNAS_PEP", "PEP")
+
 
 @_skip
 class TestCurrencyEvidence:
-    def test_pep3_unanimous_currency_corrects_listing_currency(self):
-        """PEP-3: all movements have gross.currency='USD' → listing_currency corrected
-        from 'EUR' to 'USD' on the created/updated security_master.
+    def test_pep3_ledger_gross_currency_never_determines_listing_currency(self):
+        """PEP-3 (corrected): unanimous ledger gross.currency='EUR' (the
+        amendment's own concrete evidence: 76 real, unanimous EUR movements)
+        must NOT influence listing_currency — with no --listing-currency
+        flag, the target keeps the source's original listing_currency
+        ('EUR' in the fixture) regardless of what the ledger says.
         """
-        syms = _standard_symbols_container()
-        port = _standard_portfolio_container(num_movements=3, currency="USD")
+        syms = _standard_symbols_container()  # source listing_currency == "EUR"
+        port = _standard_portfolio_container(num_movements=3, currency="EUR")
+
+        report = apply_repair(symbols_container=syms, portfolio_container=port, dry_run=False)
+
+        assert report.exit_code == 0
+        target = _created_or_existing_target(syms)
+        assert target.get("listing_currency") == "EUR", (
+            "PEP-3: unanimous ledger gross.currency must never determine "
+            f"listing_currency; got {target.get('listing_currency')!r}"
+        )
+
+    def test_pep3b_ledger_gross_currency_differing_from_listing_currency_still_ignored(self):
+        """PEP-3b: even when unanimous ledger currency actively DIFFERS from
+        the source's listing_currency (the exact scenario the rejected
+        mechanism would have "corrected"), the target must still inherit the
+        source's listing_currency unchanged — the ledger signal is inert in
+        both directions, not only when it happens to agree.
+        """
+        syms = _standard_symbols_container()  # listing_currency == "EUR"
+        port = _standard_portfolio_container(num_movements=3, currency="USD")  # differs
 
         apply_repair(symbols_container=syms, portfolio_container=port, dry_run=False)
 
-        # The created sec_XNAS_PEP must have listing_currency='USD'
-        try:
-            created_doc = next(
-                c["body"] for c in syms.create_calls if c["id"] == "sec_XNAS_PEP"
-            )
-        except StopIteration:
-            # Maybe patched via replace — look in the store
-            created_doc = syms.read_item("sec_XNAS_PEP", "PEP")
-
-        assert created_doc.get("listing_currency") == "USD", (
-            f"PEP-3: unanimous USD evidence must correct listing_currency; "
-            f"got {created_doc.get('listing_currency')!r}"
+        target = _created_or_existing_target(syms)
+        assert target.get("listing_currency") == "EUR", (
+            "PEP-3b: ledger gross.currency='USD' must not override the source's "
+            f"listing_currency='EUR'; got {target.get('listing_currency')!r}"
         )
 
-    def test_pep4_mixed_currencies_fail_closed(self):
-        """PEP-4: movements with EUR and USD → currency_evidence=inconclusive,
-        listing_currency left at 'EUR'.
+    def test_pep3c_ledger_movements_remain_byte_identical_regardless_of_currency(self):
+        """PEP-3c: whatever the ledger currency, movement financial fields
+        (gross/fees/net/fx/quantity/trade_date/withholding) are patched only
+        for security_id — currency-correction logic must never rewrite
+        ledger amounts, even when it used to silently imply a
+        listing_currency.
         """
         port = FakePortfolioContainer()
-        port.seed_movement(
-            "mvt_eur", "acct_001", "NNYS:PEP",
+        orig = port.seed_movement(
+            "mvt_001", "acct_001", "NNYS:PEP",
             gross={"amount": 500.0, "currency": "EUR"},
             fees={"amount": 5.0, "currency": "EUR"},
             net={"amount": 495.0, "currency": "EUR"},
         )
-        port.seed_movement(
-            "mvt_usd", "acct_001", "NNYS:PEP",
-            gross={"amount": 500.0, "currency": "USD"},
-            fees={"amount": 5.0, "currency": "USD"},
-            net={"amount": 495.0, "currency": "USD"},
-        )
         syms = _standard_symbols_container()
 
         apply_repair(symbols_container=syms, portfolio_container=port, dry_run=False)
 
-        # listing_currency must not be changed to either value
-        try:
-            created_doc = next(
-                c["body"] for c in syms.create_calls if c["id"] == "sec_XNAS_PEP"
-            )
-        except StopIteration:
-            created_doc = syms.read_item("sec_XNAS_PEP", "PEP")
+        replace_body = next((c["body"] for c in port.replace_calls if c["id"] == "mvt_001"), None)
+        assert replace_body is not None, "PEP-3c: mvt_001 must have been patched"
+        for field in ("gross", "fees", "net", "quantity", "trade_date", "fx", "withholding"):
+            if field in orig:
+                assert replace_body.get(field) == orig[field], (
+                    f"PEP-3c: field {field!r} must remain byte-identical; "
+                    f"was {orig[field]!r}, now {replace_body.get(field)!r}"
+                )
 
-        assert created_doc.get("listing_currency") == "EUR", (
-            f"PEP-4: mixed currencies must leave listing_currency as 'EUR'; "
-            f"got {created_doc.get('listing_currency')!r}"
-        )
-
-    def test_pep4_mixed_currencies_reported_inconclusive(self):
-        """PEP-4b: mixed currency evidence must be reported as inconclusive."""
-        port = FakePortfolioContainer()
-        for i, ccy in enumerate(["EUR", "USD"]):
-            port.seed_movement(
-                f"mvt_{i}", "acct_001", "NNYS:PEP",
-                gross={"amount": 500.0, "currency": ccy},
-                fees={"amount": 5.0, "currency": ccy},
-                net={"amount": 495.0, "currency": ccy},
-            )
+    def test_pep4_no_listing_currency_arg_preserves_existing_and_reports_no_correction(self):
+        """PEP-4 (corrected): absent --listing-currency / a listing_currency
+        kwarg, the script copies source_clean.get('listing_currency', 'EUR')
+        onto the target unchanged, and the report must not claim any
+        currency correction occurred.
+        """
         syms = _standard_symbols_container()
+        port = _standard_portfolio_container(num_movements=2, currency="USD")
 
         report = apply_repair(symbols_container=syms, portfolio_container=port, dry_run=False)
 
-        evidence = getattr(report, "currency_evidence", None)
-        assert evidence in (None, "inconclusive") or \
-               getattr(report, "currency_inconclusive", False) is True, (
-            "PEP-4b: mixed currencies must be reported as inconclusive in the report"
+        target = _created_or_existing_target(syms)
+        assert target.get("listing_currency") == "EUR", (
+            "PEP-4: with no currency flag, listing_currency must be preserved "
+            f"from the source; got {target.get('listing_currency')!r}"
         )
+        # Best-effort report probe: whatever field name Linus lands on for the
+        # corrected verdict (RepairReport.provider_currency_verdict per §3d,
+        # or a renamed diagnostic per §3c), it must not claim a currency
+        # change happened when none was requested.
+        verdict = (
+            getattr(report, "provider_currency_verdict", None)
+            or getattr(report, "currency_evidence", None)
+            or getattr(report, "ledger_accounting_currency_note", None)
+        )
+        if verdict is not None:
+            assert "not_requested" in str(verdict) or str(verdict) in ("", "inconclusive"), (
+                "PEP-4: no currency flag was passed — report must not claim a "
+                f"currency correction; got verdict={verdict!r}"
+            )
 
-    def test_pep5_no_movements_currency_fail_closed(self):
-        """PEP-5: no ledger_txn movements → currency_evidence=inconclusive,
-        listing_currency preserved as 'EUR'.
+    def test_pep5_no_movements_no_flag_preserves_listing_currency(self):
+        """PEP-5 (corrected): zero ledger_txn movements + no currency flag →
+        listing_currency preserved unchanged. There is no evidence-based path
+        left to be "inconclusive" about; the absence of a flag is sufficient
+        on its own not to touch listing_currency.
         """
         syms = _standard_symbols_container()
         port = FakePortfolioContainer()  # no movements
 
-        apply_repair(symbols_container=syms, portfolio_container=port, dry_run=False)
+        report = apply_repair(symbols_container=syms, portfolio_container=port, dry_run=False)
 
-        try:
-            created_doc = next(
-                c["body"] for c in syms.create_calls if c["id"] == "sec_XNAS_PEP"
-            )
-        except StopIteration:
-            created_doc = syms.read_item("sec_XNAS_PEP", "PEP")
+        assert report.exit_code == 0
+        target = _created_or_existing_target(syms)
+        assert target.get("listing_currency") == "EUR", (
+            "PEP-5: no movements + no flag must preserve listing_currency; "
+            f"got {target.get('listing_currency')!r}"
+        )
 
-        assert created_doc.get("listing_currency") == "EUR", (
-            f"PEP-5: no-movement case must preserve listing_currency='EUR'; "
-            f"got {created_doc.get('listing_currency')!r}"
+
+# ---------------------------------------------------------------------------
+# New: provider-verified --listing-currency correction (Reuben, per
+# danny-pep-repair-currency-correction.md §3a-3d). Gated behind
+# @_currency_skip until Linus adds a `listing_currency` kwarg to
+# apply_repair(). No network is ever used — a fake object mimicking
+# YFinanceFetcher.get_ticker_data(symbol) is injected.
+# ---------------------------------------------------------------------------
+
+
+class _FakeProvider:
+    """Stand-in for src.yfinance_fetcher.YFinanceFetcher — no network.
+    Mimics its only relevant method, get_ticker_data(symbol) -> dict | None.
+    """
+
+    def __init__(self, ticker_data: Optional[dict] = None, raise_exc: Optional[BaseException] = None):
+        self._ticker_data = ticker_data
+        self._raise_exc = raise_exc
+        self.calls: List[str] = []
+
+    def get_ticker_data(self, symbol: str) -> Optional[dict]:
+        self.calls.append(symbol)
+        if self._raise_exc is not None:
+            raise self._raise_exc
+        return self._ticker_data
+
+
+def _apply_with_provider(monkeypatch, provider: "_FakeProvider", **kwargs):
+    """Calls apply_repair with `provider` wired in via whichever injection
+    point the corrected script supports, checked in this order: an explicit
+    `yf_fetcher=` kwarg (the actual DI parameter Linus implemented), a
+    `provider=` kwarg (in case of a future rename), or, failing both, a
+    monkeypatched module-level `YFinanceFetcher` class reference (constructed
+    with no required args, mirroring the real class) inside
+    scripts.repair_pep_security_id. This keeps these tests valid regardless
+    of which injection mechanism is present, while still being 100%
+    network-free.
+    """
+    if _accepts_kwarg(apply_repair, "yf_fetcher"):
+        return apply_repair(yf_fetcher=provider, **kwargs)
+    if _accepts_kwarg(apply_repair, "provider"):
+        return apply_repair(provider=provider, **kwargs)
+
+    import scripts.repair_pep_security_id as repair_mod
+
+    class _FakeProviderClass:
+        def __init__(self, *a, **kw):
+            pass
+
+        def get_ticker_data(self, symbol: str):
+            return provider.get_ticker_data(symbol)
+
+    monkeypatch.setattr(repair_mod, "YFinanceFetcher", _FakeProviderClass, raising=False)
+    return apply_repair(**kwargs)
+
+
+_MATCHING_INFO = {
+    "currency": "USD",
+    "financialCurrency": "USD",
+    "exchange": "NMS",
+    "fullExchangeName": "NasdaqGS",
+}
+
+
+@_currency_skip
+class TestProviderVerifiedListingCurrency:
+    """Corrected --listing-currency contract per §3a-3d. All provider
+    interaction is faked — no network, no real YFinanceFetcher, no
+    production execution."""
+
+    def test_matching_provider_triple_writes_requested_currency(self, monkeypatch, tmp_path):
+        syms = _standard_symbols_container()  # config_PEP.exchange == "NASDAQ" -> XNAS target
+        port = _standard_portfolio_container(num_movements=2, currency="EUR")
+        provider = _FakeProvider(ticker_data={"info": dict(_MATCHING_INFO)})
+
+        report = _apply_with_provider(
+            monkeypatch, provider,
+            symbols_container=syms, portfolio_container=port,
+            dry_run=False, listing_currency="USD", backup_dir=tmp_path,
+        )
+
+        assert report.exit_code == 0, f"expected success, got {report.exit_code}: {report.error_details}"
+        target = _created_or_existing_target(syms)
+        assert target.get("listing_currency") == "USD"
+        assert provider.calls, "the provider must actually be consulted when --listing-currency is passed"
+
+    def test_currency_field_mismatch_aborts_zero_mutations(self, monkeypatch, tmp_path):
+        syms = _standard_symbols_container()
+        port = _standard_portfolio_container(num_movements=2, currency="EUR")
+        info = dict(_MATCHING_INFO, currency="USD", financialCurrency="EUR")  # mismatch
+        provider = _FakeProvider(ticker_data={"info": info})
+
+        report = _apply_with_provider(
+            monkeypatch, provider,
+            symbols_container=syms, portfolio_container=port,
+            dry_run=False, listing_currency="USD", backup_dir=tmp_path,
+        )
+
+        assert report.exit_code == 2
+        assert not syms.create_calls and not syms.replace_calls and not syms.delete_calls
+        assert not port.replace_calls
+        assert not list(tmp_path.glob("*.json")), "no backup file may be written when the currency check fails"
+
+    def test_exchange_mismatch_aborts_zero_mutations(self, monkeypatch, tmp_path):
+        """currency and financialCurrency both agree, but exchange does not
+        corroborate the already-resolved XNAS target MIC."""
+        syms = _standard_symbols_container()
+        port = _standard_portfolio_container(num_movements=2, currency="EUR")
+        info = dict(_MATCHING_INFO, exchange="NYQ", fullExchangeName="New York Stock Exchange")
+        provider = _FakeProvider(ticker_data={"info": info})
+
+        report = _apply_with_provider(
+            monkeypatch, provider,
+            symbols_container=syms, portfolio_container=port,
+            dry_run=False, listing_currency="USD", backup_dir=tmp_path,
+        )
+
+        assert report.exit_code == 2
+        assert not syms.create_calls and not syms.replace_calls and not syms.delete_calls
+        assert not port.replace_calls
+
+    def test_provider_exception_aborts_fail_closed(self, monkeypatch, tmp_path):
+        syms = _standard_symbols_container()
+        port = _standard_portfolio_container(num_movements=2, currency="EUR")
+        provider = _FakeProvider(raise_exc=RuntimeError("network down"))
+
+        report = _apply_with_provider(
+            monkeypatch, provider,
+            symbols_container=syms, portfolio_container=port,
+            dry_run=False, listing_currency="USD", backup_dir=tmp_path,
+        )
+
+        assert report.exit_code == 2
+        assert not syms.create_calls and not syms.replace_calls and not syms.delete_calls
+        assert not port.replace_calls
+
+    def test_provider_returns_none_aborts_fail_closed(self, monkeypatch, tmp_path):
+        syms = _standard_symbols_container()
+        port = _standard_portfolio_container(num_movements=2, currency="EUR")
+        provider = _FakeProvider(ticker_data=None)
+
+        report = _apply_with_provider(
+            monkeypatch, provider,
+            symbols_container=syms, portfolio_container=port,
+            dry_run=False, listing_currency="USD", backup_dir=tmp_path,
+        )
+
+        assert report.exit_code == 2
+        assert not syms.create_calls and not syms.replace_calls
+
+    def test_provider_missing_currency_fields_aborts_fail_closed(self, monkeypatch, tmp_path):
+        syms = _standard_symbols_container()
+        port = _standard_portfolio_container(num_movements=2, currency="EUR")
+        provider = _FakeProvider(ticker_data={"info": {}})
+
+        report = _apply_with_provider(
+            monkeypatch, provider,
+            symbols_container=syms, portfolio_container=port,
+            dry_run=False, listing_currency="USD", backup_dir=tmp_path,
+        )
+
+        assert report.exit_code == 2
+        assert not syms.create_calls and not syms.replace_calls
+
+    def test_audit_mode_provider_unreachable_does_not_abort(self, monkeypatch, tmp_path):
+        """--audit degrades gracefully on network failure: it must NOT
+        abort, and should report the verdict as unreachable rather than
+        silently succeeding or crashing."""
+        syms = _standard_symbols_container()
+        port = _standard_portfolio_container(num_movements=2, currency="EUR")
+        provider = _FakeProvider(raise_exc=RuntimeError("network down"))
+
+        report = _apply_with_provider(
+            monkeypatch, provider,
+            symbols_container=syms, portfolio_container=port,
+            dry_run=True, listing_currency="USD",
+        )
+
+        assert report.exit_code == 0, "audit must never abort on provider failure"
+        verdict = getattr(report, "provider_currency_verdict", "")
+        assert "unreach" in str(verdict).lower(), (
+            f"audit must report the provider as unreachable; got {verdict!r}"
+        )
+
+    def test_verification_precedes_mutations_and_cannot_be_bypassed_on_resume(self, monkeypatch, tmp_path):
+        """§3b verification must happen immediately before mutations and
+        cannot be skipped on a resumed --apply: a second run against the
+        already-repaired state must still re-verify the provider triple and
+        abort on mismatch, producing zero further mutations."""
+        syms = _standard_symbols_container()
+        port = _standard_portfolio_container(num_movements=2, currency="EUR")
+
+        good_provider = _FakeProvider(ticker_data={"info": dict(_MATCHING_INFO)})
+        first_report = _apply_with_provider(
+            monkeypatch, good_provider,
+            symbols_container=syms, portfolio_container=port,
+            dry_run=False, listing_currency="USD", backup_dir=tmp_path,
+        )
+        assert first_report.exit_code == 0
+        writes_after_first = syms.write_count + port.write_count
+
+        bad_provider = _FakeProvider(ticker_data={"info": dict(_MATCHING_INFO, financialCurrency="EUR")})
+        second_report = _apply_with_provider(
+            monkeypatch, bad_provider,
+            symbols_container=syms, portfolio_container=port,
+            dry_run=False, listing_currency="USD", backup_dir=tmp_path,
+        )
+
+        assert second_report.exit_code == 2, (
+            "a resumed/second --apply must re-verify the provider triple and "
+            "abort on mismatch, even though the first run already succeeded"
+        )
+        assert syms.write_count + port.write_count == writes_after_first, (
+            "no further mutation may occur once verification fails on resume"
         )
 
 

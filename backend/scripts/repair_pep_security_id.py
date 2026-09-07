@@ -78,6 +78,13 @@ from src.portfolio.cosmos_securities import (  # noqa: E402
     security_id_to_ticker,
 )
 from src.us_exchange_eligibility import US_OPTIONS_ELIGIBLE_MICS  # noqa: E402
+from src.yfinance_fetcher import YFinanceFetcher  # noqa: E402
+
+# Backend twin of the frontend's `toExchangeMic` (DgiScreenerView.tsx) —
+# reused here (not reinvented) to normalise a yfinance `info.exchange` code
+# (e.g. "NMS") to the free-text alias LEGACY_ALIAS_TO_MIC already knows how
+# to resolve to a MIC (danny-pep-repair-currency-correction.md §3b.3).
+from src.dgi_screener import EXCHANGE_MAP as _YF_EXCHANGE_MAP  # noqa: E402
 
 logger = logging.getLogger("repair_pep_security_id")
 
@@ -128,7 +135,15 @@ class RepairReport:
     config_doc_found: bool = False
     ledger_txn_found: int = 0
     import_session_refs_found: int = 0
-    currency_evidence: str = ""
+    # Diagnostic only — NEVER an input to listing_currency (§3c of
+    # danny-pep-repair-currency-correction.md). Reflects the portfolio's
+    # booking/accounting currency for these ledger movements, not the
+    # security's listing currency.
+    ledger_accounting_currency_note: str = ""
+    # Live-provider verification outcome for an operator-supplied
+    # --listing-currency (§3b/§3d). One of: "not_requested",
+    # "verified:<CUR>", "unreachable", "mismatch:<details>".
+    provider_currency_verdict: str = "not_requested"
     # Write outcomes
     target_created: bool = False
     config_patched: bool = False
@@ -228,7 +243,12 @@ def _derive_target_security_id(config_doc: dict, ticker: str) -> Optional[str]:
 
 
 def _extract_gross_currencies(ledger_txns: List[dict]) -> List[str]:
-    """Return non-empty gross.currency values from ledger movements."""
+    """Return non-empty gross.currency values from ledger movements.
+
+    Diagnostic extraction only — feeds `_ledger_accounting_currency_note`,
+    never a listing_currency decision (§3c of
+    danny-pep-repair-currency-correction.md).
+    """
     result = []
     for m in ledger_txns:
         currency = ((m.get("gross") or {}).get("currency") or "").strip().upper()
@@ -237,26 +257,132 @@ def _extract_gross_currencies(ledger_txns: List[dict]) -> List[str]:
     return result
 
 
-def _currency_verdict(
-    currencies: List[str],
-    current_listing_currency: str,
-) -> Tuple[str, Optional[str]]:
-    """Evidence-gated currency correction (§2).
+def _ledger_accounting_currency_note(currencies: List[str]) -> str:
+    """Diagnostic-only note about ledger `gross.currency` values (§3c).
 
-    Returns (verdict_string, proposed_currency_or_None).
-      "no_movements"       — no gross.currency data found
-      "unanimous:<CUR>"    — all movements agree; proposed = <CUR> if != current
-      "inconclusive"       — mixed currencies; proposed = None (never guessed)
+    This reflects the portfolio's booking/accounting currency for these
+    movements, not the security's listing currency. It must never influence
+    `listing_currency` — unlike the rejected `_currency_verdict` mechanism,
+    this function has no "proposed currency" output at all, so it is
+    structurally incapable of feeding a write path.
     """
     if not currencies:
-        return "no_movements", None
+        return "no_movements"
     unique = set(currencies)
     if len(unique) == 1:
-        consensus = unique.pop()
-        verdict = f"unanimous:{consensus}"
-        proposed = consensus if consensus != current_listing_currency.upper() else None
-        return verdict, proposed
-    return "inconclusive", None
+        return f"unanimous_accounting_currency:{unique.pop()}"
+    return "mixed_accounting_currencies"
+
+
+def _resolve_provider_mic(info: Dict[str, Any]) -> Optional[str]:
+    """Resolve a yfinance `info` dict's exchange fields to a canonical MIC.
+
+    Reuses `_YF_EXCHANGE_MAP` (backend twin of the frontend's
+    `toExchangeMic`, already defined in `src/dgi_screener.py`) to normalise
+    a raw yfinance exchange code (e.g. "NMS") to a free-text alias
+    ("NASDAQ"), then `LEGACY_ALIAS_TO_MIC` (the single existing alias→MIC
+    table) to resolve that alias to a MIC. No second/divergent mapping
+    table is introduced (§3b.3).
+
+    Falls back to matching the alias as a substring of `fullExchangeName`
+    (e.g. "NasdaqGS" contains "NASDAQ") if the raw exchange code itself
+    isn't recognised. Returns None if neither corroborates a known MIC.
+    """
+    exchange_code = (info.get("exchange") or "").strip().upper()
+    alias = _YF_EXCHANGE_MAP.get(exchange_code, exchange_code)
+    mic = LEGACY_ALIAS_TO_MIC.get(alias)
+    if mic:
+        return mic
+
+    full_exchange_name = (info.get("fullExchangeName") or "").strip().upper()
+    if full_exchange_name:
+        for alias_key, mic_value in LEGACY_ALIAS_TO_MIC.items():
+            if alias_key in full_exchange_name:
+                return mic_value
+    return None
+
+
+def _verify_listing_currency_with_provider(
+    ticker: str,
+    requested_currency: str,
+    target_mic: str,
+    fetcher: Optional[Any] = None,
+) -> Tuple[str, str]:
+    """Live provider verification for an operator-supplied `--listing-currency`
+    (§3b). Never trusts the operator's word alone; never silently applies if
+    the live check is unreachable.
+
+    Returns (verdict, detail):
+      verdict — exactly one of:
+        f"verified:{CUR}"    — all three checks passed; safe to apply.
+        "unreachable"        — provider fetch failed / empty / missing
+                                required fields (network error, rate limit,
+                                None result, or missing currency/exchange).
+        f"mismatch:{detail}" — currency/financialCurrency/MIC disagreement.
+      detail — human-readable diagnostic (superset of what's embedded in a
+        "mismatch:" verdict; also populated for "unreachable" for logging/
+        abort messages, even though the report field itself stays plain
+        "unreachable" per §3d).
+
+    Never raises — callers (discover(), run_apply(), run_audit()) decide
+    whether to abort (--apply) or just report (--audit) based on the
+    returned verdict.
+    """
+    if fetcher is None:
+        fetcher = YFinanceFetcher()
+
+    try:
+        data = fetcher.get_ticker_data(ticker)
+    except Exception as exc:  # noqa: BLE001
+        return "unreachable", f"provider fetch raised: {exc}"
+
+    if not data or not isinstance(data, dict):
+        return "unreachable", (
+            "provider returned no data (network error, rate limit, or "
+            "unknown ticker) — cannot verify listing_currency"
+        )
+
+    info = data.get("info") or {}
+    currency = info.get("currency")
+    financial_currency = info.get("financialCurrency")
+    provider_exchange = info.get("exchange")
+    full_exchange_name = info.get("fullExchangeName")
+
+    if not currency or not financial_currency or not provider_exchange:
+        return "unreachable", (
+            f"provider response missing required fields "
+            f"(currency={currency!r}, financialCurrency={financial_currency!r}, "
+            f"exchange={provider_exchange!r}) — cannot verify listing_currency"
+        )
+
+    requested = requested_currency.strip().upper()
+    currency_u = str(currency).strip().upper()
+    financial_currency_u = str(financial_currency).strip().upper()
+
+    if not (currency_u == financial_currency_u == requested):
+        detail = (
+            f"currency={currency_u!r} financialCurrency={financial_currency_u!r} "
+            f"requested={requested!r} (all three must agree)"
+        )
+        return f"mismatch:{detail}", detail
+
+    resolved_mic = _resolve_provider_mic(info)
+    target_mic_u = (target_mic or "").strip().upper()
+    if resolved_mic is None or resolved_mic.upper() != target_mic_u:
+        detail = (
+            f"provider exchange={provider_exchange!r} "
+            f"fullExchangeName={full_exchange_name!r} "
+            f"resolved_mic={resolved_mic!r} does not corroborate "
+            f"target_mic={target_mic_u!r}"
+        )
+        return f"mismatch:{detail}", detail
+
+    detail = (
+        f"currency={currency_u} financialCurrency={financial_currency_u} "
+        f"exchange={provider_exchange!r} fullExchangeName={full_exchange_name!r} "
+        f"resolved_mic={resolved_mic}"
+    )
+    return f"verified:{requested}", detail
 
 
 def _holdings_snapshot(movements: List[dict]) -> Dict[str, Dict[str, Any]]:
@@ -376,8 +502,12 @@ class _Discovery:
     # Portfolio container docs (raw)
     ledger_txns_raw: List[dict]      # ledger_txn with security_id==from_security_id
     import_session_refs_raw: List[dict]  # import_session docs with refs
-    # Currency evidence
-    currency_verdict: str
+    # Ledger accounting-currency note (diagnostic only, §3c — never an
+    # input to listing_currency) and live-provider listing_currency
+    # verification outcome (§3b/§3d).
+    ledger_accounting_currency_note: str
+    provider_currency_verdict: str
+    provider_currency_detail: str
     proposed_listing_currency: Optional[str]
     # Holdings snapshot (pre-write, includes any already-patched XNAS:PEP movements)
     holdings_before: Dict[str, Dict[str, Any]]
@@ -391,12 +521,26 @@ def discover(
     portfolio_container,
     from_security_id: str = DEFAULT_FROM_SECURITY_ID,
     to_security_id: Optional[str] = None,
+    listing_currency: Optional[str] = None,
+    yf_fetcher: Optional[Any] = None,
 ) -> _Discovery:
     """Perform full §3 discovery.
 
     Raises RepairAbort (exit_code=2) on unresolvable config or fatal inconsistency.
     Returns a _Discovery with collision_abort=True for collision cases (caller
     raises RepairAbort after logging the reason — so tests can inspect state).
+
+    Args:
+        listing_currency: Optional operator-supplied target listing currency
+            (danny-pep-repair-currency-correction.md §3b). If provided, a
+            live provider verification is performed here (best-effort, never
+            raises) and the outcome is recorded on the returned _Discovery's
+            `provider_currency_verdict`/`provider_currency_detail`. If
+            omitted, no currency change is proposed — the existing source
+            `listing_currency` is preserved (§3b bullet 1), matching
+            pre-mechanism behaviour exactly.
+        yf_fetcher: Optional injected fetcher (tests) — defaults to a real
+            `YFinanceFetcher()` instance when a live check is needed.
     """
     from azure.cosmos.exceptions import CosmosResourceNotFoundError
 
@@ -459,7 +603,9 @@ def discover(
                     target_sec_raw=target_sec_raw,
                     ledger_txns_raw=[],
                     import_session_refs_raw=[],
-                    currency_verdict="",
+                    ledger_accounting_currency_note="",
+                    provider_currency_verdict="not_requested",
+                    provider_currency_detail="",
                     proposed_listing_currency=None,
                     holdings_before={},
                     collision_abort=True,
@@ -498,15 +644,30 @@ def discover(
         if found:
             import_refs_raw.append(raw)
 
-    # ── Currency evidence (§2) ────────────────────────────────────────
+    # ── Ledger accounting-currency note (diagnostic only, §3c) ────────
+    # This is NEVER an input to listing_currency — see docstring on
+    # `_ledger_accounting_currency_note`.
     ledger_clean = [_clean(d) for d in ledger_txns_raw]
     currencies = _extract_gross_currencies(ledger_clean)
-    current_currency = (
-        (_clean(source_sec_raw) if source_sec_raw else {})
-        .get("listing_currency", "EUR")
-        .upper()
-    )
-    currency_verdict, proposed_currency = _currency_verdict(currencies, current_currency)
+    ledger_accounting_currency_note = _ledger_accounting_currency_note(currencies)
+
+    # ── Live-provider listing_currency verification (§3b) ─────────────
+    # No currency change happens unless the operator explicitly passes
+    # --listing-currency. Absent it, no live check is performed and
+    # proposed_listing_currency stays None (caller preserves the existing
+    # source listing_currency unchanged, exactly as before this mechanism
+    # existed).
+    provider_currency_verdict = "not_requested"
+    provider_currency_detail = ""
+    proposed_currency: Optional[str] = None
+    if listing_currency:
+        provider_currency_verdict, provider_currency_detail = (
+            _verify_listing_currency_with_provider(
+                ticker, listing_currency, target_mic, fetcher=yf_fetcher,
+            )
+        )
+        if provider_currency_verdict.startswith("verified:"):
+            proposed_currency = listing_currency.strip().upper()
 
     # ── Holdings snapshot before write ───────────────────────────────
     # Merge in any already-patched XNAS:PEP movements (for idempotent re-run)
@@ -531,7 +692,9 @@ def discover(
         target_sec_raw=target_sec_raw,
         ledger_txns_raw=ledger_txns_raw,
         import_session_refs_raw=import_refs_raw,
-        currency_verdict=currency_verdict,
+        ledger_accounting_currency_note=ledger_accounting_currency_note,
+        provider_currency_verdict=provider_currency_verdict,
+        provider_currency_detail=provider_currency_detail,
         proposed_listing_currency=proposed_currency,
         holdings_before=holdings_before,
     )
@@ -711,10 +874,15 @@ def run_audit(
     portfolio_container,
     from_security_id: str = DEFAULT_FROM_SECURITY_ID,
     to_security_id: Optional[str] = None,
+    listing_currency: Optional[str] = None,
+    yf_fetcher: Optional[Any] = None,
 ) -> RepairReport:
     """Read-only: discover, derive, report — write nothing."""
     try:
-        disc = discover(symbols_container, portfolio_container, from_security_id, to_security_id)
+        disc = discover(
+            symbols_container, portfolio_container, from_security_id, to_security_id,
+            listing_currency=listing_currency, yf_fetcher=yf_fetcher,
+        )
     except RepairAbort as exc:
         report = RepairReport(
             from_security_id=from_security_id,
@@ -732,7 +900,8 @@ def run_audit(
         config_doc_found=disc.config_raw is not None,
         ledger_txn_found=len(disc.ledger_txns_raw),
         import_session_refs_found=len(disc.import_session_refs_raw),
-        currency_evidence=disc.currency_verdict,
+        ledger_accounting_currency_note=disc.ledger_accounting_currency_note,
+        provider_currency_verdict=disc.provider_currency_verdict,
         exit_code=0,
     )
     if disc.collision_abort:
@@ -747,9 +916,14 @@ def run_backup_only(
     from_security_id: str = DEFAULT_FROM_SECURITY_ID,
     to_security_id: Optional[str] = None,
     backup_dir: Path = DEFAULT_BACKUP_DIR,
+    listing_currency: Optional[str] = None,
+    yf_fetcher: Optional[Any] = None,
 ) -> Path:
     """Backup only — no analysis writes beyond the backup file."""
-    disc = discover(symbols_container, portfolio_container, from_security_id, to_security_id)
+    disc = discover(
+        symbols_container, portfolio_container, from_security_id, to_security_id,
+        listing_currency=listing_currency, yf_fetcher=yf_fetcher,
+    )
     backup = build_backup(disc)
     return write_backup(backup, backup_dir)
 
@@ -760,23 +934,48 @@ def run_apply(
     from_security_id: str = DEFAULT_FROM_SECURITY_ID,
     to_security_id: Optional[str] = None,
     backup_dir: Path = DEFAULT_BACKUP_DIR,
+    listing_currency: Optional[str] = None,
+    yf_fetcher: Optional[Any] = None,
 ) -> RepairReport:
     """Backup → discover → write (ETag-gated) → verify → delete source.
 
     Raises VerificationError (exit_code=3) if post-write checks fail —
     sec_NNYS_PEP is NOT deleted in that case.
+
+    If `listing_currency` is supplied, live provider verification (§3b)
+    must succeed (`provider_currency_verdict` starts with "verified:")
+    BEFORE any backup/mutation occurs — otherwise raises RepairAbort
+    (exit_code=2). This gate sits between Phase 1 (discover) and Phase 2
+    (backup), per danny-pep-repair-currency-correction.md §3b/§3d ordering.
     """
     from azure.cosmos.exceptions import CosmosResourceNotFoundError, CosmosHttpResponseError
     from azure.core import MatchConditions
 
     # ── Phase 1: discover ─────────────────────────────────────────────
     try:
-        disc = discover(symbols_container, portfolio_container, from_security_id, to_security_id)
+        disc = discover(
+            symbols_container, portfolio_container, from_security_id, to_security_id,
+            listing_currency=listing_currency, yf_fetcher=yf_fetcher,
+        )
     except RepairAbort as exc:
         raise
 
     if disc.collision_abort:
         raise RepairAbort(disc.collision_reason, exit_code=2)
+
+    # ── Currency gate (§3b/§3d): must abort BEFORE backup/mutations ───
+    if listing_currency and not disc.provider_currency_verdict.startswith("verified:"):
+        logger.error(
+            "Aborting before backup/mutations: --listing-currency=%s requested "
+            "but live provider verification did not pass (verdict=%s, detail=%s)",
+            listing_currency, disc.provider_currency_verdict, disc.provider_currency_detail,
+        )
+        raise RepairAbort(
+            f"--listing-currency={listing_currency!r} requested but live provider "
+            f"verification failed: {disc.provider_currency_verdict} "
+            f"({disc.provider_currency_detail})",
+            exit_code=2,
+        )
 
     # ── Phase 2: backup (mandatory, before first write) ───────────────
     backup = build_backup(disc)
@@ -791,7 +990,8 @@ def run_apply(
         config_doc_found=disc.config_raw is not None,
         ledger_txn_found=len(disc.ledger_txns_raw),
         import_session_refs_found=len(disc.import_session_refs_raw),
-        currency_evidence=disc.currency_verdict,
+        ledger_accounting_currency_note=disc.ledger_accounting_currency_note,
+        provider_currency_verdict=disc.provider_currency_verdict,
     )
 
     ticker = disc.ticker
@@ -816,18 +1016,20 @@ def run_apply(
                 exit_code=2,
             )
         source_clean = _clean(disc.source_sec_raw)
-        # Determine listing_currency
+        # Determine listing_currency to apply: only ever the provider-verified
+        # proposed value: no flag / not verified → preserve existing source
+        # listing_currency unchanged (§3b bullet 1).
         if disc.proposed_listing_currency is not None:
-            listing_currency = disc.proposed_listing_currency
+            resolved_listing_currency = disc.proposed_listing_currency
         else:
-            listing_currency = source_clean.get("listing_currency", "EUR")
+            resolved_listing_currency = source_clean.get("listing_currency", "EUR")
 
         new_target = {
             **source_clean,
             "id": target_doc_id,
             "security_id": target_sid,
             "exchange_mic": disc.target_mic,
-            "listing_currency": listing_currency,
+            "listing_currency": resolved_listing_currency,
             # Preserve original created_at (this is a corrected identity, not new)
             "updated_at": now,
             "migrated_from": disc.from_security_id,
@@ -1131,9 +1333,14 @@ def audit_repair(
     portfolio_container,
     from_security_id: str = DEFAULT_FROM_SECURITY_ID,
     to_security_id: Optional[str] = None,
+    listing_currency: Optional[str] = None,
+    yf_fetcher: Optional[Any] = None,
 ) -> RepairReport:
     """Public alias: audit without writing anything."""
-    return run_audit(symbols_container, portfolio_container, from_security_id, to_security_id)
+    return run_audit(
+        symbols_container, portfolio_container, from_security_id, to_security_id,
+        listing_currency=listing_currency, yf_fetcher=yf_fetcher,
+    )
 
 
 def apply_repair(
@@ -1143,6 +1350,8 @@ def apply_repair(
     from_security_id: str = DEFAULT_FROM_SECURITY_ID,
     to_security_id: Optional[str] = None,
     backup_dir: str = DEFAULT_BACKUP_DIR,
+    listing_currency: Optional[str] = None,
+    yf_fetcher: Optional[Any] = None,
 ) -> RepairReport:
     """Public alias: run audit (if dry_run=True) or full apply.
 
@@ -1150,13 +1359,18 @@ def apply_repair(
     and surfaced as the returned report with appropriate exit_code.
     """
     if dry_run:
-        return run_audit(symbols_container, portfolio_container, from_security_id, to_security_id)
+        return run_audit(
+            symbols_container, portfolio_container, from_security_id, to_security_id,
+            listing_currency=listing_currency, yf_fetcher=yf_fetcher,
+        )
     try:
         report = run_apply(
             symbols_container, portfolio_container,
             from_security_id=from_security_id,
             to_security_id=to_security_id,
             backup_dir=backup_dir,
+            listing_currency=listing_currency,
+            yf_fetcher=yf_fetcher,
         )
         report.exit_code = 0
         return report
@@ -1179,13 +1393,18 @@ def backup_repair(
     path=None,
     from_security_id: str = DEFAULT_FROM_SECURITY_ID,
     to_security_id: Optional[str] = None,
+    listing_currency: Optional[str] = None,
+    yf_fetcher: Optional[Any] = None,
 ) -> "RepairBackup":
     """Public alias: discover all relevant docs and build a RepairBackup object.
 
     Does not write to disk. Returns the RepairBackup instance so callers can
     inspect it or pass it to write_backup() separately.
     """
-    disc = discover(symbols_container, portfolio_container, from_security_id, to_security_id)
+    disc = discover(
+        symbols_container, portfolio_container, from_security_id, to_security_id,
+        listing_currency=listing_currency, yf_fetcher=yf_fetcher,
+    )
     return build_backup(disc)
 
 
@@ -1211,7 +1430,8 @@ def _print_report(report: RepairReport, *, mode: str) -> None:
     print(f"  target_pre_existed:           {report.target_security_master_pre_existed}")
     print(f"  ledger_txn_found:             {report.ledger_txn_found}")
     print(f"  import_session_refs_found:    {report.import_session_refs_found}")
-    print(f"  currency_evidence:            {report.currency_evidence}")
+    print(f"  ledger_accounting_currency_note: {report.ledger_accounting_currency_note}")
+    print(f"  provider_currency_verdict:    {report.provider_currency_verdict}")
     if mode != "AUDIT (dry-run)":
         print(f"  target_created:               {report.target_created}")
         print(f"  config_patched:               {report.config_patched}")
@@ -1336,6 +1556,23 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default="portfolio",
         help="Portfolio container name.",
     )
+    parser.add_argument(
+        "--listing-currency",
+        dest="listing_currency",
+        default=None,
+        metavar="CUR",
+        help=(
+            "Optional target listing_currency (e.g. USD). If omitted, the "
+            "existing source listing_currency is preserved unchanged — no "
+            "currency correction is made. If provided, --apply performs a "
+            "mandatory live YFinanceFetcher('PEP') verification (currency == "
+            "financialCurrency == CUR, and provider exchange corroborates "
+            "the target MIC) BEFORE any backup/mutation; a failed/mismatched/"
+            "unreachable check aborts with exit code 2. --audit reports the "
+            "same check best-effort without writing. "
+            "Example: --apply --listing-currency USD"
+        ),
+    )
     return parser
 
 
@@ -1357,7 +1594,8 @@ def main(argv=None) -> int:
             args.database, args.symbols_container, args.portfolio_container
         )
         report = run_audit(
-            symbols_c, portfolio_c, args.from_security_id, args.to_security_id
+            symbols_c, portfolio_c, args.from_security_id, args.to_security_id,
+            listing_currency=args.listing_currency,
         )
         _print_report(report, mode="AUDIT (dry-run)")
         return report.exit_code
@@ -1369,7 +1607,8 @@ def main(argv=None) -> int:
         try:
             path = run_backup_only(
                 symbols_c, portfolio_c,
-                args.from_security_id, args.to_security_id, backup_dir
+                args.from_security_id, args.to_security_id, backup_dir,
+                listing_currency=args.listing_currency,
             )
             print(f"Backup written: {path}")
         except RepairAbort as exc:
@@ -1387,7 +1626,8 @@ def main(argv=None) -> int:
         try:
             report = run_apply(
                 symbols_c, portfolio_c,
-                args.from_security_id, args.to_security_id, backup_dir
+                args.from_security_id, args.to_security_id, backup_dir,
+                listing_currency=args.listing_currency,
             )
             _print_report(report, mode="APPLY (writes performed)")
             return 0
