@@ -2144,9 +2144,19 @@ Extended `test_portfolio_fifo.py` with `TestFifoShareConsolidation` (FIFO-SC1–
 
 **Impact:** Tests pass, but this exposed an ordering dependency discovered post-implementation.
 
-### Basher's Review Finding: Ordering Invariant Violation (Known Issue, Deferred)
+### Basher's Review Finding: Ordering Invariant Violation -- RESOLVED
 
-**Status:** DEFERRED to separate revision contract
+**Status:** RESOLVED -- commit f5ed79f (2026-09-08). Fix reviewed and approved
+(with minor notes) by Livingston: movements now sort by
+`(trade_date, ca_group_id, ca_group_seq, id)`. Verified against the RKT
+72->69.12->69 scenario; targeted backend suite (portfolio/fifo/holdings/
+scrip/consolidation/ledger_fields) 1119 passed, 0 failed. This fix landed
+together with the previously-uncommitted FIFO rewrite of
+holdings_service.py (the code half of the "Scrip Zero-Cost Pool Entry &
+BUY Import Gross/Net Correction" decision below, whose docs were committed
+in 89a7c2a but whose code had not been committed until now).
+
+**Original finding (superseded by the above):**
 
 **Issue:** `holdings_service.py` sorts movements by `(trade_date, id)` only. Within a single date, the three SHARE_CONSOLIDATION legs (CONSOLIDATION_OUT, CONSOLIDATION_IN, FRACTIONAL_CASH_OUT) process in random order (by UUID). This is the first CA event type where leg ordering is semantically critical.
 
