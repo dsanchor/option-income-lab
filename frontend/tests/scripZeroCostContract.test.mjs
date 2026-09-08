@@ -306,3 +306,46 @@ describe("MIG — Migration script source contract", () => {
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// FE — BUY form gross/net contract (danny-fifo-net-accounting-contract.md §1)
+// Contract: FE-1 — BUY form sends gross = trade_value (NOT trade_value + fees).
+//           Server derives net = gross + fees.
+// ---------------------------------------------------------------------------
+
+describe("FE — BUY form gross/net semantics", () => {
+  const addMovement = src("components/AddMovementDialog.tsx");
+
+  it("FE-1: BUY submit does not add fees into gross before sending", () => {
+    // The old incorrect code added fees into gross before calling makeGross.
+    // Pattern to reject: (parseFloat(buyForm.trade_value) ... + ... fees ...).toFixed
+    // After the fix, gross must be makeGross(buyForm.trade_value, ...) — trade value only.
+    const addsFeesToGross =
+      /makeGross\s*\(\s*\(\s*\(parseFloat\(buyForm\.trade_value\)/.test(addMovement) ||
+      /trade_value.*\+.*fees.*toFixed/.test(addMovement);
+    assert.equal(
+      addsFeesToGross,
+      false,
+      "BUY submit must NOT add fees into gross — send trade_value as gross; server computes net"
+    );
+  });
+
+  it("FE-2: BUY submit sends gross = trade_value (bare field, no arithmetic)", () => {
+    // After fix: gross: makeGross(buyForm.trade_value, currency)
+    assert.match(
+      addMovement,
+      /makeGross\s*\(\s*buyForm\.trade_value\s*,\s*currency\s*\)/,
+      "BUY gross must be makeGross(buyForm.trade_value, currency) — no fee addition"
+    );
+  });
+
+  it("FE-3: BUY fees field is still forwarded separately", () => {
+    // The fees field must still be sent in the request so the server can compute net.
+    // Pattern: fees: buyForm.fees ? makeFeesInput(...)
+    assert.match(
+      addMovement,
+      /fees.*buyForm\.fees.*makeFeesInput/s,
+      "BUY fees must still be forwarded separately so the server can derive net = gross + fees"
+    );
+  });
+});

@@ -127,9 +127,9 @@ def _buy(mid, security_id, qty, gross, fee="0", status="COMPLETE",
         "quantity": str(qty),
         "gross": {"amount": str(gross), "currency": "EUR", "eur_amount": str(gross)},
         "fees": {"total": str(fee), "currency": "EUR", "total_eur": str(fee)},
-        "net": {"amount": str(Decimal(str(gross)) - Decimal(str(fee))),
+        "net": {"amount": str(Decimal(str(gross)) + Decimal(str(fee))),
                 "currency": "EUR",
-                "eur_amount": str(Decimal(str(gross)) - Decimal(str(fee)))},
+                "eur_amount": str(Decimal(str(gross)) + Decimal(str(fee)))},
         "account_id": account_id,
         "cost_basis_status": status,
         "correction_status": "ACTIVE",
@@ -231,7 +231,7 @@ class TestS1SingleBuy:
 
     def setup_method(self):
         svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1005.00", fee="5.00"),
+            _buy("b1", "XNYS:AAPL", 100, "1000.00", fee="5.00"),
         ])
         self.result = svc.compute_holdings()
         self.s = self.result["summary"]
@@ -303,7 +303,7 @@ class TestS2PartialSellAcciones:
 
     def setup_method(self):
         svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1005.00", fee="5.00"),
+            _buy("b1", "XNYS:AAPL", 100, "1000.00", fee="5.00"),
             _sell("s1", "XNYS:AAPL", 30, "450.00", fee="3.00"),
         ])
         self.result = svc.compute_holdings()
@@ -395,12 +395,13 @@ class TestS3FullExit:
 # ---------------------------------------------------------------------------
 
 class TestS4MultipleBuysAndSale:
-    """S4: BUY 100@€10 (€0), BUY 50@€20 (€0) → SELL 60@€18 (€0).
-    pool after 2 buys: 150 shares, €2000, avg = 2000/150 = 13.333...
-    cost_sold = 60 × (2000/150) = 800.00
-    remaining  = 2000 − 800 = 1200.00
+    """S4: BUY 100@€10 (lot1, 2024-01-01), BUY 50@€20 (lot2, 2024-01-02) → SELL 60.
+    FIFO: consume 60 from lot1.
+    cost_sold = 60×10 = 600.00
+    remaining = lot1(40×€10) + lot2(50×€20) = 400+1000 = 1400.00
     sale_proceeds = 1080.00
-    realized  = 1080 − 800 = 280.00
+    realized  = 1080 − 600 = 480.00
+    avg after sell = 1400/90 = 15.56
     """
 
     def setup_method(self):
@@ -417,20 +418,20 @@ class TestS4MultipleBuysAndSale:
         assert _d(self.s["total_purchase_outflow_eur"]) == _d("2000.00")
 
     def test_summary_cost_basis_sold(self):
-        assert _d(self.s["cost_basis_sold_eur"]) == _d("800.00")
+        assert _d(self.s["cost_basis_sold_eur"]) == _d("600.00")
 
     def test_summary_remaining_cost_basis(self):
-        assert _d(self.s["remaining_cost_basis_eur"]) == _d("1200.00")
+        assert _d(self.s["remaining_cost_basis_eur"]) == _d("1400.00")
 
     def test_summary_realized_result(self):
-        assert _d(self.s["realized_result_eur"]) == _d("280.00")
+        assert _d(self.s["realized_result_eur"]) == _d("480.00")
 
     def test_remaining_shares(self):
         assert _d(self.h["total_shares"]) == _d("90")
 
     def test_avg_cost_basis_after_sell(self):
-        """After proportional CMP sell: avg stays at 1200/90 = 13.33."""
-        assert self.h["avg_cost_basis_eur"] == "13.33"
+        """After FIFO sell: avg = 1400/90 = 15.56."""
+        assert self.h["avg_cost_basis_eur"] == "15.56"
 
 
 # ---------------------------------------------------------------------------
@@ -536,10 +537,10 @@ class TestS6MixedAccionesDerechos:
 # ---------------------------------------------------------------------------
 
 class TestS7IncompleteCostBasis:
-    """S7: BUY 50@€0 (INCOMPLETE) + BUY 50@€10 (COMPLETE) → SELL 70@€15.
-    pool (paid): 50 shares, €500.
-    Sell 70: 50 from paid pool (cost 500) + 20 at cost 0.
-    cost_sold = 500, remaining = 0.
+    """S7: BUY 50@€0 (INCOMPLETE, id=b1) + BUY 50@€10 (COMPLETE, id=b2) → SELL 70@€15.
+    FIFO order: b1 (INCOMPLETE) first, then b2 (COMPLETE). Both same date; id b1 < b2.
+    Sell 70: consume 50 from INCOMPLETE lot (cost=0) + 20 from COMPLETE lot (cost=200).
+    cost_sold = 200, remaining = 30×€10 = 300.
     has_incomplete_cost_basis = True.
     """
 
@@ -560,12 +561,12 @@ class TestS7IncompleteCostBasis:
         assert self.s["has_incomplete_cost_basis"] is True
 
     def test_cost_basis_sold_only_paid_portion(self):
-        """Only 50 paid shares have known cost (€500); remaining 20 are cost-zero."""
-        assert _d(self.h["cost_basis_sold_eur"]) == _d("500.00")
+        """FIFO: 50 INCOMPLETE (cost=0) + 20 COMPLETE (cost=200) = 200 total."""
+        assert _d(self.h["cost_basis_sold_eur"]) == _d("200.00")
 
-    def test_remaining_cost_basis_zero(self):
-        """All paid shares sold; pool is empty."""
-        assert _d(self.h["remaining_cost_basis_eur"]) == _d("0.00")
+    def test_remaining_cost_basis(self):
+        """30 shares remain from COMPLETE lot: 30 × €10 = 300."""
+        assert _d(self.h["remaining_cost_basis_eur"]) == _d("300.00")
 
     def test_no_fabricated_cost_for_incomplete_shares(self):
         """cost_basis_sold must not exceed the known cost pool (no fabrication)."""
@@ -738,7 +739,7 @@ class TestS11BackwardCompatAliases:
 
     def setup_method(self):
         svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1005.00", fee="5.00"),
+            _buy("b1", "XNYS:AAPL", 100, "1000.00", fee="5.00"),
         ])
         self.result = svc.compute_holdings()
         self.s = self.result["summary"]
@@ -789,10 +790,10 @@ class TestS11BackwardCompatAliases:
 # ---------------------------------------------------------------------------
 
 class TestS12AvgCostCmp:
-    """S12: BUY 100@€10 (€0), BUY 100@€20 (€0) → SELL 50.
-    Before sell: pool=200, cost=3000, avg=15.00.
-    After sell 50: cost_sold=750, pool=150, cost=2250, avg=2250/150=15.00.
-    CMP avg stays the same when selling (proportional reduction).
+    """S12: BUY 100@€10 (lot1, 2024-01-01), BUY 100@€20 (lot2, 2024-01-02) → SELL 50.
+    FIFO: consume 50 from lot1.
+    cost_sold = 500. remaining = lot1(50×€10) + lot2(100×€20) = 500+2000 = 2500.
+    avg after sell = 2500/150 = 16.67.
     """
 
     def setup_method(self):
@@ -805,14 +806,14 @@ class TestS12AvgCostCmp:
         self.h = _holding(self.result, "XNYS:AAPL")
 
     def test_avg_cost_after_sell(self):
-        """CMP avg should be 15.00 after proportional sell."""
-        assert self.h["avg_cost_basis_eur"] == "15.00"
+        """FIFO avg after sell = 2500/150 = 16.67."""
+        assert self.h["avg_cost_basis_eur"] == "16.67"
 
     def test_remaining_shares(self):
         assert _d(self.h["total_shares"]) == _d("150")
 
     def test_remaining_cost_basis(self):
-        assert _d(self.h["remaining_cost_basis_eur"]) == _d("2250.00")
+        assert _d(self.h["remaining_cost_basis_eur"]) == _d("2500.00")
 
 
 # ---------------------------------------------------------------------------
@@ -935,7 +936,7 @@ class TestCommissionAssignment:
 
     def setup_method(self):
         svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1010.00", fee="10.00"),
+            _buy("b1", "XNYS:AAPL", 100, "1000.00", fee="10.00"),
             _sell("s1", "XNYS:AAPL", 50, "600.00", fee="6.00"),
         ])
         self.result = svc.compute_holdings()
@@ -1185,11 +1186,11 @@ class TestCurrentInvestedSemanticChange:
     """
 
     def setup_method(self):
-        # BUY 100@gross €1005 (€5 fee) → SELL 30@€15 (€3 fee)
+        # BUY 100@gross €1000 (€5 fee; net €1005) → SELL 30@€15 (€3 fee)
         # Old: 1005 - (450-3) = 1005 - 447 = 558. (Wrong!)
-        # New (CMP): avg=10.05, cost_sold=30×10.05=301.50, remaining=703.50. (Correct)
+        # New (FIFO): avg=10.05, cost_sold=30×10.05=301.50, remaining=703.50. (Correct)
         svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1005.00", fee="5.00"),
+            _buy("b1", "XNYS:AAPL", 100, "1000.00", fee="5.00"),
             _sell("s1", "XNYS:AAPL", 30, "450.00", fee="3.00"),
         ])
         self.result = svc.compute_holdings()

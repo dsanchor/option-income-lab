@@ -202,7 +202,14 @@ def _make_movement(
     sales_type=None,
 ):
     ticker = security_id.split(":")[-1]
-    net = net_eur or str(Decimal(gross_eur) - Decimal(commission_eur))
+    if net_eur is not None:
+        net = net_eur
+    elif txn_type == "BUY":
+        # New convention: net = gross + commission (total cash outflow)
+        net = str(Decimal(gross_eur) + Decimal(commission_eur))
+    else:
+        # SELL / other: net = gross - commission (proceeds after fees)
+        net = str(Decimal(gross_eur) - Decimal(commission_eur))
     doc = {
         "id": movement_id,
         "doc_type": "ledger_txn",
@@ -590,8 +597,8 @@ class TestLegacyDocumentCompatibility:
     def test_cost_basis_status_complete_on_regular_buy(self):
         """Regular BUY movements have cost_basis_status=COMPLETE and contribute to basis."""
         movements = [
-            # true gross = net 1825 + commission 7.50 = 1832.50; engine: cost = gross = 1832.50
-            _make_movement("buy_cb", "XNYS:AAPL", "BUY", 10, "1832.5",
+            # gross = trade consideration 1825; fee = 7.50; net = 1832.50; engine: cost = net = 1832.50
+            _make_movement("buy_cb", "XNYS:AAPL", "BUY", 10, "1825.0",
                            commission_eur="7.50", cost_basis_status="COMPLETE"),
         ]
         svc = _make_holdings_service(movements)

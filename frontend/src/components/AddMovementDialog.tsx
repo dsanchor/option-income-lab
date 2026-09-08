@@ -547,11 +547,8 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
           account_id: buyForm.account_id || "_unassigned",
           trade_date: buyForm.trade_date,
           quantity: buyForm.quantity,
-          // gross = net consideration + fees (true total acquisition cost; engine uses cost = gross_eur)
-          gross: makeGross(
-            ((parseFloat(buyForm.trade_value) || 0) + (parseFloat(buyForm.fees) || 0)).toFixed(4),
-            currency,
-          ),
+          // gross = trade consideration (price × qty); server derives net = gross + fees.
+          gross: makeGross(buyForm.trade_value, currency),
           fees: buyForm.fees ? makeFeesInput(buyForm.fees, currency) : undefined,
           notes: buyForm.notes || undefined,
         };
