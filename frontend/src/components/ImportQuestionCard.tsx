@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { answerQuestion } from "@/lib/portfolio-api";
+import { useEffect, useState } from "react";
+import { answerQuestion, listAccounts } from "@/lib/portfolio-api";
+import { formatAccountName } from "@/lib/accountDisplay";
 import type { ImportQuestion, ImportSession, SecurityMaster } from "@/types/import";
+import type { BrokerAccount } from "@/types/portfolio";
 import SecurityCreateForm from "./SecurityCreateForm";
 import SecuritySearchPanel from "./SecuritySearchPanel";
 
@@ -29,6 +31,23 @@ export default function ImportQuestionCard({ question, sessionId, onAnswered }: 
   const [batchValue, setBatchValue] = useState(
     question.scope === "BATCH" ? question.current_value : "",
   );
+  const isAccountBatch = question.scope === "BATCH" && question.batch_key === "account_id";
+  const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
+
+  useEffect(() => {
+    if (!isAccountBatch) return;
+    let cancelled = false;
+    listAccounts()
+      .then((resp) => {
+        if (!cancelled) setAccounts(resp.accounts ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setAccounts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAccountBatch]);
 
   // Already answered — show as a collapsed chip.
   if (question.answer !== null) {
@@ -112,11 +131,26 @@ export default function ImportQuestionCard({ question, sessionId, onAnswered }: 
           </div>
           <div className="text-xs text-text-muted">{batchKeyHint(question.batch_key)}</div>
           <div className="flex gap-2 items-center">
-            <input
-              value={batchValue}
-              onChange={(e) => setBatchValue(e.target.value)}
-              className={`${inputCls} w-36`}
-            />
+            {isAccountBatch ? (
+              <select
+                value={batchValue}
+                onChange={(e) => setBatchValue(e.target.value)}
+                className={`${inputCls} w-56`}
+              >
+                <option value="">Sin asignar</option>
+                {accounts.map((a) => (
+                  <option key={a.account_id} value={a.account_id}>
+                    {formatAccountName(a)}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={batchValue}
+                onChange={(e) => setBatchValue(e.target.value)}
+                className={`${inputCls} w-36`}
+              />
+            )}
             <button
               type="submit"
               disabled={loading}
