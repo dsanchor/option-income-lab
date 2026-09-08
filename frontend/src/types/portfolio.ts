@@ -24,8 +24,8 @@ export const SALES_TYPE_LABELS: Record<"ACCIONES" | "DERECHOS", string> = {
 };
 
 // Amendment H: Corporate action group types (Phase H-α — linked ledger legs)
-export type CaLegType = "CASH_DIVIDEND" | "RIGHTS_SOLD" | "SHARE_ACQUISITION" | "CASH_TOP_UP";
-export type CaEventType = "DIVIDEND_WITH_SCRIP" | "SCRIP_DIVIDEND" | "RIGHTS_ISSUE" | "CASH_DIVIDEND";
+export type CaLegType = "CASH_DIVIDEND" | "RIGHTS_SOLD" | "SHARE_ACQUISITION" | "CASH_TOP_UP" | "CONSOLIDATION_OUT" | "CONSOLIDATION_IN" | "FRACTIONAL_CASH_OUT";
+export type CaEventType = "DIVIDEND_WITH_SCRIP" | "SCRIP_DIVIDEND" | "RIGHTS_ISSUE" | "CASH_DIVIDEND" | "SHARE_CONSOLIDATION";
 
 // ─── Security Master ─────────────────────────────────────────────────────────
 
@@ -434,6 +434,7 @@ export interface CorporateActionLegRequest {
   fx?: { rate: string; rate_source: FxRateSource };
   cost_basis_status?: CostBasisStatus;       // SHARE_ACQUISITION only
   notes?: string;
+  transfer_cost_basis_eur?: string;          // CONSOLIDATION_IN only
 }
 
 /** POST /api/portfolio/corporate-actions */
