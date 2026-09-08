@@ -608,13 +608,20 @@ class CosmosPortfolioService:
             wht_source_eur = _d(src.get("amount_eur", "0"))
             wht_dest_eur = _d(dst.get("amount_eur", "0"))
 
-        # net = gross - fees - withholding_source - withholding_dest (all EUR)
-        net_eur = gross_eur - fees_eur - wht_source_eur - wht_dest_eur
+        # BUY: net = gross + fees (actual cash outflow; net > gross).
+        # SELL/DIVIDEND: net = gross - fees - withholding (actual cash inflow; net < gross).
         currency = gross.get("currency", "EUR").upper()
-        net_in_currency = (
-            _d(gross.get("amount", "0")) - _d(fees.get("total", "0"))
-            - wht_source_eur - wht_dest_eur
-        ) if currency == "EUR" else net_eur
+        if txn_type == "BUY":
+            net_eur = gross_eur + fees_eur
+            net_in_currency = (
+                _d(gross.get("amount", "0")) + _d(fees.get("total", "0"))
+            ) if currency == "EUR" else net_eur
+        else:
+            net_eur = gross_eur - fees_eur - wht_source_eur - wht_dest_eur
+            net_in_currency = (
+                _d(gross.get("amount", "0")) - _d(fees.get("total", "0"))
+                - wht_source_eur - wht_dest_eur
+            ) if currency == "EUR" else net_eur
 
         now = self._now()
         movement_id = f"mvt_{uuid4().hex}"
@@ -791,7 +798,12 @@ class CosmosPortfolioService:
             if isinstance(wht, dict):
                 wht_s = _d((wht.get("source") or {}).get("amount_eur", "0"))
                 wht_d = _d((wht.get("destination") or {}).get("amount_eur", "0"))
-            net_eur = gross_eur - fees_eur - wht_s - wht_d
+            # BUY: net = gross + fees (outflow; withholding not applicable to BUY).
+            # SELL/DIVIDEND: net = gross - fees - withholding.
+            if txn_type == "BUY":
+                net_eur = gross_eur + fees_eur
+            else:
+                net_eur = gross_eur - fees_eur - wht_s - wht_d
             currency = gross.get("currency", "EUR").upper()
             replacement["net"] = {
                 "amount": str(net_eur.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),

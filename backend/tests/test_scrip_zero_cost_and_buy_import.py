@@ -71,7 +71,11 @@ def _make_svc(movements):
 
 def _buy(mid, security_id, qty, gross_eur, commission_eur="0",
          cost_basis_status="COMPLETE", trade_date="2024-01-15", account_id="_unassigned"):
-    """Build a BUY movement with gross_eur as the TRUE gross (includes commission)."""
+    """Build a BUY movement with gross_eur as the trade consideration (excl. fee).
+
+    Convention (new): net = gross + commission (total cash outflow).
+    Engine reads net.eur_amount for cost basis.
+    """
     ticker = security_id.split(":")[-1]
     return {
         "id": mid,
@@ -84,9 +88,9 @@ def _buy(mid, security_id, qty, gross_eur, commission_eur="0",
         "gross": {"amount": str(gross_eur), "currency": "EUR", "eur_amount": str(gross_eur)},
         "fees": {"total": str(commission_eur), "currency": "EUR", "total_eur": str(commission_eur)},
         "net": {
-            "amount": str(Decimal(str(gross_eur)) - Decimal(str(commission_eur))),
+            "amount": str(Decimal(str(gross_eur)) + Decimal(str(commission_eur))),
             "currency": "EUR",
-            "eur_amount": str(Decimal(str(gross_eur)) - Decimal(str(commission_eur))),
+            "eur_amount": str(Decimal(str(gross_eur)) + Decimal(str(commission_eur))),
         },
         "account_id": account_id,
         "cost_basis_status": cost_basis_status,
@@ -268,29 +272,30 @@ class TestIncompleteStaysOutside:
 # ---------------------------------------------------------------------------
 
 class TestCostEqualsGrossOnly:
-    """Engine uses cost = gross_eur; commission in fees.total_eur must NOT be re-added."""
+    """Engine uses cost = net_eur (= gross + commission); commission must NOT be double-added."""
 
-    def test_cost_equals_gross_not_gross_plus_commission(self):
-        """BUY gross=1010, commission=10 → cost=1010, NOT 1020."""
+    def test_cost_equals_net_not_net_plus_commission(self):
+        """BUY gross=1000, commission=10 → net=1010 → cost=1010, NOT 1020."""
         svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1010.00", commission_eur="10.00"),
+            _buy("b1", "XNYS:AAPL", 100, "1000.00", commission_eur="10.00"),
         ])
         result = svc.compute_holdings()
         h = result["holdings"][0]
-        # If engine were gross+commission it would give 1020.
+        # Engine reads net.eur_amount = gross+commission = 1010.
+        # If engine were net+commission it would give 1020.
         assert _d(h["remaining_cost_basis_eur"]) == _d("1010.00"), (
-            "cost = gross only; double-counting commission gives 1020 — engine is broken"
+            "cost = net only; double-counting commission gives 1020 — engine is broken"
         )
 
     def test_no_commission_double_count_in_avg(self):
-        """BUY gross=1010 (includes commission) → avg = 1010/100 = 10.10, not (1010+10)/100."""
+        """BUY gross=1000, commission=10 → net=1010 → avg = 1010/100 = 10.10, not 10.20."""
         svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1010.00", commission_eur="10.00"),
+            _buy("b1", "XNYS:AAPL", 100, "1000.00", commission_eur="10.00"),
         ])
         result = svc.compute_holdings()
         h = result["holdings"][0]
         assert _d(h["avg_cost_basis_eur"]) == _d("10.10"), (
-            "avg must be gross/shares; double-count gives 10.20"
+            "avg must be net/shares; double-count gives 10.20"
         )
 
     def test_zero_commission_unchanged(self):
@@ -308,10 +313,13 @@ class TestCostEqualsGrossOnly:
 # ---------------------------------------------------------------------------
 
 class TestPartialSellWithZeroCostPool:
-    """SELL after mixed COMPLETE+ZERO_COST pool uses diluted avg correctly."""
+    """SELL after mixed COMPLETE+ZERO_COST pool: FIFO consumes oldest lot first."""
 
-    def test_sell_uses_diluted_avg(self):
-        """163 COMPLETE (4294.21) + 60 ZERO_COST → avg=19.26. SELL 50 → cost_sold=963.00."""
+    def test_sell_uses_fifo_lot1_cost(self):
+        """163 COMPLETE (4294.21) + 60 ZERO_COST.
+        FIFO: sell 50 from lot1 (b1, id < b2, same date).
+        cost_sold = 50 × (4294.21/163) = 1317.24.
+        """
         svc = _make_svc([
             _buy("b1", "XNYS:AAPL", 163, "4294.21"),
             _buy("b2", "XNYS:AAPL", 60, "0", cost_basis_status="ZERO_COST"),
@@ -319,12 +327,13 @@ class TestPartialSellWithZeroCostPool:
         ])
         result = svc.compute_holdings()
         h = result["holdings"][0]
-        avg = _d("4294.21") / _d("223")  # = 19.2563...
-        expected_cost_sold = (avg * _d("50")).quantize(_d("0.01"), rounding=ROUND_HALF_UP)
-        assert _d(h["cost_basis_sold_eur"]) == expected_cost_sold
+        from decimal import ROUND_HALF_UP
+        unit_cost = _d("4294.21") / _d("163")
+        expected_cost_sold = (unit_cost * _d("50")).quantize(_d("0.01"), rounding=ROUND_HALF_UP)
+        assert _d(h["cost_basis_sold_eur"]) == expected_cost_sold  # 1317.24
 
     def test_sell_reduces_remaining_correctly(self):
-        """remaining = pool_cost − cost_sold after sell."""
+        """remaining = lot1_remaining + lot2_remaining after FIFO sell."""
         svc = _make_svc([
             _buy("b1", "XNYS:AAPL", 163, "4294.21"),
             _buy("b2", "XNYS:AAPL", 60, "0", cost_basis_status="ZERO_COST"),
@@ -332,10 +341,11 @@ class TestPartialSellWithZeroCostPool:
         ])
         result = svc.compute_holdings()
         h = result["holdings"][0]
-        avg = _d("4294.21") / _d("223")
-        cost_sold = (avg * _d("50")).quantize(_d("0.01"), rounding=ROUND_HALF_UP)
-        expected_remaining = (_d("4294.21") - cost_sold).quantize(_d("0.01"))
-        assert _d(h["remaining_cost_basis_eur"]) == expected_remaining
+        from decimal import ROUND_HALF_UP
+        unit_cost = _d("4294.21") / _d("163")
+        # After FIFO sell of 50 from lot1: lot1 has 113 shares remaining
+        expected_remaining = (unit_cost * _d("113")).quantize(_d("0.01"), rounding=ROUND_HALF_UP)
+        assert _d(h["remaining_cost_basis_eur"]) == expected_remaining  # 2976.97
 
     def test_shares_after_sell(self):
         """After selling 50 of 223, total_shares = 173."""
@@ -579,12 +589,12 @@ class TestSellNonRegression:
     def test_sell_gross_proceeds_not_affected_by_buy_semantics(self):
         """SELL proceeds accounting does not change when BUY gross semantics change."""
         svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1005.00", commission_eur="5.00"),
+            _buy("b1", "XNYS:AAPL", 100, "1000.00", commission_eur="5.00"),
             _sell("s1", "XNYS:AAPL", 50, "600.00", commission_eur="6.00"),
         ])
         result = svc.compute_holdings()
         h = result["holdings"][0]
-        # net = 600 - 6 = 594; avg = 1005/100 = 10.05; cost_sold = 502.50; realized = 91.50
+        # net = 600 - 6 = 594; net_cost = 1000+5=1005, avg = 1005/100 = 10.05; cost_sold = 502.50; realized = 91.50
         assert _d(h["total_sale_proceeds_eur"]) == _d("594.00")
         assert _d(h["cost_basis_sold_eur"]) == _d("502.50")
         assert _d(h["realized_result_eur"]) == _d("91.50")

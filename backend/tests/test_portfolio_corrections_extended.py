@@ -102,7 +102,7 @@ def _d(v) -> Decimal:
 
 class TestBuyFullCorrection:
     def test_buy_gross_fees_net_recomputed(self, client):
-        """C-1 / C-8+C-9: BUY with new gross+fees → net = new_gross - new_fees."""
+        """C-1 / C-8+C-9: BUY with new gross+fees → net = new_gross + new_fees."""
         c, fake = client
         _seed(fake, "buy_gf_001", gross_eur="18250.000000", commission_eur="7.500000")
         new_gross = "16000.000000"
@@ -114,13 +114,13 @@ class TestBuyFullCorrection:
         repl = resp.json()["replacement"]
         assert _d(repl["gross"]["eur_amount"]) == _d(new_gross)
         assert _d(repl["fees"]["total_eur"]) == _d(new_fees)
-        expected_net = _d(new_gross) - _d(new_fees)
+        expected_net = _d(new_gross) + _d(new_fees)
         assert _d(repl["net"]["eur_amount"]) == expected_net, (
             f"net must be {expected_net}; got {repl['net']['eur_amount']}"
         )
 
     def test_buy_only_gross_uses_original_fees(self, client):
-        """C-8: Only gross changed → net = new_gross - original_fees."""
+        """C-8: Only gross changed → net = new_gross + original_fees."""
         c, fake = client
         _seed(fake, "buy_og_001", gross_eur="18250.000000", commission_eur="7.500000")
         new_gross = "20000.000000"
@@ -129,11 +129,11 @@ class TestBuyFullCorrection:
                         gross={"amount": new_gross, "currency": "EUR", "eur_amount": new_gross})
         assert resp.status_code == 200
         repl = resp.json()["replacement"]
-        expected_net = _d(new_gross) - original_fees
+        expected_net = _d(new_gross) + original_fees
         assert _d(repl["net"]["eur_amount"]) == expected_net
 
     def test_buy_only_fees_uses_original_gross(self, client):
-        """C-9: Only fees changed → net = original_gross - new_fees."""
+        """C-9: Only fees changed → net = original_gross + new_fees."""
         c, fake = client
         _seed(fake, "buy_of_001", gross_eur="18250.000000", commission_eur="7.500000")
         new_fees = "15.000000"
@@ -142,7 +142,7 @@ class TestBuyFullCorrection:
                         fees={"total": new_fees, "currency": "EUR", "total_eur": new_fees})
         assert resp.status_code == 200
         repl = resp.json()["replacement"]
-        expected_net = original_gross - _d(new_fees)
+        expected_net = original_gross + _d(new_fees)
         assert _d(repl["net"]["eur_amount"]) == expected_net
 
     def test_buy_cost_basis_status_incomplete_to_complete(self, client):
@@ -481,7 +481,7 @@ class TestNetArithmetic:
         assert len(parts) == 2 and len(parts[1]) == 6, (
             f"net must have exactly 6 decimal places; got {net_str!r}"
         )
-        expected = _d("18250.123456") - _d("7.500000")
+        expected = _d("18250.123456") + _d("7.500000")
         assert _d(net_str) == expected
 
 

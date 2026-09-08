@@ -1,16 +1,21 @@
 """Derived holdings computation from ledger movements.
 
-Cost method: chronological moving weighted average (CMP).
-- BUY COMPLETE: adds shares to pool; pool_cost += gross_eur (gross already includes commission).
-- BUY ZERO_COST: adds shares to pool at cost 0 (scrip dividends, rights); dilutes avg naturally.
-- BUY INCOMPLETE: genuinely unknown cost; adds unpaid_shares (no pool entry, warning emitted).
-- SELL ACCIONES: removes shares; assigns cost = sold_qty × current avg (pool_cost/pool_shares).
-- SELL DERECHOS: no share/pool change; net proceeds counted in sales and rights.
-- TRANSFER_IN: adds qty to pool at carried_cost_basis_eur; not counted in purchase_outflow.
-- TRANSFER_OUT: removes qty at current CMP avg; not counted in sale_proceeds.
+Cost method: FIFO (First-In, First-Out) lot depletion.
+- BUY COMPLETE: creates a lot; lot cost = net.eur_amount (total cash outflow incl. commission).
+- BUY ZERO_COST: creates a zero-cost lot (scrip dividends); dilutes avg naturally.
+- BUY INCOMPLETE: creates an unknown-cost lot; warning emitted; cost treated as 0 when consumed.
+- SELL ACCIONES: consumes oldest lots first (FIFO by trade_date, then movement_id).
+- SELL DERECHOS: no lot consumption; net proceeds counted in sales and rights.
+- TRANSFER_IN: creates a lot at carried_cost_basis_eur; not counted in purchase_outflow.
+- TRANSFER_OUT: consumes oldest lots first (like SELL ACCIONES); not counted in sale_proceeds.
 - DIVIDEND: net_eur accumulated separately.
 - Superseded, voided, deleted movements are excluded before reaching this function.
-- Negative inventory: pool capped at 0; excess quantity sold at cost 0; warning emitted.
+- Negative inventory: remaining sell qty at cost 0; warning emitted.
+
+Net convention (per danny-fifo-net-accounting-contract.md §1):
+  BUY:  net = gross + fees  (total cash outflow; gross = trade consideration)
+  SELL: net = gross - fees  (total cash inflow; gross = total proceeds)
+  Holdings cost ALWAYS uses net.eur_amount for BUY lots.
 
 All arithmetic in Decimal for precision.
 """
@@ -18,6 +23,7 @@ All arithmetic in Decimal for precision.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 
@@ -51,8 +57,41 @@ def _fmt6(v: Decimal) -> str:
     return str(v.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP))
 
 
+@dataclass
+class _Lot:
+    """A single FIFO acquisition lot."""
+    lot_id: str              # movement_id that created this lot
+    trade_date: str          # ISO date (for FIFO ordering)
+    quantity: Decimal        # remaining shares (decremented on sells)
+    original_quantity: Decimal
+    unit_cost_eur: Optional[Decimal]  # None = INCOMPLETE; 0 = ZERO_COST; >0 = COMPLETE
+    cost_basis_status: str   # COMPLETE | ZERO_COST | INCOMPLETE
+
+
+def _consume_lots(lots: List[_Lot], sell_qty: Decimal):
+    """Consume sell_qty shares from lots in FIFO order (lots already sorted).
+
+    Returns (cost_consumed: Decimal, negative_inventory: bool).
+    Lots are mutated in place.
+    """
+    remaining = sell_qty
+    cost_consumed = _ZERO
+    for lot in lots:
+        if remaining <= _ZERO:
+            break
+        if lot.quantity <= _ZERO:
+            continue
+        take = min(lot.quantity, remaining)
+        unit_c = lot.unit_cost_eur if lot.unit_cost_eur is not None else _ZERO
+        cost_consumed += take * unit_c
+        lot.quantity -= take
+        remaining -= take
+    negative_inventory = remaining > _ZERO
+    return cost_consumed, negative_inventory
+
+
 class HoldingsService:
-    """Compute derived holdings from the portfolio ledger using CMP cost basis."""
+    """Compute derived holdings from the portfolio ledger using FIFO cost basis."""
 
     def __init__(
         self,
@@ -81,11 +120,11 @@ class HoldingsService:
                 m for m in movements if m.get("account_id") == account_id
             ]
 
-        # Chronological ordering is required for CMP correctness.
+        # Chronological ordering required for FIFO correctness.
         # Tie-break on id for determinism when trade_date is identical.
         movements.sort(key=lambda m: (m.get("trade_date") or "", m.get("id") or ""))
 
-        # Per-security CMP state and accumulators
+        # Per-security FIFO state and accumulators
         per_security: Dict[str, Dict[str, Any]] = {}
 
         for m in movements:
@@ -96,20 +135,20 @@ class HoldingsService:
                 per_security[security_id] = {
                     "security_id": security_id,
                     "ticker": m.get("ticker", security_id.split(":")[-1]),
-                    # CMP pool state
-                    "pool_shares": _ZERO,    # shares with known cost (COMPLETE + ZERO_COST)
-                    "pool_cost": _ZERO,      # EUR cost of pool shares
-                    "unpaid_shares": _ZERO,  # genuinely INCOMPLETE BUY shares (no cost)
-                    "total_shares": _ZERO,   # all shares (pool + unpaid)
+                    # FIFO lot list (appended in chronological order; already sorted)
+                    "lots": [],
+                    # Share counter (all shares including INCOMPLETE)
+                    "total_shares": _ZERO,
                     # Accumulators
-                    "total_purchase_outflow_eur": _ZERO,  # Σ gross_eur BUY COMPLETE
-                    "cost_basis_sold_eur": _ZERO,         # Σ CMP cost → SELL ACCIONES
-                    "total_sale_proceeds_eur": _ZERO,     # Σ(gross-fee) all SELL types
-                    "rights_proceeds_eur": _ZERO,         # Σ(gross-fee) SELL DERECHOS
+                    "total_purchase_outflow_eur": _ZERO,  # Σ net_eur BUY COMPLETE only
+                    "cost_basis_sold_eur": _ZERO,         # Σ FIFO cost → SELL ACCIONES
+                    "total_sale_proceeds_eur": _ZERO,     # Σ net proceeds all SELL types
+                    "rights_proceeds_eur": _ZERO,         # Σ net proceeds SELL DERECHOS
                     "total_dividends_eur": _ZERO,
                     "buy_count": 0,
                     "zero_cost_count": 0,    # ZERO_COST acquisitions (informational)
-                    "incomplete_count": 0,   # genuinely INCOMPLETE acquisitions (warning)
+                    "incomplete_count": 0,   # INCOMPLETE acquisitions (warning)
+                    "has_negative_inventory": False,
                     "accounts": set(),
                     "movement_warnings": [],
                 }
@@ -118,71 +157,92 @@ class HoldingsService:
 
             qty = _d(m.get("quantity", "0"))
             gross_eur = _d((m.get("gross") or {}).get("eur_amount", "0"))
+            net_eur = _d((m.get("net") or {}).get("eur_amount", "0"))
             commission_eur = _d((m.get("fees") or {}).get("total_eur", "0"))
             cost_basis_status = m.get("cost_basis_status", "COMPLETE")
             txn_type = m.get("txn_type", "")
+            movement_id = m.get("id", "")
+            trade_date = m.get("trade_date") or ""
 
             if txn_type == "BUY":
                 agg["total_shares"] += qty
                 agg["buy_count"] += 1
                 if cost_basis_status == "INCOMPLETE":
-                    # Genuinely unknown cost — stays out of pool; warning emitted later.
-                    agg["unpaid_shares"] += qty
+                    # Genuinely unknown cost — lot created with None unit_cost; warning later.
+                    unit_cost = None
                     agg["incomplete_count"] += 1
+                    lot = _Lot(
+                        lot_id=movement_id,
+                        trade_date=trade_date,
+                        quantity=qty,
+                        original_quantity=qty,
+                        unit_cost_eur=None,
+                        cost_basis_status="INCOMPLETE",
+                    )
+                    agg["lots"].append(lot)
                 else:
-                    # COMPLETE or ZERO_COST — enters pool.
-                    # gross_eur already includes commission (corrected import mapping).
-                    # For ZERO_COST, gross_eur == 0; pool_cost unchanged.
-                    cost = gross_eur
-                    agg["pool_shares"] += qty
-                    agg["pool_cost"] += cost
+                    # COMPLETE or ZERO_COST — enter pool.
+                    # BUY cost = net.eur_amount (total cash outflow = gross + commission).
+                    lot_cost = net_eur  # 0 for ZERO_COST
+                    if qty > _ZERO:
+                        unit_cost = lot_cost / qty
+                    else:
+                        unit_cost = _ZERO
+                    lot = _Lot(
+                        lot_id=movement_id,
+                        trade_date=trade_date,
+                        quantity=qty,
+                        original_quantity=qty,
+                        unit_cost_eur=unit_cost,
+                        cost_basis_status=cost_basis_status,
+                    )
+                    agg["lots"].append(lot)
                     if cost_basis_status != "ZERO_COST":
-                        agg["total_purchase_outflow_eur"] += cost
+                        agg["total_purchase_outflow_eur"] += lot_cost
                     else:
                         agg["zero_cost_count"] += 1
 
             elif txn_type == "SELL":
-                # DERECHOS sales contribute to proceeds but do NOT decrement shares.
-                # Movements without sales_type default to ACCIONES behaviour.
+                # DERECHOS sales contribute to proceeds but do NOT consume lots.
                 sale_type = m.get("sales_type") or "ACCIONES"
                 net_proceeds = gross_eur - commission_eur
                 agg["total_sale_proceeds_eur"] += net_proceeds
 
                 if sale_type == "ACCIONES":
                     agg["total_shares"] -= qty
-                    if agg["pool_shares"] > _ZERO:
-                        avg_cost = agg["pool_cost"] / agg["pool_shares"]
-                        sold_from_pool = min(qty, agg["pool_shares"])
-                        cost_sold = sold_from_pool * avg_cost
-                        agg["pool_shares"] -= sold_from_pool
-                        agg["pool_cost"] -= cost_sold
-                        agg["cost_basis_sold_eur"] += cost_sold
-                    # Excess qty beyond pool (unpaid shares or negative inventory) → cost 0.
+                    cost_consumed, neg_inv = _consume_lots(agg["lots"], qty)
+                    agg["cost_basis_sold_eur"] += cost_consumed
+                    if neg_inv:
+                        agg["has_negative_inventory"] = True
                 else:
-                    # DERECHOS: no pool or share count change.
+                    # DERECHOS: no lot consumption.
                     agg["rights_proceeds_eur"] += net_proceeds
 
             elif txn_type == "DIVIDEND":
-                net_eur = _d((m.get("net") or {}).get("eur_amount", "0"))
                 agg["total_dividends_eur"] += net_eur
 
             elif txn_type == "TRANSFER_IN":
-                # Carries shares at explicitly stored cost basis; not a purchase outflow.
+                # Creates a lot at the carried cost basis; not a purchase outflow.
                 agg["total_shares"] += qty
                 carried_cost = _d(m.get("transfer_cost_basis_eur", "0"))
-                if carried_cost > _ZERO:
-                    agg["pool_shares"] += qty
-                    agg["pool_cost"] += carried_cost
+                if qty > _ZERO:
+                    unit_cost = carried_cost / qty
+                else:
+                    unit_cost = _ZERO
+                lot = _Lot(
+                    lot_id=movement_id,
+                    trade_date=trade_date,
+                    quantity=qty,
+                    original_quantity=qty,
+                    unit_cost_eur=unit_cost,
+                    cost_basis_status="COMPLETE" if carried_cost >= _ZERO else "INCOMPLETE",
+                )
+                agg["lots"].append(lot)
 
             elif txn_type == "TRANSFER_OUT":
-                # Removes shares proportionally at CMP; not counted in sale proceeds.
+                # Consumes lots in FIFO order; not counted in sale proceeds.
                 agg["total_shares"] -= qty
-                if agg["pool_shares"] > _ZERO:
-                    avg_cost = agg["pool_cost"] / agg["pool_shares"]
-                    transferred_from_pool = min(qty, agg["pool_shares"])
-                    cost_removed = transferred_from_pool * avg_cost
-                    agg["pool_shares"] -= transferred_from_pool
-                    agg["pool_cost"] -= cost_removed
+                _consume_lots(agg["lots"], qty)
 
             for w in m.get("warnings", []):
                 agg["movement_warnings"].append(w)
@@ -233,28 +293,36 @@ class HoldingsService:
         global_has_incomplete = False
 
         for security_id, agg in per_security.items():
-            pool_shares = agg["pool_shares"]
-            pool_cost = agg["pool_cost"]
+            lots: List[_Lot] = agg["lots"]
             total_shares = agg["total_shares"]
 
-            # CMP average: pool_cost / pool_shares (null when pool is empty)
+            # FIFO remaining cost = sum of (remaining_qty × unit_cost) for non-INCOMPLETE lots.
+            # INCOMPLETE lots have None unit_cost and are excluded from pool cost.
+            pool_shares = _ZERO
+            remaining_cost = _ZERO
+            for lot in lots:
+                if lot.quantity <= _ZERO:
+                    continue
+                if lot.unit_cost_eur is not None:
+                    pool_shares += lot.quantity
+                    remaining_cost += lot.quantity * lot.unit_cost_eur
+
+            # FIFO average: remaining_cost / pool_shares (null when pool is empty)
             avg_cost: Optional[Decimal] = None
             if pool_shares > _ZERO:
-                avg_cost = (pool_cost / pool_shares).quantize(
+                avg_cost = (remaining_cost / pool_shares).quantize(
                     _TWO_PLACES, rounding=ROUND_HALF_UP
                 )
 
-            zero_cost_count = agg["zero_cost_count"]
             incomplete_count = agg["incomplete_count"]
-            # Holding status: INCOMPLETE only when there are genuinely unknown-cost shares.
-            # ZERO_COST shares are fully resolved; they do not cause INCOMPLETE status.
+            # Holding status: INCOMPLETE when any genuinely unknown-cost acquisition exists.
             holding_cost_basis_status = "INCOMPLETE" if incomplete_count > 0 else "COMPLETE"
             if incomplete_count > 0:
                 global_has_incomplete = True
 
             purchase_outflow = agg["total_purchase_outflow_eur"]
             cost_sold = agg["cost_basis_sold_eur"]
-            remaining = pool_cost          # remaining_cost_basis = pool_cost residual
+            remaining = remaining_cost
             sale_proceeds = agg["total_sale_proceeds_eur"]
             rights_proceeds = agg["rights_proceeds_eur"]
             realized = sale_proceeds - cost_sold
@@ -268,7 +336,7 @@ class HoldingsService:
             summary_dividends += dividends
 
             item_warnings = []
-            if total_shares < _ZERO:
+            if total_shares < _ZERO or agg["has_negative_inventory"]:
                 item_warnings.append({
                     "type": "NEGATIVE_INVENTORY",
                     "message": (
@@ -295,7 +363,7 @@ class HoldingsService:
                     str(avg_cost.quantize(_TWO_PLACES)) if avg_cost is not None else None
                 ),
                 "cost_basis_status": holding_cost_basis_status,
-                # CMP cost basis fields
+                # FIFO cost basis fields
                 "total_purchase_outflow_eur": _fmt2(purchase_outflow),
                 "cost_basis_sold_eur": _fmt2(cost_sold),
                 "remaining_cost_basis_eur": _fmt2(remaining),
@@ -326,7 +394,7 @@ class HoldingsService:
             "holdings": holdings_list,
             "summary": {
                 "total_securities": len(holdings_list),
-                # CMP cost basis fields
+                # FIFO cost basis fields
                 "total_purchase_outflow_eur": _fmt2(summary_purchase_outflow),
                 "cost_basis_sold_eur": _fmt2(summary_cost_basis_sold),
                 "remaining_cost_basis_eur": _fmt2(summary_remaining),

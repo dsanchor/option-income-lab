@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Audit and repair BUY ledger field inversion + INCOMPLETE→ZERO_COST reclassification.
 
-Implements danny-scrip-zero-cost-and-buy-import-contract.md §3 exactly.
+Two migration generations are implemented in this file:
 
-Background
-----------
+  V1 (commit 4ca553e, 2026-09-08)  — danny-scrip-zero-cost-and-buy-import-contract.md §3
+  V2 (FIFO/net release)             — danny-fifo-net-accounting-contract.md §1
+
+===========================================================================
+V1 — Background (retained for auditability)
+===========================================================================
 BUY movements imported from the purchases CSV before the gross/net fix have
 inverted field semantics:
 
@@ -62,29 +66,77 @@ Safe-skip rules (fail closed)
 - fees.total_eur == "0.00": no swap needed (gross == net).
 - correction_status in ("SUPERSEDED", "VOIDED"): archived; do not touch.
 
-Modes
------
-  (default) --audit  Read-only. Prints csv auto-repair + manual candidate report.
-  --apply            Mandatory backup → ETag-gated patch for csv_import records.
-  --apply-manual-ids ID1,ID2,...  Also apply confirmed manual records (with --apply).
-  --restore FILE     Restore original values from a backup JSON file.
+===========================================================================
+V2 — Background (danny-fifo-net-accounting-contract.md §1)
+===========================================================================
+The authoritative net-centric accounting convention defines for BUY:
+
+  gross = trade consideration (price × qty, BEFORE commission)
+  net   = gross + fees = total cash outflow (AFTER commission)
+
+Commit 4ca553e introduced the opposite BUY convention:
+  gross = trade + commission (total outflow)
+  net   = trade consideration
+
+V2 corrects all active BUY records to the authoritative shape.  Critically
+the NUMERIC COST is unchanged (current gross_eur == target net_eur == total
+outflow), so holdings engine output does not change until the engine is
+updated to read net_eur instead of gross_eur.
+
+Detection (all active BUY records — csv_import and manual):
+-----------------------------------------------------------
+Case A — _repair_buy_fields_v1 marker present, fees > 0:
+    Record is in 4ca553e shape: gross = trade+fees, net = trade.
+    Source-row cross-validation: net_eur ≈ source_total (trade value) → swap.
+    If source_row absent: arithmetic check (gross ≈ net+fees) used as fallback
+    since v1 already validated these records; fail-closed if inconsistent.
+
+Case B — no v1/v2 marker, fees > 0:
+    May be 4ca553e shape (net ≈ source_total) or old pre-v1 shape
+    (gross ≈ source_total, net ≈ gross−fees) or already-correct new-directive
+    shape (gross ≈ source_total, net ≈ source_total+fees).
+    Source-row is required to distinguish; fail-closed if absent.
+
+Fee-free / ZERO_COST (fees == 0):
+    gross == net == 0 or gross == net. Already correct. No field change.
+    Policy: these records are skipped by v2 (no marker written). Fee-free
+    records are self-consistent under both conventions.
+
+Already-correct records (gross ≈ source_total, net ≈ source_total+fees):
+    Skipped; no writes.
+
+Ambiguous records (source row missing for Case B, or values match neither
+    shape): fail-closed; not flagged; operator must investigate manually.
+
+Idempotency: _repair_buy_fields_v2 marker present → unconditional skip.
+
+V2 CLI Modes
+------------
+  --audit-v2             Read-only. Print per-record diff report.
+  --apply-v2             Mandatory backup → ETag-gated patch for all v2 candidates.
+  --verify-v2            Post-apply check; expects 0 candidates; exits 3 if any remain.
+  --restore-v2 FILE      Restore from a v2 backup JSON (ETag/CAS-gated).
 
 Usage::
 
-    # Audit (default — read-only)
-    python -m scripts.repair_buy_ledger_fields --database stock-options-manager --portfolio-container portfolio
+    python -m scripts.repair_buy_ledger_fields --audit-v2 --database stock-options-manager --portfolio-container portfolio
+    python -m scripts.repair_buy_ledger_fields --apply-v2 --database stock-options-manager --portfolio-container portfolio
+    python -m scripts.repair_buy_ledger_fields --verify-v2 --database stock-options-manager --portfolio-container portfolio
+    python -m scripts.repair_buy_ledger_fields --restore-v2 /path/to/backup.json --database stock-options-manager --portfolio-container portfolio
 
-    # Apply (mandatory backup, then ETag-gated patch)
-    python -m scripts.repair_buy_ledger_fields --apply --database stock-options-manager --portfolio-container portfolio
-
-    # Restore from backup
-    python -m scripts.repair_buy_ledger_fields --restore /path/to/backup.json --database stock-options-manager --portfolio-container portfolio
+V1 Modes (retained)
+-------------------
+  (default) --audit  Read-only. Prints csv auto-repair + manual candidate report.
+  --apply            Mandatory backup → ETag-gated patch for csv_import records.
+  --apply-manual-ids ID1,ID2,...  Also apply confirmed manual records (with --apply).
+  --restore FILE     Restore original values from a v1 backup JSON file.
 
 Exit codes:
-    0  Clean (audit or apply with all records processed)
+    0  Clean (audit/verify with zero candidates, or apply with all records processed)
     1  Bad CLI arguments
     2  Backup failed or Cosmos connection error
-    3  One or more records failed to patch (partial apply — run --restore)
+    3  One or more records failed to patch (partial apply — run --restore-v2)
+       OR verify found remaining candidates after apply
 """
 
 from __future__ import annotations
@@ -782,6 +834,468 @@ def run_restore(container, backup_file: Path) -> int:
     return failures
 
 
+# ===========================================================================
+# V2 Migration — net-centric BUY accounting
+# danny-fifo-net-accounting-contract.md §1
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# V2 Detection
+# ---------------------------------------------------------------------------
+
+def _analyse_record_v2(doc: dict) -> Optional[Dict[str, Any]]:
+    """Return a v2 repair plan for a BUY record, or None if no fix needed / fail-closed.
+
+    Target state (new directive):
+        gross.eur_amount = trade consideration (price × qty, pre-commission)
+        net.eur_amount   = gross + fees = total cash outflow
+
+    Case A — _repair_buy_fields_v1 present, fees > 0 (4ca553e shape):
+        Stored as gross = trade+fees, net = trade.
+        Cross-validation: net_eur ≈ source_total (trade value) → swap gross↔net.
+        Fallback when source_row absent: arithmetic check (gross ≈ net+fees) is
+        sufficient since v1 already validated source evidence; fail-closed if
+        arithmetic is inconsistent.
+
+    Case B — no v1/v2 marker, fees > 0:
+        May be 4ca553e shape (post-fix imports) or old pre-v1 shape (unrepaired).
+        Requires source_row to distinguish safely; fail-closed if absent.
+        - net_eur ≈ source_total: 4ca553e shape → swap gross↔net
+        - gross_eur ≈ source_total AND net_eur ≈ source_total+fees: already correct → skip
+        - gross_eur ≈ source_total (net wrong): old/partial shape → set net = gross+fees
+        - neither: ambiguous → fail-closed
+
+    Fee-free (fees == 0):
+        Already correct under new directive (gross == net, no commission component).
+        Policy: skipped silently — no v2 marker written. Self-consistent in both conventions.
+
+    Idempotency: _repair_buy_fields_v2 present → unconditional skip.
+    """
+    doc_id = doc.get("id", "?")
+
+    # Idempotency: skip already v2-repaired records unconditionally.
+    if doc.get("_repair_buy_fields_v2"):
+        return None
+
+    # Must be an active BUY ledger_txn.
+    if doc.get("doc_type") != "ledger_txn":
+        return None
+    if doc.get("txn_type") != "BUY":
+        return None
+    cs = doc.get("correction_status")
+    if cs in ("SUPERSEDED", "VOIDED"):
+        return None
+
+    gross_block = doc.get("gross") or {}
+    fees_block  = doc.get("fees") or {}
+    net_block   = doc.get("net") or {}
+    gross_eur   = _d(gross_block.get("eur_amount"))
+    gross_amt   = _d(gross_block.get("amount"))
+    fees_eur    = _d(fees_block.get("total_eur"))
+    net_eur     = _d(net_block.get("eur_amount"))
+    net_amt     = _d(net_block.get("amount"))
+    currency    = gross_block.get("currency", "EUR")
+    has_v1      = bool(doc.get("_repair_buy_fields_v1"))
+
+    # Fee-free records (ZERO_COST or no-commission): already correct; skip silently.
+    if fees_eur <= Decimal("0"):
+        return None
+
+    # --- Resolve trade value from source_row (primary) or v1-inference (Case A fallback) ---
+    source_row = doc.get("source_row") or {}
+    source_total = _look_up_source_value(source_row, _SOURCE_TOTAL_ALIASES)
+    trade_value: Optional[Decimal] = None
+
+    if source_total is not None:
+        trade_value = source_total
+    elif has_v1:
+        # Case A fallback: v1 already validated via source_row at repair time.
+        # After v1: gross = trade+fees, net = trade — verify shape arithmetically.
+        if abs(gross_eur - (net_eur + fees_eur)) < _MATCH_TOLERANCE:
+            trade_value = net_eur  # inferred: post-v1 net == trade value
+        else:
+            logger.warning(
+                "SKIP v2 %s (Case A, no source_row): arithmetic inconsistent "
+                "gross=%s net=%s fees=%s — fail-closed",
+                doc_id, gross_eur, net_eur, fees_eur,
+            )
+            return None
+    else:
+        # Case B without source_row: cannot distinguish old/4ca553e/correct shapes.
+        logger.warning(
+            "SKIP v2 %s (Case B, no source_row): cannot determine trade value — fail-closed",
+            doc_id,
+        )
+        return None
+
+    # --- Compute target state ---
+    target_gross = trade_value
+    target_net   = trade_value + fees_eur
+
+    # Already in correct final shape?
+    if (abs(gross_eur - target_gross) < _MATCH_TOLERANCE
+            and abs(net_eur - target_net) < _MATCH_TOLERANCE):
+        logger.info(
+            "SKIP v2 %s: already correct (gross=%s=trade, net=%s=trade+fees)",
+            doc_id, gross_eur, net_eur,
+        )
+        return None
+
+    # 4ca553e shape: gross = trade+fees, net = trade → swap gross↔net
+    if (abs(gross_eur - target_net) < _MATCH_TOLERANCE
+            and abs(net_eur - target_gross) < _MATCH_TOLERANCE):
+        case_label = "A" if has_v1 else "B"
+        return {
+            "id": doc_id,
+            "account_id": doc.get("account_id", ""),
+            "security_id": doc.get("security_id", ""),
+            "trade_date": doc.get("trade_date", ""),
+            "quantity": str(doc.get("quantity") or "0"),
+            "currency": currency,
+            "case": case_label,
+            "action": "swap",
+            "reason": (
+                f"Case {case_label}: 4ca553e shape (gross={gross_eur}=trade+fees, "
+                f"net={net_eur}=trade); swap → gross=trade, net=gross+fees"
+            ),
+            "current_gross_eur": str(gross_eur),
+            "current_net_eur":   str(net_eur),
+            "current_fees_eur":  str(fees_eur),
+            "new_gross_eur":     str(net_eur),    # new gross = old net (trade value)
+            "new_net_eur":       str(gross_eur),  # new net  = old gross (trade+fees)
+            "new_gross_amt":     str(net_amt),
+            "new_net_amt":       str(gross_amt),
+        }
+
+    # Old/partial shape: gross ≈ trade value but net is not gross+fees → update net only
+    if abs(gross_eur - target_gross) < _MATCH_TOLERANCE:
+        case_label = "B" if not has_v1 else "A-partial"
+        return {
+            "id": doc_id,
+            "account_id": doc.get("account_id", ""),
+            "security_id": doc.get("security_id", ""),
+            "trade_date": doc.get("trade_date", ""),
+            "quantity": str(doc.get("quantity") or "0"),
+            "currency": currency,
+            "case": case_label,
+            "action": "update_net",
+            "reason": (
+                f"Case {case_label}: gross already = trade ({gross_eur}); "
+                f"net={net_eur} updated to gross+fees={target_net}"
+            ),
+            "current_gross_eur": str(gross_eur),
+            "current_net_eur":   str(net_eur),
+            "current_fees_eur":  str(fees_eur),
+            "new_gross_eur":     str(gross_eur),  # unchanged
+            "new_net_eur":       str(target_net), # updated to gross + fees
+            "new_gross_amt":     str(gross_amt),  # unchanged
+            "new_net_amt":       str(target_net), # updated
+        }
+
+    # Neither shape matches within tolerance → ambiguous → fail-closed
+    logger.warning(
+        "SKIP v2 %s: ambiguous shape — gross=%s net=%s fees=%s trade_value=%s "
+        "matches neither 4ca553e nor old shape nor already-correct within tolerance",
+        doc_id, gross_eur, net_eur, fees_eur, trade_value,
+    )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# V2 Apply
+# ---------------------------------------------------------------------------
+
+def _apply_repair_v2(doc: dict, plan: Dict[str, Any]) -> dict:
+    """Return a new doc dict with v2 corrections applied. Does not mutate input."""
+    import copy
+    patched = copy.deepcopy(doc)
+    patched["gross"]["eur_amount"] = plan["new_gross_eur"]
+    patched["gross"]["amount"]     = plan["new_gross_amt"]
+    patched["net"]["eur_amount"]   = plan["new_net_eur"]
+    patched["net"]["amount"]       = plan["new_net_amt"]
+    patched["_repair_buy_fields_v2"] = _now_utc()
+    return patched
+
+
+# ---------------------------------------------------------------------------
+# V2 Query
+# ---------------------------------------------------------------------------
+
+def _get_all_buy_candidates_v2(container) -> List[Tuple[dict, str]]:
+    """Query all active BUY ledger_txns (csv_import + manual) for v2 analysis."""
+    query = (
+        "SELECT * FROM c "
+        "WHERE c.doc_type = 'ledger_txn' "
+        "AND c.txn_type = 'BUY'"
+    )
+    results = []
+    for item in container.query_items(query=query, enable_cross_partition_query=True):
+        etag = item.get("_etag", "")
+        results.append((item, etag))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# V2 Audit
+# ---------------------------------------------------------------------------
+
+def run_audit_v2(container) -> List[Dict[str, Any]]:
+    """Read-only v2 audit. Returns list of repair plans (no writes).
+
+    Plans with ``action='swap'`` need gross↔net swap.
+    Plans with ``action='update_net'`` need only net updated to gross+fees.
+    Plans with ``case='A'`` carry the v1 marker; ``case='B'`` do not.
+    """
+    all_candidates = _get_all_buy_candidates_v2(container)
+    logger.info("V2 audit: %d active BUY records scanned", len(all_candidates))
+
+    plans: List[Dict[str, Any]] = []
+    skipped_already_v2   = 0
+    skipped_fee_free     = 0
+    skipped_already_correct = 0
+    skipped_fail_closed  = 0
+
+    for doc, _ in all_candidates:
+        if doc.get("_repair_buy_fields_v2"):
+            skipped_already_v2 += 1
+            continue
+        fees_eur = _d((doc.get("fees") or {}).get("total_eur", "0"))
+        if fees_eur <= Decimal("0"):
+            skipped_fee_free += 1
+            continue
+        plan = _analyse_record_v2(doc)
+        if plan is None:
+            # Distinguish already-correct from fail-closed (logged at WARNING level above)
+            # Use arithmetic heuristic to guess: if gross ≈ net+fees, it's 4ca553e still
+            # otherwise it may be already correct or genuinely ambiguous
+            gross_eur = _d((doc.get("gross") or {}).get("eur_amount", "0"))
+            net_eur   = _d((doc.get("net") or {}).get("eur_amount", "0"))
+            if abs(gross_eur - (net_eur + fees_eur)) < _MATCH_TOLERANCE and abs(net_eur - gross_eur) > _MATCH_TOLERANCE:
+                skipped_fail_closed += 1
+            else:
+                skipped_already_correct += 1
+        else:
+            plans.append(plan)
+
+    case_a   = sum(1 for p in plans if p.get("case") == "A")
+    case_b   = sum(1 for p in plans if p.get("case") == "B")
+    swaps    = sum(1 for p in plans if p.get("action") == "swap")
+    net_upd  = sum(1 for p in plans if p.get("action") == "update_net")
+
+    print(f"\n{'='*70}")
+    print(f"V2 AUDIT REPORT — BUY net-centric field repair")
+    print(f"{'='*70}")
+    print(f"Active BUY records scanned:            {len(all_candidates)}")
+    print(f"Already v2-repaired (skip):            {skipped_already_v2}")
+    print(f"Fee-free / ZERO_COST (skip):           {skipped_fee_free}")
+    print(f"Already correct / fail-closed (skip):  {skipped_already_correct + skipped_fail_closed}")
+    print(f"Records needing v2 repair:             {len(plans)}")
+    print(f"  Case A (v1 marker + fees>0):         {case_a}")
+    print(f"  Case B (no marker + fees>0):         {case_b}")
+    print(f"  Action = swap gross↔net:             {swaps}")
+    print(f"  Action = update_net only:            {net_upd}")
+    print()
+
+    for p in plans:
+        print(f"  [{p['id']}]  {p.get('security_id')}  {p.get('trade_date')}")
+        print(f"    Case: {p['case']}  Action: {p['action']}")
+        print(f"    Reason: {p['reason']}")
+        print(
+            f"    gross: {p['current_gross_eur']} → {p['new_gross_eur']}  "
+            f"net: {p['current_net_eur']} → {p['new_net_eur']}  "
+            f"fees: {p['current_fees_eur']} (unchanged)"
+        )
+        print()
+
+    print(f"{'='*70}")
+    print("Run with --apply-v2 to execute repairs (mandatory backup taken first).")
+    return plans
+
+
+# ---------------------------------------------------------------------------
+# V2 Backup
+# ---------------------------------------------------------------------------
+
+def run_backup_v2(container, plans: List[Dict[str, Any]], backup_path: Optional[Path] = None) -> Path:
+    """Export all records targeted by v2 repair plans to a JSON backup file.
+
+    Checksum-validates the written file before returning.
+    Raises SystemExit(2) if backup fails.
+    """
+    if not plans:
+        logger.info("V2 backup: no candidates to backup.")
+        return Path(os.devnull)
+
+    _BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    if backup_path is None:
+        backup_path = _BACKUP_DIR / f"repair_buy_fields_v2_{_now_utc()}.json"
+
+    docs_for_backup = []
+    for plan in plans:
+        try:
+            doc = container.read_item(item=plan["id"], partition_key=plan["account_id"])
+            docs_for_backup.append(dict(doc))
+        except Exception as exc:
+            logger.error("V2 backup: could not read %s: %s", plan["id"], exc)
+            print(f"\nERROR: V2 backup failed for {plan['id']}: {exc}", file=sys.stderr)
+            sys.exit(2)
+
+    checksum = _sha256(docs_for_backup)
+    payload = {
+        "migration_version": "v2",
+        "created_at": _now_utc(),
+        "record_count": len(docs_for_backup),
+        "sha256": checksum,
+        "documents": docs_for_backup,
+    }
+
+    with open(backup_path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, default=str)
+
+    # Verify written file
+    with open(backup_path, encoding="utf-8") as fh:
+        written = json.load(fh)
+    verify_checksum = _sha256(written["documents"])
+    if verify_checksum != checksum:
+        logger.error("V2 backup checksum mismatch — file corrupt, aborting.")
+        sys.exit(2)
+
+    logger.info(
+        "V2 backup written: %s  (%d docs, SHA-256: %s)",
+        backup_path, len(docs_for_backup), checksum,
+    )
+    print(f"\nV2 Backup: {backup_path}")
+    print(f"  Records: {len(docs_for_backup)}  SHA-256: {checksum}")
+    return backup_path
+
+
+# ---------------------------------------------------------------------------
+# V2 Apply
+# ---------------------------------------------------------------------------
+
+def run_apply_v2(container, plans: List[Dict[str, Any]]) -> int:
+    """ETag-gated v2 patch for each repair plan. Returns number of failures."""
+    if not plans:
+        print("V2: nothing to apply.")
+        return 0
+
+    print(f"\nV2 applying {len(plans)} record(s)...")
+    failures = 0
+
+    for plan in plans:
+        doc_id = plan["id"]
+        acct   = plan["account_id"]
+        try:
+            # Fresh read for current ETag
+            doc  = container.read_item(item=doc_id, partition_key=acct)
+            etag = doc.get("_etag", "")
+
+            # Re-analyse in case data changed between audit and apply
+            fresh_plan = _analyse_record_v2(doc)
+            if fresh_plan is None:
+                logger.info("  SKIP v2 %s — already correct or changed since audit", doc_id)
+                continue
+
+            patched = _apply_repair_v2(doc, fresh_plan)
+            ok = _etag_replace(container, doc_id, acct, patched, etag)
+            if ok:
+                print(f"  OK   {doc_id}  [{fresh_plan['action']}] [{fresh_plan['reason']}]")
+            else:
+                print(f"  CONFLICT {doc_id} — ETag changed; retry --apply-v2")
+                failures += 1
+        except Exception as exc:
+            logger.error("  FAIL v2 %s: %s", doc_id, exc)
+            failures += 1
+
+    print(f"\nV2 apply complete: {len(plans) - failures} patched, {failures} failed.")
+    return failures
+
+
+# ---------------------------------------------------------------------------
+# V2 Verify
+# ---------------------------------------------------------------------------
+
+def run_verify_v2(container) -> int:
+    """Post-apply verification: run audit_v2 and expect zero candidates.
+
+    Returns 0 if clean, 3 if candidates remain.
+    """
+    print(f"\n{'='*70}")
+    print("V2 VERIFY — post-apply audit (expect 0 candidates)")
+    print(f"{'='*70}")
+    plans = run_audit_v2(container)
+    if plans:
+        print(
+            f"\nVERIFY FAILED: {len(plans)} candidate(s) remain after apply. "
+            "Re-run --apply-v2 to patch remaining records.",
+            file=sys.stderr,
+        )
+        return 3
+    print("\nVERIFY PASSED: 0 v2 candidates remain.")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# V2 Restore
+# ---------------------------------------------------------------------------
+
+def run_restore_v2(container, backup_file: Path) -> int:
+    """Restore v2 backup using ETag/CAS writes. Returns number of failures.
+
+    Only accepts backup files with migration_version == 'v2'.
+    Checksum-validates before any writes (fail-closed on mismatch).
+    Each restore uses a fresh ETag read — safe for concurrent environments.
+    """
+    if not backup_file.exists():
+        logger.error("V2 restore: backup file not found: %s", backup_file)
+        sys.exit(2)
+
+    with open(backup_file, encoding="utf-8") as fh:
+        payload = json.load(fh)
+
+    # Version guard: reject non-v2 backups
+    if payload.get("migration_version") != "v2":
+        logger.error(
+            "V2 restore: backup file is not a v2 backup (migration_version=%r). "
+            "Use --restore for v1 backups.",
+            payload.get("migration_version"),
+        )
+        sys.exit(2)
+
+    docs = payload.get("documents", [])
+    stored_checksum = payload.get("sha256", "")
+    actual_checksum = _sha256(docs)
+    if actual_checksum != stored_checksum:
+        logger.error(
+            "V2 restore: checksum mismatch: stored=%s actual=%s — aborting",
+            stored_checksum, actual_checksum,
+        )
+        sys.exit(2)
+
+    print(f"\nV2 restoring {len(docs)} record(s) from {backup_file}...")
+    failures = 0
+
+    for doc in docs:
+        doc_id = doc.get("id", "?")
+        acct   = doc.get("account_id", "")
+        try:
+            # Read current ETag (not backup ETag — CAS uses live DB state)
+            current = container.read_item(item=doc_id, partition_key=acct)
+            etag    = current.get("_etag", "")
+            ok = _etag_replace(container, doc_id, acct, doc, etag)
+            if ok:
+                print(f"  RESTORED {doc_id}")
+            else:
+                print(f"  CONFLICT {doc_id} — ETag changed during restore; retry")
+                failures += 1
+        except Exception as exc:
+            logger.error("  FAIL v2 restore %s: %s", doc_id, exc)
+            failures += 1
+
+    print(f"\nV2 restore complete: {len(docs) - failures} restored, {failures} failed.")
+    return failures
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -804,34 +1318,57 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="repair_buy_ledger_fields",
         description=(
-            "Audit and repair BUY CSV import gross/net field inversion and "
-            "INCOMPLETE→ZERO_COST reclassification. Default mode: --audit."
+            "Audit and repair BUY ledger gross/net field semantics. "
+            "V1 modes fix the pre-4ca553e inversion; V2 modes apply the "
+            "net-centric accounting convention (danny-fifo-net-accounting-contract.md). "
+            "Default (no flag): --audit (v1 read-only)."
         ),
     )
     mode_grp = parser.add_mutually_exclusive_group()
+    # ---- V1 modes ----
     mode_grp.add_argument(
         "--audit",
         action="store_true",
-        help="(default) Read-only audit; print per-record diff report.",
+        help="(default) V1 read-only audit; print per-record diff report.",
     )
     mode_grp.add_argument(
         "--apply",
         action="store_true",
-        help="Mandatory backup → ETag-gated patch for each flagged csv_import record.",
+        help="V1: mandatory backup → ETag-gated patch for each flagged csv_import record.",
     )
     mode_grp.add_argument(
         "--restore",
         metavar="BACKUP_FILE",
-        help="Restore original values from a backup JSON file.",
+        help="V1: restore original values from a v1 backup JSON file.",
+    )
+    # ---- V2 modes ----
+    mode_grp.add_argument(
+        "--audit-v2",
+        action="store_true",
+        help="V2 read-only audit; print diff report for net-centric convention candidates.",
+    )
+    mode_grp.add_argument(
+        "--apply-v2",
+        action="store_true",
+        help="V2: mandatory backup → ETag-gated patch for all v2 candidates.",
+    )
+    mode_grp.add_argument(
+        "--verify-v2",
+        action="store_true",
+        help="V2: post-apply check; expects 0 candidates; exits 3 if any remain.",
+    )
+    mode_grp.add_argument(
+        "--restore-v2",
+        metavar="BACKUP_FILE",
+        help="V2: restore from a v2 backup JSON file (ETag/CAS-gated).",
     )
     parser.add_argument(
         "--apply-manual-ids",
         metavar="ID1,ID2,...",
         help=(
             "Comma-separated movement IDs for operator-approved manual BUY records "
-            "to include in --apply. Each ID must appear in the audit manual-candidates "
-            "list. Use only after verifying the record against the original trade "
-            "confirmation."
+            "to include in --apply (v1 only). Each ID must appear in the audit "
+            "manual-candidates list."
         ),
     )
     parser.add_argument(
@@ -847,7 +1384,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--backup-path",
         metavar="FILE",
-        help="Override backup file path (--apply only).",
+        help="Override backup file path (--apply and --apply-v2 only).",
     )
     return parser
 
@@ -856,12 +1393,21 @@ def main() -> int:
     parser = _build_arg_parser()
     args = parser.parse_args()
 
-    # Default to audit when no mode flag given
-    mode = "audit"
+    # Determine mode
     if args.apply:
         mode = "apply"
     elif args.restore:
         mode = "restore"
+    elif getattr(args, "audit_v2", False):
+        mode = "audit-v2"
+    elif getattr(args, "apply_v2", False):
+        mode = "apply-v2"
+    elif getattr(args, "verify_v2", False):
+        mode = "verify-v2"
+    elif getattr(args, "restore_v2", None):
+        mode = "restore-v2"
+    else:
+        mode = "audit"  # default
 
     manual_approved_ids: Optional[List[str]] = None
     if getattr(args, "apply_manual_ids", None):
@@ -869,6 +1415,7 @@ def main() -> int:
 
     container = _build_cosmos_container(args.database, args.portfolio_container)
 
+    # ---- V1 modes ----
     if mode == "audit":
         run_audit(container)
         return 0
@@ -878,18 +1425,43 @@ def main() -> int:
         failures = run_restore(container, backup_file)
         return 0 if failures == 0 else 3
 
-    # mode == "apply"
-    plans = run_audit(container)
-    auto_plans = [p for p in plans if not p.get("candidate_only")]
-    if not auto_plans and not manual_approved_ids:
-        print("Audit found nothing to auto-repair. Exiting without writes.")
+    if mode == "apply":
+        plans = run_audit(container)
+        auto_plans = [p for p in plans if not p.get("candidate_only")]
+        if not auto_plans and not manual_approved_ids:
+            print("V1 audit found nothing to auto-repair. Exiting without writes.")
+            return 0
+        backup_path = Path(args.backup_path) if args.backup_path else None
+        run_backup(container, plans, backup_path)  # exits(2) on failure
+        failures = run_apply(container, plans, manual_approved_ids=manual_approved_ids)
+        return 0 if failures == 0 else 3
+
+    # ---- V2 modes ----
+    if mode == "audit-v2":
+        run_audit_v2(container)
         return 0
 
-    backup_path = Path(args.backup_path) if args.backup_path else None
-    run_backup(container, plans, backup_path)  # exits(2) on failure
+    if mode == "verify-v2":
+        return run_verify_v2(container)
 
-    failures = run_apply(container, plans, manual_approved_ids=manual_approved_ids)
-    return 0 if failures == 0 else 3
+    if mode == "restore-v2":
+        backup_file = Path(args.restore_v2)
+        failures = run_restore_v2(container, backup_file)
+        return 0 if failures == 0 else 3
+
+    if mode == "apply-v2":
+        plans = run_audit_v2(container)
+        if not plans:
+            print("V2 audit found nothing to repair. Exiting without writes.")
+            return 0
+        backup_path = Path(args.backup_path) if args.backup_path else None
+        run_backup_v2(container, plans, backup_path)  # exits(2) on failure
+        failures = run_apply_v2(container, plans)
+        return 0 if failures == 0 else 3
+
+    # Should not reach here
+    logger.error("Unknown mode: %s", mode)
+    return 1
 
 
 if __name__ == "__main__":

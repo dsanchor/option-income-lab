@@ -231,7 +231,7 @@ def _add_buy(fake, security_id: str, account_id: str = "_unassigned",
         "quantity": quantity,
         "gross": {"amount": gross_eur, "currency": "EUR", "eur_amount": gross_eur},
         "fees": {"total": "0", "currency": "EUR", "total_eur": "0"},
-        "net_eur": gross_eur,
+        "net": {"amount": gross_eur, "currency": "EUR", "eur_amount": gross_eur},
         "correction_status": correction_status,
         "cost_basis_status": "COMPLETE",
     }
