@@ -2176,6 +2176,8 @@ in 89a7c2a but whose code had not been committed until now).
 
 **NOTE:** The core implementation (models.py, cosmos_portfolio.py, frontend UI) is correct and accepted by review. Only the same-date ordering guarantee is outstanding.
 
+**MERGE & DEPLOYMENT NOTE (2026-09-08):** Merge commit 613c920 reconciled local Share Consolidation commits (c087e79, f5ed79f, cfd9a41, 24fa3aa) with origin/main's independent parallel FIFO rewrite and symbol-detail-redesign merge. Conflict resolutions: (1) kept local ca_group_seq ordering fix in holdings_service.py over origin's simpler sort, (2) kept local test superset in test_portfolio_fifo.py. Post-merge TypeScript validation revealed type-definition gap: frontend/src/types/portfolio.ts was never updated with SHARE_CONSOLIDATION, CONSOLIDATION_OUT, CONSOLIDATION_IN, FRACTIONAL_CASH_OUT enum values (and transfer_cost_basis_eur field on CorporateActionLegRequest). Gap fixed in 467a0c6. Pushed to origin as 467a0c6. Validation: Backend 3924 passed (20 pre-existing yfinance failures); Frontend 1242 passed, 0 failed, TypeScript clean.
+
 
 ### Danny — Scrip Zero-Cost Pool Entry & BUY Import Gross/Net Correction
 
