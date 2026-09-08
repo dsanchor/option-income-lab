@@ -2124,7 +2124,47 @@ The operator must read remaining_cost_basis_eur from the holdings page (or compu
 
 ---
 
-**Decision:** PROPOSED -- awaiting user approval before implementation begins.
+**Decision:** ✅ RELEASED — Commit c087e79 (2026-09-08)
+
+---
+
+## Implementation Addendum
+
+### Livingston's Implementation Notes (Decision 1 & 2)
+
+#### Decision 1: Fixed latent `hasShareAcq` boolean bug
+
+**Issue:** `CorporateActionForm.tsx` previously used a deny-list: `hasShareAcq = form.event_type !== "CASH_DIVIDEND"`, which would have silently rendered a spurious, unrelated SHARE_ACQUISITION leg section on the consolidation form.
+
+**Fix:** Changed to an explicit allow-list covering only the three event types that actually use SHARE_ACQUISITION: `DIVIDEND_WITH_SCRIP`, `SCRIP_DIVIDEND`, `RIGHTS_ISSUE`. Tightly coupled to SHARE_CONSOLIDATION wiring; fixed in place per guidance to address coupled bugs.
+
+#### Decision 2: Added backend + frontend tests directly
+
+Extended `test_portfolio_fifo.py` with `TestFifoShareConsolidation` (FIFO-SC1–SC3) and added FE-SC1–SC3 coverage in `caWizardRequestShape.test.mjs`/`caGroupIndicator.test.mjs`. Test IDs were hand-picked (e.g., `"co1"`, `"ci1"`, `"fco1"`) rather than random UUIDs.
+
+**Impact:** Tests pass, but this exposed an ordering dependency discovered post-implementation.
+
+### Basher's Review Finding: Ordering Invariant Violation (Known Issue, Deferred)
+
+**Status:** DEFERRED to separate revision contract
+
+**Issue:** `holdings_service.py` sorts movements by `(trade_date, id)` only. Within a single date, the three SHARE_CONSOLIDATION legs (CONSOLIDATION_OUT, CONSOLIDATION_IN, FRACTIONAL_CASH_OUT) process in random order (by UUID). This is the first CA event type where leg ordering is semantically critical.
+
+**Evidence:** 300-trial randomized reproducer on RKT 72→69.12→69 scenario showed **66% error rate** in fractional cost basis computation (€12.00 off pre-consolidation lot instead of correct €12.88 off post-consolidation lot).
+
+**Root Cause:** Contract's "no holdings_service.py changes" constraint assumed all primitives were independent; SHARE_CONSOLIDATION violates that assumption.
+
+**Recommended Fix:** Lift the `holdings_service.py` freeze, add sort-key tie-break by `ca_group_id`/`ca_group_seq` (see danny-share-consolidation-contract-rev1.md, §R1–R6).
+
+**Assigned to:** Linus (FIFO/holdings_service owner per 2026-09-08 integration gate)
+
+**Forward Work:** Implement sort-key fix in `holdings_service.py` line 125, add randomized-ID regression tests per §R4, re-validate before production deployment.
+
+**Mitigation in Current Release:** Tests use hand-picked IDs that happen to sort correctly. Production should await the fix or accept ~66% error rate on consolidations.
+
+---
+
+**NOTE:** The core implementation (models.py, cosmos_portfolio.py, frontend UI) is correct and accepted by review. Only the same-date ordering guarantee is outstanding.
 
 
 ### Danny — Scrip Zero-Cost Pool Entry & BUY Import Gross/Net Correction
