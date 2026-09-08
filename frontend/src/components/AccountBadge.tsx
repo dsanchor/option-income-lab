@@ -1,7 +1,7 @@
 "use client";
 
 import type { BrokerAccount } from "@/types/portfolio";
-import { getAccountLabel, getAccountBadgeClass } from "@/lib/accountDisplay";
+import { getAccountName, getAccountBadgeClass } from "@/lib/accountDisplay";
 
 interface AccountBadgeProps {
   accountId: string;
@@ -10,12 +10,12 @@ interface AccountBadgeProps {
 }
 
 /**
- * Renders an account as a colored badge showing "Broker · Name".
+ * Renders an account as a colored badge showing the account name only.
  * Color is deterministic and stable for the given account_id.
  * Always includes text — never color-only.
  */
 export default function AccountBadge({ accountId, accounts, className = "" }: AccountBadgeProps) {
-  const label = getAccountLabel(accountId, accounts);
+  const label = getAccountName(accountId, accounts);
   const colorCls = getAccountBadgeClass(accountId);
   return (
     <span

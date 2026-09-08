@@ -7,7 +7,7 @@ import type { BrokerAccount, ManualMovementRequest, TransferRequest } from "@/ty
 import { SALES_TYPE_LABELS } from "@/types/portfolio";
 import type { SecurityMaster } from "@/types/portfolio";
 import CorporateActionForm from "@/components/CorporateActionForm";
-import { formatAccountLabel } from "@/lib/accountDisplay";
+import { formatAccountName } from "@/lib/accountDisplay";
 
 const inputCls =
   "w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent-blue focus:outline-none";
@@ -101,7 +101,7 @@ function AccountSelect({
       <select value={value} onChange={(e) => onChange(e.target.value)} className={inputCls} required={required}>
         <option value="_unassigned">{placeholder}</option>
         {accounts.map((a) => (
-          <option key={a.account_id} value={a.account_id}>{formatAccountLabel(a)}</option>
+          <option key={a.account_id} value={a.account_id}>{formatAccountName(a)}</option>
         ))}
       </select>
     </div>
@@ -149,7 +149,7 @@ interface BuyFormState {
   trade_date: string;
   quantity: string;
   price_per_share: string;
-  trade_value: string;   // gross amount (quantity × unit price, before fees)
+  trade_value: string;   // net consideration (price × qty, excluding fees)
   currency: string;
   fees: string;
   notes: string;
@@ -207,7 +207,7 @@ function BuyForm({ form, onChange, accounts, securities }: BuyFormProps) {
         <input type="number" step="any" min="0" value={form.price_per_share} onChange={(e) => handlePriceChange(e.target.value)} placeholder="0.00 (optional)" className={inputCls} />
       </div>
       <div>
-        <label className={labelCls}>Trade value (gross) *</label>
+        <label className={labelCls}>Trade value (net consideration) *</label>
         <input type="number" step="any" min="0" value={form.trade_value} onChange={(e) => onChange({ trade_value: e.target.value })} placeholder="0.00" className={inputCls} required />
         {mismatch && (
           <p className="mt-1 text-xs text-accent-orange">
@@ -547,6 +547,7 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
           account_id: buyForm.account_id || "_unassigned",
           trade_date: buyForm.trade_date,
           quantity: buyForm.quantity,
+          // gross = trade consideration (price × qty); server derives net = gross + fees.
           gross: makeGross(buyForm.trade_value, currency),
           fees: buyForm.fees ? makeFeesInput(buyForm.fees, currency) : undefined,
           notes: buyForm.notes || undefined,

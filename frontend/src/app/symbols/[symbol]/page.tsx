@@ -14,6 +14,7 @@ import DetailSection from "@/components/DetailSection";
 import StockTransactionsTable from "@/components/StockTransactionsTable";
 import SymbolDisambiguation from "@/components/SymbolDisambiguation";
 import SymbolConfigurationCard from "@/components/SymbolConfigurationCard";
+import SymbolDetailTabs from "@/components/SymbolDetailTabs";
 import type { SymbolDetail, SymbolDisambiguationResult } from "@/types/symbol-detail";
 import type { Plan as PlanRow } from "@/types/plans";
 
@@ -132,21 +133,6 @@ export default async function SymbolDetailPage({
         </div>
       )}
 
-      {/* Toolbar: actions — US exchanges (XNYS/XNAS) only */}
-      {usOptionsEligible && (
-        <div className="flex flex-wrap items-center justify-end gap-4">
-          <SymbolActions
-            symbol={d.symbol}
-            covered_call={d.watchlist?.covered_call ?? false}
-            cash_secured_put={d.watchlist?.cash_secured_put ?? false}
-            buy_tracker={d.watchlist?.buy_tracker ?? false}
-            telegram_notifications_enabled={d.telegram_notifications_enabled ?? false}
-            isPaused={d.is_paused ?? false}
-            nextEarningsDate={d.next_earnings_date ?? null}
-          />
-        </div>
-      )}
-
       {/* TradingView symbol info + RT chart */}
       <TradingViewSymbolInfo tvSymbol={d.tradingview_symbol ?? null} />
       <RtChart tvSymbol={d.tradingview_symbol ?? null} />
@@ -161,38 +147,58 @@ export default async function SymbolDetailPage({
         />
       </DetailSection>
 
-      {/* ── Options Section — US exchanges (XNYS/XNAS) only ──────────── */}
-      {hasOptions && usOptionsEligible && (
-        <DetailSection title="Options">
-          <PositionsTable symbol={symbol} positions={positions} />
-          <AddPositionForm symbol={symbol} />
-          {(hasAgentContent || activities.length > 0) && (
-            <RecentActivities activities={activities} agentTypes={d.agent_types ?? []} />
-          )}
-        </DetailSection>
-      )}
-
-      {/* ── Stocks Section ─────────────────────────────────────────────── */}
-      {stocksSecurityId && (
-        <DetailSection title="Stocks">
-          {/* Symbol Configuration — first, above Holdings, per contract */}
-          <SymbolConfigurationCard
-            symbol={symbol}
-            security={d.security!}
-            enrichment={d.enrichment ?? {}}
-            watchlist={d.watchlist ?? { covered_call: false, cash_secured_put: false, buy_tracker: false }}
-            telegramEnabled={d.telegram_notifications_enabled ?? false}
-            usOptionsEligible={usOptionsEligible}
-          />
-          {hasPortfolio && (
-            <PortfolioHoldingsCard portfolio={d.portfolio!} symbolState={symbolState} />
-          )}
-          <StockTransactionsTable securityId={stocksSecurityId} />
-        </DetailSection>
-      )}
-
-      {/* ── Plans (always visible) ─────────────────────────────────────── */}
-      <SymbolPlansTable plans={plans as unknown as PlanRow[]} />
+      {/* ── Three-tab navigation: Options / Stocks / Action Plans ─────── */}
+      <SymbolDetailTabs
+        optionsPanel={
+          <div className="space-y-6">
+            {usOptionsEligible && (
+              <div className="flex flex-wrap items-center justify-end gap-4">
+                <SymbolActions
+                  symbol={d.symbol}
+                  covered_call={d.watchlist?.covered_call ?? false}
+                  cash_secured_put={d.watchlist?.cash_secured_put ?? false}
+                  buy_tracker={d.watchlist?.buy_tracker ?? false}
+                  telegram_notifications_enabled={d.telegram_notifications_enabled ?? false}
+                  isPaused={d.is_paused ?? false}
+                  nextEarningsDate={d.next_earnings_date ?? null}
+                />
+              </div>
+            )}
+            {hasOptions && usOptionsEligible ? (
+              <>
+                <PositionsTable symbol={symbol} positions={positions} />
+                <AddPositionForm symbol={symbol} />
+                {(hasAgentContent || activities.length > 0) && (
+                  <RecentActivities activities={activities} agentTypes={d.agent_types ?? []} />
+                )}
+              </>
+            ) : (
+              <p className="text-sm text-text-muted py-4">
+                {usOptionsEligible
+                  ? "No open positions or recent options activity."
+                  : "US options (XNYS/XNAS) are not available for this exchange."}
+              </p>
+            )}
+          </div>
+        }
+        stocksPanel={
+          stocksSecurityId && (
+            <div className="space-y-5">
+              <SymbolConfigurationCard
+                symbol={symbol}
+                security={d.security!}
+                enrichment={d.enrichment ?? {}}
+                usOptionsEligible={usOptionsEligible}
+              />
+              {hasPortfolio && (
+                <PortfolioHoldingsCard portfolio={d.portfolio!} symbolState={symbolState} />
+              )}
+              <StockTransactionsTable securityId={stocksSecurityId} />
+            </div>
+          )
+        }
+        plansPanel={<SymbolPlansTable plans={plans as unknown as PlanRow[]} />}
+      />
     </div>
   );
 }

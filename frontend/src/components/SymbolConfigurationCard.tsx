@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import type { SecurityMasterInfo, Enrichment, WatchlistToggles } from "@/types/symbol-detail";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import type { SecurityMasterInfo, Enrichment } from "@/types/symbol-detail";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -19,8 +20,6 @@ function timeAgoShort(iso: string | null | undefined): string {
 function ro(value: string | null | undefined, placeholder = "—"): string {
   return value?.trim() || placeholder;
 }
-
-// ─── sub-components ───────────────────────────────────────────────────────────
 
 function FieldLabel({ htmlFor, children }: { htmlFor?: string; children: React.ReactNode }) {
   return (
@@ -63,51 +62,13 @@ function TextInput({
   );
 }
 
-function ToggleRow({
-  id, label, checked, onChange, disabled, disabledReason,
-}: {
-  id: string; label: string; checked: boolean;
-  onChange: (v: boolean) => void; disabled?: boolean; disabledReason?: string;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-4 py-1.5">
-      <div>
-        <label
-          htmlFor={id}
-          className={`text-sm font-medium ${disabled ? "text-text-muted" : "text-text"} cursor-pointer`}
-        >
-          {label}
-        </label>
-        {disabled && disabledReason && (
-          <p className="text-xs text-text-muted mt-0.5">{disabledReason}</p>
-        )}
-      </div>
-      <button
-        id={id}
-        role="switch"
-        type="button"
-        aria-checked={checked}
-        disabled={disabled}
-        onClick={() => !disabled && onChange(!checked)}
-        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/60 disabled:cursor-not-allowed disabled:opacity-40 ${checked ? "bg-accent-blue" : "bg-border"}`}
-      >
-        <span
-          aria-hidden
-          className={`pointer-events-none inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-4" : "translate-x-0.5"}`}
-        />
-      </button>
-    </div>
-  );
-}
-
 // ─── main component ───────────────────────────────────────────────────────────
 
 interface Props {
   symbol: string;
   security: SecurityMasterInfo;
   enrichment: Enrichment;
-  watchlist: WatchlistToggles;
-  telegramEnabled: boolean;
+  /** Retained for non-US eligibility guard (options trading availability note). */
   usOptionsEligible: boolean;
 }
 
@@ -141,14 +102,15 @@ export default function SymbolConfigurationCard({
   symbol,
   security: initialSecurity,
   enrichment: initialEnrichment,
-  watchlist: initialWatchlist,
-  telegramEnabled: initialTelegram,
   usOptionsEligible,
 }: Props) {
   // Security / form state
   const [security, setSecurity] = useState(initialSecurity);
   const [form, setForm] = useState<FormState>(() => initForm(initialSecurity));
   const [dirty, setDirty] = useState(false);
+
+  // Collapsible — default collapsed per UX redesign
+  const [open, setOpen] = useState(false);
 
   // Save state
   const [saving, setSaving] = useState(false);
@@ -160,16 +122,6 @@ export default function SymbolConfigurationCard({
   const [enrichment, setEnrichment] = useState(initialEnrichment);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshStatus, setRefreshStatus] = useState<{ ok: boolean; detail?: string } | null>(null);
-
-  // Toggle state
-  const [toggles, setToggles] = useState({
-    covered_call: initialWatchlist.covered_call,
-    cash_secured_put: initialWatchlist.cash_secured_put,
-    buy_tracker: initialWatchlist.buy_tracker,
-    telegram: initialTelegram,
-  });
-  const [toggling, setToggling] = useState<string | null>(null);
-  const [toggleError, setToggleError] = useState<string | null>(null);
 
   function patch<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -279,41 +231,32 @@ export default function SymbolConfigurationCard({
     }
   }, [symbol]);
 
-  const updateToggle = useCallback(async (flag: string, value: boolean) => {
-    setToggling(flag);
-    setToggleError(null);
-    try {
-      const res = await fetch(`/api/symbols/${encodeURIComponent(symbol)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ [flag]: value }),
-      });
-      if (res.ok) {
-        setToggles((prev) => ({ ...prev, [flag]: value }));
-      } else {
-        const data = await res.json().catch(() => ({})) as { error?: string; detail?: string };
-        setToggleError(data.detail ?? data.error ?? `Failed to update ${flag}`);
-      }
-    } catch {
-      setToggleError(`Network error updating ${flag}`);
-    } finally {
-      setToggling(null);
-    }
-  }, [symbol]);
-
   const ticker = security.ticker ?? security.security_id?.split(":")[1] ?? security.security_id;
-  const nonUsFlagReason = "US options (XNYS/XNAS only) — not available for this exchange";
 
   return (
-    <section aria-label="Symbol Configuration" className="rounded-[var(--radius)] border border-border bg-bg-card divide-y divide-border/60">
-      {/* ── Header ─────────────────────────────────────────────────── */}
-      <div className="px-4 py-3 flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-text">Symbol Configuration</h3>
-        {security.updated_at && (
-          <span className="text-xs text-text-muted">Last edited {timeAgoShort(security.updated_at)}</span>
+    <section aria-label="Symbol Configuration" className="rounded-[var(--radius)] border border-border bg-bg-card">
+      {/* ── Collapsible header — matches DetailSection visual/a11y pattern ── */}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-bg-hover transition-colors rounded-[var(--radius)]"
+        aria-expanded={open}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-text">Symbol Configuration</span>
+          {security.updated_at && (
+            <span className="text-xs text-text-muted">Last edited {timeAgoShort(security.updated_at)}</span>
+          )}
+        </div>
+        {open ? (
+          <ChevronDown size={16} className="text-text-muted shrink-0" />
+        ) : (
+          <ChevronRight size={16} className="text-text-muted shrink-0" />
         )}
-      </div>
+      </button>
 
+      {open && (
+        <div className="border-t border-border divide-y divide-border/60">
       {/* ── Read-only identity ─────────────────────────────────────── */}
       <div className="px-4 py-4 space-y-3">
         <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">Identity (read-only)</p>
@@ -322,6 +265,11 @@ export default function SymbolConfigurationCard({
           <ReadOnlyField label="Exchange MIC" value={ro(security.exchange_mic)} />
           <ReadOnlyField label="Ticker" value={ro(ticker)} />
         </div>
+        {!usOptionsEligible && security.exchange_mic && (
+          <p className="text-xs text-text-muted">
+            US options (XNYS/XNAS) not available for exchange {security.exchange_mic}.
+          </p>
+        )}
         <p className="text-xs text-text-muted">
           To correct security identity (security_id, MIC, or ticker), contact an operator — a{" "}
           <a
@@ -488,50 +436,8 @@ export default function SymbolConfigurationCard({
           </p>
         )}
       </div>
-
-      {/* ── Agent / alert toggles ──────────────────────────────────── */}
-      <div className="px-4 py-4 space-y-1">
-        <p className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-2">Agent & Alert Toggles</p>
-        {!usOptionsEligible && (
-          <p className="text-xs text-text-muted mb-3 rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2">
-            Covered Calls, Cash-Secured Puts, and Buy Tracker are available for US exchanges (XNYS/XNAS) only. This security ({security.exchange_mic}) is not eligible.
-          </p>
-        )}
-        <ToggleRow
-          id="cfg-toggle-cc"
-          label="Covered Calls agent"
-          checked={toggles.covered_call}
-          onChange={(v) => updateToggle("covered_call", v)}
-          disabled={!usOptionsEligible || toggling !== null}
-          disabledReason={!usOptionsEligible ? nonUsFlagReason : undefined}
-        />
-        <ToggleRow
-          id="cfg-toggle-csp"
-          label="Cash-Secured Puts agent"
-          checked={toggles.cash_secured_put}
-          onChange={(v) => updateToggle("cash_secured_put", v)}
-          disabled={!usOptionsEligible || toggling !== null}
-          disabledReason={!usOptionsEligible ? nonUsFlagReason : undefined}
-        />
-        <ToggleRow
-          id="cfg-toggle-buy"
-          label="Buy Tracker agent"
-          checked={toggles.buy_tracker}
-          onChange={(v) => updateToggle("buy_tracker", v)}
-          disabled={!usOptionsEligible || toggling !== null}
-          disabledReason={!usOptionsEligible ? nonUsFlagReason : undefined}
-        />
-        <ToggleRow
-          id="cfg-toggle-telegram"
-          label="Telegram notifications"
-          checked={toggles.telegram}
-          onChange={(v) => updateToggle("telegram_notifications_enabled", v)}
-          disabled={toggling !== null}
-        />
-        {toggleError && (
-          <p className="text-xs text-accent-red pt-1" role="alert">⚠ {toggleError}</p>
-        )}
-      </div>
+        </div>
+      )}
     </section>
   );
 }

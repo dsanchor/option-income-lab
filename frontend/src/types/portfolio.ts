@@ -3,11 +3,10 @@
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
 export type TxnType = "BUY" | "SELL" | "DIVIDEND" | "TRANSFER_OUT" | "TRANSFER_IN";
-export type CostBasisStatus = "COMPLETE" | "INCOMPLETE";
+export type CostBasisStatus = "COMPLETE" | "INCOMPLETE" | "ZERO_COST";
 export type CorrectionStatus = "ACTIVE" | "SUPERSEDED" | "VOIDED";
 export type WarningType =
   | "NEGATIVE_INVENTORY"
-  | "ZERO_COST_ACQUISITION"
   | "RIGHTS_AMOUNT"
   | "PROBABLE_DUPLICATE"
   | "DERECHOS_WITH_QUANTITY"

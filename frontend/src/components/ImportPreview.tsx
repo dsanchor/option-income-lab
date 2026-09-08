@@ -13,7 +13,6 @@ interface Props {
 
 const WARNING_LABELS: Record<WarningType, string> = {
   NEGATIVE_INVENTORY: "Negative inventory",
-  ZERO_COST_ACQUISITION: "Zero-cost acquisition",
   RIGHTS_AMOUNT: "Rights / scrip amount",
   PROBABLE_DUPLICATE: "Probable duplicate",
   DERECHOS_WITH_QUANTITY: "Rights sale with quantity",
