@@ -14159,3 +14159,148 @@ The following inbox files have been merged into Section 1 (Unified Symbol Overvi
 **Status:** Architecture under user review  
 **Expected:** Implementation planning to follow user confirmation
 
+
+---
+
+## Scrip Zero-Cost & BUY Gross-Net Correction (2026-09-08)
+
+**Status:** RELEASED AND DEPLOYED  
+**Commit:** 4ca553e7fd1ba7e4ac10751231540ca71ae5de1d  
+**User Directive:** copilot-correction-20260908-scrip-cost-and-buy-import.md  
+**GitHub Actions:** Run 34197339468 — SUCCESS
+
+### Problem Statement
+
+Two independent accounting bugs:
+
+**A. Scrip/Zero-Cost Shares Arithmetic Mismatch:**
+- Zero-price (scrip dividend) shares were parsed successfully but stored with `INCOMPLETE` status
+- Holdings engine excluded them from CMP pool → avg_cost_basis_eur ignored zero-cost shares
+- Result: `total_shares × avg_cost_basis_eur ≠ remaining_cost_basis_eur`
+- Example (ACS): 223 shares × €26.34 = €5,873.82 ≠ invested €4,294.21
+
+**B. BUY Import Gross/Net Inversion:**
+- CSV "Total (€)" column = net consideration (price × qty, excluding commission)
+- Stored as `gross_eur` → inverted naming
+- Holdings engine: `cost = gross_eur + commission_eur` (accidentally correct, but semantically confusing)
+- Ledger field names contradicted their values
+
+### Decision Summary
+
+**A. ZERO_COST Pool Entry:**
+- ZERO_COST shares enter CMP pool at cost 0, not a side-channel unpaid_shares
+- This naturally dilutes avg_cost_basis_eur to correct value (no separate effective_avg field needed)
+- Distinction: ZERO_COST = resolved-at-zero; INCOMPLETE = genuinely unknown (future use)
+- Warning change: ZERO_COST_ACQUISITION removed; INCOMPLETE_COST_BASIS introduced
+
+**B. BUY Gross/Net Semantics:**
+- CSV import: `gross_eur = net_consideration + commission` (correct semantics, fixes naming)
+- Holdings engine: `cost = gross_eur` (unchanged logic, now semantically aligned)
+- SELL semantics: unchanged (Total Venta = gross proceeds)
+
+**C. Migration Marker-First Idempotency:**
+- `_repair_buy_fields_v1` marker checked unconditionally first (before any repair logic)
+- Audit-default, apply-explicit, manual candidates require confirmation
+- Second audit confirms zero remaining candidates
+
+### Superseded Earlier Decision
+
+**danny-effective-average-cost-display-contract.md (2026-09-08 SUPERSEDED):**
+- Earlier proposal: new `effective_avg_cost_eur` field to fix arithmetic
+- User directive: instead, fix at source by entering ZERO_COST into pool
+- Resolution: Pool-entry fix naturally eliminates need for separate display field
+
+### Architectural Changes
+
+**Backend Files (9 modified):**
+- `models.py`: `CostBasisStatus` enum adds `ZERO_COST`; warning type adds `INCOMPLETE_COST_BASIS`
+- `parsers/purchases.py`: zero-price detection sets status to `ZERO_COST`
+- `import_service.py`: BUY gross = net_consideration + commission (line 631–635)
+- `holdings_service.py`: ZERO_COST enters pool at cost 0; avg_cost_basis_eur naturally diluted
+- `repair_buy_ledger_fields.py`: Marker-first, bilingual CSV validation, manual candidate flags
+- Tests: 469 backend tests passing; 37 scrip-specific; 55 migration
+
+**Frontend Files (5 modified):**
+- Types: removed `effective_avg_cost_eur` from portfolio.ts, symbol-detail.ts
+- `PortfolioHoldingsTable.tsx`: uses `remaining_cost_basis_eur`, not `total_invested_eur`
+- Warning cleanup: ZERO_COST_ACQUISITION removed from 5 surfaces (PortfolioMovementsTable, ImportPreview, ImportChat, MovementDetailDialog)
+- Tests: 1223 frontend tests passing; zero regressions
+
+**Migration (1 script + 55 tests):**
+- `repair_buy_ledger_fields.py`: audit-default, apply-explicit
+- Manual candidates: `candidate_only=True`, require `--apply-manual-ids`
+- Backup: SHA-256 checksum verification, restore path documented
+
+### Production Migration Results
+
+**Audit (2026-09-08 07:15 UTC):**
+- Scanned: 492 CSV BUY records
+- Auto-repair candidates: 339 (280 gross/net swaps + 60 status reclassifications)
+- Overlap: 1, Ambiguous/error: 0
+
+**Apply (2026-09-08 07:30 UTC):**
+- Patched: 339 records
+- Failed/collisions: 0
+- ETag/CAS success rate: 100%
+
+**Verification (2026-09-08 07:45 UTC):**
+- Second audit: 0 remaining candidates (idempotent)
+
+**Post-Migration Verification (ACS example):**
+- Shares: 223 (163 paid + 60 ZERO_COST)
+- Pool cost: EUR 4,534.62
+- Avg cost: EUR 20.33 (natural dilution)
+- Arithmetic: 223 × €20.33 ≈ €4,534.59 ✓
+- SELL records: 0 touched (all 45 verified)
+- Global ZERO_COST shares: 485; INCOMPLETE: 0
+
+### Test Coverage
+
+- Backend: 469/469 passing (8 test suites; 37 scrip-specific; 55 migration)
+- Frontend: 1223/1223 passing (no regressions)
+- GitHub Actions Run 34197339468: SUCCESS
+
+### Gates (Danny)
+
+1. **Cost Basis & Import Contract Gate (2026-09-08 07:35):**
+   - Pool entry semantics ✅
+   - BUY gross/net distinction ✅
+   - Migration safeguards ✅
+   - Verdict: **APPROVED**
+
+2. **Final Product & Migration Review (2026-09-08 07:58):**
+   - All 9 product files verified
+   - 469 backend + 18 frontend tests approved
+   - Migration plan sound
+   - Verdict: **APPROVED FOR RELEASE**
+
+3. **Clean-Diff Release Gate (2026-09-08 10:45):**
+   - 21 files from origin/main
+   - 469 backend + 1223 frontend tests
+   - Diff clean (no cruft)
+   - Verdict: **APPROVED FOR PRODUCTION**
+
+### Learnings
+
+**Migration Design:**
+- Marker-first approach: unconditional check (not fallback) prevents false positives
+- Bilingual CSV validation: English/Spanish header detection robust for international data
+- Manual candidate flags: `candidate_only=True` + `--apply-manual-ids` prevents accidental bulk edits
+
+**Testing Discipline:**
+- Fixture-first refactoring catches assumptions early
+- Scrip-specific test suite (37 tests) isolates domain logic
+- Zero regression across 469 + 1223 tests confirms completeness
+
+**Frontend Discipline:**
+- Type contract updates verified at compile time
+- Warning reference cleanup: single summary-level warning retained, per-symbol removed
+- TypeScript strict mode maintained throughout
+
+### Excluded from This Release
+
+- `repair_ad_xams_security_id.py`: Separate ticket, execution gate pending
+- Unrelated UI/account/Symbol Details changes: deferred to next cycle
+
+---
+
