@@ -21,7 +21,6 @@ const TXN_BADGE: Record<string, string> = {
 
 const WARNING_SHORT: Record<WarningType, string> = {
   NEGATIVE_INVENTORY: "Negative inventory",
-  ZERO_COST_ACQUISITION: "Incomplete cost basis",
   RIGHTS_AMOUNT: "Rights amount pending",
   PROBABLE_DUPLICATE: "Probable duplicate",
   DERECHOS_WITH_QUANTITY: "Rights sale with quantity",

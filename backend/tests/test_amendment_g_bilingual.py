@@ -108,14 +108,14 @@ class TestPurchasesEnglishHeaders:
         assert rows[0]["cost_basis_status"] == "COMPLETE"
 
     def test_zero_cost_acquisition_with_english_headers(self):
-        """English-header zero-price row → INCOMPLETE status (zero-cost acquisition)."""
+        """English-header zero-price row → ZERO_COST status (scrip dividend); no warning."""
         csv = (
             "Year\tCompany\tPurchase Date\tPrice per share\tShares\tTotal\tCommission\n"
             "2024\tScrip Co\t2024-01-01\t0\t50\t0\t0\n"
         )
         rows = parse_purchases(_enc(csv))
-        assert rows[0]["cost_basis_status"] == "INCOMPLETE"
-        assert any(w["type"] == "ZERO_COST_ACQUISITION" for w in rows[0]["warnings"])
+        assert rows[0]["cost_basis_status"] == "ZERO_COST"
+        assert not any(w["type"] == "ZERO_COST_ACQUISITION" for w in rows[0]["warnings"])
 
     def test_unrecognized_english_header_raises(self):
         """A column header not in any alias set must raise ValueError."""

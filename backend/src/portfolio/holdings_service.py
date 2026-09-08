@@ -1,8 +1,9 @@
 """Derived holdings computation from ledger movements.
 
 Cost method: chronological moving weighted average (CMP).
-- BUY COMPLETE: adds shares to pool; pool_cost += gross_eur + commission_eur.
-- BUY INCOMPLETE: adds unpaid_shares (no pool cost fabricated).
+- BUY COMPLETE: adds shares to pool; pool_cost += gross_eur (gross already includes commission).
+- BUY ZERO_COST: adds shares to pool at cost 0 (scrip dividends, rights); dilutes avg naturally.
+- BUY INCOMPLETE: genuinely unknown cost; adds unpaid_shares (no pool entry, warning emitted).
 - SELL ACCIONES: removes shares; assigns cost = sold_qty × current avg (pool_cost/pool_shares).
 - SELL DERECHOS: no share/pool change; net proceeds counted in sales and rights.
 - TRANSFER_IN: adds qty to pool at carried_cost_basis_eur; not counted in purchase_outflow.
@@ -96,18 +97,19 @@ class HoldingsService:
                     "security_id": security_id,
                     "ticker": m.get("ticker", security_id.split(":")[-1]),
                     # CMP pool state
-                    "pool_shares": _ZERO,    # shares with known cost
+                    "pool_shares": _ZERO,    # shares with known cost (COMPLETE + ZERO_COST)
                     "pool_cost": _ZERO,      # EUR cost of pool shares
-                    "unpaid_shares": _ZERO,  # INCOMPLETE BUY shares (no cost)
+                    "unpaid_shares": _ZERO,  # genuinely INCOMPLETE BUY shares (no cost)
                     "total_shares": _ZERO,   # all shares (pool + unpaid)
                     # Accumulators
-                    "total_purchase_outflow_eur": _ZERO,  # Σ(gross+fee) BUY COMPLETE
+                    "total_purchase_outflow_eur": _ZERO,  # Σ gross_eur BUY COMPLETE
                     "cost_basis_sold_eur": _ZERO,         # Σ CMP cost → SELL ACCIONES
                     "total_sale_proceeds_eur": _ZERO,     # Σ(gross-fee) all SELL types
                     "rights_proceeds_eur": _ZERO,         # Σ(gross-fee) SELL DERECHOS
                     "total_dividends_eur": _ZERO,
                     "buy_count": 0,
-                    "zero_cost_count": 0,
+                    "zero_cost_count": 0,    # ZERO_COST acquisitions (informational)
+                    "incomplete_count": 0,   # genuinely INCOMPLETE acquisitions (warning)
                     "accounts": set(),
                     "movement_warnings": [],
                 }
@@ -123,14 +125,21 @@ class HoldingsService:
             if txn_type == "BUY":
                 agg["total_shares"] += qty
                 agg["buy_count"] += 1
-                if cost_basis_status != "INCOMPLETE":
-                    cost = gross_eur + commission_eur
+                if cost_basis_status == "INCOMPLETE":
+                    # Genuinely unknown cost — stays out of pool; warning emitted later.
+                    agg["unpaid_shares"] += qty
+                    agg["incomplete_count"] += 1
+                else:
+                    # COMPLETE or ZERO_COST — enters pool.
+                    # gross_eur already includes commission (corrected import mapping).
+                    # For ZERO_COST, gross_eur == 0; pool_cost unchanged.
+                    cost = gross_eur
                     agg["pool_shares"] += qty
                     agg["pool_cost"] += cost
-                    agg["total_purchase_outflow_eur"] += cost
-                else:
-                    agg["unpaid_shares"] += qty
-                    agg["zero_cost_count"] += 1
+                    if cost_basis_status != "ZERO_COST":
+                        agg["total_purchase_outflow_eur"] += cost
+                    else:
+                        agg["zero_cost_count"] += 1
 
             elif txn_type == "SELL":
                 # DERECHOS sales contribute to proceeds but do NOT decrement shares.
@@ -236,8 +245,11 @@ class HoldingsService:
                 )
 
             zero_cost_count = agg["zero_cost_count"]
-            holding_cost_basis_status = "INCOMPLETE" if zero_cost_count > 0 else "COMPLETE"
-            if agg["unpaid_shares"] > _ZERO:
+            incomplete_count = agg["incomplete_count"]
+            # Holding status: INCOMPLETE only when there are genuinely unknown-cost shares.
+            # ZERO_COST shares are fully resolved; they do not cause INCOMPLETE status.
+            holding_cost_basis_status = "INCOMPLETE" if incomplete_count > 0 else "COMPLETE"
+            if incomplete_count > 0:
                 global_has_incomplete = True
 
             purchase_outflow = agg["total_purchase_outflow_eur"]
@@ -263,12 +275,12 @@ class HoldingsService:
                         "Negative holdings — earlier purchases may not yet be imported"
                     ),
                 })
-            if zero_cost_count > 0:
+            if incomplete_count > 0:
                 item_warnings.append({
-                    "type": "ZERO_COST_ACQUISITION",
-                    "count": zero_cost_count,
+                    "type": "INCOMPLETE_COST_BASIS",
+                    "count": incomplete_count,
                     "message": (
-                        f"{zero_cost_count} acquisition(s) with incomplete cost basis"
+                        f"{incomplete_count} acquisition(s) with genuinely unknown cost basis"
                     ),
                 })
 

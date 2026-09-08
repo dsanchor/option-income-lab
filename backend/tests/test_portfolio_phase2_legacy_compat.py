@@ -590,7 +590,8 @@ class TestLegacyDocumentCompatibility:
     def test_cost_basis_status_complete_on_regular_buy(self):
         """Regular BUY movements have cost_basis_status=COMPLETE and contribute to basis."""
         movements = [
-            _make_movement("buy_cb", "XNYS:AAPL", "BUY", 10, "1825",
+            # true gross = net 1825 + commission 7.50 = 1832.50; engine: cost = gross = 1832.50
+            _make_movement("buy_cb", "XNYS:AAPL", "BUY", 10, "1832.5",
                            commission_eur="7.50", cost_basis_status="COMPLETE"),
         ]
         svc = _make_holdings_service(movements)
@@ -598,7 +599,7 @@ class TestLegacyDocumentCompatibility:
         aapl = next((h for h in result["holdings"] if h["security_id"] == "XNYS:AAPL"), None)
         assert aapl is not None
         assert aapl["cost_basis_status"] == "COMPLETE"
-        # avg_cost = (1825 + 7.50) / 10 = 183.25
+        # avg_cost = 1832.50 / 10 = 183.25
         assert Decimal(aapl["avg_cost_basis_eur"]) == Decimal("183.25")
 
     def test_zero_cost_acquisition_still_produces_incomplete_status(self):

@@ -627,9 +627,12 @@ def _row_to_movement(
         sales_type_raw = None
     elif fmt == "purchases":
         trade_date = row.get("purchase_date", "")
-        gross = row.get("total_cost", Decimal("0"))
+        # CSV "Total (€)" is NET consideration (price × qty, excluding commission).
+        net_consideration = row.get("total_cost", Decimal("0"))
         commission = row.get("commission", Decimal("0"))
-        net = gross - commission
+        # True gross = net + commission (total acquisition outflow incl. fees).
+        gross = net_consideration + commission
+        net = net_consideration
         wht_source = Decimal("0")
         wht_dest = Decimal("0")
         quantity = row.get("quantity", Decimal("0"))

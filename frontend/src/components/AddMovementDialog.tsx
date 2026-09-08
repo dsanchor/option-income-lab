@@ -149,7 +149,7 @@ interface BuyFormState {
   trade_date: string;
   quantity: string;
   price_per_share: string;
-  trade_value: string;   // gross amount (quantity × unit price, before fees)
+  trade_value: string;   // net consideration (price × qty, excluding fees)
   currency: string;
   fees: string;
   notes: string;
@@ -207,7 +207,7 @@ function BuyForm({ form, onChange, accounts, securities }: BuyFormProps) {
         <input type="number" step="any" min="0" value={form.price_per_share} onChange={(e) => handlePriceChange(e.target.value)} placeholder="0.00 (optional)" className={inputCls} />
       </div>
       <div>
-        <label className={labelCls}>Trade value (gross) *</label>
+        <label className={labelCls}>Trade value (net consideration) *</label>
         <input type="number" step="any" min="0" value={form.trade_value} onChange={(e) => onChange({ trade_value: e.target.value })} placeholder="0.00" className={inputCls} required />
         {mismatch && (
           <p className="mt-1 text-xs text-accent-orange">
@@ -547,7 +547,11 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
           account_id: buyForm.account_id || "_unassigned",
           trade_date: buyForm.trade_date,
           quantity: buyForm.quantity,
-          gross: makeGross(buyForm.trade_value, currency),
+          // gross = net consideration + fees (true total acquisition cost; engine uses cost = gross_eur)
+          gross: makeGross(
+            ((parseFloat(buyForm.trade_value) || 0) + (parseFloat(buyForm.fees) || 0)).toFixed(4),
+            currency,
+          ),
           fees: buyForm.fees ? makeFeesInput(buyForm.fees, currency) : undefined,
           notes: buyForm.notes || undefined,
         };

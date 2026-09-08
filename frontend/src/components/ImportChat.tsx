@@ -449,7 +449,6 @@ export default function ImportChat() {
 function warningLabel(type: string): string {
   const labels: Record<string, string> = {
     NEGATIVE_INVENTORY: "Negative inventory",
-    ZERO_COST_ACQUISITION: "Zero-cost acquisition",
     RIGHTS_AMOUNT: "Rights amount",
     PROBABLE_DUPLICATE: "Probable duplicate",
   };

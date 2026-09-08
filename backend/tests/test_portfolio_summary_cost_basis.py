@@ -218,7 +218,7 @@ def _holding(result, security_id):
 # ---------------------------------------------------------------------------
 
 class TestS1SingleBuy:
-    """S1: BUY 100@€10 (€5 fee).
+    """S1: BUY 100@gross €1005 (€5 fee; net 1000).
     Expected:
       total_purchase_outflow_eur  = 1005
       cost_basis_sold_eur         = 0
@@ -231,7 +231,7 @@ class TestS1SingleBuy:
 
     def setup_method(self):
         svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1000.00", fee="5.00"),
+            _buy("b1", "XNYS:AAPL", 100, "1005.00", fee="5.00"),
         ])
         self.result = svc.compute_holdings()
         self.s = self.result["summary"]
@@ -293,7 +293,7 @@ class TestS1SingleBuy:
 # ---------------------------------------------------------------------------
 
 class TestS2PartialSellAcciones:
-    """S2: BUY 100@€10 (€5 fee) → SELL 30@€15 (€3 fee).
+    """S2: BUY 100@gross €1005 (€5 fee) → SELL 30@€15 (€3 fee).
     avg_cost = 1005/100 = 10.05
     cost_sold = 30 × 10.05 = 301.50
     remaining  = 1005 − 301.50 = 703.50
@@ -303,7 +303,7 @@ class TestS2PartialSellAcciones:
 
     def setup_method(self):
         svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1000.00", fee="5.00"),
+            _buy("b1", "XNYS:AAPL", 100, "1005.00", fee="5.00"),
             _sell("s1", "XNYS:AAPL", 30, "450.00", fee="3.00"),
         ])
         self.result = svc.compute_holdings()
@@ -573,7 +573,8 @@ class TestS7IncompleteCostBasis:
 
     def test_warning_zero_cost_acquisition(self):
         warning_types = [w["type"] for w in self.h["warnings"]]
-        assert "ZERO_COST_ACQUISITION" in warning_types
+        # INCOMPLETE (genuinely unknown cost) emits INCOMPLETE_COST_BASIS, not ZERO_COST_ACQUISITION.
+        assert "INCOMPLETE_COST_BASIS" in warning_types
 
     def test_remaining_shares(self):
         assert _d(self.h["total_shares"]) == _d("30")
@@ -731,13 +732,13 @@ class TestS10MultiSecurityAggregation:
 # ---------------------------------------------------------------------------
 
 class TestS11BackwardCompatAliases:
-    """S11: BUY 100@€10 (€5 fee).
+    """S11: BUY 100@gross €1005 (€5 fee).
     Old alias fields must still be present and equal their new counterparts.
     """
 
     def setup_method(self):
         svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1000.00", fee="5.00"),
+            _buy("b1", "XNYS:AAPL", 100, "1005.00", fee="5.00"),
         ])
         self.result = svc.compute_holdings()
         self.s = self.result["summary"]
@@ -928,13 +929,13 @@ class TestS15SupersededExclusion:
 # ---------------------------------------------------------------------------
 
 class TestCommissionAssignment:
-    """Buy commission is INCLUDED in pool_cost.
+    """Buy commission is INCLUDED in pool_cost (via gross_eur which is true gross).
     Sell commission is DEDUCTED from sale_proceeds (not from pool_cost).
     """
 
     def setup_method(self):
         svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1000.00", fee="10.00"),
+            _buy("b1", "XNYS:AAPL", 100, "1010.00", fee="10.00"),
             _sell("s1", "XNYS:AAPL", 50, "600.00", fee="6.00"),
         ])
         self.result = svc.compute_holdings()
@@ -942,7 +943,7 @@ class TestCommissionAssignment:
         self.h = _holding(self.result, "XNYS:AAPL")
 
     def test_buy_commission_in_pool_cost(self):
-        """BUY gross=1000, commission=10 → pool_cost=1010."""
+        """BUY gross=1010 (net 1000 + commission 10) → pool_cost=1010."""
         assert _d(self.s["total_purchase_outflow_eur"]) == _d("1010.00")
 
     def test_sell_commission_deducted_from_proceeds(self):
@@ -1184,11 +1185,11 @@ class TestCurrentInvestedSemanticChange:
     """
 
     def setup_method(self):
-        # BUY 100@€10 (€5 fee) → SELL 30@€15 (€3 fee)
+        # BUY 100@gross €1005 (€5 fee) → SELL 30@€15 (€3 fee)
         # Old: 1005 - (450-3) = 1005 - 447 = 558. (Wrong!)
         # New (CMP): avg=10.05, cost_sold=30×10.05=301.50, remaining=703.50. (Correct)
         svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1000.00", fee="5.00"),
+            _buy("b1", "XNYS:AAPL", 100, "1005.00", fee="5.00"),
             _sell("s1", "XNYS:AAPL", 30, "450.00", fee="3.00"),
         ])
         self.result = svc.compute_holdings()
