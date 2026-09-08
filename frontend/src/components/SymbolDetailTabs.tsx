@@ -28,6 +28,8 @@ interface Props {
   stocksPanel: React.ReactNode;
   /** Pre-built server JSX for the Action Plans tab panel. */
   plansPanel: React.ReactNode;
+  /** Optional content rendered on the same line as the tab bar, right-aligned (e.g. Analyze / CC / CSP / Alerts actions). */
+  actions?: React.ReactNode;
 }
 
 /**
@@ -50,6 +52,7 @@ export default function SymbolDetailTabs({
   optionsPanel,
   stocksPanel,
   plansPanel,
+  actions,
 }: Props) {
   const [activeTab, setActiveTab] = useState<TabId>("options");
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -95,33 +98,37 @@ export default function SymbolDetailTabs({
 
   return (
     <div className="space-y-4">
-      {/* ── Tab bar — pill style matching Options Screener ── */}
-      <div
-        role="tablist"
-        aria-label="Symbol detail sections"
-        className="flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1 w-fit"
-      >
-        {TABS.map((tab, idx) => (
-          <button
-            key={tab.id}
-            ref={(el) => { tabRefs.current[idx] = el; }}
-            role="tab"
-            id={`sym-tab-${tab.id}`}
-            aria-selected={activeTab === tab.id}
-            aria-controls={`sym-panel-${tab.id}`}
-            tabIndex={activeTab === tab.id ? 0 : -1}
-            type="button"
-            onClick={() => handleTabChange(tab.id)}
-            onKeyDown={(e) => handleKeyDown(e, idx)}
-            className={`rounded-[var(--radius-pill)] px-4 py-1.5 text-sm transition ${
-              activeTab === tab.id
-                ? "bg-accent-blue text-white"
-                : "text-text-muted hover:text-text"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+      {/* ── Tab bar — pill style matching Options Screener — shares its
+           row with optional page-level actions (Analyze / CC / CSP / Alerts) ── */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div
+          role="tablist"
+          aria-label="Symbol detail sections"
+          className="flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1 w-fit"
+        >
+          {TABS.map((tab, idx) => (
+            <button
+              key={tab.id}
+              ref={(el) => { tabRefs.current[idx] = el; }}
+              role="tab"
+              id={`sym-tab-${tab.id}`}
+              aria-selected={activeTab === tab.id}
+              aria-controls={`sym-panel-${tab.id}`}
+              tabIndex={activeTab === tab.id ? 0 : -1}
+              type="button"
+              onClick={() => handleTabChange(tab.id)}
+              onKeyDown={(e) => handleKeyDown(e, idx)}
+              className={`rounded-[var(--radius-pill)] px-4 py-1.5 text-sm transition ${
+                activeTab === tab.id
+                  ? "bg-accent-blue text-white"
+                  : "text-text-muted hover:text-text"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        {actions && <div className="flex flex-wrap items-center gap-3">{actions}</div>}
       </div>
 
       {/* ── Tab panels — conditionally rendered so client components only

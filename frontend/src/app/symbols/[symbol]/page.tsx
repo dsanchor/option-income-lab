@@ -151,19 +151,6 @@ export default async function SymbolDetailPage({
       <SymbolDetailTabs
         optionsPanel={
           <div className="space-y-6">
-            {usOptionsEligible && (
-              <div className="flex flex-wrap items-center justify-end gap-4">
-                <SymbolActions
-                  symbol={d.symbol}
-                  covered_call={d.watchlist?.covered_call ?? false}
-                  cash_secured_put={d.watchlist?.cash_secured_put ?? false}
-                  buy_tracker={d.watchlist?.buy_tracker ?? false}
-                  telegram_notifications_enabled={d.telegram_notifications_enabled ?? false}
-                  isPaused={d.is_paused ?? false}
-                  nextEarningsDate={d.next_earnings_date ?? null}
-                />
-              </div>
-            )}
             {hasOptions && usOptionsEligible ? (
               <>
                 <PositionsTable symbol={symbol} positions={positions} />
@@ -198,6 +185,19 @@ export default async function SymbolDetailPage({
           )
         }
         plansPanel={<SymbolPlansTable plans={plans as unknown as PlanRow[]} />}
+        actions={
+          usOptionsEligible && (
+            <SymbolActions
+              symbol={d.symbol}
+              covered_call={d.watchlist?.covered_call ?? false}
+              cash_secured_put={d.watchlist?.cash_secured_put ?? false}
+              buy_tracker={d.watchlist?.buy_tracker ?? false}
+              telegram_notifications_enabled={d.telegram_notifications_enabled ?? false}
+              isPaused={d.is_paused ?? false}
+              nextEarningsDate={d.next_earnings_date ?? null}
+            />
+          )
+        }
       />
     </div>
   );
