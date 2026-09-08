@@ -774,6 +774,7 @@ class TestSecurityFieldExtension:
         assert "effective_yfinance_symbol" in sec
         assert "effective_tradingview_symbol" in sec
         assert "_etag" in sec
+        assert sec["_etag"], "_etag must be a non-empty string so PATCH can pass optimistic concurrency"
         assert "updated_at" in sec
         # Values
         assert sec["ticker"] == "AD"

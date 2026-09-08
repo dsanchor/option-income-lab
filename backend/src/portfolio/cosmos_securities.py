@@ -145,20 +145,24 @@ class CosmosSecuritiesService:
         doc_id = security_id_to_doc_id(security_id)
         try:
             doc = self.container.read_item(item=doc_id, partition_key=ticker)
-            return _clean(doc)
+            result = _clean(doc)
+            result["_etag"] = doc.get("_etag", "")
+            return result
         except CosmosResourceNotFoundError:
             return None
 
     def list_securities(self) -> List[Dict[str, Any]]:
         """Return all security_master documents (cross-partition)."""
         query = "SELECT * FROM c WHERE c.doc_type = 'security_master'"
-        return [
-            _clean(d)
-            for d in self.container.query_items(
-                query=query,
-                enable_cross_partition_query=True,
-            )
-        ]
+        results = []
+        for d in self.container.query_items(
+            query=query,
+            enable_cross_partition_query=True,
+        ):
+            cleaned = _clean(d)
+            cleaned["_etag"] = d.get("_etag", "")
+            results.append(cleaned)
+        return results
 
     def find_candidates_for_name(
         self, normalized_name: str, limit: int = 5
