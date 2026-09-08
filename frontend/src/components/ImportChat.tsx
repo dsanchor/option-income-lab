@@ -1,18 +1,21 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { FileUp, Upload } from "lucide-react";
 import {
   createImportSession,
   generatePreview,
   commitImport,
+  listAccounts,
 } from "@/lib/portfolio-api";
+import { formatAccountName } from "@/lib/accountDisplay";
 import type {
   ImportSession,
   ImportFormat,
   ImportPreviewResponse,
   CommitResult,
 } from "@/types/import";
+import type { BrokerAccount } from "@/types/portfolio";
 import ImportQuestionCard from "./ImportQuestionCard";
 import ImportPreview from "./ImportPreview";
 
@@ -49,8 +52,23 @@ export default function ImportChat() {
   const [format, setFormat] = useState<"" | ImportFormat>("");
   const [currency, setCurrency] = useState("EUR");
   const [accountId, setAccountId] = useState("");
+  const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listAccounts()
+      .then((resp) => {
+        if (!cancelled) setAccounts(resp.accounts ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setAccounts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -426,12 +444,18 @@ export default function ImportChat() {
           <label className="block text-xs font-medium text-text-muted mb-1">
             Broker / account <span className="text-text-muted font-normal">(optional)</span>
           </label>
-          <input
+          <select
             value={accountId}
             onChange={(e) => setAccountId(e.target.value)}
-            placeholder="Leave blank to skip"
             className={`${inputCls} w-full`}
-          />
+          >
+            <option value="">Leave blank to skip</option>
+            {accounts.map((a) => (
+              <option key={a.account_id} value={a.account_id}>
+                {formatAccountName(a)}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 

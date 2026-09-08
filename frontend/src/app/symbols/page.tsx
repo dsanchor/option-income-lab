@@ -31,6 +31,12 @@ function kpiEur(v: number | string | null | undefined): string {
   }).format(n);
 }
 
+/** Format a percentage for KPI display, with an explicit "+" sign when positive. */
+function kpiPct(v: number | null | undefined): string {
+  if (v == null || !isFinite(v)) return "—";
+  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+}
+
 function KpiCard({
   label,
   value,
@@ -99,6 +105,18 @@ export default async function SymbolsPage() {
   const netGainsTone =
     netGains == null ? "neutral" : netGains >= 0 ? "green" : "red";
 
+  // Unrealized benefit/loss %: current market value vs. remaining cost basis still held.
+  const totalCurrentValueNum =
+    totalCurrentValue != null
+      ? (typeof totalCurrentValue === "string" ? parseFloat(totalCurrentValue) : totalCurrentValue)
+      : null;
+  const unrealizedPct =
+    totalCurrentValueNum != null && isFinite(totalCurrentValueNum) && totalInvestment != null && totalInvestment !== 0
+      ? ((totalCurrentValueNum - totalInvestment) / totalInvestment) * 100
+      : null;
+  const unrealizedPctTone =
+    unrealizedPct == null ? "neutral" : unrealizedPct >= 0 ? "green" : "red";
+
   return (
     <div className="space-y-6">
       {/* ── Header ───────────────────────────────────────────────────── */}
@@ -135,6 +153,14 @@ export default async function SymbolsPage() {
               value={kpiEur(totalCurrentValue)}
               tone="neutral"
               tooltip="Valor actual de mercado del portfolio en EUR (acciones × precio actual en EUR)."
+            />
+          )}
+          {unrealizedPct != null && (
+            <KpiCard
+              label="Unrealized P/L %"
+              value={kpiPct(unrealizedPct)}
+              tone={unrealizedPctTone}
+              tooltip="Ganancia o pérdida no realizada: (Current Value − Current Investment) / Current Investment."
             />
           )}
           <KpiCard

@@ -52,7 +52,7 @@ const COMMON_KEYS = [
 
 const PORTFOLIO_ONLY_KEYS = [
   "price_eur", "portfolio_shares", "portfolio_avg_cost_eur",
-  "portfolio_invested_eur", "current_value_eur", "portfolio_dividends_eur",
+  "portfolio_invested_eur", "current_value_eur", "gain_loss_pct", "portfolio_dividends_eur",
 ];
 
 const OPTIONS_ONLY_KEYS = [
@@ -245,9 +245,9 @@ describe("CC: Column contract — Portfolio and Options column sets", () => {
     }
   });
 
-  it("CC-5: Portfolio column count: 10 columns (4 common + 6 portfolio-specific)", () => {
-    assert.equal(PORTFOLIO_COLUMN_KEYS.length, 10,
-      `CC-5: Portfolio must have 10 columns (symbol,category,momentum,price + 6 portfolio-specific), got ${PORTFOLIO_COLUMN_KEYS.length}: ${PORTFOLIO_COLUMN_KEYS.join(", ")}`);
+  it("CC-5: Portfolio column count: 11 columns (4 common + 7 portfolio-specific)", () => {
+    assert.equal(PORTFOLIO_COLUMN_KEYS.length, 11,
+      `CC-5: Portfolio must have 11 columns (symbol,category,momentum,price + 7 portfolio-specific), got ${PORTFOLIO_COLUMN_KEYS.length}: ${PORTFOLIO_COLUMN_KEYS.join(", ")}`);
   });
 
   it("CC-6: Options column count: 9 columns (4 common + 5 options-specific)", () => {
@@ -490,9 +490,9 @@ describe("CS: ColSpan/alignment — header and body cell counts match active col
     assert.ok(true, "CS-1: colSpan check passed (static or dynamic)");
   });
 
-  it("CS-2: Portfolio column count + Actions = 11 total table cells", () => {
-    assert.equal(PORTFOLIO_COLUMN_KEYS.length + 1, 11,
-      `CS-2: Portfolio 10 data columns + 1 Actions = 11; got ${PORTFOLIO_COLUMN_KEYS.length + 1}`);
+  it("CS-2: Portfolio column count + Actions = 12 total table cells", () => {
+    assert.equal(PORTFOLIO_COLUMN_KEYS.length + 1, 12,
+      `CS-2: Portfolio 11 data columns + 1 Actions = 12; got ${PORTFOLIO_COLUMN_KEYS.length + 1}`);
   });
 
   it("CS-3: Options column count + Actions = 10 total table cells", () => {
@@ -888,8 +888,8 @@ describe("CW: Column width contract — proportional, overflow-safe, no clipping
       "CW-9b DEFECT: truncate must not appear near numeric cells — financial data must be fully visible.");
   });
 
-  it("CW-10: Portfolio (10 cols) and Options (9 cols) have different column counts — widths must adapt", () => {
-    assert.strictEqual(PORTFOLIO_COLUMN_KEYS.length, 10, "CW-10: Portfolio must have 10 data columns");
+  it("CW-10: Portfolio (11 cols) and Options (9 cols) have different column counts — widths must adapt", () => {
+    assert.strictEqual(PORTFOLIO_COLUMN_KEYS.length, 11, "CW-10: Portfolio must have 11 data columns");
     assert.strictEqual(OPTIONS_COLUMN_KEYS.length,   9,  "CW-10: Options must have 9 data columns");
     assert.notStrictEqual(PORTFOLIO_COLUMN_KEYS.length, OPTIONS_COLUMN_KEYS.length,
       "CW-10: Column counts must differ so widths adapt per mode rather than being fixed-equal.");

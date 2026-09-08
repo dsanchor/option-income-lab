@@ -30,6 +30,17 @@ function portfolioShares(v: string | null | undefined): string {
   if (!isFinite(n)) return "—";
   return n % 1 === 0 ? n.toFixed(0) : n.toFixed(4).replace(/0+$/, "");
 }
+/** Unrealized benefit/loss % between current invested and current market value. */
+function gainLossPct(r: { portfolio_invested_eur?: string | null; current_value_eur?: string | null }): number | null {
+  const invested = r.portfolio_invested_eur != null ? parseFloat(r.portfolio_invested_eur) : NaN;
+  const value = r.current_value_eur != null ? parseFloat(r.current_value_eur) : NaN;
+  if (!isFinite(invested) || !isFinite(value) || invested === 0) return null;
+  return ((value - invested) / invested) * 100;
+}
+function formatPct(v: number | null): string {
+  if (v == null || !isFinite(v)) return "—";
+  return `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+}
 function momentumClass(m: string): string {
   const t = (m || "").toLowerCase();
   if (t.startsWith("bullish")) return "text-accent-green border-accent-green/40 bg-accent-green/10";
@@ -67,7 +78,7 @@ type SortKey =
   | "symbol" | "category" | "dgi_score" | "tech_timing" | "entry_tag"
   | "momentum" | "price" | "price_eur" | "total_shares" | "in_calls" | "put_exposure"
   | "portfolio_shares" | "portfolio_avg_cost_eur" | "portfolio_invested_eur"
-  | "current_value_eur" | "portfolio_dividends_eur";
+  | "current_value_eur" | "gain_loss_pct" | "portfolio_dividends_eur";
 
 /**
  * Case-insensitive row search predicate.
@@ -139,6 +150,7 @@ const COLUMNS: {
   { key: "portfolio_avg_cost_eur",  label: "Avg Cost", align: "right", modes: ["portfolio"], width: "84px",  nowrap: true },
   { key: "portfolio_invested_eur",  label: "Invested", align: "right", modes: ["portfolio"], width: "84px",  nowrap: true },
   { key: "current_value_eur",       label: "Value €",  align: "right", modes: ["portfolio"], width: "84px",  nowrap: true },
+  { key: "gain_loss_pct",           label: "P/L %",     align: "right", modes: ["portfolio"], width: "72px",  nowrap: true },
   { key: "portfolio_dividends_eur", label: "Dividends",align: "right", modes: ["portfolio"], width: "84px",  nowrap: true },
   { key: "in_calls",                 label: "In Calls", align: "right", modes: ["options"],  width: "72px",  nowrap: true },
   { key: "put_exposure",             label: "Puts $",   align: "right", modes: ["options"],  width: "80px",  nowrap: true },
@@ -249,15 +261,21 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       out = out.filter((r) => matchesSymbolSuitability(r.entry_tag, r.momentum, suitabilityFilter));
     }
     const sorted = [...out].sort((a, b) => {
-      const av = a[sort] as unknown;
-      const bv = b[sort] as unknown;
       let cmp: number;
-      if (typeof av === "number" || typeof bv === "number") {
-        cmp = (Number(av) || -Infinity) - (Number(bv) || -Infinity);
-      } else if (typeof av === "string" && typeof bv === "string" && !isNaN(parseFloat(av))) {
-        cmp = (parseFloat(av) || -Infinity) - (parseFloat(bv as string) || -Infinity);
+      if (sort === "gain_loss_pct") {
+        const av = gainLossPct(a);
+        const bv = gainLossPct(b);
+        cmp = (av ?? -Infinity) - (bv ?? -Infinity);
       } else {
-        cmp = String(av ?? "").localeCompare(String(bv ?? ""));
+        const av = a[sort] as unknown;
+        const bv = b[sort] as unknown;
+        if (typeof av === "number" || typeof bv === "number") {
+          cmp = (Number(av) || -Infinity) - (Number(bv) || -Infinity);
+        } else if (typeof av === "string" && typeof bv === "string" && !isNaN(parseFloat(av))) {
+          cmp = (parseFloat(av) || -Infinity) - (parseFloat(bv as string) || -Infinity);
+        } else {
+          cmp = String(av ?? "").localeCompare(String(bv ?? ""));
+        }
       }
       return dir === "asc" ? cmp : -cmp;
     });
@@ -312,6 +330,10 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
     const divClass = !isFinite(divNum) || divNum === 0
       ? "text-text-muted"
       : divNum > 0 ? "text-accent-green" : "text-accent-red";
+    const plPct = gainLossPct(r);
+    const plClass = plPct == null
+      ? "text-text-muted"
+      : plPct >= 0 ? "text-accent-green" : "text-accent-red";
     return (
       <tr
         key={r.symbol}
@@ -407,6 +429,11 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
         )}
         {viewMode === "portfolio" && (
           <td className="px-3 py-3 text-right font-mono text-xs whitespace-nowrap">{isPortfolio ? eur(r.current_value_eur) : "—"}</td>
+        )}
+        {viewMode === "portfolio" && (
+          <td className={`px-3 py-3 text-right font-mono text-xs whitespace-nowrap ${plClass}`}>
+            {isPortfolio ? formatPct(plPct) : "—"}
+          </td>
         )}
         {viewMode === "portfolio" && (
           <td className={`px-3 py-3 text-right font-mono text-xs whitespace-nowrap ${divClass}`}>
