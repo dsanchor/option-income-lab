@@ -479,7 +479,7 @@ class TestFullCorrectionFieldMatrix:
         repl = data["replacement"]
         assert repl["gross"]["eur_amount"] == "17000", "gross should be updated"
         assert repl["fees"]["total_eur"] == "5.00", "fees should be updated"
-        net_expected = Decimal("17000") - Decimal("5.00")
+        net_expected = Decimal("17000") + Decimal("5.00")
         assert Decimal(repl["net"]["eur_amount"]) == net_expected, (
             f"net should be recomputed as {net_expected}, got {repl['net']['eur_amount']}"
         )
@@ -619,8 +619,8 @@ class TestFullCorrectionFieldMatrix:
         })
         assert resp.status_code == 200, resp.text
         repl = resp.json()["replacement"]
-        # net = new_gross 9000 - original_fees 5.00 = 8995.00
-        assert Decimal(repl["net"]["eur_amount"]) == Decimal("8995.00")
+        # net = new_gross 9000 + original_fees 5.00 = 9005.00
+        assert Decimal(repl["net"]["eur_amount"]) == Decimal("9005.00")
         assert repl["gross"]["eur_amount"] == "9000"
 
     # ── C-9: fees change → net recomputed using original gross ────────────

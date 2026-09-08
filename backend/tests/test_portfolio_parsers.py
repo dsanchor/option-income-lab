@@ -309,11 +309,11 @@ class TestPurchasesParser:
         rows = parse_purchases(_encode(PURCHASES_CSV_ZERO_COST))
         assert len(rows) == 1
         row = rows[0]
-        assert row["cost_basis_status"] == "INCOMPLETE"
+        # Zero-price explicit BUY is ZERO_COST (scrip dividend): legitimate, no warning.
+        assert row["cost_basis_status"] == "ZERO_COST"
         assert row["price_per_share"] == Decimal("0")
         assert row["quantity"] == Decimal("50")
-        assert len(row["warnings"]) == 1
-        assert row["warnings"][0]["type"] == "ZERO_COST_ACQUISITION"
+        assert len(row["warnings"]) == 0
 
     def test_empty_file_raises(self):
         with pytest.raises(ValueError):

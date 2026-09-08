@@ -260,7 +260,7 @@ class TestCashDividendLegHoldings:
 
     def test_cash_dividend_does_not_affect_pool_cost(self):
         """CASH_DIVIDEND must not alter the cost pool."""
-        buy_gross = "2000.00"
+        buy_gross = "2009.95"
         buy_fees = "9.95"
         svc = _make_services([
             _standard_buy(gross_eur=buy_gross, fees_eur=buy_fees),
@@ -269,7 +269,7 @@ class TestCashDividendLegHoldings:
         result = svc.compute_holdings()
         h = result["holdings"][0]
         # avg_cost_basis_eur should reflect only the BUY, not the dividend.
-        # Holdings service rounds avg_cost to 2dp: (2000+9.95)/100 = 20.0995 → 20.10
+        # Engine: cost = net = gross + fees; avg = net / qty = 2019.90/100 = 20.20
         avg_cost = Decimal(h["avg_cost_basis_eur"])
         raw_avg = (Decimal(buy_gross) + Decimal(buy_fees)) / Decimal("100")
         expected_avg = raw_avg.quantize(Decimal("0.01"))
@@ -367,10 +367,10 @@ class TestShareAcquisitionIncompleteHoldings:
 
     def test_share_acquisition_incomplete_zero_pool_cost(self):
         """SHARE_ACQUISITION INCOMPLETE must not contribute to pool_cost (avg cost basis)."""
-        buy_gross = "2000.00"
+        buy_gross = "2009.95"
         buy_qty = "100"
         buy_fees = "9.95"
-        # Holdings service rounds avg_cost to 2dp
+        # Engine: cost = net = gross + fees; avg = net / qty = 2019.90/100 = 20.20
         from decimal import ROUND_HALF_UP
         raw_avg = (Decimal(buy_gross) + Decimal(buy_fees)) / Decimal(buy_qty)
         expected_avg = raw_avg.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -413,9 +413,10 @@ class TestRightsSoldLegHoldings:
     def test_rights_sold_does_not_affect_avg_cost(self):
         """RIGHTS_SOLD must not change the average cost basis."""
         from decimal import ROUND_HALF_UP
-        buy_gross = "2000.00"
+        buy_gross = "2009.95"
         buy_fees = "9.95"
         buy_qty = "100"
+        # Engine: cost = net = gross + fees; avg = net / qty = 2019.90/100 = 20.20
         raw_avg = (Decimal(buy_gross) + Decimal(buy_fees)) / Decimal(buy_qty)
         expected_avg = raw_avg.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
@@ -481,9 +482,10 @@ class TestCashTopUpLegHoldings:
         enter the pool_cost. avg_cost_basis_eur must reflect only the BUY.
         """
         from decimal import ROUND_HALF_UP
-        buy_gross = "2000.00"
+        buy_gross = "2009.95"
         buy_fees = "9.95"
         buy_qty = "100"
+        # Engine: cost = net = gross + fees; avg = net / qty = 2019.90/100 = 20.20
         raw_avg = (Decimal(buy_gross) + Decimal(buy_fees)) / Decimal(buy_qty)
         expected_avg = raw_avg.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
@@ -520,7 +522,7 @@ class TestDividendWithScripGroupHoldings:
 
     def _build_full_group(self):
         return [
-            _standard_buy(quantity="100", gross_eur="2000.00", fees_eur="9.95"),
+            _standard_buy(quantity="100", gross_eur="2009.95", fees_eur="9.95"),
             _cash_dividend_leg(doc_id="g_cd", gross_eur="209.79", net_eur="169.93"),
             _share_acquisition_leg(doc_id="g_sa", quantity="9", gross_eur="0",
                                    cost_basis_status="INCOMPLETE"),
@@ -554,7 +556,8 @@ class TestDividendWithScripGroupHoldings:
     def test_full_group_pool_cost_unchanged_by_incomplete_legs(self):
         """Pool avg cost reflects only the COMPLETE BUY, not INCOMPLETE CA legs."""
         from decimal import ROUND_HALF_UP
-        raw_avg = (Decimal("2000.00") + Decimal("9.95")) / Decimal("100")
+        # Engine: cost = net = gross + fees; avg = net / qty = 2019.90/100 = 20.20
+        raw_avg = (Decimal("2009.95") + Decimal("9.95")) / Decimal("100")
         expected_avg = raw_avg.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
         svc = _make_services(self._build_full_group())

@@ -109,21 +109,13 @@ def parse_purchases(content: bytes) -> List[Dict[str, Any]]:
 
         empresa_normalized = normalize_company_name(empresa_raw)
 
-        # Zero-cost acquisition detection
+        # Zero-cost acquisition detection (e.g. scrip dividend, rights issue).
+        # price=0 with quantity>0 is an explicit zero-cost entry — known cost,
+        # happens to be zero.  Not a warning; enters pool at cost 0 (ZERO_COST).
         is_zero_cost = (price_per_share == Decimal("0") and quantity > Decimal("0"))
-        cost_basis_status = "INCOMPLETE" if is_zero_cost else "COMPLETE"
+        cost_basis_status = "ZERO_COST" if is_zero_cost else "COMPLETE"
 
         warnings: List[Dict[str, Any]] = []
-        if is_zero_cost:
-            warnings.append({
-                "type": "ZERO_COST_ACQUISITION",
-                "row_index": row_index,
-                "company": empresa_raw,
-                "message": (
-                    f"Row {row_index}: Shares acquired at zero cost — likely corporate action "
-                    "(scrip dividend, rights issue, stock split); cost basis incomplete."
-                ),
-            })
 
         results.append({
             "row_index": row_index,

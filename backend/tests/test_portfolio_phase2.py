@@ -267,7 +267,7 @@ class TestManualMovementCreation:
         svc, _ = _make_svc()
         doc = svc.create_manual_movement(_buy_body())
         net = Decimal(doc["net"]["eur_amount"])
-        assert net == Decimal("18242.50")
+        assert net == Decimal("18257.50")  # gross + fees = 18250 + 7.50
 
     def test_sell_defaults_to_acciones(self):
         svc, _ = _make_svc()

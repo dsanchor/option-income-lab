@@ -10,6 +10,7 @@ Covers:
 - Currency not found in ECB data → 404 (rate_not_found)
 - ECB service unavailable → 503 (fx_unavailable)
 - date param optional (defaults to today — uses cache/ECB)
+- ECB XML single-line format: date + rates on same line (regression for continue bug)
 
 The service makes real HTTP calls to ECB. All tests (except EUR→EUR)
 mock `src.portfolio.fx_service.get_fx_rate` to avoid network dependency.
@@ -261,3 +262,95 @@ class TestFxOptionalDate:
         resp = c.get("/api/fx/rates?from_currency=EUR&to_currency=EUR")
         assert resp.status_code == 200
         assert Decimal(resp.json()["rate"]) == Decimal("1")
+
+
+# ===========================================================================
+# ECB XML parser — single-line format regression (FX-SL-1..3)
+# ===========================================================================
+
+class TestEcbXmlSingleLineFormat:
+    """Regression tests: ECB delivers all tags for a date block on ONE line.
+
+    The real ECB eurofxref-hist-90d.xml is compact XML — the <Cube time="...">
+    element and all its child <Cube currency="..." rate="..."/> elements appear
+    on the same line, separated only by ><.  The old parser used `continue`
+    after setting current_date, which skipped every rate on that line, leaving
+    _rate_cache empty and making every non-EUR symbol have price_eur=null.
+    """
+
+    # Minimal single-line ECB XML with two date blocks (as actually delivered)
+    _XML_SINGLE_LINE = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01" '
+        'xmlns="http://www.ecb.int/vocabulary/2002-08-01/eurofxref">'
+        '<gesmes:subject>Reference rates</gesmes:subject>'
+        '<Cube>'
+        '<Cube time="2024-06-14">'
+        '<Cube currency="USD" rate="1.0800"/>'
+        '<Cube currency="GBP" rate="0.8450"/>'
+        '<Cube currency="CHF" rate="0.9700"/>'
+        '</Cube>\n'  # newline between date blocks (as in real file)
+        '<Cube time="2024-06-13">'
+        '<Cube currency="USD" rate="1.0750"/>'
+        '<Cube currency="GBP" rate="0.8410"/>'
+        '</Cube>'
+        '</Cube>'
+        '</gesmes:Envelope>'
+    )
+
+    def _invoke_fetch_and_cache(self, xml_text: str) -> None:
+        """Patch requests.get and call _fetch_and_cache() directly."""
+        import src.portfolio.fx_service as svc
+        import unittest.mock as mock
+
+        mock_resp = mock.MagicMock()
+        mock_resp.text = xml_text
+        mock_resp.raise_for_status = mock.MagicMock()
+
+        with mock.patch("src.portfolio.fx_service.requests.get", return_value=mock_resp):
+            # Clear cache so fresh parse happens
+            with svc._cache_lock:
+                svc._rate_cache.clear()
+                svc._cache_fetched_date = None
+            svc._fetch_and_cache()
+
+    def test_fx_sl1_single_line_usd_rate_parsed(self):
+        """FX-SL-1: USD rate parsed from compact single-line ECB XML."""
+        import src.portfolio.fx_service as svc
+        self._invoke_fetch_and_cache(self._XML_SINGLE_LINE)
+        with svc._cache_lock:
+            rate = svc._rate_cache.get(("2024-06-14", "USD"))
+        assert rate is not None, (
+            "FX-SL-1 DEFECT: USD rate must be parsed from single-line ECB XML. "
+            "The `continue` after setting current_date was dropping all rates on the same line."
+        )
+        from decimal import Decimal
+        # ECB publishes 1.0800 USD/EUR; we store EUR/USD = 1/1.0800
+        expected = str((Decimal("1") / Decimal("1.0800")).quantize(Decimal("0.000000001")))
+        assert rate == expected, f"FX-SL-1 DEFECT: expected {expected!r}, got {rate!r}"
+
+    def test_fx_sl2_single_line_gbp_rate_parsed(self):
+        """FX-SL-2: GBP rate parsed from compact single-line ECB XML."""
+        import src.portfolio.fx_service as svc
+        self._invoke_fetch_and_cache(self._XML_SINGLE_LINE)
+        with svc._cache_lock:
+            rate = svc._rate_cache.get(("2024-06-14", "GBP"))
+        assert rate is not None, "FX-SL-2 DEFECT: GBP rate must be present after parsing."
+
+    def test_fx_sl3_second_date_block_parsed(self):
+        """FX-SL-3: Rates in the second date block are also parsed."""
+        import src.portfolio.fx_service as svc
+        self._invoke_fetch_and_cache(self._XML_SINGLE_LINE)
+        with svc._cache_lock:
+            rate_d1 = svc._rate_cache.get(("2024-06-14", "USD"))
+            rate_d2 = svc._rate_cache.get(("2024-06-13", "USD"))
+        assert rate_d1 is not None, "FX-SL-3 DEFECT: first date block must be parsed."
+        assert rate_d2 is not None, "FX-SL-3 DEFECT: second date block must be parsed."
+
+    def test_fx_sl4_get_fx_rate_returns_rate_after_single_line_fetch(self):
+        """FX-SL-4: get_fx_rate returns a valid rate after single-line XML fetch."""
+        import src.portfolio.fx_service as svc
+        self._invoke_fetch_and_cache(self._XML_SINGLE_LINE)
+        rate = svc.get_fx_rate("USD", "EUR", rate_date="2024-06-14")
+        from decimal import Decimal
+        assert Decimal(rate) > 0, "FX-SL-4 DEFECT: get_fx_rate must return a positive rate."

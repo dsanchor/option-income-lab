@@ -82,7 +82,8 @@ def _fetch_and_cache() -> None:
         dm = date_pattern.search(line)
         if dm:
             current_date = dm.group(1)
-            continue
+            # No `continue` here: ECB XML is single-line per date block, so the
+            # rate <Cube> elements appear on the same line as the time attribute.
         if current_date:
             for rm in rate_pattern.finditer(line):
                 currency = rm.group(1).upper()

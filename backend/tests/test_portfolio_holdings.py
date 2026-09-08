@@ -81,8 +81,20 @@ def _make_movement(
     account_id="_unassigned", commission_eur="0", net_eur=None,
     cost_basis_status="COMPLETE", trade_date="2024-01-15",
 ):
+    """Build a ledger_txn movement document.
+
+    Net convention (danny-fifo-net-accounting-contract.md §1):
+      BUY:  gross = trade consideration (before fees); net = gross + commission.
+            Pass gross_eur as the trade consideration; net is auto-derived.
+      SELL: gross = total proceeds (before fee deduction); net = gross - commission.
+    """
     ticker = security_id.split(":")[-1]
-    net = net_eur or str(Decimal(gross_eur) - Decimal(commission_eur))
+    if net_eur is not None:
+        net = net_eur
+    elif txn_type == "BUY":
+        net = str(Decimal(gross_eur) + Decimal(commission_eur))
+    else:
+        net = str(Decimal(gross_eur) - Decimal(commission_eur))
     return {
         "id": movement_id,
         "doc_type": "ledger_txn",
@@ -200,7 +212,8 @@ class TestCostBasis:
         h = result["holdings"][0]
         assert h["cost_basis_status"] == "INCOMPLETE"
         warning_types = [w["type"] for w in h["warnings"]]
-        assert "ZERO_COST_ACQUISITION" in warning_types
+        # INCOMPLETE (genuinely unknown cost) emits INCOMPLETE_COST_BASIS, not ZERO_COST_ACQUISITION.
+        assert "INCOMPLETE_COST_BASIS" in warning_types
 
     def test_total_invested_excludes_dividends(self):
         movements = [
@@ -282,7 +295,7 @@ class TestCommissionInCostBasis:
         svc = HoldingsService(portfolio_svc, securities_svc)
         result = svc.compute_holdings()
         h = result["holdings"][0]
-        # Total(EUR)=1000 + Comision=10 => total_invested_eur==1010
+        # gross=1000 (trade consideration), commission=10 → net=1010 → cost=1010
         assert Decimal(h["total_invested_eur"]) == Decimal("1010.00")
 
     def test_zero_commission_no_effect(self):
@@ -334,7 +347,7 @@ class TestDividendQuantityNullHoldings:
 
 class TestAvgCostBasisPerShare:
     def test_avg_cost_basis_single_buy(self):
-        """1 BUY: 10 shares, gross=€1825, commission=€7.50 → avg = 1832.50/10 = 183.25."""
+        """1 BUY: 10 shares, gross=€1825 (trade), commission=€7.50 → net=€1832.50 → avg=183.25."""
         movements = [
             _make_movement("t1", "XNYS:AAPL", "BUY", "10", "1825.00", commission_eur="7.50"),
         ]
@@ -345,7 +358,7 @@ class TestAvgCostBasisPerShare:
         assert h["avg_cost_basis_eur"] == "183.25"
 
     def test_avg_cost_basis_multi_buy(self):
-        """BUY 100@€1000 (€10 fee) + BUY 50@€750 (€5 fee) → avg = (1010+755)/150 = 11.77."""
+        """BUY 100@gross €1000 (€10 fee; net €1010) + BUY 50@gross €750 (€5 fee; net €755) → avg = (1010+755)/150 = 11.77."""
         movements = [
             _make_movement("t1", "XNYS:AAPL", "BUY", "100", "1000.00", commission_eur="10.00"),
             _make_movement("t2", "XNYS:AAPL", "BUY", "50", "750.00", commission_eur="5.00"),
@@ -357,7 +370,7 @@ class TestAvgCostBasisPerShare:
         assert h["avg_cost_basis_eur"] == "11.77"
 
     def test_avg_cost_basis_excludes_zero_cost(self):
-        """Paid BUY (100 shares, €1000, €10 fee) + INCOMPLETE BUY (50 shares) → avg = 1010/100 = 10.10."""
+        """Paid BUY (100 shares, gross €1000, €10 fee; net €1010) + INCOMPLETE BUY (50 shares) → avg = 1010/100 = 10.10."""
         movements = [
             _make_movement("t1", "XNYS:AAPL", "BUY", "100", "1000.00", commission_eur="10.00"),
             _make_movement("t2", "XNYS:AAPL", "BUY", "50", "0", cost_basis_status="INCOMPLETE"),
@@ -380,7 +393,7 @@ class TestAvgCostBasisPerShare:
         assert h["avg_cost_basis_eur"] is None
 
     def test_avg_cost_basis_independent_of_sells(self):
-        """BUY 100@€1000 (€10 fee) then SELL 30 → avg = 1010/100 = 10.10 (sell does not change it)."""
+        """BUY 100@gross €1000 (€10 fee; net €1010) then SELL 30 → avg = 1010/100 = 10.10 (FIFO single lot: avg unchanged)."""
         movements = [
             _make_movement("t1", "XNYS:AAPL", "BUY", "100", "1000.00", commission_eur="10.00"),
             _make_movement("t2", "XNYS:AAPL", "SELL", "30", "350.00"),
@@ -410,7 +423,7 @@ class TestAvgCostBasisPerShare:
 
 class TestSummaryTotals:
     def test_purchases_only(self):
-        """BUY 100@€1000 (€10 fee) → purchases=1010, sales=0, current_invested=1010."""
+        """BUY 100@gross €1000 (€10 fee; net €1010) → purchases=1010, sales=0, current_invested=1010."""
         movements = [
             _make_movement("t1", "XNYS:AAPL", "BUY", "100", "1000.00", commission_eur="10.00"),
         ]
@@ -423,9 +436,9 @@ class TestSummaryTotals:
         assert s["current_invested_eur"] == "1010.00"
 
     def test_purchases_and_sales(self):
-        """BUY 100@€1000 (€10 fee) + SELL 30@€350 (€5 fee).
+        """BUY 100@gross €1000 (€10 fee; net €1010) + SELL 30@€350 (€5 fee).
 
-        CMP avg = 1010/100 = 10.10.  cost_sold = 30×10.10 = 303.00.
+        FIFO avg = 1010/100 = 10.10.  cost_sold = 30×10.10 = 303.00.
         remaining = 1010 − 303 = 707.00.
         purchases=1010, sales=345, current_invested=remaining=707.00.
         """
@@ -444,9 +457,9 @@ class TestSummaryTotals:
     def test_sales_exceed_purchases(self):
         """BUY 100@€500 + SELL 100@€800 (no fees).
 
-        CMP avg = 5.00.  cost_sold = 500.  remaining = 0.00.
+        avg = 5.00.  cost_sold = 500.  remaining = 0.00.
         realized = 800 − 500 = 300.00.
-        current_invested_eur = remaining_cost_basis = 0.00 (pool empty, not negative).
+        current_invested_eur = remaining_cost_basis = 0.00 (lots empty, not negative).
         """
         movements = [
             _make_movement("t1", "XNYS:AAPL", "BUY", "100", "500.00"),
@@ -489,9 +502,9 @@ class TestSummaryTotals:
     def test_multi_security_aggregation(self):
         """2 securities, mixed buys/sells → summary totals are portfolio-wide sums.
 
-        AAPL: BUY 10@€1000 (€5 fee) cost=1005, avg=100.50.
+        AAPL: BUY 10@gross €1000 (€5 fee; net €1005), avg=100.50.
               SELL 5@€600 (€3 fee): cost_sold=502.50, remaining=502.50.
-        TEF: BUY 100@€400 (€2 fee) cost=402, avg=4.02.
+        TEF: BUY 100@gross €400 (€2 fee; net €402), avg=4.02.
              SELL 20@€90 (€1 fee): cost_sold=80.40, remaining=321.60.
         Portfolio remaining = 502.50 + 321.60 = 824.10.
         """
@@ -505,7 +518,7 @@ class TestSummaryTotals:
         svc = HoldingsService(portfolio_svc, securities_svc)
         result = svc.compute_holdings()
         s = result["summary"]
-        # AAPL purchases: 1000+5=1005; TEF purchases: 400+2=402 → 1407
+        # AAPL net: 1000+5=1005; TEF net: 400+2=402 → 1407
         assert Decimal(s["total_purchases_eur"]) == Decimal("1407.00")
         # AAPL sales: 600-3=597; TEF sales: 90-1=89 → 686
         assert Decimal(s["total_sales_eur"]) == Decimal("686.00")
@@ -567,7 +580,7 @@ class TestPerSecurityTotals:
         svc = HoldingsService(portfolio_svc, securities_svc)
         result = svc.compute_holdings()
         h = result["holdings"][0]
-        # purchases = 18250 + 7.50 = 18257.50
+        # net cost = 18250 + 7.50 = 18257.50
         assert h["total_purchases_eur"] == "18257.50"
         # purchases alias equals total_invested_eur
         assert h["total_purchases_eur"] == h["total_invested_eur"]
@@ -724,7 +737,7 @@ class TestRightsSaleHoldings:
         h = result["holdings"][0]
         # total_shares = 100 - 30 = 70 (DERECHOS not subtracted)
         assert Decimal(h["total_shares"]) == Decimal("70")
-        # total_invested_eur = 2000 + 20 = 2020
+        # total_invested_eur = net = gross 2000 + commission 20 = 2020
         assert Decimal(h["total_invested_eur"]) == Decimal("2020.00")
         # total_sales_eur = (600-5) + (300-5) = 595 + 295 = 890
         assert Decimal(h["total_sales_eur"]) == Decimal("890.00")
@@ -748,14 +761,14 @@ class TestRightsSaleHoldings:
 
 
 # ---------------------------------------------------------------------------
-# CMP acceptance tests — Danny contract §9.1 (S1–S15)
+# FIFO acceptance tests — Danny contract (S1–S10)
 # ---------------------------------------------------------------------------
 
-class TestCMPAcceptance:
-    """Acceptance matrix for the CMP cost-basis algorithm per Danny's contract."""
+class TestFifoAcceptance:
+    """Acceptance matrix for the FIFO cost-basis algorithm per Danny's contract."""
 
     def test_s1_buy_only(self):
-        """S1: BUY 100@€10 (€5 fee) → remaining=1005, cost_sold=0, realized=0."""
+        """S1: BUY 100@gross €1000 (€5 fee; net €1005) → remaining=1005, cost_sold=0, realized=0."""
         movements = [
             _make_movement("s1t1", "XNYS:AAPL", "BUY", "100", "1000.00", commission_eur="5.00"),
         ]
@@ -770,8 +783,8 @@ class TestCMPAcceptance:
         assert Decimal(s["remaining_cost_basis_eur"]) == Decimal("1005.00")
 
     def test_s2_buy_partial_sell(self):
-        """S2: BUY 100@€10 (€5 fee) → SELL 30@€15 (€3 fee).
-        avg=10.05, cost_sold=301.50, remaining=703.50, proceeds=447, realized=145.50.
+        """S2: BUY 100@gross €1000 (€5 fee; net €1005) → SELL 30@€15 (€3 fee).
+        FIFO avg=10.05, cost_sold=301.50, remaining=703.50, proceeds=447, realized=145.50.
         """
         movements = [
             _make_movement("s2t1", "XNYS:AAPL", "BUY", "100", "1000.00", commission_eur="5.00"),
@@ -801,7 +814,10 @@ class TestCMPAcceptance:
         assert Decimal(h["realized_result_eur"]) == Decimal("500.00")
 
     def test_s4_two_buys_then_sell(self):
-        """S4: BUY 100@€10, BUY 50@€20 → SELL 60. avg=13.333, cost_sold=800, remaining=1200."""
+        """S4: BUY 100@€10 (lot1), BUY 50@€20 (lot2) → SELL 60.
+        FIFO: consume 60 from lot1.
+        cost_sold = 60×10 = 600, remaining = 40×10 + 50×20 = 1400.
+        """
         movements = [
             _make_movement("s4t1", "XNYS:AAPL", "BUY", "100", "1000.00",
                            trade_date="2024-01-10"),
@@ -814,8 +830,8 @@ class TestCMPAcceptance:
         svc = HoldingsService(portfolio_svc, securities_svc)
         result = svc.compute_holdings()
         h = result["holdings"][0]
-        assert Decimal(h["cost_basis_sold_eur"]) == Decimal("800.00")
-        assert Decimal(h["remaining_cost_basis_eur"]) == Decimal("1200.00")
+        assert Decimal(h["cost_basis_sold_eur"]) == Decimal("600.00")
+        assert Decimal(h["remaining_cost_basis_eur"]) == Decimal("1400.00")
         assert Decimal(h["total_sale_proceeds_eur"]) == Decimal("1080.00")
 
     def test_s5_derechos_only(self):
@@ -863,9 +879,9 @@ class TestCMPAcceptance:
         assert Decimal(h["realized_result_eur"]) == Decimal("200.00")
 
     def test_s7_incomplete_buy_then_sell(self):
-        """S7: BUY 50 INCOMPLETE + BUY 50@€10 → SELL 70.
-        Pool: 50 shares, €500. Sell 70: 50 from pool (cost=500) + 20 at cost 0.
-        cost_sold=500, remaining=0, has_incomplete=True.
+        """S7: BUY 50 INCOMPLETE (2024-01-10) + BUY 50@€10 (2024-01-15) → SELL 70.
+        FIFO: consume INCOMPLETE lot first (50, cost=0, warning), then 20 from COMPLETE.
+        cost_sold=200 (20×10), remaining=300 (30×10), has_incomplete=True.
         """
         movements = [
             _make_movement("s7t1", "XNYS:AAPL", "BUY", "50", "0",
@@ -881,10 +897,11 @@ class TestCMPAcceptance:
         result = svc.compute_holdings()
         h = result["holdings"][0]
         s = result["summary"]
-        assert Decimal(h["cost_basis_sold_eur"]) == Decimal("500.00")
-        assert Decimal(h["remaining_cost_basis_eur"]) == Decimal("0.00")
+        assert Decimal(h["cost_basis_sold_eur"]) == Decimal("200.00")
+        assert Decimal(h["remaining_cost_basis_eur"]) == Decimal("300.00")
         assert s["has_incomplete_cost_basis"] is True
-        assert any(w["type"] == "ZERO_COST_ACQUISITION" for w in h["warnings"])
+        # INCOMPLETE (genuinely unknown cost) emits INCOMPLETE_COST_BASIS warning, not ZERO_COST_ACQUISITION.
+        assert any(w["type"] == "INCOMPLETE_COST_BASIS" for w in h["warnings"])
 
     def test_s8_transfer_preserves_basis(self):
         """S8: BUY 100@€10 acct-A → TRANSFER_OUT 40 → TRANSFER_IN 40 (carried=400).
@@ -958,7 +975,10 @@ class TestCMPAcceptance:
         assert s["current_invested_eur"] == s["remaining_cost_basis_eur"]
 
     def test_s12_avg_cost_stable_after_sell(self):
-        """S12: BUY 100@€10, BUY 100@€20 → SELL 50. CMP avg=15.00 unchanged by sell."""
+        """S12: BUY 100@€10 (lot1), BUY 100@€20 (lot2) → SELL 50.
+        FIFO: consume 50 from lot1. remaining=lot1(50@€10)+lot2(100@€20)=2500 total.
+        avg = 2500/150 = 16.67.
+        """
         movements = [
             _make_movement("s12t1", "XNYS:AAPL", "BUY", "100", "1000.00",
                            trade_date="2024-01-01"),
@@ -971,7 +991,7 @@ class TestCMPAcceptance:
         svc = HoldingsService(portfolio_svc, securities_svc)
         result = svc.compute_holdings()
         h = result["holdings"][0]
-        assert h["avg_cost_basis_eur"] == "15.00"
+        assert h["avg_cost_basis_eur"] == "16.67"
 
     def test_s13_full_sell_avg_null(self):
         """S13: BUY 100@€10 → SELL 100. avg_cost_basis_eur is None (pool empty)."""
