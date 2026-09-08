@@ -124,10 +124,10 @@ export interface LedgerMovement {
   company_name: string;
   trade_date: string;           // "YYYY-MM-DD"
   quantity: string | null;      // null for DIVIDEND (no share count in source schema)
-  gross: MoneyAmount;
-  fees: FeeAmount;
-  withholding: Withholding;
-  net: MoneyAmount;
+  gross?: MoneyAmount;
+  fees?: FeeAmount;
+  withholding?: Withholding;
+  net?: MoneyAmount;
   fx: FxInfo;
   account_id: string;
   import_source: ImportSource;

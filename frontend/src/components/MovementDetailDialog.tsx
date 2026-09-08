@@ -276,17 +276,17 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-2">Amounts</div>
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 rounded-[var(--radius)] border border-border bg-bg-card/50 p-3">
-              <Field label="Gross" value={formatEurAmount(m.gross.eur_amount, m.gross.currency)} mono />
-              <Field label="Fees" value={formatEurAmount(m.fees.total_eur, m.fees.currency)} mono />
-              <Field label="Net" value={formatEurAmount(m.net.eur_amount, m.net.currency)} mono />
-              {m.withholding.source && (
+              <Field label="Gross" value={formatEurAmount(m.gross?.eur_amount, m.gross?.currency)} mono />
+              <Field label="Fees" value={formatEurAmount(m.fees?.total_eur, m.fees?.currency)} mono />
+              <Field label="Net" value={formatEurAmount(m.net?.eur_amount, m.net?.currency)} mono />
+              {m.withholding?.source && (
                 <Field
                   label={`WHT Source (${m.withholding.source.country ?? ""})`}
                   value={formatEurAmount(m.withholding.source.amount_eur)}
                   mono
                 />
               )}
-              {m.withholding.destination && (
+              {m.withholding?.destination && (
                 <Field
                   label={`WHT Dest`}
                   value={formatEurAmount(m.withholding.destination.amount_eur)}

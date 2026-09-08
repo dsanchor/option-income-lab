@@ -58,6 +58,13 @@ function matchesMovementSymbol(m: LedgerMovement, query: string): boolean {
   );
 }
 
+function fmtEur(amount: string | null | undefined): string {
+  if (!amount) return "—";
+  const n = Number(amount);
+  if (Number.isNaN(n)) return "—";
+  return `€${n.toLocaleString("es-ES", { minimumFractionDigits: 2 })}`;
+}
+
 function Skeleton() {
   return (
     <div className="space-y-2">
@@ -574,10 +581,10 @@ function MovementRow({
             : "—"}
         </td>
         <td className="px-4 py-2 text-right font-mono text-text">
-          €{Number(m.gross.eur_amount).toLocaleString("es-ES", { minimumFractionDigits: 2 })}
+          {fmtEur(m.gross?.eur_amount)}
         </td>
         <td className="px-4 py-2 text-right font-mono text-text">
-          €{Number(m.net.eur_amount).toLocaleString("es-ES", { minimumFractionDigits: 2 })}
+          {fmtEur(m.net?.eur_amount)}
         </td>
         <td className="px-4 py-2"><AccountBadge accountId={m.account_id} accounts={accounts} /></td>
         <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>

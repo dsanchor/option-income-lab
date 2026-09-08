@@ -342,6 +342,11 @@ class TestManualMovementCreation:
         # 100 - 0 (fees) - 15 - 5 = 80
         assert net == Decimal("80.000000")
 
+    def test_missing_withholding_defaults_to_null_shape(self):
+        svc, _ = _make_svc()
+        doc = svc.create_manual_movement(_buy_body())
+        assert doc["withholding"] == {"source": None, "destination": None}
+
 
 # ---------------------------------------------------------------------------
 # Movement Correction
@@ -597,6 +602,25 @@ class TestTransferPairCreation:
         in_ = result["transfer_in"]
         assert out["transfer_peer_id"] == in_["id"]
         assert in_["transfer_peer_id"] == out["id"]
+
+    def test_transfer_docs_include_zero_financial_and_null_withholding_fields(self):
+        svc = self._setup_with_shares("100")
+        result = svc.create_transfer_pair(
+            security_id="XNYS:AAPL",
+            trade_date="2026-01-15",
+            quantity="10",
+            source_account_id="acct_a",
+            dest_account_id="acct_b",
+        )
+        expected_gross_net = {"amount": "0", "currency": "EUR", "eur_amount": "0"}
+        expected_fees = {"total": "0", "currency": "EUR", "total_eur": "0"}
+        expected_withholding = {"source": None, "destination": None}
+
+        for leg in (result["transfer_out"], result["transfer_in"]):
+            assert leg["gross"] == expected_gross_net
+            assert leg["fees"] == expected_fees
+            assert leg["net"] == expected_gross_net
+            assert leg["withholding"] == expected_withholding
 
 
 # ---------------------------------------------------------------------------
@@ -1098,4 +1122,3 @@ class TestPreviewBatchReassignEndpoint:
         })
         ids_after = set(fake.portfolio_container._store.keys())
         assert ids_before == ids_after  # no documents written
-

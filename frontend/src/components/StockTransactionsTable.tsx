@@ -250,7 +250,7 @@ export default function StockTransactionsTable({ securityId }: Props) {
                     <td className="px-4 py-2 text-right font-mono text-text">{fmt(m.gross?.eur_amount)}</td>
                     {hasFees && (
                       <td className="px-4 py-2 text-right font-mono text-text-muted">
-                        {parseFloat(m.fees?.total_eur ?? "0") > 0 ? fmt(m.fees.total_eur) : "—"}
+                        {parseFloat(m.fees?.total_eur ?? "0") > 0 ? fmt(m.fees?.total_eur) : "—"}
                       </td>
                     )}
                     {hasWht && (

@@ -110,6 +110,38 @@ def _apply_wht_rate_derivation(wht: Optional[Dict[str, Any]], gross_eur: Decimal
     return result
 
 
+def _ensure_ledger_detail_fields(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Backfill required detail-dialog financial fields when absent.
+
+    Imported movements already persist these fields consistently. Some manual
+    write paths historically omitted them, so new/rebuilt docs must guarantee
+    their presence.
+    """
+    currency = "EUR"
+    gross = doc.get("gross")
+    if isinstance(gross, dict):
+        currency = str(gross.get("currency") or "EUR").upper()
+    elif isinstance(doc.get("net"), dict):
+        currency = str((doc["net"] or {}).get("currency") or "EUR").upper()
+
+    if not isinstance(doc.get("gross"), dict):
+        doc["gross"] = {"amount": "0", "currency": currency, "eur_amount": "0"}
+    if not isinstance(doc.get("fees"), dict):
+        doc["fees"] = {"total": "0", "currency": currency, "total_eur": "0"}
+    if not isinstance(doc.get("net"), dict):
+        doc["net"] = {"amount": "0", "currency": currency, "eur_amount": "0"}
+
+    if not isinstance(doc.get("withholding"), dict):
+        doc["withholding"] = {"source": None, "destination": None}
+    else:
+        doc["withholding"] = {
+            "source": doc["withholding"].get("source"),
+            "destination": doc["withholding"].get("destination"),
+        }
+
+    return doc
+
+
 # Leg type → txn_type mapping for corporate-action groups (Amendment H §H.3.3)
 _CA_LEG_TXN_TYPE = {
     "CASH_DIVIDEND": "DIVIDEND",
@@ -670,6 +702,7 @@ class CosmosPortfolioService:
 
         if wht:
             doc["withholding"] = _apply_wht_rate_derivation(wht, gross_eur)
+        _ensure_ledger_detail_fields(doc)
 
         if txn_type == "SELL":
             doc["sales_type"] = sales_type
@@ -770,7 +803,8 @@ class CosmosPortfolioService:
         # Apply field overrides from correction_data.
         # Non-nullable fields: only applied when value is not None (absent means "no change").
         # Nullable fields (withholding, quantity for DIVIDEND): applied when key is present in
-        # the body, so an explicit JSON null can intentionally clear the field.
+        # the body. An explicit JSON null clears the value, then the write path normalizes
+        # the persisted movement back to the required detail-contract shape.
         _NONNULL_OVERRIDABLE = ("trade_date", "gross", "fees", "fx", "sales_type",
                                 "cost_basis_status", "notes")
         _NULLABLE_OVERRIDABLE = ("withholding", "quantity")
@@ -819,6 +853,7 @@ class CosmosPortfolioService:
                 replacement["withholding"] = _apply_wht_rate_derivation(
                     replacement["withholding"], gross_eur
                 )
+        _ensure_ledger_detail_fields(replacement)
 
         # Write replacement
         self.portfolio_container.upsert_item(replacement)
@@ -970,6 +1005,7 @@ class CosmosPortfolioService:
 
             if wht:
                 doc["withholding"] = _apply_wht_rate_derivation(wht, gross_eur)
+            _ensure_ledger_detail_fields(doc)
 
             if sales_type:
                 doc["sales_type"] = sales_type
@@ -1249,6 +1285,7 @@ class CosmosPortfolioService:
 
             if wht:
                 doc["withholding"] = _apply_wht_rate_derivation(wht, gross_eur)
+            _ensure_ledger_detail_fields(doc)
 
             if sales_type:
                 doc["sales_type"] = sales_type
@@ -1580,6 +1617,10 @@ class CosmosPortfolioService:
             "ticker": ticker,
             "trade_date": trade_date,
             "quantity": str(qty.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+            "gross": {"amount": "0", "currency": "EUR", "eur_amount": "0"},
+            "fees": {"total": "0", "currency": "EUR", "total_eur": "0"},
+            "net": {"amount": "0", "currency": "EUR", "eur_amount": "0"},
+            "withholding": {"source": None, "destination": None},
             "import_source": "manual",
             "correction_status": "ACTIVE",
             "transfer_group_id": group_id,
@@ -1762,6 +1803,7 @@ class CosmosPortfolioService:
         new_doc.pop("corrects_movement_id", None)
         new_doc["created_at"] = now
         new_doc["updated_at"] = now
+        _ensure_ledger_detail_fields(new_doc)
 
         # Step 2: write to destination first (safe order)
         self.portfolio_container.upsert_item(new_doc)
@@ -1991,5 +2033,3 @@ class CosmosPortfolioService:
                     "(MANUAL CLEANUP REQUIRED)",
                     entry["original_id"], entry["source_account_id"], restore_exc,
                 )
-
-

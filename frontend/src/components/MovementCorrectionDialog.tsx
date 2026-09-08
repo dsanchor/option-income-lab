@@ -22,7 +22,7 @@ const sectionHeadCls = "text-xs font-semibold uppercase tracking-wide text-text-
 type WithholdingDestState = "not_captured" | "zero" | "value";
 
 function initDestState(m: LedgerMovement): WithholdingDestState {
-  if (!m.withholding.destination) return "not_captured";
+  if (!m.withholding?.destination) return "not_captured";
   if (m.withholding.destination.amount_eur === "0") return "zero";
   return "value";
 }
@@ -249,6 +249,9 @@ export default function MovementCorrectionDialog({
 }: MovementCorrectionDialogProps) {
   const isTransfer = m.txn_type === "TRANSFER_OUT" || m.txn_type === "TRANSFER_IN";
   const hasWithholding = m.txn_type === "DIVIDEND" || m.txn_type === "SELL";
+  const originalGross = m.gross;
+  const originalFees = m.fees;
+  const originalWithholding = m.withholding;
 
   // ── Shared fields ──────────────────────────────────────────────────────────
   const [reason, setReason] = useState("");
@@ -260,14 +263,14 @@ export default function MovementCorrectionDialog({
   const [quantity, setQuantity] = useState(m.quantity ?? "");
 
   // ── Gross ──────────────────────────────────────────────────────────────────
-  const [grossAmount, setGrossAmount] = useState(m.gross.amount);
-  const [grossCurrency, setGrossCurrency] = useState(m.gross.currency);
-  const [grossEurAmount, setGrossEurAmount] = useState(m.gross.eur_amount);
+  const [grossAmount, setGrossAmount] = useState(originalGross?.amount ?? "");
+  const [grossCurrency, setGrossCurrency] = useState(originalGross?.currency ?? "");
+  const [grossEurAmount, setGrossEurAmount] = useState(originalGross?.eur_amount ?? "");
 
   // ── Fees ───────────────────────────────────────────────────────────────────
-  const [feesTotal, setFeesTotal] = useState(m.fees.total);
-  const [feesCurrency, setFeesCurrency] = useState(m.fees.currency);
-  const [feesEur, setFeesEur] = useState(m.fees.total_eur);
+  const [feesTotal, setFeesTotal] = useState(originalFees?.total ?? "");
+  const [feesCurrency, setFeesCurrency] = useState(originalFees?.currency ?? "");
+  const [feesEur, setFeesEur] = useState(originalFees?.total_eur ?? "");
 
   // ── FX ─────────────────────────────────────────────────────────────────────
   const [fxRate, setFxRate] = useState(m.fx?.rate ?? "");
@@ -282,17 +285,17 @@ export default function MovementCorrectionDialog({
   );
 
   // ── Withholding source ─────────────────────────────────────────────────────
-  const [whtSrcCountry, setWhtSrcCountry] = useState(m.withholding.source?.country ?? "");
-  const [whtSrcAmount, setWhtSrcAmount] = useState(m.withholding.source?.amount_eur ?? "");
+  const [whtSrcCountry, setWhtSrcCountry] = useState(originalWithholding?.source?.country ?? "");
+  const [whtSrcAmount, setWhtSrcAmount] = useState(originalWithholding?.source?.amount_eur ?? "");
 
   // ── Withholding destination (3-state) ──────────────────────────────────────
   const [whtDestState, setWhtDestState] = useState<WithholdingDestState>(() => initDestState(m));
-  const [whtDestCountry, setWhtDestCountry] = useState(m.withholding.destination?.country ?? "ES");
-  const [whtDestAmount, setWhtDestAmount] = useState(m.withholding.destination?.amount_eur ?? "");
+  const [whtDestCountry, setWhtDestCountry] = useState(originalWithholding?.destination?.country ?? "ES");
+  const [whtDestAmount, setWhtDestAmount] = useState(originalWithholding?.destination?.amount_eur ?? "");
 
   // ── SELL withholding toggle (collapsible; default open when original had WHT) ──
   const [showSellWht, setShowSellWht] = useState(
-    !!(m.withholding.source || m.withholding.destination)
+    !!(originalWithholding?.source || originalWithholding?.destination)
   );
 
   // ── Dialog state ───────────────────────────────────────────────────────────
@@ -383,9 +386,9 @@ export default function MovementCorrectionDialog({
 
       // Gross (send as a unit when any of the 3 fields changed)
       if (
-        grossAmount !== m.gross.amount ||
-        grossCurrency !== m.gross.currency ||
-        grossEurAmount !== m.gross.eur_amount
+        grossAmount !== (originalGross?.amount ?? "") ||
+        grossCurrency !== (originalGross?.currency ?? "") ||
+        grossEurAmount !== (originalGross?.eur_amount ?? "")
       ) {
         if (!grossAmount || !grossCurrency || !grossEurAmount) {
           setError(
@@ -404,9 +407,9 @@ export default function MovementCorrectionDialog({
 
       // Fees (send as a unit)
       if (
-        feesTotal !== m.fees.total ||
-        feesCurrency !== m.fees.currency ||
-        feesEur !== m.fees.total_eur
+        feesTotal !== (originalFees?.total ?? "") ||
+        feesCurrency !== (originalFees?.currency ?? "") ||
+        feesEur !== (originalFees?.total_eur ?? "")
       ) {
         if (!feesTotal || !feesCurrency || !feesEur) {
           setError(
@@ -449,14 +452,14 @@ export default function MovementCorrectionDialog({
 
         // H.1: rate_pct is derived — exclude from change detection (amount/country are authoritative)
         const srcChanged =
-          whtSrcCountry !== (m.withholding.source?.country ?? "") ||
-          whtSrcAmount !== (m.withholding.source?.amount_eur ?? "");
+          whtSrcCountry !== (originalWithholding?.source?.country ?? "") ||
+          whtSrcAmount !== (originalWithholding?.source?.amount_eur ?? "");
 
         const destChanged =
           whtDestState !== origDestState ||
           (whtDestState === "value" &&
-            (whtDestCountry !== (m.withholding.destination?.country ?? "ES") ||
-              whtDestAmount !== (m.withholding.destination?.amount_eur ?? "")));
+            (whtDestCountry !== (originalWithholding?.destination?.country ?? "ES") ||
+              whtDestAmount !== (originalWithholding?.destination?.amount_eur ?? "")));
 
         if (srcChanged || destChanged) {
           // H.1: rate_pct is server-authoritative — derive from amounts; server overwrites anyway
@@ -600,9 +603,9 @@ export default function MovementCorrectionDialog({
                 </>
               )}
               <span className="text-text-muted">Gross:</span>
-              <span className="font-mono text-text">{fmtEur(m.gross.eur_amount)}</span>
+              <span className="font-mono text-text">{fmtEur(m.gross?.eur_amount)}</span>
               <span className="text-text-muted">Net:</span>
-              <span className="font-mono text-text">{fmtEur(m.net.eur_amount)}</span>
+              <span className="font-mono text-text">{fmtEur(m.net?.eur_amount)}</span>
               <span className="text-text-muted">ID:</span>
               <span className="font-mono text-text-muted truncate col-span-2 sm:col-span-1">
                 {m.id}
@@ -1005,4 +1008,3 @@ export default function MovementCorrectionDialog({
     </div>
   );
 }
-
