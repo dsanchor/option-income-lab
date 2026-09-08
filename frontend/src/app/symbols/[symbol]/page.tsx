@@ -7,7 +7,7 @@ import PositionsTable from "@/components/PositionsTable";
 import SymbolSummary from "@/components/SymbolSummary";
 import AddPositionForm from "@/components/AddPositionForm";
 import SymbolPlansTable from "@/components/SymbolPlansTable";
-import RtChart from "@/components/RtChart";
+import { RtChartProvider, RtChartButton, RtChartPanel } from "@/components/RtChart";
 import TradingViewSymbolInfo from "@/components/TradingViewSymbolInfo";
 import PortfolioHoldingsCard from "@/components/PortfolioHoldingsCard";
 import DetailSection from "@/components/DetailSection";
@@ -108,34 +108,39 @@ export default async function SymbolDetailPage({
       {/* ── Shared Header ─────────────────────────────────────────────── */}
 
       {/* Canonical identity badge */}
-      {d.security && (
-        <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
-          <span className="font-mono font-semibold text-text">{d.security.security_id}</span>
-          <span>·</span>
-          <span>{d.security.company_name}</span>
-          {d.security.isin && (
-            <>
+      <RtChartProvider tvSymbol={d.tradingview_symbol ?? null}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {d.security && (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
+              <span className="font-mono font-semibold text-text">{d.security.security_id}</span>
               <span>·</span>
-              <span className="font-mono">ISIN {d.security.isin}</span>
-            </>
+              <span>{d.security.company_name}</span>
+              {d.security.isin && (
+                <>
+                  <span>·</span>
+                  <span className="font-mono">ISIN {d.security.isin}</span>
+                </>
+              )}
+              {d.security.listing_currency && (
+                <>
+                  <span>·</span>
+                  <span>{d.security.listing_currency}</span>
+                </>
+              )}
+              {symbolState && (
+                <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 ${membershipBadgeClass(symbolState)}`}>
+                  {membershipBadgeLabel(symbolState)}
+                </span>
+              )}
+            </div>
           )}
-          {d.security.listing_currency && (
-            <>
-              <span>·</span>
-              <span>{d.security.listing_currency}</span>
-            </>
-          )}
-          {symbolState && (
-            <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 ${membershipBadgeClass(symbolState)}`}>
-              {membershipBadgeLabel(symbolState)}
-            </span>
-          )}
+          <RtChartButton />
         </div>
-      )}
 
-      {/* TradingView symbol info + RT chart */}
-      <TradingViewSymbolInfo tvSymbol={d.tradingview_symbol ?? null} />
-      <RtChart tvSymbol={d.tradingview_symbol ?? null} />
+        {/* TradingView symbol info + RT chart panel */}
+        <TradingViewSymbolInfo tvSymbol={d.tradingview_symbol ?? null} />
+        <RtChartPanel />
+      </RtChartProvider>
 
       {/* ── Summary Section ────────────────────────────────────────────── */}
       <DetailSection title="Summary">
@@ -146,6 +151,16 @@ export default async function SymbolDetailPage({
           totalShares={d.total_shares}
         />
       </DetailSection>
+
+      {/* Symbol configuration — always visible, directly below Summary */}
+      {d.security && (
+        <SymbolConfigurationCard
+          symbol={symbol}
+          security={d.security}
+          enrichment={d.enrichment ?? {}}
+          usOptionsEligible={usOptionsEligible}
+        />
+      )}
 
       {/* ── Three-tab navigation: Options / Stocks / Action Plans ─────── */}
       <SymbolDetailTabs
@@ -171,12 +186,6 @@ export default async function SymbolDetailPage({
         stocksPanel={
           stocksSecurityId && (
             <div className="space-y-5">
-              <SymbolConfigurationCard
-                symbol={symbol}
-                security={d.security!}
-                enrichment={d.enrichment ?? {}}
-                usOptionsEligible={usOptionsEligible}
-              />
               {hasPortfolio && (
                 <PortfolioHoldingsCard portfolio={d.portfolio!} symbolState={symbolState} />
               )}

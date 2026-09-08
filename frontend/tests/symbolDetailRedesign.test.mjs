@@ -2,7 +2,9 @@
  * symbolDetailRedesign.test.mjs — Symbol Details UI redesign regression.
  *
  * Requirements (2026-09-07 directive):
- *   AP — Symbol Configuration remains first in Stocks before Portfolio Holdings.
+ *   AP — Symbol Configuration is always visible (moved out of the Stocks-tab-only
+ *         guard, directly below Summary); Portfolio Holdings remains gated to the
+ *         Stocks tab and stays ordered after Config.
  *   AT — Agent & Alert Toggles section and all toggle controls ABSENT from
  *         SymbolConfigurationCard (backend fields may still exist elsewhere).
  *   EC — SymbolConfigurationCard is expandable/collapsible, default COLLAPSED;
@@ -53,15 +55,18 @@ describe("AP: Arrangement — SymbolConfigurationCard before Portfolio Holdings 
       `<PortfolioHoldingsCard (${phIdx}). Contract: Config first, Holdings second.`);
   });
 
-  it("AP-2: Both components are inside the same stocksSecurityId guard in page.tsx", () => {
+  it("AP-2: SymbolConfigurationCard is always visible (rendered before the stocksSecurityId guard); PortfolioHoldingsCard remains inside the Stocks tab guard", () => {
+    // 2026-09-08 update: Config card moved out of the Stocks-tab-only guard so it's
+    // always visible directly below Summary, regardless of active tab. Holdings stays
+    // gated to the Stocks tab since it needs stocksSecurityId to query movements.
     const guardIdx = pageSrc.indexOf("stocksSecurityId &&");
     const cfgIdx   = pageSrc.indexOf("<SymbolConfigurationCard");
     const phIdx    = pageSrc.indexOf("<PortfolioHoldingsCard");
     assert.ok(guardIdx !== -1, "AP-2: stocksSecurityId guard not found in page.tsx");
-    assert.ok(cfgIdx > guardIdx,
-      "AP-2 DEFECT: <SymbolConfigurationCard must be inside the stocksSecurityId guard");
+    assert.ok(cfgIdx < guardIdx,
+      "AP-2 DEFECT: <SymbolConfigurationCard must be always visible (before the stocksSecurityId guard)");
     assert.ok(phIdx > guardIdx,
-      "AP-2 DEFECT: <PortfolioHoldingsCard must be inside the stocksSecurityId guard");
+      "AP-2 DEFECT: <PortfolioHoldingsCard must remain inside the stocksSecurityId guard");
   });
 
   it("AP-3: No alternative Holdings component inserted between Config and Holdings in Stocks source", () => {

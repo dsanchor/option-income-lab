@@ -5,7 +5,8 @@
  *
  * Coverage:
  *   SC-1  SymbolConfigurationCard appears before PortfolioHoldingsCard in page.tsx (placement).
- *   SC-2  SymbolConfigurationCard is inside the `{stocksSecurityId && ...}` guard.
+ *   SC-2  SymbolConfigurationCard is always visible (rendered before the Stocks-tab-only
+ *         `stocksSecurityId` guard) — directly below Summary, not gated by active tab.
  *   SC-3  Identity fields (security_id, exchange_mic, ticker) use ReadOnlyField; no <input for them.
  *   SC-4  effective_yfinance_symbol and effective_tradingview_symbol are shown as read-only spans.
  *   SC-5  ToggleRow has role="switch" and aria-checked attributes.
@@ -60,15 +61,17 @@ describe("SC-1/SC-2: SymbolConfigurationCard placement in page.tsx", () => {
     );
   });
 
-  it("SC-2: SymbolConfigurationCard is inside the stocksSecurityId guard", () => {
+  it("SC-2: SymbolConfigurationCard is always visible (rendered before the stocksSecurityId-gated tab content, not hidden behind it)", () => {
+    // 2026-09-08 update: Config card was moved out of the Stocks-tab-only guard so it's
+    // always visible, directly below Summary, regardless of the active tab.
     const guardIdx = pageSrc.indexOf("stocksSecurityId &&");
     const scIdx = pageSrc.indexOf("<SymbolConfigurationCard");
     assert.ok(guardIdx !== -1, "stocksSecurityId guard not found in page.tsx");
     assert.ok(scIdx !== -1, "<SymbolConfigurationCard JSX not found in page.tsx");
     assert.ok(
-      guardIdx < scIdx,
-      `SC-2 FAIL: stocksSecurityId guard (idx=${guardIdx}) must appear before ` +
-        `<SymbolConfigurationCard (idx=${scIdx}) — card must be inside the guard.`,
+      scIdx < guardIdx,
+      `SC-2 FAIL: <SymbolConfigurationCard (idx=${scIdx}) must appear before the ` +
+        `stocksSecurityId guard (idx=${guardIdx}) — card must always be visible, not gated by tab.`,
     );
   });
 });
