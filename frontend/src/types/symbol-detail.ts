@@ -125,9 +125,11 @@ export interface SecurityMasterInfo {
 
 export interface HoldingsByAccount {
   account_id: string;
-  account_name?: string;
+  account_name?: string | null;
   shares: string;
   avg_cost_eur?: string | null;
+  current_invested_eur?: string | null;
+  total_dividends_eur?: string | null;
 }
 
 export interface RecentMovement {

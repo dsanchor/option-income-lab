@@ -89,9 +89,13 @@ export default function PortfolioHoldingsCard({ portfolio, symbolState }: Props)
                   <td className="px-4 py-2.5 text-right font-mono text-text">
                     {eur(acct.avg_cost_eur)}
                   </td>
-                  <td className="px-4 py-2.5 text-right font-mono text-text-muted">—</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-text">
+                    {eur(acct.current_invested_eur)}
+                  </td>
                   {showDividends && (
-                    <td className="px-4 py-2.5 text-right font-mono text-text-muted">—</td>
+                    <td className="px-4 py-2.5 text-right font-mono text-accent-green">
+                      {eur(acct.total_dividends_eur)}
+                    </td>
                   )}
                 </tr>
               ))}

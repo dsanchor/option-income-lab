@@ -411,6 +411,36 @@ class TestWatchlistAndPortfolioState:
                 f"holdings_by_account entry missing 'avg_cost_eur' key: {entry}"
             )
 
+    def test_holdings_by_account_includes_name_invested_and_dividends(self, client):
+        """Per-account rows must resolve account_name from the account doc (name only,
+        never broker/type), and include current_invested_eur/total_dividends_eur so the
+        Symbol Detail table can render real per-account values instead of placeholders.
+        """
+        c, fake = client
+        fake.container.seed_security("XNYS:AAPL", "Apple Inc.")
+        fake.container.seed_config("AAPL", {"security_id": "XNYS:AAPL"})
+        fake.portfolio_container._store["acct_fidelity_main"] = {
+            "id": "acct_fidelity_main",
+            "account_id": "acct_fidelity_main",
+            "doc_type": "account",
+            "broker": "OTHER",
+            "name": "Fidelity Brokerage",
+            "currency": "EUR",
+        }
+        _add_ledger_buy(fake, "XNYS:AAPL", account_id="acct_fidelity_main",
+                        quantity="50", doc_id="txn_aapl_fid")
+
+        resp = c.get("/api/symbols/XNYS:AAPL/detail")
+        data = resp.json()
+        portfolio = data.get("portfolio", {})
+        by_account = portfolio.get("holdings_by_account", [])
+        entry = next(a for a in by_account if a["account_id"] == "acct_fidelity_main")
+
+        assert entry["account_name"] == "Fidelity Brokerage"
+        assert "OTHER" not in str(entry["account_name"])
+        assert "current_invested_eur" in entry
+        assert "total_dividends_eur" in entry
+
     def test_recent_movements_in_portfolio_section(self, client):
         """recent_movements entries must carry final contract field names.
 

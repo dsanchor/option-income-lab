@@ -1091,19 +1091,44 @@ def _holdings_by_account(holdings_svc, security_id: str, main_holding: dict) -> 
                  if h.get("security_id") == security_id),
                 None,
             )
+            account_name = None
+            try:
+                acct_doc = holdings_svc.portfolio_svc.get_account(acct)
+                if acct_doc:
+                    account_name = acct_doc.get("name")
+            except Exception:
+                pass
+
             if acct_holding:
                 result.append({
                     "account_id": acct,
+                    "account_name": account_name,
                     "shares": str(acct_holding.get("total_shares", "0")),
                     "avg_cost_eur": (
                         str(acct_holding.get("avg_cost_basis_eur"))
                         if acct_holding.get("avg_cost_basis_eur") is not None else None
                     ),
+                    "current_invested_eur": acct_holding.get("current_invested_eur"),
+                    "total_dividends_eur": acct_holding.get("total_dividends_eur"),
                 })
             else:
-                result.append({"account_id": acct, "shares": "0", "avg_cost_eur": None})
+                result.append({
+                    "account_id": acct,
+                    "account_name": account_name,
+                    "shares": "0",
+                    "avg_cost_eur": None,
+                    "current_invested_eur": None,
+                    "total_dividends_eur": None,
+                })
         except Exception:
-            result.append({"account_id": acct, "shares": "0", "avg_cost_eur": None})
+            result.append({
+                "account_id": acct,
+                "account_name": None,
+                "shares": "0",
+                "avg_cost_eur": None,
+                "current_invested_eur": None,
+                "total_dividends_eur": None,
+            })
     return result
 
 
