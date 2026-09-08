@@ -4,9 +4,12 @@
  * Builds and validates POST /api/portfolio/corporate-actions and
  * POST .../correct request bodies from wizard form state.
  *
- * Amendment H §H.3.1–§H.3.6 contract (Livingston final 2026-09-06):
- *   - event_type ∈ {CASH_DIVIDEND, DIVIDEND_WITH_SCRIP, SCRIP_DIVIDEND, RIGHTS_ISSUE}
- *   - leg_type ∈ {CASH_DIVIDEND, RIGHTS_SOLD, SHARE_ACQUISITION, CASH_TOP_UP}
+ * Amendment H §H.3.1–§H.3.6 contract (Livingston final 2026-09-06, extended
+ * 2026-09-08 for SHARE_CONSOLIDATION per danny-share-consolidation-contract.md):
+ *   - event_type ∈ {CASH_DIVIDEND, DIVIDEND_WITH_SCRIP, SCRIP_DIVIDEND, RIGHTS_ISSUE,
+ *     SHARE_CONSOLIDATION}
+ *   - leg_type ∈ {CASH_DIVIDEND, RIGHTS_SOLD, SHARE_ACQUISITION, CASH_TOP_UP,
+ *     CONSOLIDATION_OUT, CONSOLIDATION_IN, FRACTIONAL_CASH_OUT}
  *   - Required legs per event_type validated before submit
  *   - withholding.*.rate_pct is server-derived — must NOT be sent or trusted
  *   - amount_eur is the primary input; rate_pct will be derived server-side
@@ -23,6 +26,7 @@ export const CA_EVENT_TYPES: readonly CaEventType[] = [
   "DIVIDEND_WITH_SCRIP",
   "SCRIP_DIVIDEND",
   "RIGHTS_ISSUE",
+  "SHARE_CONSOLIDATION",
 ];
 
 export const CA_LEG_TYPES: readonly CaLegType[] = [
@@ -30,6 +34,9 @@ export const CA_LEG_TYPES: readonly CaLegType[] = [
   "RIGHTS_SOLD",
   "SHARE_ACQUISITION",
   "CASH_TOP_UP",
+  "CONSOLIDATION_OUT",
+  "CONSOLIDATION_IN",
+  "FRACTIONAL_CASH_OUT",
 ];
 
 /** Required leg types per event_type. */
@@ -38,6 +45,7 @@ export const CA_REQUIRED_LEGS: Record<CaEventType, CaLegType[]> = {
   DIVIDEND_WITH_SCRIP: ["CASH_DIVIDEND", "SHARE_ACQUISITION"],
   SCRIP_DIVIDEND: ["SHARE_ACQUISITION"],
   RIGHTS_ISSUE: ["SHARE_ACQUISITION"],
+  SHARE_CONSOLIDATION: ["CONSOLIDATION_OUT", "CONSOLIDATION_IN"],
 };
 
 // ---------------------------------------------------------------------------

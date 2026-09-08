@@ -1965,7 +1965,11 @@ No product code modified by this review. No production calls made.
 
 **Author:** Danny (Lead)
 **Date:** 2026-09-08
-**Status:** PROPOSED
+**Status:** RELEASED -- implemented by Livingston (backend model/CA-group wiring),
+Rusty (CorporateActionForm wizard + MovementDetailDialog badges), tested by Livingston
+(15 backend tests in test_share_consolidation.py + FIFO-SC1/2/3 in test_portfolio_fifo.py,
+FE-SC1/2/3 in caWizardRequestShape.test.mjs/caGroupIndicator.test.mjs). No RKT/Reckitt
+production data touched; no holdings_service.py changes required.
 **Scope:** Accounting model extension for 24/25 share consolidation with fractional cash-out
 **Out of scope:** The extraordinary dividend (already recorded as a separate DIVIDEND; handled correctly).
 

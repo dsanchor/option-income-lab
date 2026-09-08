@@ -50,11 +50,13 @@ class ImportFormat(str, Enum):
 class CostBasisStatus(str, Enum):
     COMPLETE = "COMPLETE"
     INCOMPLETE = "INCOMPLETE"
+    ZERO_COST = "ZERO_COST"       # Explicit zero acquisition cost (e.g. scrip dividend)
 
 
 class WarningType(str, Enum):
     NEGATIVE_INVENTORY = "NEGATIVE_INVENTORY"
     ZERO_COST_ACQUISITION = "ZERO_COST_ACQUISITION"
+    INCOMPLETE_COST_BASIS = "INCOMPLETE_COST_BASIS"   # Genuinely unknown cost
     RIGHTS_AMOUNT = "RIGHTS_AMOUNT"
     PROBABLE_DUPLICATE = "PROBABLE_DUPLICATE"
     DERECHOS_WITH_QUANTITY = "DERECHOS_WITH_QUANTITY"
@@ -242,7 +244,7 @@ class HoldingItem(BaseModel):
     avg_cost_basis_eur: Optional[str]
     cost_basis_status: str
     # CMP cost basis fields (Danny contract §3.2)
-    total_purchase_outflow_eur: str   # Σ(gross+fee) BUY COMPLETE
+    total_purchase_outflow_eur: str   # Σ gross_eur BUY COMPLETE (ZERO_COST excluded — no cash outflow)
     cost_basis_sold_eur: str          # Σ CMP cost assigned to SELL ACCIONES
     remaining_cost_basis_eur: str     # pool_cost residual
     total_sale_proceeds_eur: str      # Σ(gross-fee) SELL (all types)
@@ -261,13 +263,13 @@ class HoldingItem(BaseModel):
 class HoldingsSummary(BaseModel):
     total_securities: int
     # CMP cost basis fields (Danny contract §3.1)
-    total_purchase_outflow_eur: str   # Σ(gross+fee) BUY COMPLETE
+    total_purchase_outflow_eur: str   # Σ gross_eur BUY COMPLETE (ZERO_COST excluded)
     cost_basis_sold_eur: str          # Σ CMP cost assigned to SELL ACCIONES
     remaining_cost_basis_eur: str     # pool_cost residual (= "Inversión actual")
     total_sale_proceeds_eur: str      # Σ(gross-fee) SELL (all types)
     rights_proceeds_eur: str          # Σ(gross-fee) SELL DERECHOS
     realized_result_eur: str          # total_sale_proceeds − cost_basis_sold
-    has_incomplete_cost_basis: bool   # true if any security has unpaid_shares > 0
+    has_incomplete_cost_basis: bool   # true if any security has genuinely INCOMPLETE buys
     # Backward-compatible aliases
     total_invested_eur: str           # alias: total_purchase_outflow_eur
     total_purchases_eur: str          # alias: total_purchase_outflow_eur
@@ -491,6 +493,9 @@ class CaLegType(str, Enum):
     RIGHTS_SOLD = "RIGHTS_SOLD"
     SHARE_ACQUISITION = "SHARE_ACQUISITION"
     CASH_TOP_UP = "CASH_TOP_UP"
+    CONSOLIDATION_OUT = "CONSOLIDATION_OUT"
+    CONSOLIDATION_IN = "CONSOLIDATION_IN"
+    FRACTIONAL_CASH_OUT = "FRACTIONAL_CASH_OUT"
 
 
 class CaEventType(str, Enum):
@@ -498,6 +503,7 @@ class CaEventType(str, Enum):
     DIVIDEND_WITH_SCRIP = "DIVIDEND_WITH_SCRIP"
     SCRIP_DIVIDEND = "SCRIP_DIVIDEND"
     RIGHTS_ISSUE = "RIGHTS_ISSUE"
+    SHARE_CONSOLIDATION = "SHARE_CONSOLIDATION"
 
 
 class CorporateActionLegCreate(BaseModel):
@@ -511,6 +517,7 @@ class CorporateActionLegCreate(BaseModel):
     fx: Optional[Dict[str, str]] = None
     cost_basis_status: Optional[str] = None
     notes: Optional[str] = None
+    transfer_cost_basis_eur: Optional[str] = None   # required for CONSOLIDATION_IN
 
     @field_validator("leg_type")
     @classmethod

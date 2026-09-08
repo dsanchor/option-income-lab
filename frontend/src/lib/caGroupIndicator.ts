@@ -36,6 +36,9 @@ export const CA_LEG_TYPE_LABELS: Record<string, string> = {
   RIGHTS_SOLD: "Rights Sold",
   SHARE_ACQUISITION: "Share Acquisition",
   CASH_TOP_UP: "Cash Top-Up",
+  CONSOLIDATION_OUT: "Consolidation Out",
+  CONSOLIDATION_IN: "Consolidation In",
+  FRACTIONAL_CASH_OUT: "Fractional Cash",
 };
 
 /**

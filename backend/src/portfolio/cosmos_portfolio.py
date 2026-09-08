@@ -116,6 +116,9 @@ _CA_LEG_TXN_TYPE = {
     "RIGHTS_SOLD": "SELL",
     "SHARE_ACQUISITION": "BUY",
     "CASH_TOP_UP": "BUY",
+    "CONSOLIDATION_OUT": "TRANSFER_OUT",
+    "CONSOLIDATION_IN": "TRANSFER_IN",
+    "FRACTIONAL_CASH_OUT": "SELL",
 }
 
 # Required leg types per event type (Amendment H §H.4)
@@ -124,6 +127,7 @@ _CA_REQUIRED_LEGS: Dict[str, set] = {
     "DIVIDEND_WITH_SCRIP": {"CASH_DIVIDEND", "SHARE_ACQUISITION"},
     "SCRIP_DIVIDEND": {"SHARE_ACQUISITION"},
     "RIGHTS_ISSUE": {"SHARE_ACQUISITION"},
+    "SHARE_CONSOLIDATION": {"CONSOLIDATION_OUT", "CONSOLIDATION_IN"},
 }
 
 # Financial fields on a group leg that must not be patched individually.
@@ -608,13 +612,20 @@ class CosmosPortfolioService:
             wht_source_eur = _d(src.get("amount_eur", "0"))
             wht_dest_eur = _d(dst.get("amount_eur", "0"))
 
-        # net = gross - fees - withholding_source - withholding_dest (all EUR)
-        net_eur = gross_eur - fees_eur - wht_source_eur - wht_dest_eur
+        # BUY: net = gross + fees (actual cash outflow; net > gross).
+        # SELL/DIVIDEND: net = gross - fees - withholding (actual cash inflow; net < gross).
         currency = gross.get("currency", "EUR").upper()
-        net_in_currency = (
-            _d(gross.get("amount", "0")) - _d(fees.get("total", "0"))
-            - wht_source_eur - wht_dest_eur
-        ) if currency == "EUR" else net_eur
+        if txn_type == "BUY":
+            net_eur = gross_eur + fees_eur
+            net_in_currency = (
+                _d(gross.get("amount", "0")) + _d(fees.get("total", "0"))
+            ) if currency == "EUR" else net_eur
+        else:
+            net_eur = gross_eur - fees_eur - wht_source_eur - wht_dest_eur
+            net_in_currency = (
+                _d(gross.get("amount", "0")) - _d(fees.get("total", "0"))
+                - wht_source_eur - wht_dest_eur
+            ) if currency == "EUR" else net_eur
 
         now = self._now()
         movement_id = f"mvt_{uuid4().hex}"
@@ -791,7 +802,12 @@ class CosmosPortfolioService:
             if isinstance(wht, dict):
                 wht_s = _d((wht.get("source") or {}).get("amount_eur", "0"))
                 wht_d = _d((wht.get("destination") or {}).get("amount_eur", "0"))
-            net_eur = gross_eur - fees_eur - wht_s - wht_d
+            # BUY: net = gross + fees (outflow; withholding not applicable to BUY).
+            # SELL/DIVIDEND: net = gross - fees - withholding.
+            if txn_type == "BUY":
+                net_eur = gross_eur + fees_eur
+            else:
+                net_eur = gross_eur - fees_eur - wht_s - wht_d
             currency = gross.get("currency", "EUR").upper()
             replacement["net"] = {
                 "amount": str(net_eur.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
@@ -886,7 +902,18 @@ class CosmosPortfolioService:
                 quantity = str(leg.get("quantity") or "0")
                 cost_basis_status = leg.get("cost_basis_status")
 
-            sales_type = "DERECHOS" if leg_type == "RIGHTS_SOLD" else None
+            if leg_type == "RIGHTS_SOLD":
+                sales_type = "DERECHOS"
+            elif leg_type == "FRACTIONAL_CASH_OUT":
+                sales_type = "ACCIONES"
+            else:
+                sales_type = None
+
+            transfer_cost_basis_eur = leg.get("transfer_cost_basis_eur")
+            if leg_type == "CONSOLIDATION_IN" and not transfer_cost_basis_eur:
+                raise ValueError(
+                    "CONSOLIDATION_IN leg requires transfer_cost_basis_eur"
+                )
 
             gross = leg.get("gross") or {}
             fees_data = leg.get("fees") or {}
@@ -949,6 +976,9 @@ class CosmosPortfolioService:
 
             if txn_type == "BUY":
                 doc["cost_basis_status"] = cost_basis_status or "COMPLETE"
+
+            if leg_type == "CONSOLIDATION_IN":
+                doc["transfer_cost_basis_eur"] = str(transfer_cost_basis_eur)
 
             leg_notes = leg.get("notes") or notes
             if leg_notes:
@@ -1149,7 +1179,18 @@ class CosmosPortfolioService:
                 quantity = str(leg.get("quantity") or "0")
                 cost_basis_status = leg.get("cost_basis_status")
 
-            sales_type = "DERECHOS" if leg_type == "RIGHTS_SOLD" else None
+            if leg_type == "RIGHTS_SOLD":
+                sales_type = "DERECHOS"
+            elif leg_type == "FRACTIONAL_CASH_OUT":
+                sales_type = "ACCIONES"
+            else:
+                sales_type = None
+
+            transfer_cost_basis_eur = leg.get("transfer_cost_basis_eur")
+            if leg_type == "CONSOLIDATION_IN" and not transfer_cost_basis_eur:
+                raise ValueError(
+                    "CONSOLIDATION_IN leg requires transfer_cost_basis_eur"
+                )
 
             gross = leg.get("gross") or {}
             fees_data = leg.get("fees") or {}
@@ -1214,6 +1255,9 @@ class CosmosPortfolioService:
 
             if txn_type == "BUY":
                 doc["cost_basis_status"] = cost_basis_status or "COMPLETE"
+
+            if leg_type == "CONSOLIDATION_IN":
+                doc["transfer_cost_basis_eur"] = str(transfer_cost_basis_eur)
 
             leg_notes = leg.get("notes") or group_notes
             if leg_notes:

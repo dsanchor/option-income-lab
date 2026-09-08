@@ -24,6 +24,9 @@ const CA_LEG_TYPE_LABELS = {
   RIGHTS_SOLD: "Rights Sold",
   SHARE_ACQUISITION: "Share Acquisition",
   CASH_TOP_UP: "Cash Top-Up",
+  CONSOLIDATION_OUT: "Consolidation Out",
+  CONSOLIDATION_IN: "Consolidation In",
+  FRACTIONAL_CASH_OUT: "Fractional Cash",
 };
 
 function getCaLegTypeLabel(legType) {
@@ -126,6 +129,18 @@ describe("getCaLegTypeLabel", () => {
     assert.equal(getCaLegTypeLabel("CASH_TOP_UP"), "Cash Top-Up");
   });
 
+  it("FE-SC2: CONSOLIDATION_OUT → 'Consolidation Out'", () => {
+    assert.equal(getCaLegTypeLabel("CONSOLIDATION_OUT"), "Consolidation Out");
+  });
+
+  it("FE-SC2: CONSOLIDATION_IN → 'Consolidation In'", () => {
+    assert.equal(getCaLegTypeLabel("CONSOLIDATION_IN"), "Consolidation In");
+  });
+
+  it("FE-SC2: FRACTIONAL_CASH_OUT → 'Fractional Cash'", () => {
+    assert.equal(getCaLegTypeLabel("FRACTIONAL_CASH_OUT"), "Fractional Cash");
+  });
+
   it("null → null", () => {
     assert.equal(getCaLegTypeLabel(null), null);
   });
@@ -153,9 +168,12 @@ describe("CA_LEG_TYPE_LABELS exhaustive coverage", () => {
     "RIGHTS_SOLD",
     "SHARE_ACQUISITION",
     "CASH_TOP_UP",
+    "CONSOLIDATION_OUT",
+    "CONSOLIDATION_IN",
+    "FRACTIONAL_CASH_OUT",
   ];
 
-  it("covers exactly 4 leg types from Amendment H §H.3.2", () => {
+  it("covers exactly 7 leg types from Amendment H §H.3.2 + SHARE_CONSOLIDATION", () => {
     assert.deepEqual(
       Object.keys(CA_LEG_TYPE_LABELS).sort(),
       ALL_LEG_TYPES.sort(),

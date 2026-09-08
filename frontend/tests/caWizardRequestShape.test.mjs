@@ -6,13 +6,16 @@
  * Tests pure helpers that build the POST /api/portfolio/corporate-actions
  * and POST .../correct request bodies from wizard form state.
  *
- * Contract (Livingston final — 2026-09-06):
+ * Contract (Livingston final — 2026-09-06; extended 2026-09-08 for
+ * SHARE_CONSOLIDATION per danny-share-consolidation-contract.md):
  *   POST /api/portfolio/corporate-actions          → 201
  *   POST /api/portfolio/corporate-actions/{id}/correct → 201
  *
  * Key rules:
- *   - event_type ∈ {CASH_DIVIDEND, DIVIDEND_WITH_SCRIP, SCRIP_DIVIDEND, RIGHTS_ISSUE}
- *   - leg_type ∈ {CASH_DIVIDEND, RIGHTS_SOLD, SHARE_ACQUISITION, CASH_TOP_UP}
+ *   - event_type ∈ {CASH_DIVIDEND, DIVIDEND_WITH_SCRIP, SCRIP_DIVIDEND, RIGHTS_ISSUE,
+ *     SHARE_CONSOLIDATION}
+ *   - leg_type ∈ {CASH_DIVIDEND, RIGHTS_SOLD, SHARE_ACQUISITION, CASH_TOP_UP,
+ *     CONSOLIDATION_OUT, CONSOLIDATION_IN, FRACTIONAL_CASH_OUT}
  *   - Required legs per event_type enforced before submit
  *   - withholding.source.amount_eur and .destination.amount_eur are primary inputs;
  *     rate_pct is server-derived and must NOT be sent (or ignored if sent)
@@ -33,6 +36,7 @@ const CA_EVENT_TYPES = [
   "DIVIDEND_WITH_SCRIP",
   "SCRIP_DIVIDEND",
   "RIGHTS_ISSUE",
+  "SHARE_CONSOLIDATION",
 ];
 
 const CA_LEG_TYPES = [
@@ -40,6 +44,9 @@ const CA_LEG_TYPES = [
   "RIGHTS_SOLD",
   "SHARE_ACQUISITION",
   "CASH_TOP_UP",
+  "CONSOLIDATION_OUT",
+  "CONSOLIDATION_IN",
+  "FRACTIONAL_CASH_OUT",
 ];
 
 /** Required leg types per event_type. */
@@ -48,6 +55,7 @@ const CA_REQUIRED_LEGS = {
   DIVIDEND_WITH_SCRIP: ["CASH_DIVIDEND", "SHARE_ACQUISITION"],
   SCRIP_DIVIDEND: ["SHARE_ACQUISITION"],
   RIGHTS_ISSUE: ["SHARE_ACQUISITION"],
+  SHARE_CONSOLIDATION: ["CONSOLIDATION_OUT", "CONSOLIDATION_IN"],
 };
 
 /** Validate an event_type value. */
@@ -187,6 +195,46 @@ describe("missingRequiredLegs", () => {
 });
 
 // ---------------------------------------------------------------------------
+// FE-SC1: SHARE_CONSOLIDATION (danny-share-consolidation-contract.md §5.3)
+// ---------------------------------------------------------------------------
+
+describe("FE-SC1: SHARE_CONSOLIDATION wizard shape", () => {
+  it("isValidCaEventType accepts SHARE_CONSOLIDATION", () => {
+    assert.equal(isValidCaEventType("SHARE_CONSOLIDATION"), true);
+  });
+
+  it("isValidCaLegType accepts CONSOLIDATION_OUT", () => {
+    assert.equal(isValidCaLegType("CONSOLIDATION_OUT"), true);
+  });
+
+  it("isValidCaLegType accepts CONSOLIDATION_IN", () => {
+    assert.equal(isValidCaLegType("CONSOLIDATION_IN"), true);
+  });
+
+  it("isValidCaLegType accepts FRACTIONAL_CASH_OUT", () => {
+    assert.equal(isValidCaLegType("FRACTIONAL_CASH_OUT"), true);
+  });
+
+  it("missingRequiredLegs('SHARE_CONSOLIDATION', []) returns both required legs", () => {
+    assert.deepEqual(
+      missingRequiredLegs("SHARE_CONSOLIDATION", []),
+      ["CONSOLIDATION_OUT", "CONSOLIDATION_IN"],
+    );
+  });
+
+  it("missingRequiredLegs satisfied by CONSOLIDATION_OUT + CONSOLIDATION_IN", () => {
+    assert.deepEqual(
+      missingRequiredLegs("SHARE_CONSOLIDATION", ["CONSOLIDATION_OUT", "CONSOLIDATION_IN"]),
+      [],
+    );
+  });
+
+  it("FRACTIONAL_CASH_OUT is NOT a required leg for SHARE_CONSOLIDATION", () => {
+    assert.equal(CA_REQUIRED_LEGS.SHARE_CONSOLIDATION.includes("FRACTIONAL_CASH_OUT"), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // stripRatePctFromWithholding — rate_pct must NOT be sent to server
 // ---------------------------------------------------------------------------
 
@@ -309,6 +357,48 @@ describe("validateCaGroupCorrectionRequest", () => {
     };
     const errs = validateCaGroupCorrectionRequest(req);
     assert.ok(errs.some((e) => e.includes("MYSTERY_LEG")));
+  });
+
+  it("FE-SC3: SHARE_CONSOLIDATION with correct legs returns no errors", () => {
+    const req = {
+      account_id: "heytrade_main",
+      correction_note: "Fix consolidation quantities",
+      event_type: "SHARE_CONSOLIDATION",
+      legs: [
+        {
+          leg_type: "CONSOLIDATION_OUT",
+          trade_date: "2024-05-01",
+          quantity: "100",
+          gross: { amount: "0", currency: "EUR", eur_amount: "0" },
+        },
+        {
+          leg_type: "CONSOLIDATION_IN",
+          trade_date: "2024-05-01",
+          quantity: "80",
+          gross: { amount: "0", currency: "EUR", eur_amount: "0" },
+          transfer_cost_basis_eur: "5000.00",
+        },
+      ],
+    };
+    assert.deepEqual(validateCaGroupCorrectionRequest(req), []);
+  });
+
+  it("FE-SC3: SHARE_CONSOLIDATION missing CONSOLIDATION_IN returns error", () => {
+    const req = {
+      account_id: "heytrade_main",
+      correction_note: "Bad correction",
+      event_type: "SHARE_CONSOLIDATION",
+      legs: [
+        {
+          leg_type: "CONSOLIDATION_OUT",
+          trade_date: "2024-05-01",
+          quantity: "100",
+          gross: { amount: "0", currency: "EUR", eur_amount: "0" },
+        },
+      ],
+    };
+    const errs = validateCaGroupCorrectionRequest(req);
+    assert.ok(errs.some((e) => e.includes("CONSOLIDATION_IN")));
   });
 });
 

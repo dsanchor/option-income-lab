@@ -5,7 +5,7 @@ import { X, History, Link2, Trash2 } from "lucide-react";
 import type { LedgerMovement, WarningType } from "@/types/portfolio";
 import { SALES_TYPE_LABELS } from "@/types/portfolio";
 import type { BrokerAccount } from "@/types/portfolio";
-import { getAccountLabel } from "@/lib/accountDisplay";
+import { getAccountName } from "@/lib/accountDisplay";
 import { getMovements, voidCorporateActionGroup } from "@/lib/portfolio-api";
 import MovementCorrectionDialog from "./MovementCorrectionDialog";
 import ReassignmentDialog from "./ReassignmentDialog";
@@ -21,7 +21,6 @@ const TXN_BADGE: Record<string, string> = {
 
 const WARNING_SHORT: Record<WarningType, string> = {
   NEGATIVE_INVENTORY: "Negative inventory",
-  ZERO_COST_ACQUISITION: "Incomplete cost basis",
   RIGHTS_AMOUNT: "Rights amount pending",
   PROBABLE_DUPLICATE: "Probable duplicate",
   DERECHOS_WITH_QUANTITY: "Rights sale with quantity",
@@ -63,18 +62,25 @@ const CA_LEG_BADGE: Record<string, string> = {
   RIGHTS_SOLD: "bg-accent-red/15 text-accent-red",
   SHARE_ACQUISITION: "bg-accent-green/15 text-accent-green",
   CASH_TOP_UP: "bg-accent-orange/15 text-accent-orange",
+  CONSOLIDATION_OUT: "bg-accent-red/15 text-accent-red",
+  CONSOLIDATION_IN: "bg-accent-green/15 text-accent-green",
+  FRACTIONAL_CASH_OUT: "bg-accent-orange/15 text-accent-orange",
 };
 const CA_LEG_LABEL: Record<string, string> = {
   CASH_DIVIDEND: "Cash Dividend",
   RIGHTS_SOLD: "Rights Sold",
   SHARE_ACQUISITION: "Share Acquisition",
   CASH_TOP_UP: "Cash Top-Up",
+  CONSOLIDATION_OUT: "Consolidation Out",
+  CONSOLIDATION_IN: "Consolidation In",
+  FRACTIONAL_CASH_OUT: "Fractional Cash",
 };
 const CA_EVENT_LABEL: Record<string, string> = {
   CASH_DIVIDEND: "Cash Dividend",
   DIVIDEND_WITH_SCRIP: "Dividend with Scrip",
   SCRIP_DIVIDEND: "Scrip Dividend",
   RIGHTS_ISSUE: "Rights Issue",
+  SHARE_CONSOLIDATION: "Share Consolidation",
 };
 
 export default function MovementDetailDialog({ movement: m, accounts = [], onClose, onRefresh }: MovementDetailDialogProps) {
@@ -250,7 +256,7 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <Field label="Date" value={m.trade_date} mono />
             <Field label="Symbol ID" value={m.security_id} mono />
-            <Field label="Account" value={getAccountLabel(m.account_id, accounts)} />
+            <Field label="Account" value={getAccountName(m.account_id, accounts)} />
             {m.quantity != null && (
               <Field
                 label="Quantity"
@@ -336,10 +342,10 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
               <div className="grid grid-cols-2 gap-4 rounded-[var(--radius)] border border-border bg-bg-card/50 p-3">
                 <Field label="Direction" value={m.txn_type === "TRANSFER_OUT" ? "Out → destination" : "In ← source"} />
                 {m.transfer_source_account_id && (
-                  <Field label="From account" value={getAccountLabel(m.transfer_source_account_id!, accounts)} />
+                  <Field label="From account" value={getAccountName(m.transfer_source_account_id!, accounts)} />
                 )}
                 {m.transfer_dest_account_id && (
-                  <Field label="To account" value={getAccountLabel(m.transfer_dest_account_id!, accounts)} />
+                  <Field label="To account" value={getAccountName(m.transfer_dest_account_id!, accounts)} />
                 )}
                 {m.transfer_cost_basis_eur && (
                   <Field

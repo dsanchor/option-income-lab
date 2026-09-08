@@ -14,7 +14,7 @@ import type {
   LedgerMovement,
 } from "@/types/portfolio";
 import type { SecurityMaster } from "@/types/portfolio";
-import { formatAccountLabel } from "@/lib/accountDisplay";
+import { formatAccountName } from "@/lib/accountDisplay";
 
 const inputCls =
   "w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent-blue focus:outline-none";
@@ -49,6 +49,12 @@ const EVENT_TYPES: Array<{ value: CaEventType; label: string; description: strin
     description: "New shares allocated from subscription rights",
     legs: ["SHARE_ACQUISITION"],
   },
+  {
+    value: "SHARE_CONSOLIDATION",
+    label: "Share Consolidation",
+    description: "Reverse split — fewer shares, same total cost basis; optional fractional cash",
+    legs: ["CONSOLIDATION_OUT", "CONSOLIDATION_IN"],
+  },
 ];
 
 const CA_LEG_BADGE: Record<string, string> = {
@@ -56,6 +62,9 @@ const CA_LEG_BADGE: Record<string, string> = {
   RIGHTS_SOLD: "bg-accent-red/15 text-accent-red",
   SHARE_ACQUISITION: "bg-accent-green/15 text-accent-green",
   CASH_TOP_UP: "bg-accent-orange/15 text-accent-orange",
+  CONSOLIDATION_OUT: "bg-accent-red/15 text-accent-red",
+  CONSOLIDATION_IN: "bg-accent-green/15 text-accent-green",
+  FRACTIONAL_CASH_OUT: "bg-accent-orange/15 text-accent-orange",
 };
 
 const CA_LEG_LABEL: Record<string, string> = {
@@ -63,6 +72,9 @@ const CA_LEG_LABEL: Record<string, string> = {
   RIGHTS_SOLD: "Rights Sold",
   SHARE_ACQUISITION: "Share Acquisition",
   CASH_TOP_UP: "Investor Cash Top-Up",
+  CONSOLIDATION_OUT: "Shares Removed",
+  CONSOLIDATION_IN: "Shares Consolidated",
+  FRACTIONAL_CASH_OUT: "Fractional Cash Settlement",
 };
 
 // ─── Form state ────────────────────────────────────────────────────────────────
@@ -108,6 +120,16 @@ export interface CaFormState {
   ctu_enabled: boolean;
   ctu_gross: string;
   ctu_gross_eur: string;
+
+  // SHARE_CONSOLIDATION fields
+  co_quantity: string;                    // pre-consolidation shares to remove
+  ci_quantity: string;                    // post-consolidation shares (= old × ratio)
+  ci_transfer_cost_basis_eur: string;     // carried cost basis (operator reads from holdings)
+  fco_enabled: boolean;                   // whether fractional cash leg is included
+  fco_quantity: string;                   // fractional shares (e.g., "0.12")
+  fco_gross: string;                      // cash proceeds in listing currency
+  fco_gross_eur: string;                  // cash proceeds in EUR
+  fco_fees: string;                       // fees on fractional disposal
 }
 
 const defaultState = (): CaFormState => ({
@@ -140,6 +162,14 @@ const defaultState = (): CaFormState => ({
   ctu_enabled: false,
   ctu_gross: "",
   ctu_gross_eur: "",
+  co_quantity: "",
+  ci_quantity: "",
+  ci_transfer_cost_basis_eur: "",
+  fco_enabled: false,
+  fco_quantity: "",
+  fco_gross: "",
+  fco_gross_eur: "",
+  fco_fees: "",
 });
 
 // ─── Pre-fill helper for group correction ─────────────────────────────────────
@@ -150,6 +180,9 @@ export function buildCaInitialState(legs: LedgerMovement[], representative: Ledg
   const saLeg = legs.find((l) => l.ca_leg_type === "SHARE_ACQUISITION");
   const rsLeg = legs.find((l) => l.ca_leg_type === "RIGHTS_SOLD");
   const ctuLeg = legs.find((l) => l.ca_leg_type === "CASH_TOP_UP");
+  const coLeg = legs.find((l) => l.ca_leg_type === "CONSOLIDATION_OUT");
+  const ciLeg = legs.find((l) => l.ca_leg_type === "CONSOLIDATION_IN");
+  const fcoLeg = legs.find((l) => l.ca_leg_type === "FRACTIONAL_CASH_OUT");
 
   const baseLeg = cdLeg ?? saLeg ?? representative;
   const currency = baseLeg.gross?.currency ?? "EUR";
@@ -204,6 +237,21 @@ export function buildCaInitialState(legs: LedgerMovement[], representative: Ledg
     state.ctu_enabled = true;
     state.ctu_gross = ctuLeg.gross?.amount ?? "";
     state.ctu_gross_eur = ctuLeg.gross?.eur_amount ?? "";
+  }
+
+  if (coLeg) {
+    state.co_quantity = coLeg.quantity ?? "";
+  }
+  if (ciLeg) {
+    state.ci_quantity = ciLeg.quantity ?? "";
+    state.ci_transfer_cost_basis_eur = ciLeg.transfer_cost_basis_eur ?? "";
+  }
+  if (fcoLeg) {
+    state.fco_enabled = true;
+    state.fco_quantity = fcoLeg.quantity ?? "";
+    state.fco_gross = fcoLeg.gross?.amount ?? "";
+    state.fco_gross_eur = fcoLeg.gross?.eur_amount ?? "";
+    state.fco_fees = fcoLeg.fees?.total ?? "";
   }
 
   return state;
@@ -533,6 +581,34 @@ function buildLegs(form: CaFormState): CorporateActionLegRequest[] {
     });
   }
 
+  // SHARE_CONSOLIDATION legs
+  if (ev === "SHARE_CONSOLIDATION") {
+    legs.push({
+      leg_type: "CONSOLIDATION_OUT",
+      trade_date: form.payment_date,
+      quantity: form.co_quantity || undefined,
+      gross: makeGross("0", "EUR", "0"),
+      fees: null,
+    });
+    legs.push({
+      leg_type: "CONSOLIDATION_IN",
+      trade_date: form.payment_date,
+      quantity: form.ci_quantity || undefined,
+      gross: makeGross("0", "EUR", "0"),
+      transfer_cost_basis_eur: form.ci_transfer_cost_basis_eur || undefined,
+    });
+    if (form.fco_enabled) {
+      legs.push({
+        leg_type: "FRACTIONAL_CASH_OUT",
+        trade_date: form.payment_date,
+        quantity: form.fco_quantity || undefined,
+        gross: makeGross(form.fco_gross, form.currency, form.fco_gross_eur),
+        fees: makeFees(form.fco_fees, form.currency),
+        fx: makeFx(form.fx_rate, form.currency),
+      });
+    }
+  }
+
   return legs;
 }
 
@@ -548,6 +624,25 @@ function validate(form: CaFormState): string | null {
   }
   if (ev === "DIVIDEND_WITH_SCRIP" || ev === "SCRIP_DIVIDEND" || ev === "RIGHTS_ISSUE") {
     if (!form.sa_quantity) return "Share acquisition quantity is required.";
+  }
+  if (ev === "SHARE_CONSOLIDATION") {
+    if (!form.co_quantity || parseFloat(form.co_quantity) <= 0) {
+      return "Pre-consolidation share quantity is required and must be greater than zero.";
+    }
+    if (!form.ci_quantity || parseFloat(form.ci_quantity) <= 0) {
+      return "Post-consolidation share quantity is required and must be greater than zero.";
+    }
+    if (!form.ci_transfer_cost_basis_eur || parseFloat(form.ci_transfer_cost_basis_eur) < 0) {
+      return "Carried cost basis (€) is required and must not be negative.";
+    }
+    if (form.fco_enabled) {
+      if (!form.fco_quantity || parseFloat(form.fco_quantity) <= 0) {
+        return "Fractional cash-out quantity is required and must be greater than zero when enabled.";
+      }
+      if (!form.fco_gross) {
+        return "Fractional cash-out gross proceeds is required when enabled.";
+      }
+    }
   }
   if (ev === "RIGHTS_ISSUE" && form.rs_enabled && !form.rs_gross) {
     return "Rights sold proceeds (gross) is required.";
@@ -602,6 +697,42 @@ function CashDivNetPreview({ form }: { form: CaFormState }) {
   );
 }
 
+// ─── Net preview (SHARE_CONSOLIDATION legs) ───────────────────────────────────
+
+function ConsolidationSummaryPreview({ form }: { form: CaFormState }) {
+  const coQty = parseFloat(form.co_quantity) || 0;
+  const ciQty = parseFloat(form.ci_quantity) || 0;
+  const carriedCost = parseFloat(form.ci_transfer_cost_basis_eur) || 0;
+  if (coQty === 0 && ciQty === 0 && carriedCost === 0) return null;
+
+  const fcoQty = form.fco_enabled ? (parseFloat(form.fco_quantity) || 0) : 0;
+  const fractionalCostEstimate =
+    form.fco_enabled && fcoQty > 0 && ciQty > 0 ? (fcoQty / ciQty) * carriedCost : 0;
+
+  return (
+    <div className="rounded-[var(--radius)] border border-border bg-bg-input/40 px-3 py-2 text-xs space-y-1">
+      <div className="font-medium text-text-muted uppercase tracking-wide mb-1">Consolidation summary (server is authoritative)</div>
+      <div className="flex justify-between">
+        <span>Shares</span>
+        <span className="font-mono text-text">
+          {coQty || "—"} → {ciQty || "—"}
+          {form.fco_enabled && fcoQty > 0 ? ` (−${fcoQty} fractional)` : ""}
+        </span>
+      </div>
+      <div className="flex justify-between">
+        <span>Cost carried</span>
+        <span className="font-mono text-text">€{carriedCost.toFixed(2)}</span>
+      </div>
+      {form.fco_enabled && fcoQty > 0 && (
+        <div className="flex justify-between text-accent-orange/80">
+          <span>Fractional cost estimate</span>
+          <span className="font-mono">€{fractionalCostEstimate.toFixed(2)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main form ─────────────────────────────────────────────────────────────────
 
 export interface CorporateActionFormProps {
@@ -633,9 +764,13 @@ export default function CorporateActionForm({
 
   const isCorrect = mode === "correct";
   const hasCashDiv = form.event_type === "CASH_DIVIDEND" || form.event_type === "DIVIDEND_WITH_SCRIP";
-  const hasShareAcq = form.event_type !== "CASH_DIVIDEND";
+  const hasShareAcq =
+    form.event_type === "DIVIDEND_WITH_SCRIP" ||
+    form.event_type === "SCRIP_DIVIDEND" ||
+    form.event_type === "RIGHTS_ISSUE";
   const canRightsSold = form.event_type === "RIGHTS_ISSUE";
   const canCashTopUp = form.event_type === "DIVIDEND_WITH_SCRIP";
+  const isConsolidation = form.event_type === "SHARE_CONSOLIDATION";
 
   const cdGrossEur = form.cd_gross_eur || (form.currency === "EUR" ? form.cd_gross : "0");
 
@@ -744,7 +879,7 @@ export default function CorporateActionForm({
             >
               <option value="_unassigned">Unassigned</option>
               {accounts.map((a) => (
-                <option key={a.account_id} value={a.account_id}>{formatAccountLabel(a)}</option>
+                <option key={a.account_id} value={a.account_id}>{formatAccountName(a)}</option>
               ))}
             </select>
           )}
@@ -1108,6 +1243,123 @@ export default function CorporateActionForm({
               )}
             </div>
           </LegSection>
+        )}
+
+        {/* SHARE_CONSOLIDATION legs */}
+        {isConsolidation && (
+          <>
+            <LegSection legType="CONSOLIDATION_OUT">
+              <div>
+                <label className={labelCls}>Pre-consolidation shares to remove *</label>
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  value={form.co_quantity}
+                  onChange={(e) => set({ co_quantity: e.target.value })}
+                  placeholder="Shares before consolidation"
+                  className={inputCls}
+                  required
+                />
+              </div>
+            </LegSection>
+
+            <LegSection legType="CONSOLIDATION_IN">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className={labelCls}>Post-consolidation shares *</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={form.ci_quantity}
+                    onChange={(e) => set({ ci_quantity: e.target.value })}
+                    placeholder="Shares after consolidation"
+                    className={inputCls}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>Carried cost basis € *</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={form.ci_transfer_cost_basis_eur}
+                    onChange={(e) => set({ ci_transfer_cost_basis_eur: e.target.value })}
+                    placeholder="0.00"
+                    className={inputCls}
+                    required
+                  />
+                  <p className="mt-0.5 text-xs text-text-muted">
+                    Read this from the Holdings page before creating the consolidation.
+                  </p>
+                </div>
+              </div>
+            </LegSection>
+
+            <LegSection
+              legType="FRACTIONAL_CASH_OUT"
+              optional
+              enabled={form.fco_enabled}
+              onToggle={() => set({ fco_enabled: !form.fco_enabled })}
+            >
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className={labelCls}>Fractional quantity *</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={form.fco_quantity}
+                    onChange={(e) => set({ fco_quantity: e.target.value })}
+                    placeholder="e.g. 0.12"
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>Cash proceeds *</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={form.fco_gross}
+                    onChange={(e) => set({ fco_gross: e.target.value })}
+                    placeholder="0.00"
+                    className={inputCls}
+                  />
+                </div>
+                {form.currency !== "EUR" && (
+                  <div>
+                    <label className={labelCls}>Cash proceeds EUR</label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={form.fco_gross_eur}
+                      onChange={(e) => set({ fco_gross_eur: e.target.value })}
+                      placeholder="0.00"
+                      className={inputCls}
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className={labelCls}>Fees</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={form.fco_fees}
+                    onChange={(e) => set({ fco_fees: e.target.value })}
+                    placeholder="0.00"
+                    className={inputCls}
+                  />
+                </div>
+              </div>
+            </LegSection>
+
+            <ConsolidationSummaryPreview form={form} />
+          </>
         )}
       </div>
 
