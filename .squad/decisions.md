@@ -7872,3 +7872,53 @@ this feature.
 ---
 
 
+
+---
+
+## Manual Movement Round-Trip Fidelity Fix
+
+**Date:** 2026-09-08  
+**Status:** RESOLVED  
+**Commit:** 914d6a6  
+**Requested by:** Copilot (internal bug fix)
+
+### Context
+
+Manually-created portfolio movements (Add Movement dialog) and transfer pairs did not populate `gross`, `fees`, `net`, and `withholding` fields consistently. Imported movements always included these blocks, but manual movements omitted them entirely. This inconsistency caused `TypeError` when opening movement detail dialogs for manually-created movements, blocking the "Void entire group" UI action for Share Consolidation corporate-action groups with manually-created legs.
+
+### Decision
+
+**Backend:** Normalize `create_manual_movement()`, `create_transfer_pair()`, and related paths to always emit zero/null-shaped `gross`, `fees`, `net`, `withholding` blocks.
+
+**Frontend:** Loosen `LedgerMovement` TypeScript type to mark these fields as optional, and update components to use optional chaining and safe fallbacks instead of unconditional nested reads.
+
+### Rationale
+
+1. **Ensures round-trip fidelity:** all movements now carry consistent field shapes
+2. **Defense-in-depth:** optional typing at the frontend layer remains robust even if backend normalization is incomplete or old documents have sparse data
+3. **Unblocks user actions:** enables "Void entire group" on Share Consolidation groups with manually-created legs
+4. **Visible to TypeScript:** optional types make unsafe accesses visible at compile-time, preventing future regressions
+
+### Scope Applied
+
+**Backend:**
+- `backend/src/portfolio/cosmos_portfolio.py`: `create_manual_movement()`, `create_transfer_pair()`, `_rebuild_from_reassignment()`, `_create_ca_leg()`, `_correct_ca()`
+- `backend/tests/test_portfolio_phase2.py`: 5 new regression tests
+
+**Frontend:**
+- `frontend/src/components/MovementDetailDialog.tsx`, `MovementCorrectionDialog.tsx`, `PortfolioMovementsTable.tsx`, `StockTransactionsTable.tsx`
+- `frontend/src/types/portfolio.ts`
+- `frontend/tests/movementDetailDefensiveGuards.test.mjs` (new, 26 tests)
+
+### Validation
+
+- Backend: 3926 tests passed (including 5 new regression tests in test_portfolio_phase2.py)
+- Frontend: `tsc --noEmit` 0 errors; `node --test tests/*.mjs` 1245/1245 passed
+- No regressions; 20 pre-existing unrelated yfinance test failures noted
+
+### User Impact
+
+✅ Manually-created movements display correctly in detail dialog  
+✅ "Void entire group" action now available for Share Consolidation groups with manual legs  
+✅ Movement correction dialog safely initializes sparse movements (transfers, manual edits)
+

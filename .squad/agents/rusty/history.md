@@ -2044,3 +2044,59 @@ Initial feature rejected by Basher (D0) with D2 defect: TypeScript types and too
 
 **Verification:** Frontend TypeScript clean; no regression on unrelated components; coordinated with Linus's backend work.
 
+
+---
+
+## 2026-09-08: FIFO Holdings Engine + Accounting Convention Migration
+
+### What Was Done
+Replaced the CMP (moving weighted average) holdings engine with a FIFO lot-based engine
+in `backend/src/portfolio/holdings_service.py`. Updated all six assigned test files to
+match the new FIFO semantics and the new BUY gross/net convention.
+
+### Key Technical Decisions
+
+**BUY Convention Change (critical):**
+- OLD: `gross = total outflow (incl. commission)`, `net = trade consideration`; engine used `gross_eur`
+- NEW: `gross = trade consideration`, `net = gross + fees (total outflow)`; engine reads `net.eur_amount`
+- Impact: NUMERIC IDENTITY for migrated records (`_repair_buy_fields_v2` already swapped field labels)
+- For test helpers: reduce `gross_eur` parameter by `fee` amount so `net = gross + fee = old_gross`
+
+**FIFO Engine Design:**
+- `_Lot` dataclass: lot_id=movement_id, trade_date, quantity (decremented in place), unit_cost_eur (None=INCOMPLETE, 0=ZERO_COST, >0=COMPLETE)
+- Lots appended in chronological sort order `(trade_date, id)` → naturally FIFO queue
+- `_consume_lots(lots, sell_qty)`: iterates lot list, mutates qty in place, returns `(cost_consumed, negative_inventory_bool)`
+- INCOMPLETE lots: unit_cost=None, treated as 0 when consumed; excluded from remaining pool cost; tracked via `incomplete_count`
+- `has_incomplete_cost_basis = (incomplete_count > 0)` for any security with INCOMPLETE lots (even if all consumed)
+
+**FIFO vs CMP Test Value Changes (multi-lot):**
+- S4: BUY 100@€10, BUY 50@€20 → SELL 60 → FIFO: cost_sold=600, remaining=1400, avg=15.56 (vs CMP: 800, 1200, 13.33)
+- S7: INCOMPLETE(50,2024-01-10)+COMPLETE(50@€10,2024-01-15) → SELL 70 → FIFO: cost_sold=200, remaining=300 (vs CMP: 500, 0)
+- S12: BUY 100@€10, BUY 100@€20 → SELL 50 → FIFO: cost_sold=500, remaining=2500, avg=16.67 (vs CMP: 750, 2250, 15.00)
+- TestPartialSellWithZeroCostPool: COMPLETE(163@4294.21)+ZERO_COST(60) → SELL 50 → FIFO: cost_sold=1317.24, remaining=2976.97 (lot1 consumed first since "b1"<"b2")
+
+**Critical gotcha:** When editing the `_buy()` helper in `test_portfolio_summary_cost_basis.py`,
+the edit removed `"account_id": account_id, "cost_basis_status": status,` from the return dict.
+This caused silent test failures where INCOMPLETE status was None. Always verify ALL fields
+are present in helper dict after any edit.
+
+### Files Modified
+- `backend/src/portfolio/holdings_service.py`: full FIFO rewrite
+- `backend/tests/test_portfolio_holdings.py`: BUY helper + all call sites + CMP→FIFO acceptance class
+- `backend/tests/test_portfolio_summary_cost_basis.py`: `_buy()` helper + S4/S7/S12 assertions
+- `backend/tests/test_scrip_zero_cost_and_buy_import.py`: `_buy()` helper + TestCostEqualsGrossOnly + TestPartialSellWithZeroCostPool FIFO assertions
+- `backend/tests/test_amendment_h_holdings_effects.py`: 4 tests using `buy_gross="2009.95"` → updated formula to use `(gross + fees) / qty`
+- `backend/tests/test_portfolio_phase2_legacy_compat.py`: `_make_movement()` helper BUY convention
+- `backend/tests/test_portfolio_fifo.py`: NEW file — ADM regression + id tie-break + zero-cost + partial lot tests
+
+### Test Results
+328 assigned tests passing. Broader suite: 3961 pass (28 yfinance live-API failures pre-existing).
+
+## Learnings
+
+### 2026-09-08 — Movement detail defensive guards for sparse manual ledger movements
+- **Root cause:** manually created movements can omit `gross`, `fees`, `net`, and/or `withholding` in legacy/current API payloads, while imported movements usually include fully populated blocks. Unconditional nested reads in the frontend detail/correction/table views caused runtime `TypeError`s when users opened manual movement details.
+- **Files changed:** `frontend/src/components/MovementDetailDialog.tsx`, `MovementCorrectionDialog.tsx`, `PortfolioMovementsTable.tsx`, `StockTransactionsTable.tsx`, `frontend/src/types/portfolio.ts`, and new test `frontend/tests/movementDetailDefensiveGuards.test.mjs`.
+- **Decision:** marked `LedgerMovement.gross`, `.fees`, `.withholding`, and `.net` as optional in the frontend type so TypeScript reflects the real-world/legacy contract and forces defense-in-depth at call sites, even after backend default-filling lands.
+- **Behavior:** detail and table UIs now render `—` or omit WHT blocks instead of crashing; correction dialog also initializes safely for sparse legacy/manual movements, including transfers.
+- **Validation:** `npx tsc --noEmit` passed; `node --test tests/*.mjs` passed, including the new sparse-movement regression coverage.

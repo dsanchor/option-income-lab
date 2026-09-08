@@ -3747,3 +3747,156 @@ Classes:
 - `test_options_screener_share_availability.py`: 30 tests now fail (fixture missing `exchange` field); pre-existing fixture debt (orthogonal to screener universe feature)
 - `test_options_screener_endpoint.py` + `test_options_screener_cache_concurrency.py`: 5 skipped (pre-existing features removed by precomputed-only refactor, 2026-08-29)
 
+
+### 2026-09-08 — FIFO/Net Accounting Integration Gate
+
+**Scope:** Final integration validation for FIFO lot depletion + net-centric BUY accounting.
+Implementation authors: Rusty (W1/W2/W9), Linus (W3/W4/W5/W6), Reuben (W7/W8).
+
+**Targeted suites (input artifacts) — ALL PASS:**
+- 171 pass: `test_portfolio_fifo.py` + `test_portfolio_holdings.py` + `test_repair_buy_ledger_fields.py`
+- 260 pass: `test_portfolio_summary_cost_basis.py`, `test_scrip_zero_cost_and_buy_import.py`, `test_amendment_g_bilingual.py`, `test_amendment_h_holdings_effects.py`, `test_portfolio_phase2_legacy_compat.py`
+- 24 pass: `frontend/tests/scripZeroCostContract.test.mjs` (FE-1/FE-2/FE-3 BUY gross semantics)
+
+**All 8 contract gates (G1–G7, targeted scope) PASS.**
+
+**Broader suite: 8 stale-test failures** in files NOT in W9 scope:
+- `test_portfolio_corrections_extended.py` (4): Basher-authored; encode OLD `net = gross − fees` for BUY
+- `test_portfolio_phase2.py` (1): test name `test_net_computed_from_gross_minus_fees` = old formula
+- `test_portfolio_phase2_corrections.py` (2): old formula in comments and assertions
+- `test_unified_watchlist.py` (1): `_add_buy()` fake uses flat `net_eur` field; FIFO engine reads `net.eur_amount` nested dict → `remaining_cost_basis_eur = 0`
+
+**Implementation verdict: CORRECT.** BUY net = gross + fees is right per contract.
+**G10 BLOCKED** pending 8 stale-test updates.
+
+**Attribution for required fixes:**
+- Rusty: `test_portfolio_phase2.py`, `test_portfolio_phase2_corrections.py`, `test_unified_watchlist.py`
+- Basher (self): `test_portfolio_corrections_extended.py`
+
+**Key learnings:**
+1. When BUY net formula changes (gross−fees → gross+fees), grep ALL test files for `gross_minus_fees`, `expected_net = _d(...) - _d(...)`, and test comments with "net = gross" before closing W9.
+2. Fake `_add_buy` helpers in integration test fixtures must include NESTED `net` dict (`net.eur_amount`), not just flat `net_eur`. FIFO engine always reads `net.eur_amount` for lot cost.
+3. W9 scope was under-specified: only 5 amendment/legacy files listed, but at least 4 more portfolio test files encode the BUY net formula.
+4. `test_portfolio_corrections_extended.py` is Basher's own responsibility; it tests the correction path BUY net which changed under FIFO contract.
+
+### 2026-09-08 — FIFO Integration Gate: Post-Revision Clearance
+
+**Scope:** Independent verification of Livingston's stale-test fix for 8 collateral failures.
+
+**Diff review:** All 8 changes confined to the 4 collateral test files. Changes:
+- 4 in `test_portfolio_corrections_extended.py`: arithmetic flip `- _d(...)` → `+ _d(...)`, docstrings updated
+- 1 in `test_portfolio_phase2.py`: literal `18242.50` → `18257.50` with explanatory comment
+- 2 in `test_portfolio_phase2_corrections.py`: expected values and comments updated
+- 1 in `test_unified_watchlist.py`: `_add_buy()` flat `net_eur` → nested `"net": {amount, currency, eur_amount}`
+No implementation files modified. `git diff --check` exits 0 on the four test files.
+(Unrelated trailing whitespace in `livingston/history.md` is pre-existing noise.)
+
+**Final results:**
+- 8/8 previously failing: ✅ all pass
+- 923/923 `-k "portfolio"` broad suite: ✅ all pass
+- 431/431 targeted input-artifact backend suite: ✅ all pass
+- 24/24 frontend contract suite: ✅ all pass
+- **Total: 1386/1386 pass, 0 fail**
+
+**G10: CLEARED. FIFO/net accounting implementation: FULLY APPROVED.**
+
+**Key process learning:** When a BUY net formula changes in a contract update,
+search ALL test files (not just those in W9 scope) for encoded net arithmetic
+before closing the gate. Use: `grep -rn "gross.*-.*fees\|net.*minus\|18242\|expected_net"
+backend/tests/` to catch stale assertions.
+
+---
+
+## 2026-09-08 — SHARE_CONSOLIDATION implementation gate — **REJECT**
+
+**Scope:** Livingston's SHARE_CONSOLIDATION implementation against Danny's
+`danny-share-consolidation-contract.md`, covering `backend/src/portfolio/models.py`,
+`cosmos_portfolio.py`, `holdings_service.py` (contractually untouched),
+`portfolio_routes.py` (contractually untouched), `test_share_consolidation.py` (new,
+§5.1 SC-T1..T10), `test_portfolio_fifo.py` (extended, §5.2 FIFO-SC1..3), and the
+frontend (`CorporateActionForm.tsx`, `MovementDetailDialog.tsx`, `portfolio.ts`,
+`caWizardRequestShape.ts`, `caGroupIndicator.ts`).
+
+**Static review — all contract-mandated hunks verified correct:**
+- `models.py`: 3 new `CaLegType` values, `SHARE_CONSOLIDATION` event type,
+  `transfer_cost_basis_eur` field — matches §3.1 exactly.
+- `cosmos_portfolio.py`: `_CA_LEG_TXN_TYPE`/`_CA_REQUIRED_LEGS` additive-only;
+  CONSOLIDATION_OUT/IN zero-value TRANSFER legs; FRACTIONAL_CASH_OUT forces
+  `sales_type=ACCIONES`; `transfer_cost_basis_eur` required-or-raise on both
+  `create_corporate_action` and `correct_corporate_action_group` — matches §3.2–§3.4.
+- `holdings_service.py` and `portfolio_routes.py`: confirmed zero diff (contract §3.5/§3.6
+  compliance, D1 "zero changes to holdings_service.py").
+- Frontend: event type, badges/labels, `CaFormState` fields, `buildLegs`, `validate`,
+  `buildCaInitialState`, `ConsolidationSummaryPreview` — matches §4.1–§4.6.
+- Backend suite `test_share_consolidation.py` (13 tests, SC-T1..T10 incl. all-or-nothing
+  no-partial-write check) and FIFO extension in `test_portfolio_fifo.py` (FIFO-SC1..3) —
+  all pass in isolation, and the arithmetic they assert (72→69.12→69, only €0.12/0.12sh
+  realized, full €7,420 cost carried, purchase_outflow unaffected) is correct **when leg
+  processing order matches `ca_group_seq`**.
+- 946/946 broader `-k "portfolio or fifo or consolidation"` backend regression pass;
+  95/95 targeted frontend tests (`caWizardRequestShape`, `caGroupIndicator`) pass. No
+  regressions to existing CA event types.
+
+**Defect found — independent dynamic verification, not caught by Livingston's own tests:**
+
+`holdings_service.py`'s FIFO engine sorts movements by `(trade_date, id)` only
+(`movements.sort(key=lambda m: (m.get("trade_date") or "", m.get("id") or ""))`) — it
+never reads `ca_group_seq`. All three SHARE_CONSOLIDATION legs share one `trade_date`
+(the payment date), so their **relative processing order among themselves depends
+entirely on the lexicographic order of their randomly-generated `mvt_{uuid4().hex}`
+ids** — not on `ca_group_seq` (1/2/3), which exists on the documents but is never
+consulted for ordering.
+
+Livingston's own `FIFO-SC1` fixture hand-picks ids `"co1"`, `"ci1"`, `"fco1"`, which
+happen to sort IN → OUT → SELL — an order under which the numbers come out right by
+coincidence. This masked the bug. I reran the identical economic scenario (BUY 50@€100 +
+BUY 22@€110 → consolidate OUT 72 / IN 69.12 tcb=€7,420.00 / FRACTIONAL_CASH_OUT 0.12
+@€8.58) through the **real** `CosmosPortfolioService.create_corporate_action` (which
+assigns genuine random UUIDs, not hand-picked strings) 300 times and recomputed holdings
+each time: **199/300 trials (≈66%) produced the wrong `cost_basis_sold_eur`** (€12.00,
+priced off the stale pre-consolidation €100/share lot, instead of the correct €12.88
+priced off the new consolidated €107.35/share lot). A worse sub-ordering (OUT, SELL, IN)
+makes the fractional SELL run against already-empty lots, producing `cost_basis_sold_eur
+= 0.00` **and** a spurious `NEGATIVE_INVENTORY` warning, even though the consolidation is
+entirely internally consistent.
+
+This is not a rare edge case: it hits roughly two times in three, on the specific
+accounting output the review brief calls out as the operation's core (72 → 69.12 → 69,
+only 0.12 cost realized). It has never surfaced in an existing CA event type
+(CASH_DIVIDEND/DIVIDEND_WITH_SCRIP/SCRIP_DIVIDEND/RIGHTS_ISSUE) because none of those mix
+a same-date lot-removal leg, a same-date lot-creation leg, and a same-date lot-consuming
+leg — SHARE_CONSOLIDATION is the first CA type to introduce that three-way interaction,
+so the pre-existing `(trade_date, id)` sort key was never previously exercised this way.
+
+**Why this isn't Livingston's defect to fix under this contract:** the only correct fix is
+a tie-break in `holdings_service.py`'s sort key (e.g., stamp and sort by `ca_group_seq`,
+or a monotonic `sequence_number`, ahead of the random id) — and Danny's contract explicitly
+places `holdings_service.py` **out of scope** for this work (§3.6 "NO CHANGES", §8 "Modifying
+holdings_service.py" not authorized). Livingston implemented exactly what the contract
+specified; the contract's own "reuse existing primitives, zero holdings_service.py changes"
+premise (D1) is what's unsafe for this specific leg combination.
+
+**Verdict: REJECT.**
+
+**Recommended revision owner: Danny** (not Livingston — locked out this cycle per reviewer
+rejection rule). Danny needs to amend the contract to authorize a minimal, scoped
+`holdings_service.py` ordering fix (tie-break same-date movements by `ca_group_seq` ahead
+of `id`, or an equivalent deterministic sequencing mechanism) before SHARE_CONSOLIDATION can
+ship safely. Once the contract is amended, implementation of the `holdings_service.py`
+tie-break should go to **Linus** (credited with W3–W6 of the FIFO/holdings_service rollout
+per the 2026-09-08 FIFO integration gate entry above, and the closest existing owner of that
+file's sort semantics) — not Livingston, and not a re-litigation of the FIFO cost model
+itself, which is otherwise sound and unaffected.
+
+**Secondary, non-blocking observation:** the contract text for CONSOLIDATION_OUT/IN says
+quantity is "required, must be > 0" but `cosmos_portfolion.py` does not enforce this
+server-side (frontend does, via `validate()`). This matches the existing pattern for other
+CA leg types (no other leg type is server-side quantity-validated either, per D3's
+"mirrors how existing CA legs don't cross-validate quantities") — flagged for awareness,
+not a blocker.
+
+**Full reproduction methodology:** independent Python script driving
+`CosmosPortfolioService.create_corporate_action` + `HoldingsService.compute_holdings`
+against a `_FakeContainer`, 300 trials with real `uuid4()` ids, comparing
+`cost_basis_sold_eur` against the contractually-correct €12.88. Available on request;
+not committed (per task instructions, no commits made this review).

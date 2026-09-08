@@ -1746,3 +1746,45 @@ Identical: `h-full` on Reveal, animated entrance, tone-based coloring, tooltip v
 
 **Recommendation:** All four contracts + PEP repair ready for close-out.
 
+### 2026-09-08 — Share Consolidation Model Analysis (RKT)
+
+**Learning:** Share consolidations (e.g., 24:25) cannot be modeled as SELL — that consumes FIFO cost of N old shares instead of the proportional cost of the fractional remainder. Correct pattern: TRANSFER_OUT (remove old qty, depletes lots) → TRANSFER_IN (reissue new qty with preserved total cost basis) → SELL ACCIONES fractional. Reuses existing FIFO engine without holdings_service changes. CONSOLIDATION_IN must store `transfer_cost_basis_eur` (same field as TRANSFER_IN). Operator must supply total cost basis manually from holdings before creating the group. Decision doc: `.squad/decisions/inbox/danny-rkt-consolidation-model.md`.
+
+### 2026-09-08 — Share Consolidation Implementation Contract (Design Review)
+
+**Scope:** Reusable SHARE_CONSOLIDATION operation — NOT specific to RKT; no production mutations authorized.
+
+**Key decisions made:**
+1. **Single-lot consolidation** (D1): CONSOLIDATION_IN creates one FIFO lot from full cost; per-lot preservation deferred. Trade-off: individual lot acquisition dates lost; aggregate cost correct.
+2. **FRACTIONAL_CASH_OUT optional** (D2): `_CA_REQUIRED_LEGS["SHARE_CONSOLIDATION"]` = `{CONSOLIDATION_OUT, CONSOLIDATION_IN}` only.
+3. **Ratio is informational** (D3): no server-side validation of `qty_in == qty_out × ratio`.
+4. **Operator-supplied cost basis** (D4): server cannot derive it; must read from holdings.
+5. **Existing void/correct mechanics** (D5): no special logic needed.
+
+**Changes specified:**
+- Backend: 3 new CaLegType values, 1 new CaEventType, mapping additions, `transfer_cost_basis_eur` on CorporateActionLegCreate, wiring in create + correct loops. ~50 lines net. Zero changes to holdings_service.py or routes.
+- Frontend: type unions extended, caWizardRequestShape constants, caGroupIndicator labels, CorporateActionForm UI for SHARE_CONSOLIDATION (3 leg sections, consolidation summary panel). ~150 lines net.
+- Tests: 10 backend unit tests (SC-T1 through SC-T10), 3 FIFO integration tests (FIFO-SC1 through SC3), 3 frontend test additions.
+
+**Contract location:** `.squad/decisions/inbox/danny-share-consolidation-contract.md`
+
+### 2026-09-08 — SHARE_CONSOLIDATION Rejection Retrospective & Contract Rev 1
+
+**Role:** Lead Architect — retrospective facilitator, revision author
+**Status:** ✅ APPROVED (Revision 1)
+**Trigger:** Basher rejection — same-day CA leg ordering is random, causing 66% wrong fractional cost basis on production-like runs with real UUIDs.
+
+**Root cause:** The original contract (§3.6, §8) forbade changes to `holdings_service.py`. The sort key `(trade_date, id)` is non-deterministic for same-date CA legs because `id` contains a random UUID. SHARE_CONSOLIDATION is the first CA type with interdependent same-date legs (OUT must precede IN must precede FRACTIONAL_CASH_OUT). Livingston built exactly what was specified — the defect is in the contract scope boundary, not the implementation.
+
+**Test false-positive lesson:** Livingston's FIFO test used hand-picked IDs (`"co1"`, `"ci1"`, `"fco1"`) that sort correctly by coincidence. The contract didn't require randomized IDs.
+
+**Fix:** Amend the sort key to `(trade_date, ca_group_id or "", ca_group_seq or 0, id)`. This is general (all CA types), preserves non-CA ordering (those fields are None → empty/0 → same as before), and uses `ca_group_seq` which is already stamped on every CA movement since Amendment H.
+
+**Key architectural learning — the general rule:** When composing existing primitives into a new multi-leg CA event type, verify the processing-order contract of the consumer (holdings_service sort key), not just the producer (cosmos_portfolio leg wiring). The producer stamps `ca_group_seq` correctly but the consumer ignores it. A "reuse-only, no consumer changes" premise must be validated against the consumer's actual ordering guarantees.
+
+**Regression test mandate (new standing rule):** All future CA FIFO tests must use randomized UUIDs for movement IDs, never hand-picked IDs that might accidentally sort correctly. This applies retroactively to SHARE_CONSOLIDATION and proactively to any future CA type.
+
+**Assignment:** Linus (holdings_service owner) implements the 1-2 line sort key fix. Livingston locked out this cycle. Basher owns four new ordering regression tests (randomized UUIDs, same-day unrelated movements, two CA groups on same date, non-CA ordering preserved).
+
+**Revision location:** `.squad/decisions/inbox/danny-share-consolidation-contract-rev1.md`
+

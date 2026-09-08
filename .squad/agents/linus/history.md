@@ -41,6 +41,30 @@
 
 ## Recent Learnings
 
+### 2026-09-08 — ECB FX Parser: `continue` Bug Drops All Non-EUR Rates
+- **Root cause:** `_fetch_and_cache()` in `backend/src/portfolio/fx_service.py` had a
+  `continue` statement after setting `current_date` from a matched `<Cube time="...">` line.
+  The ECB `eurofxref-hist-90d.xml` is compact XML — the time attribute and ALL child
+  `<Cube currency="..." rate="..."/>` elements are on the **same line** (per date block).
+  The `continue` skipped rate processing for that very line, so `_rate_cache` was always
+  empty → every non-EUR `get_fx_rate()` call raised `FxRateNotFoundError` → all non-EUR
+  symbols got `price_eur = null` in the pricing cache → UI showed "—" for Price € on
+  every USD/GBP/CHF symbol, while EUR symbols worked fine (hardcoded identity rate).
+- **Symptom pattern:** EUR-denominated symbols display Price € correctly; any symbol
+  whose Yahoo-returned currency is USD, GBP, CHF, etc. shows "—" for Price €.
+  This is the diagnostic fingerprint of a fully-empty FX cache.
+- **Fix:** Remove the `continue` in the `for line in xml_text.splitlines()` loop.
+  After matching the date pattern, fall through to the `if current_date:` block so that
+  rate tags on the same line are still processed by `rate_pattern.finditer(line)`.
+- **Files changed:** `backend/src/portfolio/fx_service.py` (1-line removal of `continue`),
+  `backend/tests/test_portfolio_phase2_fx.py` (4 regression tests FX-SL-1…4).
+- **Tests:** 29/29 FX tests pass; 37/37 symbol pricing tests pass.
+- **Deployment:** Yes — backend restart required to clear the module-level
+  `_rate_cache` and trigger a fresh ECB fetch with the fixed parser.
+- **Durable pattern:** When parsing line-by-line XML/text with date/section headers,
+  never `continue` after matching the header if data tags can appear on the same line.
+  Use fall-through: set the section state, then still process the rest of the line.
+
 ### 2026-09-07 — Symbols Overview: Authoritative Screener-Eligibility Booleans
 - `_compute_symbols_overview` in `backend/web/app.py` previously emitted no
   `us_options_eligible` or `screener_eligible` field on any row, causing
@@ -1737,3 +1761,104 @@ Design choices of note:
 - No network calls from resolution function (table lookup only)
 - Fail-soft fallback for unknown MICs (bare ticker, not error)
 - Backward compatible (US securities unaffected)
+
+## 2026-09-08 — FIFO Net Accounting: BUY Gross/Net Contract Fix
+
+**Session Role:** W3 (BUY import), W4 (manual/corrected BUY net), W5 (frontend BUY form), W6 (frontend test)
+
+**Contract:** `danny-fifo-net-accounting-contract.md` (supersedes `4ca553e` BUY convention)
+
+**Changes made:**
+
+### backend/src/portfolio/import_service.py
+- BUY block: `gross = total_cost` (trade consideration), `net = gross + commission`
+- Old (wrong): `gross = total_cost + commission`, `net = total_cost`
+
+### backend/src/portfolio/cosmos_portfolio.py
+- `create_manual_movement`: net derivation is now type-conditional:
+  - BUY: `net_eur = gross_eur + fees_eur`
+  - SELL/DIVIDEND: `net_eur = gross_eur - fees_eur - wht` (unchanged)
+- `correct_movement`: same conditional net recompute when gross/fees/withholding touched
+
+### frontend/src/components/AddMovementDialog.tsx
+- BUY submit: `gross: makeGross(buyForm.trade_value, currency)` — sends trade_value only
+- Old (wrong): added `fees` into gross before submission
+
+### frontend/tests/scripZeroCostContract.test.mjs
+- Added FE suite: FE-1, FE-2, FE-3 covering the BUY gross/net frontend contract
+
+**Test results:**
+- 24/24 frontend contract tests (node --test) ✅
+- 260/260 backend targeted tests ✅ (scrip_zero_cost_and_buy_import, amendment_g, amendment_h, phase2_legacy_compat, summary_cost_basis)
+
+**Durable learnings:**
+- The BUY net direction is OPPOSITE to SELL/DIVIDEND: BUY net > gross (you pay more), SELL net < gross (you receive less). The net formula must branch by txn_type.
+- Frontend must never pre-compute net or include fees in gross before posting; the server is authoritative for net derivation.
+- The pre-existing `test_best_options.py::TestNoDirectContractAccess` failure (missing file path) is unrelated to this work.
+
+## 2026-09-08 — SHARE_CONSOLIDATION Rev 1: Deterministic CA-Group Leg Ordering Fix
+
+**Session Role:** Implementation owner for Danny's approved Rev 1 fix
+(`danny-share-consolidation-contract-rev1.md`), triggered by Basher's REJECT
+(`basher-share-consolidation-review.md`).
+
+**Root cause:** `holdings_service.py` sorted movements by `(trade_date, id)` only.
+`id` is a random `mvt_{uuid4().hex}`, so same-date SHARE_CONSOLIDATION legs
+(CONSOLIDATION_OUT / CONSOLIDATION_IN / FRACTIONAL_CASH_OUT) processed in
+effectively random order in production — 66% of trials in Basher's 300-trial
+reproducer computed the wrong fractional cost basis, because FIFO depletion
+requires OUT before IN before FCO within the group.
+
+**Change made (holdings_service.py, the only authorized file besides tests):**
+- Sort key extended from `(trade_date, id)` to
+  `(trade_date, ca_group_id or "", ca_group_seq or 0, id)`.
+- `ca_group_id`/`ca_group_seq` are already stamped on every CA leg by
+  `cosmos_portfolio.py` since Amendment H; non-CA movements get `("", 0)`,
+  which is bitwise identical to the old sort behavior. This is why the fix
+  is general (applies to all CA event types) rather than SHARE_CONSOLIDATION-
+  or RKT-specific, and needed no other file changes.
+- Confirmed via a scripted revert-and-rerun that the new
+  `test_fifo_sc_order_1_randomized_uuids_prove_ordering` test fails without
+  the fix (cost_basis_sold_eur = 0.00 instead of 12.88) and passes with it —
+  the regression test genuinely exercises the bug, not a false positive.
+
+**Tests added (backend/tests/test_portfolio_fifo.py, extends
+`TestFifoShareConsolidation`, prefix `test_fifo_sc_order_`):**
+1. `_1_randomized_uuids_prove_ordering` — 20 shuffled iterations with
+   `uuid4().hex` movement IDs and shuffled insertion order; every iteration
+   must yield total_shares=69.000000, cost_basis_sold=12.88,
+   remaining_cost_basis=7407.12, no NEGATIVE_INVENTORY.
+2. `_2_unrelated_same_day_movements_dont_interfere` — a CA group plus
+   unrelated same-day BUY/SELL on other securities; each security computes
+   independently and correctly.
+3. `_3_two_ca_groups_same_date_independent` — two distinct
+   SHARE_CONSOLIDATION groups (different securities, same date) resolve
+   independently by `ca_group_id`.
+4. `_4_non_ca_ordering_preserved` — two same-date BUYs with no `ca_group_id`
+   still sort by `(trade_date, id)`, proving no regression to pre-existing
+   `TestFifoIdTieBreak` semantics.
+- Test helpers (`_sell`, `_transfer_out`, `_transfer_in`) got optional
+  `ca_group_id=None, ca_group_seq=None` kwargs; defaults are behaviorally
+  identical to the prior (keyless) shape, so Livingston's original
+  `test_fifo_sc1..3` tests were untouched and still pass.
+
+**Test results:** 17/17 in `test_portfolio_fifo.py`; 251/251 across
+holdings/CA/FX-adjacent suites (`test_portfolio_holdings.py`,
+`test_share_consolidation.py`, `test_amendment_h_holdings_effects.py`,
+`test_portfolio_summary_cost_basis.py`, `test_portfolio_phase2_fx.py`);
+3995/4015 in the full backend suite — the 20 failures are pre-existing
+`test_yfinance_data_provider.py` test-isolation flakiness (reproduces even
+running that file alone, unrelated to portfolio/FIFO/holdings). Diff to
+`holdings_service.py` is exactly the sort-key line + its comment, per §R6.4.
+
+**Durable learnings:**
+- When a same-date movement group has interdependent legs (one leg must
+  exist before another can consume it), a plain `(date, id)` sort is unsafe
+  because `id` carries no semantic ordering — always add the group's
+  intended-sequence field to the sort key ahead of `id`, and prove it with
+  *randomized* IDs, not hand-picked ones that happen to sort correctly.
+  Hand-picked test fixture IDs are a systemic false-positive risk for any
+  future same-date multi-leg CA type.
+- `ca_group_id`/`ca_group_seq` were already general-purpose (stamped on every
+  CA leg, all event types) — the fix required zero new fields and zero
+  RKT-specific branching, confirming Danny's Rev 1 compatibility proof.

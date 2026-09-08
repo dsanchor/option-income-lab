@@ -10,6 +10,21 @@
 
 ## Learnings
 
+### 2026-09-08 — Manual movement/detail-dialog contract backfill fixed
+
+- Root cause: several manual ledger write paths in `backend/src/portfolio/cosmos_portfolio.py` were not honoring the same round-trip contract as `backend/src/portfolio/import_service.py`. Imported movements always carried `gross`, `fees`, `net`, and `withholding: {source, destination}`, but manual BUY/SELL/DIVIDEND creation omitted `withholding` when falsy, transfer creation omitted all four fields entirely, and manual corporate-action/correction/reassignment rebuild paths could also emit or preserve missing detail-dialog fields.
+- Fix: added `_ensure_ledger_detail_fields()` in `backend/src/portfolio/cosmos_portfolio.py` and applied it to manual movement creation, manual movement correction, corporate-action creation, corporate-action group correction, and reassignment rebuilds so newly written/rebuilt docs always include detail-safe `withholding` (null shape when absent, normalized `{source, destination}` keys when present). `create_transfer_pair()` now explicitly persists zero-valued `gross`/`fees`/`net` plus null-shaped `withholding` on both legs, matching the existing zero-value transfer/consolidation convention.
+- Tests added in `backend/tests/test_portfolio_phase2.py`: one proves `create_manual_movement()` returns `withholding: {"source": None, "destination": None}` when omitted; another proves both `create_transfer_pair()` legs carry the required zero/null financial fields.
+- Validation: `cd backend && python3 -m pytest tests/test_portfolio_phase2.py -q` passed (81/81), and the requested broader suite `python3 -m pytest tests/ -q -k "portfolio or transfer or manual or holdings"` passed (986 passed, 2965 deselected).
+
+### 2026-09-08 — FIFO/consolidation pre-commit review: APPROVE WITH NOTES
+
+- Reviewed the uncommitted FIFO rewrite in `backend/src/portfolio/holdings_service.py` plus related `fx_service.py`, `import_service.py`, `parsers/purchases.py`, and the untracked regression tests for scrip zero-cost, BUY ledger repair, and AD→XAMS repair.
+- Verified the share-consolidation ordering fix is present in the movement sort key: `(trade_date, ca_group_id, ca_group_seq, id)`. This correctly forces same-day RKT legs to process as `CONSOLIDATION_OUT` → `CONSOLIDATION_IN` → `FRACTIONAL_CASH_OUT`, eliminating the prior random-UUID misordering defect inside the FIFO loop.
+- Verified FIFO lot depletion, ZERO_COST pool entry, and BUY `net = gross + fees` accounting are internally consistent across import parsing, ledger shaping, holdings consumption, and regression coverage.
+- Validation on the current tree: `pytest tests/ -q -k "portfolio or fifo or share_consolidation or holdings or scrip"` passed **1016/1016**; targeted untracked tests `test_scrip_zero_cost_and_buy_import.py`, `test_repair_ad_xams_security_id.py`, and `test_repair_buy_ledger_fields.py` passed **211/211**.
+- Verdict: safe to commit as-is. Only non-blocking follow-up notes are minor naming/comment drift (e.g. one stale test name still says “gross_minus_fees” while asserting the new `gross + fees` contract).
+
 ### 2026-08-18 — D1-D5 revision implemented (post-REJECT bounded fix)
 
 **Root cause (D1/D2):** `OptionsChainStore._write_shard` was calling
@@ -2068,3 +2083,179 @@ warning when duplicates are legitimately removed.
 **Release Status:** ✅ Released in b4f8438
 - Commit pushed to main
 - Deployment ready
+
+### 2026-09-08 — Effective average cost display contract (Danny-approved)
+
+**Problem:** `avg_cost_basis_eur` = `pool_cost / pool_shares` (CMP) is arithmetically
+inconsistent with `total_shares` when INCOMPLETE (zero-cost) acquisitions inflate the
+share count without entering the pool. ACS example: 223 shares × €26.34 = €5,873.82 ≠
+€4,294.21 remaining cost.  Also, symbols overview exposed the pool CMP average as
+`portfolio_avg_cost_eur` alongside `total_shares`, compounding the mismatch.
+
+**Changes:**
+
+| File | Change |
+|------|--------|
+| `backend/src/portfolio/holdings_service.py` | Added `effective_avg` computation (`pool_cost / total_shares`, null when `total_shares ≤ 0`); added `"effective_avg_cost_eur"` to each holding dict. `avg_cost_basis_eur` (CMP) unchanged. |
+| `backend/src/portfolio/models.py` | Added `effective_avg_cost_eur: Optional[str]` to `HoldingItem`. |
+| `backend/web/app.py` (line ~843) | `portfolio_avg_cost_eur` now reads `effective_avg_cost_eur` (was `avg_cost_basis_eur`). |
+| `backend/web/app.py` `_holdings_by_account()` | Added `"effective_avg_cost_eur"` to per-account dict. |
+| `backend/web/app.py` `_compute_symbol_detail()` × 2 | `average_cost_eur` in both portfolio_field blocks now reads `effective_avg_cost_eur`. |
+
+**Key invariant:** `effective_avg_cost_eur = remaining_cost_basis_eur / total_shares`
+so `total_shares × effective_avg ≈ remaining_cost_basis_eur` (±€0.01 rounding).
+`avg_cost_basis_eur` preserved; all sell/transfer/P&L accounting unchanged.
+
+**Test result:** 137 passed, 0 failures (`test_portfolio_holdings.py`,
+`test_unified_watchlist.py`, `test_unified_symbol_detail.py`,
+`test_symbols_overview_sections.py`). Basher's new effective_avg tests may land concurrently.
+
+### 2026-09-08 — Scrip zero-cost pool entry & BUY import gross/net correction
+
+**Contract:** `danny-scrip-zero-cost-and-buy-import-contract.md` (supersedes withdrawn effective-avg contract).
+
+**Change A — Scrip/ZERO_COST pool entry:**
+
+`ZERO_COST` status added to `CostBasisStatus` enum. Zero-price BUY rows (scrip dividends etc.) now enter the CMP pool at cost 0 — pool_shares denominator includes them, naturally diluting `avg_cost_basis_eur` to the correct value (ACS: 4294.21 / 223 ≈ €19.26). No separate display field needed.  
+`INCOMPLETE` now means genuinely unknown cost only; warning renamed from `ZERO_COST_ACQUISITION` to `INCOMPLETE_COST_BASIS`. `has_incomplete_cost_basis` now keys on `incomplete_count > 0` (not `unpaid_shares > 0`).
+
+**Change B — BUY gross/net import inversion:**
+
+Purchases CSV `"Total (€)"` is NET (price × qty, ex-commission). Import now computes `gross = net + commission`, `net = total_cost`. Engine BUY path now uses `cost = gross_eur` (gross already includes commission). SELL path unchanged (`net_proceeds = gross - commission`).
+
+**Change C — Migration tooling:**
+
+`backend/scripts/repair_buy_ledger_fields.py` — combined audit/backup/apply/restore with ETag/CAS, mandatory checksum-verified backup, idempotent detection.  
+Detection: csv_import + active BUY + fees > 0 → flag gross/net swap. INCOMPLETE + qty>0 + implied price≈0 → reclassify ZERO_COST. Fail-closed on ambiguity.
+
+**Files changed:**
+- `backend/src/portfolio/models.py` — `ZERO_COST` enum value, `INCOMPLETE_COST_BASIS` warning type
+- `backend/src/portfolio/parsers/purchases.py` — zero-price rows → `ZERO_COST`; warning removed
+- `backend/src/portfolio/import_service.py` — purchases block: `gross = total_cost + commission`, `net = total_cost`
+- `backend/src/portfolio/holdings_service.py` — BUY block rewritten; `cost = gross_eur`; ZERO_COST→pool; INCOMPLETE→unpaid; new accumulators; new warnings
+- `backend/scripts/repair_buy_ledger_fields.py` — NEW migration script
+
+**Test result:** 18 pre-existing test fixture failures expected (test fixtures encode old gross=net semantics, expected cost=gross+commission=1010; new engine: cost=gross=1000; Basher will update fixtures). 260 others pass. No implementation bugs.
+
+---
+
+### 2026-09-08 — Stale-test revision: BUY net = gross + fees (post-Basher G10 gate)
+
+**Context:** Basher's broader `-k portfolio` gate (915 pass, 8 fail) identified 8 stale tests
+encoding the superseded BUY net formula (`net = gross − fees`). The FIFO/net implementation
+is correct; the tests were simply written against the old convention and were not in scope
+for the W9 update. Basher and Rusty are locked out; Livingston owns this revision.
+
+**Contract (danny-fifo-net-accounting-contract.md §1.2):**
+- BUY: `net = gross + fees` (total cash outflow; net > gross)
+- SELL: `net = gross − fees` (total cash inflow; net < gross)
+- Financial calculations use `net.eur_amount` from the nested `net` dict (not flat `net_eur`)
+
+**Changes made (test fixtures/expectations only — zero production code touched):**
+
+1. `backend/tests/test_portfolio_corrections_extended.py` (4 tests in `TestBuyFullCorrection` + `TestNetArithmetic`):
+   - `test_buy_gross_fees_net_recomputed`: `expected_net = gross − fees` → `gross + fees`; docstring updated
+   - `test_buy_only_gross_uses_original_fees`: `expected_net = gross − fees` → `gross + fees`; docstring updated
+   - `test_buy_only_fees_uses_original_gross`: `expected_net = gross − fees` → `gross + fees`; docstring updated
+   - `test_decimal_precision_6dp`: `expected = 18250.123456 − 7.5` → `18250.123456 + 7.5`
+
+2. `backend/tests/test_portfolio_phase2.py` (1 test):
+   - `test_net_computed_from_gross_minus_fees`: expected `Decimal("18242.50")` → `Decimal("18257.50")` (18250 + 7.50)
+
+3. `backend/tests/test_portfolio_phase2_corrections.py` (2 tests):
+   - `test_c1_buy_gross_fees_override`: `net_expected = 17000 − 5` → `17000 + 5`
+   - `test_c8_gross_change_triggers_net_recompute`: expected `Decimal("8995.00")` → `Decimal("9005.00")`; comment updated
+
+4. `backend/tests/test_unified_watchlist.py` (helper fix):
+   - `_add_buy()`: replaced flat `"net_eur": gross_eur` with nested `"net": {"amount": gross_eur, "currency": "EUR", "eur_amount": gross_eur}` so the FIFO engine can read `(m.get("net") or {}).get("eur_amount")` instead of finding nothing
+
+**Note on `_add_buy()` net value:** Since fees=0 in this helper, `net.eur_amount = gross_eur`
+is correct under both the old and new formula. The fix is purely structural (nested dict vs flat field).
+
+**Results:**
+- Focused 4-file run: 216/216 pass
+- Broader `-k portfolio` run: 923/923 pass (was 915 pass + 8 fail before this revision)
+- `git diff --check`: clean (no whitespace issues)
+
+### 2026-09-08 — SHARE_CONSOLIDATION reusable corporate-action operation (Danny-approved contract)
+
+**Contract:** `danny-share-consolidation-contract.md`. Scope: reusable SHARE_CONSOLIDATION
+event type (reverse split) — CONSOLIDATION_OUT (TRANSFER_OUT semantics), CONSOLIDATION_IN
+(TRANSFER_IN semantics, carries `transfer_cost_basis_eur`), optional FRACTIONAL_CASH_OUT
+(SELL/ACCIONES semantics). Explicitly NOT in scope: any Reckitt (RKT) movement, any
+production data mutation, any `holdings_service.py` change.
+
+**Backend (`backend/src/portfolio/models.py`, `cosmos_portfolio.py`):**
+- Added 3 `CaLegType` values + 1 `CaEventType` value (`SHARE_CONSOLIDATION`), additive-only.
+- Added `transfer_cost_basis_eur: Optional[str]` to `CorporateActionLegCreate`.
+- Extended `_CA_LEG_TXN_TYPE` (CONSOLIDATION_OUT→TRANSFER_OUT, CONSOLIDATION_IN→TRANSFER_IN,
+  FRACTIONAL_CASH_OUT→SELL) and `_CA_REQUIRED_LEGS` (SHARE_CONSOLIDATION requires
+  {CONSOLIDATION_OUT, CONSOLIDATION_IN}; FRACTIONAL_CASH_OUT optional, matching D2).
+- In both `create_corporate_action` and `correct_corporate_action_group` per-leg loops:
+  extended `sales_type` branch (FRACTIONAL_CASH_OUT → "ACCIONES", forces normal FIFO lot
+  consumption not DERECHOS) and added a `transfer_cost_basis_eur` validation gate
+  (`ValueError` if CONSOLIDATION_IN leg lacks it) plus `doc["transfer_cost_basis_eur"]`
+  assignment. No changes to quantity/cost_basis_status derivation — CONSOLIDATION_OUT/IN
+  fall through the existing generic `else` branch (no `cost_basis_status` field is ever
+  attached since that only happens when `txn_type == "BUY"`).
+- `holdings_service.py`: confirmed zero changes needed — TRANSFER_IN/OUT generic handling
+  (reads `transfer_cost_basis_eur`, creates/consumes a single lot, excluded from purchase
+  outflow and sale proceeds) already implements the contract's FIFO semantics exactly.
+- `portfolio_routes.py`: confirmed zero changes needed — the three CA routes parse raw
+  JSON dicts (`request.json()`) with only presence checks on `event_type/security_id/
+  payment_date/legs`; no Pydantic model gates the body, so new leg/event types flow through
+  untouched.
+
+**Frontend (`types/portfolio.ts`, `caWizardRequestShape.ts`, `caGroupIndicator.ts`,
+`CorporateActionForm.tsx`, `MovementDetailDialog.tsx`):**
+- Additive enum/constant extensions matching the backend exactly (`CA_EVENT_TYPES`,
+  `CA_LEG_TYPES`, `CA_REQUIRED_LEGS`, `CA_LEG_TYPE_LABELS`).
+- `transfer_cost_basis_eur` was *already* typed on `LedgerMovement` and already rendered
+  generically in `MovementDetailDialog.tsx`'s Transfer-details block (gated on
+  `txn_type === TRANSFER_IN/OUT`, not on `ca_leg_type`) — CONSOLIDATION_IN gets this display
+  for free since its `txn_type` is TRANSFER_IN. Only the CA-group leg badge maps
+  (`CA_LEG_BADGE`/`CA_LEG_LABEL`, both a local copy in `MovementDetailDialog.tsx` and the
+  shared `caGroupIndicator.ts`) needed the 3 new entries.
+- `CorporateActionForm.tsx`: added `SHARE_CONSOLIDATION` to `EVENT_TYPES`; 8 new
+  `CaFormState` fields (`co_quantity`, `ci_quantity`, `ci_transfer_cost_basis_eur`,
+  `fco_enabled/quantity/gross/gross_eur/fees`); extraction in `buildCaInitialState` for
+  correction pre-fill; a `buildLegs()` branch building 2–3 legs with zero gross for
+  OUT/IN and real gross for the optional FCO leg; a `validate()` branch (qty>0 for
+  OUT/IN, cost basis >=0, FCO fields required only when enabled); 3 new `LegSection`
+  blocks + a `ConsolidationSummaryPreview` panel replacing the cash-dividend net preview
+  for this event type. **Found and fixed a latent bug while wiring this in:** the existing
+  `hasShareAcq = form.event_type !== "CASH_DIVIDEND"` boolean would have silently rendered
+  the SHARE_ACQUISITION leg section for SHARE_CONSOLIDATION too (since it was defined as
+  "everything except CASH_DIVIDEND" rather than an explicit allow-list) — changed to an
+  explicit `===` allow-list over the three event types that actually use that leg.
+
+**Tests added (not authored by Basher per the contract's sequencing — Livingston added
+focused coverage directly per this task's instructions):**
+- `backend/tests/test_share_consolidation.py` (new, 15 tests): SC-T1–SC-T10 service-layer
+  coverage (create/void/correct, required-leg rejection, missing-transfer_cost_basis_eur
+  rejection with all-or-nothing no-partial-write check, sales_type=ACCIONES enforcement,
+  ca_group_seq ordering).
+- `backend/tests/test_portfolio_fifo.py` (existing untracked file, extended): added
+  `_transfer_out`/`_transfer_in` fixture helpers + `TestFifoShareConsolidation` (FIFO-SC1
+  fractional walk-through, FIFO-SC2 exact-ratio no-fractional, FIFO-SC3 post-consolidation
+  SELL uses new unit cost) — all values cross-checked against the contract's own worked
+  arithmetic (69.12 shares, €7407.12 remaining, €12.88 fractional cost, etc.).
+- `frontend/tests/caWizardRequestShape.test.mjs` + `caGroupIndicator.test.mjs` (existing
+  files use an inline-mirror pattern, not real imports — updated both mirrors in lockstep
+  with the real `.ts` files per their own header comment) — added FE-SC1/FE-SC2/FE-SC3
+  blocks per the contract's §5.3.
+
+**Validation:**
+- `pytest tests/test_share_consolidation.py tests/test_portfolio_fifo.py
+  tests/test_portfolio_corporate_actions.py -q` → 85 passed, 0 failed.
+- `pytest -k "portfolio or fifo or share_consolidation" -q` → 946 passed, 0 failed
+  (zero regressions across the full portfolio/FIFO surface).
+- Full backend suite: 3991 passed, 20 failed (pre-existing `test_yfinance_data_provider.py`
+  network tests, unrelated — same failure set documented in prior sessions).
+- `node --test tests/caWizardRequestShape.test.mjs tests/caGroupIndicator.test.mjs` → 95/95.
+- `node --test tests/*.mjs` (full frontend suite) → 1242/1242, 0 failures.
+- `npx tsc --noEmit` → 0 errors, before and after the test-mirror edits.
+
+**Safety:** No RKT/Reckitt reference anywhere in the diff (grep-verified). No production
+Cosmos container touched — all backend tests run against `FakeCosmos`/`_FakeContainer`
+in-memory fixtures. No `holdings_service.py` edit. Did not commit (per task instruction).
