@@ -2,10 +2,98 @@
 
 ## Active Decisions
 
+### Livingston — Dividends economics ambiguity note
+
+## Date
+2026-09-09
+
+## Ambiguity
+
+The accepted design sketch for `GET /api/economics/dividends` shows
+`monthly[]` rows shaped with a single `"month": "YYYY-MM"` field, but the
+implementation brief also says the existing monthly array "already carries
+both `year` and `month` per row per the design doc".
+
+## Working interpretation
+
+I implemented the accepted design sketch verbatim for `monthly[]`:
+
+- `month` as `"YYYY-MM"`
+- no extra per-row `year` field
+- no extra per-row numeric `month` field
+
+Reason: the same brief explicitly says not to redesign the accepted shape and
+to add only two additive top-level fields (`yearly`, `cumulative`).
+
+### Rusty — Economics frontend implementation notes
+
+**Date:** 2026-09-09
+**Status:** Proposed for archive if useful
+
+## Decision
+Use a shared App Router layout at `frontend/src/app/economics/layout.tsx` for the Economics tab strip, and let the dividends page issue a second endpoint read scoped only by `symbol`/`account_id` for multi-year comparison sections.
+
+## Why
+- The repo's bundled Next docs confirm nested `layout.tsx` support, so one shared strip is cleaner and less error-prone than repeating tabs inside three pages.
+- Dividends comparison UX has two conflicting needs: the main page must respect `year`/`month`, but the new compare-years / snowball sections must not. A second fetch against the same endpoint preserves the accepted response contract, avoids inventing extra backend fields, and makes the captioned all-history sections truthful.
+
+## Consequences
+- Tab styling and query-param carry-over stay consistent across Overview / Options / Dividends.
+- `EconomicsView` remains the options-detail implementation with only route-path parameterization.
+- Dividends charts/tables can show true multi-year history even when the rest of the page is focused on one reporting year.
+
+### Danny — Fiscal Reports row grain
+
+**Date:** 2026-09-09
+**Status:** PROPOSED
+**Requested by:** dsanchor
+
+### Decision
+
+For the planned Fiscal Reports feature, **dividend-related corporate actions should be reported at event/group grain, not raw leg grain, whenever `ca_group_id` is present**.
+
+### Why
+
+- Corporate-action legs are explicitly grouped by shared `ca_group_id` (`backend/src/portfolio/cosmos_portfolio.py:876-880`).
+- `DIVIDEND_WITH_SCRIP` is modeled as multiple required legs: `CASH_DIVIDEND` + `SHARE_ACQUISITION` (`backend/src/portfolio/cosmos_portfolio.py:146-162`).
+- Group void/correction flows are atomic, reinforcing that the economic object is the group, not each leg independently (`backend/src/portfolio/cosmos_portfolio.py:1048-1360`).
+
+### Consequence
+
+- A composite dividend produces **one Fiscal Reports dividend row** keyed by `ca_group_id`.
+- Cash gross/net/withholding fields come from the `CASH_DIVIDEND` leg.
+- Companion stock-leg fields may be shown as secondary columns/metadata on that same row.
+- The linked `SHARE_ACQUISITION` leg must **not** also surface as a separate BUY row in the default fiscal dividend view, otherwise the event is visually split and risks double interpretation.
+
+### Basher — dividends tests scope note
+
+**Date:** 2026-09-09
+**Requested by:** dsanchor
+
+## Decision
+
+For the new dividends + overview economics work, frontend coverage is limited to a
+lightweight source-contract test over `frontend/src/types/economics.ts` and the
+two consuming views.
+
+## Why
+
+- Existing frontend economics tests in this repo already favor contract/source
+  inspection over brittle component rendering.
+- The new view behavior is mostly embedded inside React components rather than
+  extracted into standalone pure helpers.
+- A type/export contract check gives durable signal without inventing a new UI
+  testing pattern.
+
+## Consequence
+
+- Backend carries the heavy behavioral coverage.
+- Frontend guards the public contract surface and typed wiring only.
+
 ### Danny — Economics Unified Dashboards Design
 
-**Date:** 2026-09-09  
-**Status:** PROPOSED  
+**Date:** 2026-09-09
+**Status:** PROPOSED
 **Requested by:** dsanchor
 
 **Decision:** Adopt a **three-view Economics information architecture**:
@@ -90,7 +178,7 @@ No product code modified by this review. No production calls made.
 
 ### Basher — FIFO Integration Gate
 
-**Date:** 2026-09-08T10:56Z  
+**Date:** 2026-09-08T10:56Z
 **Updated:** 2026-09-08T11:05Z (post-Livingston revision)
 **Author:** Basher (Tester, Reviewer)
 **Status:** ✅ FULL APPROVAL — G10 CLEARED
@@ -696,9 +784,9 @@ Execute in order; stop on any non-zero exit code:
 
 ### Danny — FIFO / Net-Accounting Design Review & Implementation Plan
 
-**Date:** 2026-09-08T10:22Z  
-**Ceremony:** Pre-Work Design Review  
-**Status:** APPROVED — agents may begin implementation  
+**Date:** 2026-09-08T10:22Z
+**Ceremony:** Pre-Work Design Review
+**Status:** APPROVED — agents may begin implementation
 **Inputs:** `copilot-directive-20260908-fifo-net-accounting.md`, `danny-fifo-net-accounting-contract.md`, `reuben-audit-report-20260908-fifo-net-accounting.md`
 
 ---
@@ -1020,15 +1108,15 @@ for lot in lots_ordered_fifo:
         break
     if lot.quantity <= 0:
         continue
-    
+
     take = min(lot.quantity, remaining)
-    
+
     if lot.cost_basis_status == "INCOMPLETE":
         # Cost genuinely unknown — assign 0 cost; warning emitted
         unit_cost = 0
     else:
         unit_cost = lot.net_unit_cost_eur
-    
+
     cost_assigned += take * unit_cost
     lot.quantity -= take      # partial consumption
     remaining -= take
@@ -1083,8 +1171,8 @@ For each `(security_id, [account_id])`:
 total_shares = sum(lot.quantity for lot in active_lots)
               + unpaid_shares  (INCOMPLETE lots, if we choose to separate)
 
-remaining_cost_basis_eur = sum(lot.quantity * lot.net_unit_cost_eur 
-                               for lot in active_lots 
+remaining_cost_basis_eur = sum(lot.quantity * lot.net_unit_cost_eur
+                               for lot in active_lots
                                where lot.cost_basis_status != "INCOMPLETE")
 
 avg_cost_basis_eur = remaining_cost_basis_eur / total_pool_shares
@@ -1167,7 +1255,7 @@ pool_cost = net_BUY1 + net_BUY2 + net_BUY3 = total cost of all acquisitions
 pool_shares = 85 + 15 + 10 = 110
 avg = pool_cost / 110
 
-After SELL 100: 
+After SELL 100:
 pool_shares = 10
 pool_cost = pool_cost - (100 * avg) = pool_cost * (10/110)
 remaining_avg = pool_cost * (10/110) / 10 = same avg as before
@@ -2542,7 +2630,7 @@ Since holdings are computed live (not stored), the safest approach is:
    # After repair: cost = gross_eur (gross includes commission)
    # Before repair: cost = gross_eur + commission_eur (gross = net)
    ```
-   
+
    Better: add a `_repair_version` field during data repair. But this is over-engineered.
 
    **Simplest safe approach:** Deploy engine + import fix + data repair in one maintenance window. The window is short (script runs in seconds for ~200 BUY records). Accept that during the few seconds between engine deploy and repair completion, holdings for CSV-imported BUYs with commission > 0 will under-count by the commission amount. This is a transient display error during a maintenance window, not a data corruption.
@@ -2705,10 +2793,10 @@ Only genuinely INCOMPLETE holdings (future, with `unpaid_shares > 0` and empty p
 
 ### Reuben — Read-Only Audit Report: FIFO/Net Accounting Pre-Flight
 
-**Date:** 2026-09-08T10:14Z  
-**Author:** Reuben (backend/migration specialist)  
-**Directive:** `copilot-directive-20260908-fifo-net-accounting.md`  
-**Contract reference:** `danny-fifo-net-accounting-contract.md`  
+**Date:** 2026-09-08T10:14Z
+**Author:** Reuben (backend/migration specialist)
+**Directive:** `copilot-directive-20260908-fifo-net-accounting.md`
+**Contract reference:** `danny-fifo-net-accounting-contract.md`
 **Scope:** Read-only analysis — no production edits, no test changes, no migrations applied.
 
 ---
@@ -2730,7 +2818,7 @@ Under the deployed convention (`gross` = total outflow including commission;
 | 2024-01-23 | 15 | 738.61 | 731.44 | 7.17 | 49.2407/sh |
 | 2025-08-05 | 10 | 490.38 | 484.86 | 5.52 | 49.0380/sh |
 
-Total BUY inventory: **110 shares**, total outflow **€4,037.00**  
+Total BUY inventory: **110 shares**, total outflow **€4,037.00**
 Note: the backup also implies 45 SELL records existed at the time of migration audit (mentioned in checkpoint 006 §18 "all 45 active SELL records remained untouched"). ADM SELL records are not captured in the backup (backup only covers BUY candidates), so their gross/net/quantity cannot be verified here without DB access.
 
 ### 1.2 Under the New Directive (`danny-fifo-net-accounting-contract.md`)
@@ -2819,7 +2907,7 @@ withholding.source.amount_eur   = wht_source
 withholding.destination.amount_eur = wht_destination
 ```
 
-New directive for DIVIDEND: `net = gross - fees - withholding`.  
+New directive for DIVIDEND: `net = gross - fees - withholding`.
 With `fees = 0`, this becomes `net = gross - withholding`, which is precisely what
 `Importe Neto` stores. **Dividend records are already aligned with the new directive.**
 
@@ -2882,7 +2970,7 @@ handles them through source evidence, not backup restoration.**
 | DIVIDEND records | unknown | — | no field migration needed |
 | Manual BUY created before Linus's fix (pre-4ca553e) | 0 (audit found none) | — | migration found 0 manual candidates |
 
-**Minimum required gross↔net field swaps: ~280 BUY records**  
+**Minimum required gross↔net field swaps: ~280 BUY records**
 **Unknown additional: post-backup BUY records** — requires fresh DB query before applying.
 
 ---
@@ -2911,7 +2999,7 @@ fields) on BUY records, then update the holdings engine to read `net_eur` instea
    records. Holdings output — average cost, remaining cost basis — does not change.
 2. **Idempotent marker:** Write `_repair_buy_fields_v2 = timestamp` on each patched record.
    Records already carrying v2 are unconditionally skipped on re-run.
-3. **Detection:** 
+3. **Detection:**
    - Primary: `_repair_buy_fields_v1` present + fees_eur > 0 → swap gross↔net
    - Secondary: no v1/v2 marker + `abs(gross_eur - (net_eur + fees_eur)) < 0.01` → swap
      (covers post-backup records imported under the 4ca553e convention)
@@ -3012,9 +3100,9 @@ and identify any post-backup BUY records before forward migration is designed an
 ### 1. Unified Symbol Overview & Shared Filtering — Portfolio + Watchlist Consolidation
 
 
-**Date:** 2026-09-07  
-**Authors:** Danny (Architect), Rusty (Frontend), Livingston (Backend), Reuben (Frontend, escalated revision), Basher (Testing)  
-**Status:** ✅ **RELEASED** — Commit 69e3635  
+**Date:** 2026-09-07
+**Authors:** Danny (Architect), Rusty (Frontend), Livingston (Backend), Reuben (Frontend, escalated revision), Basher (Testing)
+**Status:** ✅ **RELEASED** — Commit 69e3635
 **Impact:** Single unified symbol overview table (Portfolio holdings + Watchlist research) with shared filter surface; account colors and labels throughout; US eligibility enforcement; international portfolio enrichment via provider-symbol resolution
 
 #### User Directive (2026-09-07)
@@ -3105,9 +3193,9 @@ A symbol has explicit membership if: manually added OR any watchlist toggle enab
 
 #### Deployed
 
-**Commit:** `69e3635 feat: consolidate symbols and portfolio workflows`  
-**GitHub Actions:** Run 34067334078 — **SUCCESS**  
-**Deployment:** API + frontend images built, Azure Container Apps revisions ready  
+**Commit:** `69e3635 feat: consolidate symbols and portfolio workflows`
+**GitHub Actions:** Run 34067334078 — **SUCCESS**
+**Deployment:** API + frontend images built, Azure Container Apps revisions ready
 **Test Coverage:** 996/996 tests passing (421 backend + 183 frontend + 392 integration)
 
 ---
@@ -3116,14 +3204,14 @@ A symbol has explicit membership if: manually added OR any watchlist toggle enab
 ### 2. Rights-Sale Portfolio Column Extension (Tipo) — COMPLETE & SHIPPED
 
 
-**Date:** 2026-09-06  
-**Authors:** Danny (Lead, Architecture), Livingston (Persistence & Integration), Basher (QA/Validation)  
-**Status:** COMPLETE — commit 031464c; 164/164 tests pass; GitHub Actions run 34027265195 PASSED; approved for production  
+**Date:** 2026-09-06
+**Authors:** Danny (Lead, Architecture), Livingston (Persistence & Integration), Basher (QA/Validation)
+**Status:** COMPLETE — commit 031464c; 164/164 tests pass; GitHub Actions run 34027265195 PASSED; approved for production
 **Impact:** Portfolio sales CSV extended to distinguish ACCIONES (shares) from DERECHOS (rights); DERECHOS sales do NOT decrement holdings; backward-compatible with legacy 6-column format
 
 #### Executive Summary
 
-Users need to record sales of rights ("Derechos") separately from sales of shares ("Acciones") to correctly model holdings and preserve sales proceeds. The design extends the 6-column sales CSV with an optional 7th column "Tipo" (Type), normalized to either "ACCIONES" or "DERECHOS". 
+Users need to record sales of rights ("Derechos") separately from sales of shares ("Acciones") to correctly model holdings and preserve sales proceeds. The design extends the 6-column sales CSV with an optional 7th column "Tipo" (Type), normalized to either "ACCIONES" or "DERECHOS".
 
 **Key requirement:** ACCIONES sales decrement holdings; DERECHOS sales do NOT. Legacy 6-column CSVs default to "ACCIONES" (backward-compatible).
 
@@ -3216,9 +3304,9 @@ total_shares = SUM(BUY.quantity) - SUM(SELL[sales_type=="ACCIONES"].quantity)
 
 #### Deployment
 
-**Commit:** 031464c  
-**GitHub Actions:** Run 34027265195 PASSED  
-**Status:** API and frontend healthy on sha-031464c  
+**Commit:** 031464c
+**GitHub Actions:** Run 34027265195 PASSED
+**Status:** API and frontend healthy on sha-031464c
 **Release:** Shipped to production
 
 ---
@@ -3227,9 +3315,9 @@ total_shares = SUM(BUY.quantity) - SUM(SELL[sales_type=="ACCIONES"].quantity)
 ### 3. Rights-Sales Column Position Reconciliation (Follow-Up)
 
 
-**Date:** 2026-09-06  
-**Author:** Livingston (Persistence & Integration Engineer)  
-**Status:** RESOLVED — pragmatic dual-layout implementation; Layout A (column 3) confirmed canonical  
+**Date:** 2026-09-06
+**Author:** Livingston (Persistence & Integration Engineer)
+**Status:** RESOLVED — pragmatic dual-layout implementation; Layout A (column 3) confirmed canonical
 **Scope:** Parser column detection; reconcile user sample vs. design doc test fixtures
 
 #### Conflict Description
@@ -3271,10 +3359,10 @@ else:
 
 #### Outcome
 
-✅ **All 164 portfolio tests pass**  
-✅ **TypeScript compiles clean (0 errors)**  
-✅ **User's Layout A CSV accepted**  
-✅ **Basher's Layout B test fixtures work**  
+✅ **All 164 portfolio tests pass**
+✅ **TypeScript compiles clean (0 errors)**
+✅ **User's Layout A CSV accepted**
+✅ **Basher's Layout B test fixtures work**
 ✅ **No ambiguity in data interpretation**
 
 #### Canonical Layout Confirmation
@@ -3576,9 +3664,9 @@ Current custody of a security may differ from the broker where historical purcha
 ### 2. Portfolio Summary Totals & Holdings Filters (APPROVED & IMPLEMENTED)
 
 
-**Date:** 2026-09-06  
-**Author:** Danny (Lead)  
-**Status:** FROZEN — implementation-ready (Rusty Backend + Livingston Frontend)  
+**Date:** 2026-09-06
+**Author:** Danny (Lead)
+**Status:** FROZEN — implementation-ready (Rusty Backend + Livingston Frontend)
 **Impact:** Holdings summary displays purchase/sale/current-invested totals; UI filters hide zero-share holdings (default on) and search ticker/company/security_id; Find in portfolio search.
 
 #### Backend: Summary Accumulators
@@ -3638,9 +3726,9 @@ Current custody of a security may differ from the broker where historical purcha
 ### 3. Find in Portfolio — Import Question Security Search (APPROVED & IMPLEMENTED)
 
 
-**Date:** 2026-09-06  
-**Author:** Livingston (Frontend Lead)  
-**Status:** FROZEN — implementation-ready (Rusty Implementation)  
+**Date:** 2026-09-06
+**Author:** Livingston (Frontend Lead)
+**Status:** FROZEN — implementation-ready (Rusty Implementation)
 **Impact:** Import questions for unresolved companies can now search existing portfolio securities (including aliases) and select to map to SELECTED_CANDIDATE.
 
 #### Feature
@@ -3726,9 +3814,9 @@ User directive: Enable Watchlist-only symbols (no portfolio holdings); auto-add 
 
 ## Symbol Unification — Portfolio ↔ Watchlist ↔ Symbol Details Integration (2026-09-06)
 
-**Date:** 2026-09-06 (Implementation Contract rev 3)  
-**Authors:** Danny (Lead Architect), Livingston (Backend/Persistence), Rusty (Frontend/UX), Basher (Testing)  
-**Status:** ✅ APPROVED, DEPLOYED, HEALTHY  
+**Date:** 2026-09-06 (Implementation Contract rev 3)
+**Authors:** Danny (Lead Architect), Livingston (Backend/Persistence), Rusty (Frontend/UX), Basher (Testing)
+**Status:** ✅ APPROVED, DEPLOYED, HEALTHY
 **Impact:** Unified symbol management: unify Portfolio securities with Watchlist and Symbol Details, auto-enroll symbols with disabled agent/notification defaults, render two-section Watchlist (Portfolio/Watchlist-only symbols).
 
 
@@ -7904,9 +7992,9 @@ this feature.
 
 ## Manual Movement Round-Trip Fidelity Fix
 
-**Date:** 2026-09-08  
-**Status:** RESOLVED  
-**Commit:** 914d6a6  
+**Date:** 2026-09-08
+**Status:** RESOLVED
+**Commit:** 914d6a6
 **Requested by:** Copilot (internal bug fix)
 
 ### Context
@@ -7945,7 +8033,6 @@ Manually-created portfolio movements (Add Movement dialog) and transfer pairs di
 
 ### User Impact
 
-✅ Manually-created movements display correctly in detail dialog  
-✅ "Void entire group" action now available for Share Consolidation groups with manual legs  
+✅ Manually-created movements display correctly in detail dialog
+✅ "Void entire group" action now available for Share Consolidation groups with manual legs
 ✅ Movement correction dialog safely initializes sparse movements (transfers, manual edits)
-
