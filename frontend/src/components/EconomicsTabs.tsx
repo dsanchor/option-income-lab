@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 
 const linkBase =
   "inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] px-3 py-1.5 text-sm transition-all no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/60";
@@ -21,7 +22,7 @@ const TABS = [
 function buildHref(
   href: string,
   keys: readonly string[],
-  searchParams: ReturnType<typeof useSearchParams>,
+  searchParams: URLSearchParams,
 ) {
   const params = new URLSearchParams();
   for (const key of keys) {
@@ -34,7 +35,16 @@ function buildHref(
 
 export default function EconomicsTabs() {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+  // Client-only search string, read after mount (matches the pattern used in
+  // EconomicsView/DividendsView) to avoid next/navigation's useSearchParams(),
+  // which requires a <Suspense> boundary and otherwise breaks static prerendering.
+  const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    setSearch(window.location.search);
+  }, [pathname]);
+
+  const searchParams = new URLSearchParams(search);
 
   return (
     <div className="w-fit rounded-[var(--radius-pill)] border border-border bg-bg-card p-1">
