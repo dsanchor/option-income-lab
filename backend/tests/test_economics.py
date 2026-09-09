@@ -1,5 +1,10 @@
 from datetime import datetime, timezone
 
+import pytest
+from fastapi.testclient import TestClient
+
+import src.portfolio.cosmos_portfolio as cp
+from web.app import app
 from web.app import _build_economics_report
 
 
@@ -168,3 +173,100 @@ def test_build_economics_report_applies_filters():
             "opened_at": "2026-01-15T00:00:00Z",
         }
     ]
+
+
+class _FakeEconomicsCosmos:
+    def __init__(self, symbol_docs):
+        self._symbol_docs = symbol_docs
+        self.portfolio_container = object()
+
+    def get_all_symbols(self):
+        return self._symbol_docs
+
+
+def _sample_dividend_movements():
+    return [
+        {
+            "id": "div-aapl",
+            "txn_type": "DIVIDEND",
+            "trade_date": "2024-01-15",
+            "ticker": "AAPL",
+            "security_id": "XNAS:AAPL",
+            "account_id": "acct-1",
+            "correction_status": "ACTIVE",
+            "gross": {"amount": "10", "currency": "USD", "eur_amount": "10"},
+            "fees": {"total_eur": "0"},
+            "withholding": {"source": {"amount_eur": "1"}},
+            "net": {"eur_amount": "9"},
+        },
+        {
+            "id": "div-msft",
+            "txn_type": "DIVIDEND",
+            "trade_date": "2024-02-15",
+            "ticker": "MSFT",
+            "security_id": "XNAS:MSFT",
+            "account_id": "acct-2",
+            "correction_status": "ACTIVE",
+            "gross": {"amount": "8", "currency": "USD", "eur_amount": "8"},
+            "fees": {"total_eur": "0"},
+            "withholding": {},
+            "net": {"eur_amount": "8"},
+        },
+    ]
+
+
+@pytest.fixture
+def economics_client():
+    original_cosmos = getattr(app.state, "cosmos", None)
+    original_error = getattr(app.state, "cosmos_error", None)
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            app.state.cosmos = _FakeEconomicsCosmos(_sample_symbol_docs())
+            app.state.cosmos_error = None
+            yield client
+    finally:
+        app.state.cosmos = original_cosmos
+        app.state.cosmos_error = original_error
+
+
+def test_api_dividends_economics_smoke(monkeypatch, economics_client):
+    monkeypatch.setattr(
+        cp.CosmosPortfolioService,
+        "get_all_movements_for_holdings",
+        lambda self: _sample_dividend_movements(),
+    )
+
+    response = economics_client.get("/api/economics/dividends")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) >= {
+        "summary",
+        "monthly",
+        "by_symbol",
+        "yearly",
+        "cumulative",
+        "positions",
+        "filters",
+    }
+
+
+def test_api_economics_overview_smoke(monkeypatch, economics_client):
+    monkeypatch.setattr(
+        cp.CosmosPortfolioService,
+        "get_all_movements_for_holdings",
+        lambda self: _sample_dividend_movements(),
+    )
+
+    response = economics_client.get("/api/economics/overview")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) >= {
+        "summary",
+        "monthly",
+        "by_symbol",
+        "filters",
+        "applied_filters",
+        "meta",
+    }

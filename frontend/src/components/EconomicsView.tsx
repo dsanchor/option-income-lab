@@ -374,7 +374,15 @@ function PositionsDetail({ rows }: { rows: EconomicsPosition[] }) {
   );
 }
 
-export default function EconomicsView() {
+export default function EconomicsView({
+  basePath = "/economics",
+  title = "Economics",
+  description = "Premium, buybacks, net income, and options RoC analytics across all symbols.",
+}: {
+  basePath?: string;
+  title?: string;
+  description?: string;
+}) {
   const [year, setYear] = useState<string>("");
   const [months, setMonths] = useState<string[]>([]);
   const [symbols, setSymbols] = useState<string[]>([]);
@@ -406,7 +414,7 @@ export default function EconomicsView() {
     if (status) params.set("status", status);
     const qs = params.toString();
     // Keep the browser URL in sync (shareable filters).
-    window.history.replaceState({}, "", qs ? `/economics?${qs}` : "/economics");
+    window.history.replaceState({}, "", qs ? `${basePath}?${qs}` : basePath);
     try {
       const res = await fetch(`/api/economics${qs ? `?${qs}` : ""}`);
       const body = await res.json().catch(() => ({}));
@@ -417,7 +425,7 @@ export default function EconomicsView() {
     } finally {
       setLoading(false);
     }
-  }, [year, months, symbols, type, status]);
+  }, [basePath, year, months, symbols, type, status]);
 
   useEffect(() => {
     if (!initialized) return;
@@ -430,9 +438,9 @@ export default function EconomicsView() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Economics</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
         <p className="mt-1 text-sm text-text-muted">
-          Premium, buybacks, net income, and options RoC analytics across all symbols.
+          {description}
         </p>
       </div>
 
