@@ -4,6 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import MultiSelect from "@/components/MultiSelect";
 import Reveal from "@/components/Reveal";
 import StatCard from "@/components/StatCard";
+import AccountBadge from "@/components/AccountBadge";
+import { listAccounts } from "@/lib/portfolio-api";
+import type { BrokerAccount } from "@/types/portfolio";
 import {
   Area,
   AreaChart,
@@ -352,6 +355,127 @@ function ByYearSection({ rows }: { rows: DividendsYearlyRow[] }) {
   );
 }
 
+type YoyGrowthRow = {
+  year: number;
+  priorYear: number;
+  monthsCompared: number;
+  thisYearNet: number;
+  priorYearNet: number;
+  pctChange: number | null;
+  isPartialYear: boolean;
+};
+
+/** Number of fully-elapsed calendar months in `year` as of `now` (0-12). */
+function completeMonthsForYear(year: number, now: Date): number {
+  if (year > now.getFullYear()) return 0;
+  if (year < now.getFullYear()) return 12;
+  return now.getMonth(); // now.getMonth() is 0-indexed → equals count of complete months so far
+}
+
+function sumNetThroughMonth(rows: DividendsMonthlyRow[], year: number, monthLimit: number): number {
+  return rows
+    .filter((row) => {
+      const { year: rowYear, month } = parseYearMonth(row.month);
+      return rowYear === year && month <= monthLimit;
+    })
+    .reduce((total, row) => total + row.net_eur, 0);
+}
+
+/**
+ * Builds year-over-year net dividend growth rows (most recent year first).
+ * The current calendar year is necessarily partial, so every comparison uses
+ * the same number of complete months on both sides (e.g. Jan-Aug this year
+ * vs Jan-Aug last year) rather than comparing a partial year to a full one.
+ */
+function computeYoyGrowth(rows: DividendsMonthlyRow[]): YoyGrowthRow[] {
+  const now = new Date();
+  const years = Array.from(new Set(rows.map((row) => parseYearMonth(row.month).year))).sort((a, b) => b - a);
+  const result: YoyGrowthRow[] = [];
+  for (const year of years) {
+    const priorYear = year - 1;
+    if (!years.includes(priorYear)) continue;
+    const monthsCompared = Math.min(completeMonthsForYear(year, now), completeMonthsForYear(priorYear, now));
+    if (monthsCompared <= 0) continue;
+    const thisYearNet = sumNetThroughMonth(rows, year, monthsCompared);
+    const priorYearNet = sumNetThroughMonth(rows, priorYear, monthsCompared);
+    const pctChange = priorYearNet !== 0 ? ((thisYearNet - priorYearNet) / Math.abs(priorYearNet)) * 100 : null;
+    result.push({
+      year,
+      priorYear,
+      monthsCompared,
+      thisYearNet,
+      priorYearNet,
+      pctChange,
+      isPartialYear: monthsCompared < 12,
+    });
+  }
+  return result;
+}
+
+function YoyGrowthSection({ rows }: { rows: DividendsMonthlyRow[] }) {
+  const growth = useMemo(() => computeYoyGrowth(rows), [rows]);
+
+  return (
+    <div className="surface overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3">
+        <h2 className="text-base font-semibold">Year-over-Year Growth</h2>
+        <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+          {growth.length} comparisons
+        </span>
+      </div>
+      <div className="overflow-x-auto border-t border-border">
+        <table className="w-full min-w-[720px] text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
+              <th className="px-3 py-2 font-medium">Comparison</th>
+              <th className="px-3 py-2 text-right font-medium">Months Compared</th>
+              <th className="px-3 py-2 text-right font-medium">This Period Net</th>
+              <th className="px-3 py-2 text-right font-medium">Prior Period Net</th>
+              <th className="px-3 py-2 text-right font-medium">Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {growth.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-3 py-6 text-center text-text-muted">
+                  Not enough multi-year history to compute growth yet.
+                </td>
+              </tr>
+            )}
+            {growth.map((row) => (
+              <tr
+                key={row.year}
+                className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40"
+              >
+                <td className="px-3 py-2 font-semibold">
+                  {row.year} vs {row.priorYear}
+                  {row.isPartialYear && (
+                    <span className="ml-2 rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-[10px] font-normal uppercase tracking-wide text-text-muted">
+                      YTD
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right font-mono">
+                  Jan–{MONTHS[row.monthsCompared - 1].label}
+                </td>
+                <td className="px-3 py-2 text-right font-mono">{eur(row.thisYearNet)}</td>
+                <td className="px-3 py-2 text-right font-mono">{eur(row.priorYearNet)}</td>
+                <td className={`px-3 py-2 text-right font-mono ${row.pctChange === null ? "text-text-muted" : signedColor(row.pctChange)}`}>
+                  {row.pctChange === null ? "—" : `${row.pctChange >= 0 ? "+" : ""}${row.pctChange.toFixed(1)}%`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="border-t border-border px-4 py-2 text-xs text-text-muted">
+        Each comparison uses the same number of complete months on both sides, so the current (partial) year is
+        never compared against a full prior year.
+      </p>
+    </div>
+  );
+}
+
 function MonthlyNetChart({ rows }: { rows: DividendsMonthlyRow[] }) {
   if (!rows.length) return <p className="text-sm text-text-muted">No data.</p>;
   const chartData = rows.map((row) => ({ label: formatMonthLabel(row.month), net_eur: row.net_eur }));
@@ -387,66 +511,9 @@ function MonthlyNetChart({ rows }: { rows: DividendsMonthlyRow[] }) {
   );
 }
 
-function GrossVsNetChart({ rows }: { rows: DividendsBySymbolRow[] }) {
-  if (!rows.length) return <p className="text-sm text-text-muted">No data.</p>;
-  const chartData = rows.map((row) => ({
-    symbol: row.symbol,
-    gross_eur: row.gross_eur,
-    net_eur: row.net_eur,
-    withholding_total_eur: row.withholding_total_eur,
-  }));
-
-  return (
-    <div style={{ height: 260 }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 4, left: 2 }} barGap={4}>
-          <CartesianGrid stroke="rgba(148,163,184,0.08)" strokeDasharray="3 3" vertical={false} />
-          <XAxis
-            dataKey="symbol"
-            tick={{ fill: "#8d969e", fontSize: 10 }}
-            tickLine={false}
-            axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
-          />
-          <YAxis
-            tick={{ fill: "#8d969e", fontSize: 10 }}
-            tickLine={false}
-            axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
-            tickFormatter={(value) => eur(Number(value))}
-            width={72}
-          />
-          <Tooltip
-            cursor={{ fill: "rgba(148,163,184,0.08)" }}
-            content={({ active, payload, label }) => {
-              if (!active || !payload?.length) return null;
-              const source = payload[0]?.payload as { withholding_total_eur: number };
-              return (
-                <div className="rounded-[10px] border border-border bg-bg-card px-3 py-2 text-xs shadow-lg">
-                  <div className="mb-1 font-medium text-text">{label}</div>
-                  {payload.map((entry, index) => (
-                    <div key={`${entry.name}-${index}`} className="flex items-center gap-2">
-                      <span className="inline-block h-2 w-2 rounded-sm" style={{ background: entry.color }} />
-                      <span className="text-text-muted">{entry.name}</span>
-                      <span className="ml-auto font-mono text-text">{eur(Number(entry.value ?? 0))}</span>
-                    </div>
-                  ))}
-                  <div className="mt-1 border-t border-border pt-1 text-text-muted">
-                    Withholding: <span className="font-mono text-text">{eur(source.withholding_total_eur)}</span>
-                  </div>
-                </div>
-              );
-            }}
-          />
-          <Legend wrapperStyle={{ fontSize: 11, color: "#8d969e" }} iconType="circle" iconSize={8} />
-          <Bar dataKey="gross_eur" name="Gross" fill="#5b61ff" radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
-          <Bar dataKey="net_eur" name="Net" fill="#00c493" radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-
-function YearOverYearChart({ rows }: { rows: DividendsMonthlyRow[] }) {
+function YearOverYearChart({ rows, selectedYears }: { rows: DividendsMonthlyRow[]; selectedYears: Set<number> }) {
   const years = Array.from(new Set(rows.map((row) => parseYearMonth(row.month).year))).sort((a, b) => a - b);
+  const visibleYears = years.filter((year) => selectedYears.has(year));
   if (!years.length) return <p className="text-sm text-text-muted">No multi-year data.</p>;
 
   const byMonth = new Map<number, Record<string, number | string>>();
@@ -483,13 +550,13 @@ function YearOverYearChart({ rows }: { rows: DividendsMonthlyRow[] }) {
             />
             <Tooltip content={<ChartTooltip />} />
             <Legend wrapperStyle={{ fontSize: 11, color: "#8d969e" }} iconType="circle" iconSize={8} />
-            {years.map((year, index) => (
+            {visibleYears.map((year) => (
               <Line
                 key={year}
                 type="monotone"
                 dataKey={String(year)}
                 name={String(year)}
-                stroke={LINE_COLORS[index % LINE_COLORS.length]}
+                stroke={LINE_COLORS[years.indexOf(year) % LINE_COLORS.length]}
                 strokeWidth={2}
                 dot={{ r: 2 }}
                 connectNulls
@@ -513,7 +580,6 @@ function CumulativeChart({ rows }: { rows: DividendsCumulativeRow[] }) {
       <div style={{ height: 260 }}>
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={chartData} margin={{ top: 8, right: 8, bottom: 4, left: 2 }}>
-            <CartesianGrid stroke="rgba(148,163,184,0.08)" strokeDasharray="3 3" vertical={false} />
             <XAxis
               dataKey="month"
               tick={{ fill: "#8d969e", fontSize: 10 }}
@@ -558,8 +624,7 @@ const POSITION_COLS: {
     | "gross_currency"
     | "fees_eur"
     | "withholding_source_eur"
-    | "withholding_destination_eur"
-    | "correction_status";
+    | "withholding_destination_eur";
   label: string;
   num?: boolean;
   sortable?: boolean;
@@ -575,16 +640,9 @@ const POSITION_COLS: {
   { key: "withholding_destination_eur", label: "Withholding Dest", num: true },
   { key: "withholding_total_eur", label: "Withholding Total", num: true, sortable: true },
   { key: "net_eur", label: "Net EUR", num: true, sortable: true },
-  { key: "correction_status", label: "Status" },
 ];
 
-function statusBadgeClass(status: string): string {
-  if (status === "CORRECTED") return "border-accent-orange/40 bg-accent-orange/10 text-accent-orange";
-  if (status === "VOID") return "border-accent-red/40 bg-accent-red/10 text-accent-red";
-  return "border-accent-green/40 bg-accent-green/10 text-accent-green";
-}
-
-function DividendsDetail({ rows }: { rows: DividendPosition[] }) {
+function DividendsDetail({ rows, accounts }: { rows: DividendPosition[]; accounts: BrokerAccount[] }) {
   const [sortKey, setSortKey] = useState<DividendSortKey>("trade_date");
   const [dir, setDir] = useState<"asc" | "desc">("desc");
 
@@ -642,7 +700,7 @@ function DividendsDetail({ rows }: { rows: DividendPosition[] }) {
             {sorted.map((row) => (
               <tr key={row.id} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
                 <td className="px-3 py-2 font-mono">{row.trade_date}</td>
-                <td className="px-3 py-2">{row.account_id || "—"}</td>
+                <td className="px-3 py-2"><AccountBadge accountId={row.account_id || ""} accounts={accounts} /></td>
                 <td className="px-3 py-2 font-semibold">{row.symbol}</td>
                 <td className="px-3 py-2 text-right font-mono">{nativeCurrency(row.gross_amount, row.gross_currency)}</td>
                 <td className="px-3 py-2 font-mono">{row.gross_currency}</td>
@@ -652,11 +710,6 @@ function DividendsDetail({ rows }: { rows: DividendPosition[] }) {
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_destination_eur)}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_total_eur)}</td>
                 <td className={`px-3 py-2 text-right font-mono ${signedColor(row.net_eur)}`}>{eur(row.net_eur)}</td>
-                <td className="px-3 py-2">
-                  <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${statusBadgeClass(row.correction_status)}`}>
-                    {row.correction_status}
-                  </span>
-                </td>
               </tr>
             ))}
           </tbody>
@@ -673,6 +726,8 @@ export default function DividendsView() {
   const [accountIds, setAccountIds] = useState<string[]>([]);
   const [data, setData] = useState<DividendsReport | null>(null);
   const [comparisonData, setComparisonData] = useState<DividendsReport | null>(null);
+  const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
+  const [selectedYoyYears, setSelectedYoyYears] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState(false);
@@ -684,6 +739,12 @@ export default function DividendsView() {
     setSymbols(params.get("symbol") ? params.get("symbol")!.split(",").filter(Boolean) : []);
     setAccountIds(params.get("account_id") ? params.get("account_id")!.split(",").filter(Boolean) : []);
     setInitialized(true);
+  }, []);
+
+  useEffect(() => {
+    listAccounts()
+      .then((resp) => setAccounts(resp.accounts))
+      .catch(() => setAccounts([]));
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -735,6 +796,27 @@ export default function DividendsView() {
   const yoyRows = comparisonData?.monthly ?? [];
   const yearlyRows = comparisonData?.yearly ?? [];
   const cumulativeRows = comparisonData?.cumulative ?? [];
+
+  const availableYoyYears = useMemo(
+    () => Array.from(new Set(yoyRows.map((row) => parseYearMonth(row.month).year))).sort((a, b) => a - b),
+    [yoyRows],
+  );
+
+  useEffect(() => {
+    setSelectedYoyYears((prev) => {
+      const stillValid = prev.size > 0 && Array.from(prev).every((y) => availableYoyYears.includes(y));
+      return stillValid ? prev : new Set(availableYoyYears);
+    });
+  }, [availableYoyYears]);
+
+  function toggleYoyYear(yearValue: number) {
+    setSelectedYoyYears((prev) => {
+      const next = new Set(prev);
+      if (next.has(yearValue)) next.delete(yearValue);
+      else next.add(yearValue);
+      return next;
+    });
+  }
 
   return (
     <div className="space-y-8">
@@ -802,6 +884,7 @@ export default function DividendsView() {
           <MonthlySection rows={data.monthly} />
           <BySymbolSection rows={data.by_symbol} />
           <ByYearSection rows={yearlyRows} />
+          <YoyGrowthSection rows={yoyRows} />
 
           <div className="surface p-4">
             <h2 className="mb-4 text-base font-semibold">Charts</h2>
@@ -811,12 +894,26 @@ export default function DividendsView() {
                 <MonthlyNetChart rows={data.monthly} />
               </div>
               <div>
-                <h3 className="mb-2 text-sm font-medium text-text-muted">Gross vs Net by Symbol</h3>
-                <GrossVsNetChart rows={data.by_symbol} />
-              </div>
-              <div>
-                <h3 className="mb-2 text-sm font-medium text-text-muted">Year-over-Year Monthly Comparison</h3>
-                <YearOverYearChart rows={yoyRows} />
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-medium text-text-muted">Year-over-Year Monthly Comparison</h3>
+                  <div className="flex flex-wrap gap-1.5">
+                    {availableYoyYears.map((yearValue) => (
+                      <button
+                        key={yearValue}
+                        type="button"
+                        onClick={() => toggleYoyYear(yearValue)}
+                        className={`rounded-[var(--radius-pill)] border px-2.5 py-0.5 text-xs transition-colors ${
+                          selectedYoyYears.has(yearValue)
+                            ? "border-accent-blue/40 bg-accent-blue/15 text-accent-blue"
+                            : "border-border bg-bg-input text-text-muted hover:text-text"
+                        }`}
+                      >
+                        {yearValue}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <YearOverYearChart rows={yoyRows} selectedYears={selectedYoyYears} />
               </div>
               <div>
                 <h3 className="mb-2 text-sm font-medium text-text-muted">Cumulative Net Dividends (Snowball)</h3>
@@ -825,7 +922,7 @@ export default function DividendsView() {
             </div>
           </div>
 
-          <DividendsDetail rows={data.positions} />
+          <DividendsDetail rows={data.positions} accounts={accounts} />
         </>
       )}
     </div>
