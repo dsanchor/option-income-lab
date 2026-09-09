@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from src.cosmos_db import is_watchlist_paused
 from src.scheduler_registry import _MAX_TASK_DURATION_SECONDS
 from src.best_options import DEFAULT_DTE_MIN, DEFAULT_DTE_MAX
+from src.dividends_economics import build_dividends_economics_report
 
 try:
     import yfinance as yf
@@ -444,6 +445,135 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
             "symbols": symbol_filter,
             "type": option_type,
             "status": status_filter,
+        },
+    }
+
+
+def _build_economics_overview_report(
+    options_report: Dict[str, Any],
+    dividends_report: Dict[str, Any],
+    *,
+    year: Optional[int] = None,
+    month_filter: Optional[List[int]] = None,
+    symbol_filter: Optional[List[str]] = None,
+    source: str = "both",
+) -> Dict[str, Any]:
+    monthly_rows: Dict[str, Dict[str, Any]] = {}
+    symbol_rows: Dict[str, Dict[str, Any]] = {}
+
+    for row in options_report.get("monthly", []):
+        group_year = row.get("year")
+        group_month = row.get("month")
+        if not isinstance(group_year, int) or not isinstance(group_month, int):
+            continue
+        month_key = f"{group_year:04d}-{group_month:02d}"
+        monthly_rows.setdefault(
+            month_key,
+            {
+                "month": month_key,
+                "options_net_native": 0.0,
+                "dividends_net_eur": 0.0,
+                "option_positions": 0,
+                "dividend_events": 0,
+            },
+        )
+        monthly_rows[month_key]["options_net_native"] = row.get("net") or 0.0
+        monthly_rows[month_key]["option_positions"] = row.get("positions_count") or 0
+
+    for row in dividends_report.get("monthly", []):
+        month_key = str(row.get("month") or "").strip()
+        if not month_key:
+            continue
+        monthly_rows.setdefault(
+            month_key,
+            {
+                "month": month_key,
+                "options_net_native": 0.0,
+                "dividends_net_eur": 0.0,
+                "option_positions": 0,
+                "dividend_events": 0,
+            },
+        )
+        monthly_rows[month_key]["dividends_net_eur"] = row.get("net_eur") or 0.0
+        monthly_rows[month_key]["dividend_events"] = row.get("dividend_count") or 0
+
+    for row in options_report.get("by_symbol", []):
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        symbol_rows.setdefault(
+            symbol,
+            {
+                "symbol": symbol,
+                "options_net_native": 0.0,
+                "dividends_net_eur": 0.0,
+                "option_positions": 0,
+                "dividend_events": 0,
+            },
+        )
+        symbol_rows[symbol]["options_net_native"] = row.get("net") or 0.0
+        symbol_rows[symbol]["option_positions"] = row.get("positions_count") or 0
+
+    for row in dividends_report.get("by_symbol", []):
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        symbol_rows.setdefault(
+            symbol,
+            {
+                "symbol": symbol,
+                "options_net_native": 0.0,
+                "dividends_net_eur": 0.0,
+                "option_positions": 0,
+                "dividend_events": 0,
+            },
+        )
+        symbol_rows[symbol]["dividends_net_eur"] = row.get("net_eur") or 0.0
+        symbol_rows[symbol]["dividend_events"] = row.get("dividend_count") or 0
+
+    filtered_symbols = {
+        row["symbol"]
+        for row in symbol_rows.values()
+        if (
+            row.get("option_positions")
+            or row.get("dividend_events")
+            or row.get("options_net_native")
+            or row.get("dividends_net_eur")
+        )
+    }
+    available_years = set(options_report.get("filters", {}).get("years", []))
+    available_years.update(dividends_report.get("filters", {}).get("years", []))
+    available_symbols = set(options_report.get("filters", {}).get("symbols", []))
+    available_symbols.update(dividends_report.get("filters", {}).get("symbols", []))
+
+    return {
+        "summary": {
+            "options_net_native": options_report.get("summary", {}).get("net_income", 0.0),
+            "options_currency": "USD",
+            "dividends_net_eur": dividends_report.get("summary", {}).get("total_net_eur", 0.0),
+            "total_option_positions": options_report.get("summary", {}).get("total_positions", 0),
+            "total_dividend_events": dividends_report.get("summary", {}).get("total_dividends", 0),
+            "total_symbols": len(filtered_symbols),
+            "fx_mode": "side_by_side",
+        },
+        "monthly": [monthly_rows[key] for key in sorted(monthly_rows)],
+        "by_symbol": [symbol_rows[key] for key in sorted(symbol_rows)],
+        "filters": {
+            "years": sorted(available_years, reverse=True),
+            "symbols": sorted(available_symbols),
+        },
+        "applied_filters": {
+            "year": year,
+            "months": month_filter,
+            "symbols": symbol_filter,
+            "source": source,
+        },
+        "meta": {
+            "options_bucket_field": "opened_at",
+            "dividends_bucket_field": "trade_date",
+            "options_currency_native": "USD",
+            "dividends_currency": "EUR",
+            "combined_total_available": False,
         },
     }
 
@@ -1027,6 +1157,131 @@ async def api_economics(request: Request,
                 symbol_filter=symbol_list,
                 option_type=normalized_type,
                 status_filter=normalized_status,
+            )
+        )
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/economics/dividends")
+async def api_dividends_economics(request: Request,
+                                  year: Optional[int] = Query(default=None),
+                                  month: Optional[str] = Query(default=None),
+                                  symbol: Optional[str] = Query(default=None),
+                                  account_id: Optional[str] = Query(default=None)):
+    try:
+        cosmos = _get_cosmos(request)
+        portfolio_container = getattr(cosmos, "portfolio_container", None)
+        if portfolio_container is None:
+            raise RuntimeError("CosmosDB portfolio container not available")
+
+        symbol_list = None
+        if symbol:
+            symbol_list = [s.strip().upper() for s in symbol.split(",") if s.strip()]
+            if not symbol_list:
+                symbol_list = None
+
+        month_list = None
+        if month:
+            try:
+                month_list = [int(m.strip()) for m in month.split(",") if m.strip()]
+                if not month_list:
+                    month_list = None
+            except ValueError:
+                month_list = None
+
+        account_list = None
+        if account_id:
+            account_list = [a.strip() for a in account_id.split(",") if a.strip()]
+            if not account_list:
+                account_list = None
+
+        from src.portfolio.cosmos_portfolio import CosmosPortfolioService
+
+        portfolio_svc = CosmosPortfolioService(portfolio_container, None)
+        movements = portfolio_svc.get_all_movements_for_holdings()
+        return JSONResponse(
+            build_dividends_economics_report(
+                movements,
+                year=year,
+                month_filter=month_list,
+                symbol_filter=symbol_list,
+                account_filter=account_list,
+            )
+        )
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/economics/overview")
+async def api_economics_overview(request: Request,
+                                 year: Optional[int] = Query(default=None),
+                                 month: Optional[str] = Query(default=None),
+                                 symbol: Optional[str] = Query(default=None),
+                                 source: Optional[str] = Query(default=None)):
+    try:
+        cosmos = _get_cosmos(request)
+        portfolio_container = getattr(cosmos, "portfolio_container", None)
+        if portfolio_container is None:
+            raise RuntimeError("CosmosDB portfolio container not available")
+
+        symbol_list = None
+        if symbol:
+            symbol_list = [s.strip().upper() for s in symbol.split(",") if s.strip()]
+            if not symbol_list:
+                symbol_list = None
+
+        month_list = None
+        if month:
+            try:
+                month_list = [int(m.strip()) for m in month.split(",") if m.strip()]
+                if not month_list:
+                    month_list = None
+            except ValueError:
+                month_list = None
+
+        normalized_source = source.strip().lower() if source else "both"
+        if normalized_source not in {"options", "dividends", "both"}:
+            return JSONResponse(
+                {"error": "source must be 'options', 'dividends', or 'both'"},
+                status_code=400,
+            )
+
+        get_all_symbols = getattr(cosmos, "get_all_symbols", None)
+        symbol_docs = (
+            get_all_symbols()
+            if callable(get_all_symbols)
+            else cosmos.list_symbols()
+        )
+
+        from src.portfolio.cosmos_portfolio import CosmosPortfolioService
+
+        portfolio_svc = CosmosPortfolioService(portfolio_container, None)
+        movements = portfolio_svc.get_all_movements_for_holdings()
+        options_report = _build_economics_report(
+            symbol_docs,
+            year=year,
+            month_filter=month_list,
+            symbol_filter=symbol_list,
+        )
+        dividends_report = build_dividends_economics_report(
+            movements,
+            year=year,
+            month_filter=month_list,
+            symbol_filter=symbol_list,
+        )
+        return JSONResponse(
+            _build_economics_overview_report(
+                options_report,
+                dividends_report,
+                year=year,
+                month_filter=month_list,
+                symbol_filter=symbol_list,
+                source=normalized_source,
             )
         )
     except RuntimeError as e:
