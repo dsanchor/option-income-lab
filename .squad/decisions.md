@@ -2,8 +2,35 @@
 
 ## Active Decisions
 
+### Danny — Economics Unified Dashboards Design
 
-## Active Decisions
+**Date:** 2026-09-09  
+**Status:** PROPOSED  
+**Requested by:** dsanchor
+
+**Decision:** Adopt a **three-view Economics information architecture**:
+
+1. `/economics` — global overview
+2. `/economics/options` — options detail (existing page, moved canonically)
+3. `/economics/dividends` — dividends detail (new)
+
+Navigation uses **routed pages with an in-page Economics tab bar**.
+
+**Key architectural ruling:** Do **not** publish a single blended "Economics total" KPI in v1.
+
+- Options economics: native-premium data with **no stored currency or FX conversion**
+- Dividends: authoritative in **EUR** via `net.eur_amount`
+- `backend/src/portfolio/fx_service.py` proves FX capability exists, but is insufficient for historical backfill
+
+**Result:** Overview launches as **side-by-side series**:
+- Options net (USD native)
+- Dividends net (EUR)
+
+**Consequences:**
+- Overview is accurate on day one, avoids misleading headline numbers
+- Future "true unified total" requires separate FX/data-foundation project
+- Legacy `/economics?...` bookmarks become migration concern; `/economics/options` is canonical detail URL
+
 
 ### Danny — Final Reviewer Gate: Post-Release UI Batch (Column Visibility, Symbol Detail Tabs, Config Collapse, Holdings, Account-Name-Only)
 

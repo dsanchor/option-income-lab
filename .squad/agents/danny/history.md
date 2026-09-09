@@ -1788,3 +1788,10 @@ Identical: `h-full` on Reveal, animated entrance, tone-based coloring, tooltip v
 
 **Revision location:** `.squad/decisions/inbox/danny-share-consolidation-contract-rev1.md`
 
+
+### 2026-09-09 — Economics Unified Dashboards Design
+
+- Produced `.squad/designs/economics-unified-dashboards-design.md` for the Economics overview/options/dividends split.
+- Recommended **routed Economics views with an in-page tab bar** rather than one giant client-tab page; runner-up is a TopNav dropdown if discoverability later becomes the bottleneck.
+- Rejected a naive blended options+dividends money KPI for v1: current options economics has no stored currency/FX, while dividends are EUR-native; ship the overview as **side-by-side USD-native options + EUR dividends** until a separate FX foundation scope exists.
+- Dividends detail should mirror the current options dashboard structure, keeping `year` / `months` / `symbols` and adding `account_id` because dividend rows are account-scoped.
