@@ -684,6 +684,9 @@ from src.options_screener_universe import (  # noqa: E402
     compute_options_screener_universe as _compute_screener_universe,
     _resolve_eligibility_mic as _resolve_screener_mic,
 )
+from src.calendar_visibility import (  # noqa: E402
+    compute_calendar_visible_symbols as _compute_calendar_visible_symbols,
+)
 
 
 def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_portfolio: bool = False):
@@ -3420,20 +3423,74 @@ def _compute_dashboard_data(cosmos) -> Dict[str, Any]:
 
 
 
+def _calendar_visible_symbols(cosmos) -> set:
+    """I/O wrapper around ``compute_calendar_visible_symbols`` (pure predicate,
+    src/calendar_visibility.py): loads symbol_configs + current portfolio
+    shares, then delegates the visibility decision. Mirrors the
+    ``_build_screener_symbol_inputs`` holdings-loading pattern so the
+    calendar, Symbols overview, and Options Screener never drift on what
+    counts as "still relevant" (danny-unified-watchlist-contract.md §1.1).
+    """
+    symbols = cosmos.list_symbols() if cosmos else []
+
+    from decimal import Decimal as _CalDec
+
+    shares_by_ticker: Dict[str, _CalDec] = {}
+    portfolio_container = getattr(cosmos, "portfolio_container", None)
+    if portfolio_container is not None:
+        try:
+            from src.portfolio.cosmos_portfolio import CosmosPortfolioService
+            from src.portfolio.cosmos_securities import CosmosSecuritiesService
+            from src.portfolio.holdings_service import HoldingsService
+
+            portfolio_svc = CosmosPortfolioService(portfolio_container, None)
+            securities_svc = CosmosSecuritiesService(cosmos.container)
+            holdings_svc = HoldingsService(portfolio_svc, securities_svc)
+            holdings_result = holdings_svc.compute_holdings()
+            for h in holdings_result.get("holdings", []):
+                ticker = (h.get("ticker") or "").strip().upper()
+                if not ticker:
+                    continue
+                try:
+                    shares_by_ticker[ticker] = _CalDec(str(h.get("total_shares", 0)))
+                except Exception:
+                    shares_by_ticker[ticker] = _CalDec("0")
+        except Exception as exc:
+            logger.warning("_calendar_visible_symbols: holdings load failed: %s", exc)
+
+    return _compute_calendar_visible_symbols(symbols, shares_by_ticker)
+
+
 @app.get("/api/calendar")
 async def api_calendar(request: Request):
-    """Return earnings and ex-dividend dates from the calendar container."""
+    """Return earnings and ex-dividend dates from the calendar container.
+
+    Excludes events for portfolio-origin symbols that are now historical
+    (zero current shares, no active option position, no explicit watchlist
+    interest) — see ``_calendar_visible_symbols``.
+    """
     cosmos = getattr(request.app.state, "cosmos", None)
     if cosmos is None:
         return {"events": [], "error": "CosmosDB not available"}
 
     events = cosmos.get_calendar_events()
+    try:
+        visible = _calendar_visible_symbols(cosmos)
+        events = [ev for ev in events if (ev.get("symbol") or "").strip().upper() in visible]
+    except Exception as exc:
+        logger.warning("api_calendar: visibility filter failed, showing all events: %s", exc)
     return {"events": events}
 
 
 @app.post("/api/calendar/refresh")
 async def api_calendar_refresh(request: Request):
-    """Refresh calendar events from yfinance and store in CosmosDB."""
+    """Refresh calendar events from yfinance and store in CosmosDB.
+
+    Skips portfolio-origin symbols that are now historical (zero shares, no
+    active option position, no explicit watchlist interest) so stale
+    positions don't keep consuming yfinance calls or reappearing on the
+    calendar — see ``_calendar_visible_symbols``.
+    """
     cosmos = getattr(request.app.state, "cosmos", None)
     if cosmos is None:
         return JSONResponse({"error": "CosmosDB not available"}, status_code=503)
@@ -3441,7 +3498,13 @@ async def api_calendar_refresh(request: Request):
     if yf is None:
         return JSONResponse({"error": "yfinance not installed"}, status_code=503)
 
-    symbols = cosmos.list_symbols() if cosmos else []
+    all_symbols = cosmos.list_symbols() if cosmos else []
+    try:
+        visible = _calendar_visible_symbols(cosmos)
+        symbols = [s for s in all_symbols if (s.get("symbol") or "").strip().upper() in visible]
+    except Exception as exc:
+        logger.warning("api_calendar_refresh: visibility filter failed, refreshing all: %s", exc)
+        symbols = all_symbols
     updated = 0
     errors = 0
 
