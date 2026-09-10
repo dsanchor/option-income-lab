@@ -18,7 +18,6 @@ import type {
   EconomicsAggregatedBySymbolRow,
   EconomicsAggregatedMonthlyRow,
   EconomicsAggregatedReport,
-  EconomicsAggregatedSource,
   EconomicsAggregatedSummary,
 } from "@/types/economics";
 
@@ -35,12 +34,6 @@ const MONTHS = [
   { value: "10", label: "Oct" },
   { value: "11", label: "Nov" },
   { value: "12", label: "Dec" },
-];
-
-const SOURCE_PILLS: { value: EconomicsAggregatedSource; label: string }[] = [
-  { value: "both", label: "Both" },
-  { value: "options", label: "Options" },
-  { value: "dividends", label: "Dividends" },
 ];
 
 const usd = (value: number | null | undefined, currencyCode = "USD") =>
@@ -67,31 +60,6 @@ function formatMonthLabel(value: string) {
   return Number.isNaN(date.getTime())
     ? value
     : new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric" }).format(date);
-}
-
-function Pills({
-  value,
-  onChange,
-}: {
-  value: EconomicsAggregatedSource;
-  onChange: (next: EconomicsAggregatedSource) => void;
-}) {
-  return (
-    <div className="flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1">
-      {SOURCE_PILLS.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          onClick={() => onChange(option.value)}
-          className={`rounded-[var(--radius-pill)] px-3 py-1 text-xs transition ${
-            value === option.value ? "bg-accent-blue text-white" : "text-text-muted hover:text-text"
-          }`}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 function SummaryRow({ summary }: { summary: EconomicsAggregatedSummary }) {
@@ -382,7 +350,6 @@ export default function EconomicsOverviewView() {
   const [year, setYear] = useState<string>("");
   const [months, setMonths] = useState<string[]>([]);
   const [symbols, setSymbols] = useState<string[]>([]);
-  const [source, setSource] = useState<EconomicsAggregatedSource>("both");
   const [data, setData] = useState<EconomicsAggregatedReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -393,8 +360,6 @@ export default function EconomicsOverviewView() {
     setYear(params.get("year") ?? String(new Date().getFullYear()));
     setMonths(params.get("month") ? params.get("month")!.split(",").filter(Boolean) : []);
     setSymbols(params.get("symbol") ? params.get("symbol")!.split(",").filter(Boolean) : []);
-    const nextSource = params.get("source");
-    setSource(nextSource === "options" || nextSource === "dividends" ? nextSource : "both");
     setInitialized(true);
   }, []);
 
@@ -406,7 +371,6 @@ export default function EconomicsOverviewView() {
     if (year) params.set("year", year);
     if (months.length) params.set("month", months.join(","));
     if (symbols.length) params.set("symbol", symbols.join(","));
-    if (source !== "both") params.set("source", source);
 
     const qs = params.toString();
     window.history.replaceState({}, "", qs ? `/economics?${qs}` : "/economics");
@@ -415,13 +379,30 @@ export default function EconomicsOverviewView() {
       const res = await fetch(`/api/economics/overview${qs ? `?${qs}` : ""}`);
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-      setData(body as EconomicsAggregatedReport);
+      const report = body as EconomicsAggregatedReport;
+      // Dividends net should reflect cash + derechos (rights) combined everywhere in the overview.
+      const withTotals: EconomicsAggregatedReport = {
+        ...report,
+        summary: {
+          ...report.summary,
+          dividends_net_eur: report.summary.dividends_total_net_eur ?? report.summary.dividends_net_eur,
+        },
+        monthly: report.monthly.map((row) => ({
+          ...row,
+          dividends_net_eur: row.dividends_total_net_eur ?? row.dividends_net_eur,
+        })),
+        by_symbol: report.by_symbol.map((row) => ({
+          ...row,
+          dividends_net_eur: row.dividends_total_net_eur ?? row.dividends_net_eur,
+        })),
+      };
+      setData(withTotals);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load economics overview.");
     } finally {
       setLoading(false);
     }
-  }, [months, source, symbols, year]);
+  }, [months, symbols, year]);
 
   useEffect(() => {
     if (!initialized) return;
@@ -430,8 +411,6 @@ export default function EconomicsOverviewView() {
 
   const yearOptions = data?.filters.years ?? [];
   const symbolOptions = (data?.filters.symbols ?? []).map((symbol) => ({ value: symbol, label: symbol }));
-  const showOptionsChart = source === "both" || source === "options";
-  const showDividendsChart = source === "both" || source === "dividends";
 
   return (
     <div className="space-y-8">
@@ -481,10 +460,6 @@ export default function EconomicsOverviewView() {
             <span className="text-xs text-text-muted">Symbols</span>
             <MultiSelect options={symbolOptions} selected={symbols} onChange={setSymbols} allLabel="All Symbols" />
           </div>
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-text-muted">Source</span>
-            <Pills value={source} onChange={setSource} />
-          </div>
         </div>
       </div>
 
@@ -501,25 +476,21 @@ export default function EconomicsOverviewView() {
 
           <div className="surface p-4">
             <h2 className="mb-4 text-base font-semibold">Charts</h2>
-            <div className={`grid gap-6 ${showOptionsChart && showDividendsChart ? "lg:grid-cols-2" : "grid-cols-1"}`}>
-              {showOptionsChart && (
-                <OverviewBarChart
-                  rows={data.monthly}
-                  dataKey="options_net_native"
-                  title="Monthly Options Net"
-                  currency="USD"
-                  fill="#5b61ff"
-                />
-              )}
-              {showDividendsChart && (
-                <OverviewBarChart
-                  rows={data.monthly}
-                  dataKey="dividends_net_eur"
-                  title="Monthly Dividends Net"
-                  currency="EUR"
-                  fill="#00c493"
-                />
-              )}
+            <div className="grid gap-6 lg:grid-cols-2">
+              <OverviewBarChart
+                rows={data.monthly}
+                dataKey="options_net_native"
+                title="Monthly Options Net"
+                currency="USD"
+                fill="#5b61ff"
+              />
+              <OverviewBarChart
+                rows={data.monthly}
+                dataKey="dividends_net_eur"
+                title="Monthly Dividends Net"
+                currency="EUR"
+                fill="#00c493"
+              />
             </div>
           </div>
         </>

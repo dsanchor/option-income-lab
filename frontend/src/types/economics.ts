@@ -212,6 +212,7 @@ export interface EconomicsAggregatedSummary {
   options_net_native: number;
   options_currency: string;
   dividends_net_eur: number;
+  dividends_total_net_eur?: number;
   total_option_positions: number;
   total_dividend_events: number;
   total_symbols: number;
@@ -222,6 +223,7 @@ export interface EconomicsAggregatedMonthlyRow {
   month: string;
   options_net_native: number;
   dividends_net_eur: number;
+  dividends_total_net_eur?: number;
   option_positions: number;
   dividend_events: number;
 }
@@ -230,6 +232,7 @@ export interface EconomicsAggregatedBySymbolRow {
   symbol: string;
   options_net_native: number;
   dividends_net_eur: number;
+  dividends_total_net_eur?: number;
   option_positions: number;
   dividend_events: number;
 }
