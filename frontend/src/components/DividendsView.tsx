@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import EconomicsTabs from "@/components/EconomicsTabs";
 import MultiSelect from "@/components/MultiSelect";
 import Reveal from "@/components/Reveal";
 import StatCard from "@/components/StatCard";
@@ -949,6 +950,8 @@ export default function DividendsView() {
           Gross, withholding, cash vs derechos income, and total dividend snowball trends across your accounts and symbols.
         </p>
       </div>
+
+      <EconomicsTabs />
 
       {error && (
         <div className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-4 py-3 text-sm">

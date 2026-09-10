@@ -4,12 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
-const linkBase =
-  "inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] px-3 py-1.5 text-sm transition-all no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/60";
-
+// Matches the Calls/Puts tab styling used in OptionsScreenerView.tsx.
 function navClass(active: boolean) {
-  return `${linkBase} ${
-    active ? "bg-bg-hover text-text!" : "text-text-muted! hover:bg-bg-hover hover:text-text!"
+  return `rounded-[var(--radius-pill)] px-4 py-1.5 text-sm transition no-underline ${
+    active ? "bg-accent-blue text-white!" : "text-text-muted! hover:text-text!"
   }`;
 }
 
@@ -47,18 +45,16 @@ export default function EconomicsTabs() {
   const searchParams = new URLSearchParams(search);
 
   return (
-    <div className="w-fit rounded-[var(--radius-pill)] border border-border bg-bg-card p-1">
-      <div className="flex flex-wrap items-center gap-2">
-        {TABS.map((tab) => (
-          <Link
-            key={tab.href}
-            href={buildHref(tab.href, tab.keys, searchParams)}
-            className={navClass(pathname === tab.href)}
-          >
-            {tab.label}
-          </Link>
-        ))}
-      </div>
+    <div className="flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1">
+      {TABS.map((tab) => (
+        <Link
+          key={tab.href}
+          href={buildHref(tab.href, tab.keys, searchParams)}
+          className={navClass(pathname === tab.href)}
+        >
+          {tab.label}
+        </Link>
+      ))}
     </div>
   );
 }

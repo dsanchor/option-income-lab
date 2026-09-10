@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import EconomicsTabs from "@/components/EconomicsTabs";
 import MultiSelect from "@/components/MultiSelect";
 import StatCard from "@/components/StatCard";
 import Reveal from "@/components/Reveal";
@@ -443,6 +444,8 @@ export default function EconomicsView({
           {description}
         </p>
       </div>
+
+      <EconomicsTabs />
 
       {error && (
         <div className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-4 py-3 text-sm">
