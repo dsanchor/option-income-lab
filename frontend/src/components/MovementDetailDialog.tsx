@@ -263,7 +263,7 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
             <Field label="Date" value={m.trade_date} mono />
             <Field label="Symbol ID" value={m.security_id} mono />
             <Field label="Account" value={getAccountName(m.account_id, accounts)} />
-            {m.quantity != null && (
+            {m.quantity != null && Number(m.quantity) !== 0 && (
               <Field
                 label="Quantity"
                 value={Number(m.quantity).toLocaleString("es-ES", { maximumFractionDigits: 6 })}

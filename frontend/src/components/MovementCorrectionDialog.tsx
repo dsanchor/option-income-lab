@@ -212,7 +212,7 @@ function WithholdingDestSection({
               {derivedRate != null ? `${derivedRate}%` : "—"}
             </div>
             <p className="mt-0.5 text-xs text-text-muted">
-              {derivedRate != null ? "Auto-computed from amount ÷ gross" : "Enter amount above to derive rate"}
+              {derivedRate != null ? "Auto-computed from amount ÷ (gross − origin WHT)" : "Enter amount above to derive rate"}
             </p>
           </div>
         </div>
@@ -342,9 +342,12 @@ export default function MovementCorrectionDialog({
     grossEurNum > 0 && parseFloat(whtSrcAmount) > 0
       ? ((parseFloat(whtSrcAmount) / grossEurNum) * 100).toFixed(2)
       : null;
+  // Destination WHT is levied on the amount remaining after origin withholding,
+  // so its rate base is gross minus the origin WHT amount, not raw gross.
+  const grossEurNetOfOriginWht = Math.max(0, grossEurNum - (parseFloat(whtSrcAmount) || 0));
   const derivedDestRate =
-    grossEurNum > 0 && whtDestState === "value" && parseFloat(whtDestAmount) > 0
-      ? ((parseFloat(whtDestAmount) / grossEurNum) * 100).toFixed(2)
+    grossEurNetOfOriginWht > 0 && whtDestState === "value" && parseFloat(whtDestAmount) > 0
+      ? ((parseFloat(whtDestAmount) / grossEurNetOfOriginWht) * 100).toFixed(2)
       : null;
 
   async function handleSubmit(e: React.FormEvent) {

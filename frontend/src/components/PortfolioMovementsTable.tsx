@@ -576,7 +576,7 @@ function MovementRow({
         </td>
         <td className="px-4 py-2 text-right text-text-muted">{m.trade_date}</td>
         <td className="px-4 py-2 text-right font-mono text-text">
-          {m.quantity != null
+          {m.quantity != null && Number(m.quantity) !== 0
             ? Number(m.quantity).toLocaleString("es-ES", { maximumFractionDigits: 6 })
             : "—"}
         </td>

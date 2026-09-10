@@ -362,7 +362,15 @@ function LegSection({
 
 // ─── Derived WHT rate field ────────────────────────────────────────────────────
 
-function WhtRateDisplay({ amount, grossEur }: { amount: string; grossEur: string }) {
+function WhtRateDisplay({
+  amount,
+  grossEur,
+  basisLabel = "gross",
+}: {
+  amount: string;
+  grossEur: string;
+  basisLabel?: string;
+}) {
   const amtN = parseFloat(amount) || 0;
   const grossN = parseFloat(grossEur) || 0;
   const derived = amtN > 0 && grossN > 0 ? ((amtN / grossN) * 100).toFixed(2) : null;
@@ -374,7 +382,7 @@ function WhtRateDisplay({ amount, grossEur }: { amount: string; grossEur: string
         {derived != null ? `${derived}%` : "—"}
       </div>
       <p className="mt-0.5 text-xs text-text-muted">
-        {derived != null ? "Auto-computed from amount ÷ gross" : "Enter amount above to derive rate"}
+        {derived != null ? `Auto-computed from amount ÷ ${basisLabel}` : "Enter amount above to derive rate"}
       </p>
     </div>
   );
@@ -443,7 +451,7 @@ function WhtDestFields({
               className={inputCls}
             />
           </div>
-          <WhtRateDisplay amount={amount} grossEur={grossEur} />
+          <WhtRateDisplay amount={amount} grossEur={grossEur} basisLabel="(gross − origin WHT)" />
         </div>
       )}
       {state === "not_captured" && (
@@ -773,6 +781,12 @@ export default function CorporateActionForm({
   const isConsolidation = form.event_type === "SHARE_CONSOLIDATION";
 
   const cdGrossEur = form.cd_gross_eur || (form.currency === "EUR" ? form.cd_gross : "0");
+  // Destination WHT is levied on the amount remaining after origin (source-country)
+  // withholding has already been deducted, so the derived rate must use gross minus
+  // origin WHT, not raw gross.
+  const cdGrossEurAfterOriginWht = String(
+    Math.max(0, (parseFloat(cdGrossEur) || 0) - (parseFloat(form.cd_wht_src_amount) || 0)),
+  );
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -1062,7 +1076,7 @@ export default function CorporateActionForm({
                   state={form.cd_wht_dest_state}
                   country={form.cd_wht_dest_country}
                   amount={form.cd_wht_dest_amount}
-                  grossEur={cdGrossEur}
+                  grossEur={cdGrossEurAfterOriginWht}
                   onState={(s) => set({ cd_wht_dest_state: s })}
                   onCountry={(v) => set({ cd_wht_dest_country: v })}
                   onAmount={(v) => set({ cd_wht_dest_amount: v })}

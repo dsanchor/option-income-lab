@@ -243,7 +243,7 @@ export default function StockTransactionsTable({ securityId }: Props) {
                       </div>
                     </td>
                     <td className="px-4 py-2 text-right font-mono text-text">
-                      {m.quantity != null
+                      {m.quantity != null && Number(m.quantity) !== 0
                         ? Number(m.quantity).toLocaleString("en-US", { maximumFractionDigits: 6 })
                         : "—"}
                     </td>
