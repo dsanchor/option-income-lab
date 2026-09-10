@@ -575,8 +575,13 @@ class TestStandaloneMovementsUnaffected:
 # H-T11 through H-T17: Group correction (POST .../correct)
 # ---------------------------------------------------------------------------
 
+# Note: this fixture uses DIVIDEND_WITH_SCRIP (2 legs), not the single-leg
+# CASH_DIVIDEND event type, because CASH_DIVIDEND is never a "group" (see
+# create_corporate_action: single-leg CASH_DIVIDEND gets no ca_group_id and
+# is a plain movement). These tests exercise generic group-correction
+# mechanics, so they need a genuinely multi-leg fixture.
 _CA_SIMPLE = {
-    "event_type": "CASH_DIVIDEND",
+    "event_type": "DIVIDEND_WITH_SCRIP",
     "security_id": _SECURITY_ID,
     "account_id": _ACCOUNT_ID,
     "payment_date": "2024-03-28",
@@ -589,8 +594,30 @@ _CA_SIMPLE = {
                 "destination": {"country": "ES", "amount_eur": "40.00", "rate_pct": "999"},
             },
         },
+        {
+            "leg_type": "SHARE_ACQUISITION",
+            "trade_date": "2024-03-28",
+            "quantity": "5",
+            "gross": {"amount": "0", "currency": "EUR", "eur_amount": "0"},
+            "cost_basis_status": "INCOMPLETE",
+        },
     ],
 }
+
+_CA_SIMPLE_LEGS_FULL = [
+    {
+        "leg_type": "CASH_DIVIDEND",
+        "trade_date": "2024-03-28",
+        "gross": {"amount": "210.00", "currency": "EUR", "eur_amount": "210.00"},
+    },
+    {
+        "leg_type": "SHARE_ACQUISITION",
+        "trade_date": "2024-03-28",
+        "quantity": "5",
+        "gross": {"amount": "0", "currency": "EUR", "eur_amount": "0"},
+        "cost_basis_status": "INCOMPLETE",
+    },
+]
 
 
 class TestGroupCorrection:
@@ -604,14 +631,8 @@ class TestGroupCorrection:
         result = svc.correct_corporate_action_group(orig_id, {
             "account_id": _ACCOUNT_ID,
             "correction_note": "Fix gross amount",
-            "event_type": "CASH_DIVIDEND",
-            "legs": [
-                {
-                    "leg_type": "CASH_DIVIDEND",
-                    "trade_date": "2024-03-28",
-                    "gross": {"amount": "210.00", "currency": "EUR", "eur_amount": "210.00"},
-                },
-            ],
+            "event_type": "DIVIDEND_WITH_SCRIP",
+            "legs": _CA_SIMPLE_LEGS_FULL,
         })
         assert result["ca_group_id"] != orig_id
         assert result["original_ca_group_id"] == orig_id
@@ -624,14 +645,8 @@ class TestGroupCorrection:
         result = svc.correct_corporate_action_group(orig_id, {
             "account_id": _ACCOUNT_ID,
             "correction_note": "Fix amount",
-            "event_type": "CASH_DIVIDEND",
-            "legs": [
-                {
-                    "leg_type": "CASH_DIVIDEND",
-                    "trade_date": "2024-03-28",
-                    "gross": {"amount": "210.00", "currency": "EUR", "eur_amount": "210.00"},
-                },
-            ],
+            "event_type": "DIVIDEND_WITH_SCRIP",
+            "legs": _CA_SIMPLE_LEGS_FULL,
         })
         for mvt in result["movements"]:
             assert mvt["replaces_ca_group_id"] == orig_id
@@ -643,14 +658,8 @@ class TestGroupCorrection:
         new_group_id = svc.correct_corporate_action_group(orig_id, {
             "account_id": _ACCOUNT_ID,
             "correction_note": "Fix amount",
-            "event_type": "CASH_DIVIDEND",
-            "legs": [
-                {
-                    "leg_type": "CASH_DIVIDEND",
-                    "trade_date": "2024-03-28",
-                    "gross": {"amount": "210.00", "currency": "EUR", "eur_amount": "210.00"},
-                },
-            ],
+            "event_type": "DIVIDEND_WITH_SCRIP",
+            "legs": _CA_SIMPLE_LEGS_FULL,
         })["ca_group_id"]
 
         # Query all docs in the fake store and check the originals
@@ -668,14 +677,8 @@ class TestGroupCorrection:
             svc.correct_corporate_action_group(original["ca_group_id"], {
                 "account_id": _ACCOUNT_ID,
                 "correction_note": "   ",
-                "event_type": "CASH_DIVIDEND",
-                "legs": [
-                    {
-                        "leg_type": "CASH_DIVIDEND",
-                        "trade_date": "2024-03-28",
-                        "gross": {"amount": "210.00", "currency": "EUR", "eur_amount": "210.00"},
-                    },
-                ],
+                "event_type": "DIVIDEND_WITH_SCRIP",
+                "legs": _CA_SIMPLE_LEGS_FULL,
             })
 
     def test_ht15_no_active_legs_raises(self, svc):
@@ -756,7 +759,7 @@ class TestGroupCorrection:
         result = svc.correct_corporate_action_group(orig_id, {
             "account_id": _ACCOUNT_ID,
             "correction_note": "Fix WHT",
-            "event_type": "CASH_DIVIDEND",
+            "event_type": "DIVIDEND_WITH_SCRIP",
             "legs": [
                 {
                     "leg_type": "CASH_DIVIDEND",
@@ -766,9 +769,16 @@ class TestGroupCorrection:
                         "destination": {"country": "ES", "amount_eur": "15.00", "rate_pct": "999"},
                     },
                 },
+                {
+                    "leg_type": "SHARE_ACQUISITION",
+                    "trade_date": "2024-03-28",
+                    "quantity": "5",
+                    "gross": {"amount": "0", "currency": "EUR", "eur_amount": "0"},
+                    "cost_basis_status": "INCOMPLETE",
+                },
             ],
         })
-        div = result["movements"][0]
+        div = next(m for m in result["movements"] if m["ca_leg_type"] == "CASH_DIVIDEND")
         assert div["withholding"]["destination"]["rate_pct"] == "15.00"
 
 
@@ -1026,3 +1036,60 @@ class TestHardDelete:
         """HD-7: Deleting a non-existent CA group raises ValueError with no_legs_found."""
         with pytest.raises(ValueError, match="no_legs_found"):
             svc.delete_corporate_action_group("cag_nonexistent", _ACCOUNT_ID)
+
+
+# ---------------------------------------------------------------------------
+# Single-leg CASH_DIVIDEND is never a group (no ca_group_id)
+# ---------------------------------------------------------------------------
+
+_CA_CASH_DIVIDEND_ONLY = {
+    "event_type": "CASH_DIVIDEND",
+    "security_id": _SECURITY_ID,
+    "account_id": _ACCOUNT_ID,
+    "payment_date": "2024-03-28",
+    "legs": [
+        {
+            "leg_type": "CASH_DIVIDEND",
+            "trade_date": "2024-03-28",
+            "gross": {"amount": "200.00", "currency": "EUR", "eur_amount": "200.00"},
+            "withholding": {
+                "destination": {"country": "ES", "amount_eur": "40.00", "rate_pct": "999"},
+            },
+        },
+    ],
+}
+
+
+class TestSingleLegCashDividendUngrouped:
+    def test_no_ca_group_id_assigned(self, svc):
+        """A single-leg CASH_DIVIDEND is created without ca_group_id/ca_leg_type/
+        ca_event_type/ca_group_seq — it is a plain standalone movement."""
+        result = svc.create_corporate_action(_CA_CASH_DIVIDEND_ONLY)
+        assert result["ca_group_id"] is None
+        mvt = result["movements"][0]
+        assert mvt.get("ca_group_id") is None
+        assert mvt.get("ca_leg_type") is None
+        assert mvt.get("ca_event_type") is None
+        assert mvt.get("ca_group_seq") is None
+
+    def test_deletable_via_normal_delete_movement(self, svc):
+        """A single-leg CASH_DIVIDEND is hard-deletable via delete_movement,
+        without the group_leg_hard_delete_required guard."""
+        result = svc.create_corporate_action(_CA_CASH_DIVIDEND_ONLY)
+        mvt = result["movements"][0]
+        delete_result = svc.delete_movement(mvt["id"], _ACCOUNT_ID)
+        assert delete_result["deleted"] is True
+        assert svc.get_movement(mvt["id"], _ACCOUNT_ID) is None
+
+    def test_correctable_via_normal_correct_movement(self, svc):
+        """A single-leg CASH_DIVIDEND is correctable via correct_movement (including
+        financial fields), without the group_leg_correction_required guard."""
+        result = svc.create_corporate_action(_CA_CASH_DIVIDEND_ONLY)
+        mvt = result["movements"][0]
+        corrected = svc.correct_movement(mvt["id"], _ACCOUNT_ID, {
+            "account_id": _ACCOUNT_ID,
+            "correction_note": "Fix gross amount",
+            "gross": {"amount": "210.00", "currency": "EUR", "eur_amount": "210.00"},
+        })
+        assert corrected["replacement"]["gross"]["eur_amount"] == "210.00"
+        assert corrected["original"]["correction_status"] == "SUPERSEDED"

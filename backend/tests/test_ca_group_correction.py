@@ -853,9 +853,11 @@ class TestGroupCorrectionArithmetic:
     def test_wht_rate_pct_zero_when_gross_is_zero(self, svc):
         """rate_pct = '0' when gross_eur = 0 — no ZeroDivision. Contract §H arithmetic."""
         svc_obj, _ = svc
-        # Create a CASH_DIVIDEND group with zero gross but non-zero WHT amounts
+        # Create a DIVIDEND_WITH_SCRIP group (CASH_DIVIDEND is single-leg and never
+        # a group — see create_corporate_action) with zero gross but non-zero WHT
+        # amounts on the CASH_DIVIDEND leg.
         zero_gross_req = {
-            "event_type": "CASH_DIVIDEND",
+            "event_type": "DIVIDEND_WITH_SCRIP",
             "security_id": _SECURITY_ID,
             "account_id": _ACCOUNT_ID,
             "payment_date": "2024-03-28",
@@ -869,11 +871,19 @@ class TestGroupCorrectionArithmetic:
                     },
                     "fx": {"rate": "1.000000000", "rate_source": "ECB"},
                 },
+                {
+                    "leg_type": "SHARE_ACQUISITION",
+                    "trade_date": "2024-03-28",
+                    "quantity": "5",
+                    "gross": {"amount": "0", "currency": "EUR", "eur_amount": "0"},
+                    "cost_basis_status": "INCOMPLETE",
+                    "fx": {"rate": "1.000000000", "rate_source": "ECB"},
+                },
             ],
         }
         orig = svc_obj.create_corporate_action(zero_gross_req)
         correction_req = {
-            "event_type": "CASH_DIVIDEND",
+            "event_type": "DIVIDEND_WITH_SCRIP",
             "account_id": _ACCOUNT_ID,
             "correction_note": "Zero gross WHT rate test",
             "legs": [
@@ -886,10 +896,18 @@ class TestGroupCorrectionArithmetic:
                     },
                     "fx": {"rate": "1.000000000", "rate_source": "ECB"},
                 },
+                {
+                    "leg_type": "SHARE_ACQUISITION",
+                    "trade_date": "2024-03-28",
+                    "quantity": "5",
+                    "gross": {"amount": "0", "currency": "EUR", "eur_amount": "0"},
+                    "cost_basis_status": "INCOMPLETE",
+                    "fx": {"rate": "1.000000000", "rate_source": "ECB"},
+                },
             ],
         }
         result = svc_obj.correct_corporate_action_group(orig["ca_group_id"], correction_req)
-        div_leg = result["movements"][0]
+        div_leg = next(m for m in result["movements"] if m["ca_leg_type"] == "CASH_DIVIDEND")
         source_rate = div_leg["withholding"]["source"]["rate_pct"]
         assert source_rate == "0", (
             f"rate_pct must be '0' when gross_eur=0 (avoid ZeroDivision); got {source_rate!r}"

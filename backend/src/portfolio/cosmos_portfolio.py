@@ -916,7 +916,20 @@ class CosmosPortfolioService:
             raise ValueError(f"Unknown leg_type(s): {sorted(invalid_legs)}")
 
         # Build and validate all leg docs before writing any (all-or-nothing).
-        ca_group_id = f"cag_{uuid4().hex}"
+        # CASH_DIVIDEND is the only event type that is *always* exactly one leg
+        # (_CA_REQUIRED_LEGS["CASH_DIVIDEND"] == {"CASH_DIVIDEND"}, no optional
+        # legs apply). It is not a "group" in any meaningful sense — skip
+        # ca_group_id/ca_leg_type/ca_event_type/ca_group_seq entirely so it
+        # behaves like a normal standalone movement: individually deletable via
+        # delete_movement and correctable via correct_movement, instead of
+        # being force-routed through the group correct/void/delete endpoints.
+        # Other event types (SCRIP_DIVIDEND, RIGHTS_ISSUE, ...) can also end up
+        # with a single provided leg, but they remain grouped: their leg set is
+        # extensible (e.g. DIVIDEND_WITH_SCRIP's optional CASH_TOP_UP/
+        # RIGHTS_SOLD legs), so treating them as "not a group" would be
+        # incorrect in general.
+        is_single_leg = event_type == "CASH_DIVIDEND"
+        ca_group_id = None if is_single_leg else f"cag_{uuid4().hex}"
         now = self._now()
         ticker = security_id.split(":")[-1] if ":" in security_id else security_id
         docs_to_write: List[Dict[str, Any]] = []
@@ -993,13 +1006,14 @@ class CosmosPortfolioService:
                 },
                 "import_source": "manual",
                 "correction_status": "ACTIVE",
-                "ca_group_id": ca_group_id,
-                "ca_leg_type": leg_type,
-                "ca_event_type": event_type,
-                "ca_group_seq": seq,
                 "created_at": now,
                 "updated_at": now,
             }
+            if not is_single_leg:
+                doc["ca_group_id"] = ca_group_id
+                doc["ca_leg_type"] = leg_type
+                doc["ca_event_type"] = event_type
+                doc["ca_group_seq"] = seq
 
             doc["fx"] = fx if fx else {"rate": "1.000000000", "rate_source": "ECB"}
 
