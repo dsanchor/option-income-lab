@@ -463,6 +463,41 @@ class TestPortfolioEndpoints:
         assert data.get("deleted") is True
         assert "txn_test_001" not in fake.portfolio_container._store
 
+    def test_movements_backfills_company_name_from_security_master(self, client):
+        """Manually-created movements (and single-leg CA docs) have no
+        company_name on the doc — GET /movements must backfill it from
+        security_master so the UI shows the company name, matching what
+        bulk-imported movements already have stored directly."""
+        c, fake = client
+        security_id = "XNYS:AAPL"
+        fake.container._store[("AAPL", "sec_XNYS_AAPL")] = {
+            "id": "sec_XNYS_AAPL",
+            "symbol": "AAPL",
+            "doc_type": "security_master",
+            "security_id": security_id,
+            "ticker": "AAPL",
+            "company_name": "Apple Inc.",
+            "exchange_mic": "XNYS",
+            "listing_currency": "USD",
+            "status": "ACTIVE",
+        }
+        fake.portfolio_container._store["txn_manual_001"] = {
+            "id": "txn_manual_001",
+            "doc_type": "ledger_txn",
+            "account_id": "_unassigned",
+            "txn_type": "DIVIDEND",
+            "security_id": security_id,
+            "ticker": "AAPL",
+            "trade_date": "2026-01-01",
+            "quantity": "0",
+            "import_source": "manual",
+            # no company_name — as manual creation leaves it
+        }
+        resp = c.get("/api/portfolio/movements")
+        assert resp.status_code == 200
+        mvt = resp.json()["movements"][0]
+        assert mvt["company_name"] == "Apple Inc."
+
 
 # ---------------------------------------------------------------------------
 # F6 — DELETE movement with _unassigned account_id

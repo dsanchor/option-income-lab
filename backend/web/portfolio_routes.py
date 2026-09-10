@@ -26,7 +26,7 @@ from src.portfolio.cosmos_securities import (
     _CollisionError,
     security_id_to_ticker,
 )
-from src.portfolio.holdings_service import HoldingsService
+from src.portfolio.holdings_service import HoldingsService, _resolve_security_names
 from src.portfolio.import_service import (
     ImportService,
     StateError,
@@ -549,6 +549,19 @@ async def get_movements(
             limit=limit,
             offset=offset,
         )
+        # Manually-created movements (and single-leg corporate actions) don't
+        # have company_name written on the doc — only bulk-imported ones do.
+        # Backfill it from security_master so the UI always shows a name.
+        missing_ids = {
+            m.get("security_id")
+            for m in movements
+            if m.get("security_id") and not m.get("company_name")
+        }
+        if missing_ids:
+            names = _resolve_security_names(list(missing_ids), _get_securities_svc(request))
+            for m in movements:
+                if not m.get("company_name"):
+                    m["company_name"] = names.get(m.get("security_id"), "")
         return JSONResponse({
             "movements": [_clean(m) for m in movements],
             "total_count": total,
