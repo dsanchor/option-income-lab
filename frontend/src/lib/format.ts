@@ -8,6 +8,18 @@ export function pct(n: number | null | undefined, digits = 1): string {
   return `${v.toFixed(digits)}%`;
 }
 
+/**
+ * Average of the last `n` values, ignoring zero entries (e.g. months with no
+ * activity yet). Returns null when there is nothing to average, so callers
+ * can render a "—" instead of a misleading 0.00.
+ */
+export function averageLastNExcludingZero(values: (number | null | undefined)[], n = 12): number | null {
+  const recent = values.slice(-n);
+  const nonZero = recent.filter((v): v is number => typeof v === "number" && isFinite(v) && v !== 0);
+  if (nonZero.length === 0) return null;
+  return nonZero.reduce((sum, v) => sum + v, 0) / nonZero.length;
+}
+
 export function timeAgo(iso?: string | null): string {
   if (!iso) return "";
   const then = new Date(iso.replace("Z", "+00:00")).getTime();

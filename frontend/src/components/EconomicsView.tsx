@@ -25,6 +25,7 @@ import {
 import Reveal from "@/components/Reveal";
 import StatCard from "@/components/StatCard";
 import { getAccountName } from "@/lib/accountDisplay";
+import { averageLastNExcludingZero } from "@/lib/format";
 import { listAccounts } from "@/lib/portfolio-api";
 import type { BrokerAccount } from "@/types/portfolio";
 import type {
@@ -159,7 +160,8 @@ function readInitialOptionFilters() {
   };
 }
 
-function SummaryRow({ summary }: { summary: EconomicsSummary }) {
+function SummaryRow({ summary, monthly }: { summary: EconomicsSummary; monthly: EconomicsMonthlyRow[] }) {
+  const avgLast12 = averageLastNExcludingZero(monthly.map((row) => row.net_income_eur), 12);
   const cards = [
     {
       label: "Premium Sold (USD)",
@@ -198,10 +200,18 @@ function SummaryRow({ summary }: { summary: EconomicsSummary }) {
       tone: "purple" as const,
       hint: `${summary.total_positions ?? 0} positions in scope`,
     },
+    {
+      label: "Avg Monthly Net (last 12mo)",
+      value: avgLast12 ?? undefined,
+      prefix: "€",
+      decimals: 2,
+      tone: ((avgLast12 ?? 0) >= 0 ? "green" : "red") as "green" | "red",
+      hint: "Months with no activity are excluded from the average",
+    },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
       {cards.map((card, index) => (
         <Reveal key={card.label} index={index} className="h-full">
           <StatCard
@@ -757,7 +767,7 @@ export default function EconomicsView({
         </div>
       )}
 
-      {data && <SummaryRow summary={data.summary} />}
+      {data && <SummaryRow summary={data.summary} monthly={data.monthly} />}
 
       {coverage && <CoverageBanner coverage={coverage} hasAccountFilter={accountIds.length > 0} />}
 

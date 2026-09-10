@@ -16,6 +16,7 @@ import MultiSelect from "@/components/MultiSelect";
 import Reveal from "@/components/Reveal";
 import StatCard from "@/components/StatCard";
 import { getAccountName } from "@/lib/accountDisplay";
+import { averageLastNExcludingZero } from "@/lib/format";
 import { listAccounts } from "@/lib/portfolio-api";
 import type { BrokerAccount } from "@/types/portfolio";
 import type {
@@ -100,13 +101,15 @@ function readInitialOverviewFilters() {
   };
 }
 
-function SummaryRow({ summary }: { summary: EconomicsAggregatedSummary }) {
+function SummaryRow({ summary, monthly }: { summary: EconomicsAggregatedSummary; monthly: EconomicsAggregatedMonthlyRow[] }) {
   const coverage = summary.options_coverage ?? {
     linked_positions: 0,
     total_positions: 0,
     linked_ratio: 0,
   };
   const coverageDisplay = `${coverage.linked_positions ?? 0}/${coverage.total_positions ?? 0}`;
+  const avgLast12 = averageLastNExcludingZero(monthly.map((row) => row.combined_net_eur), 12);
+  const yoc = summary.portfolio_yoc_pct;
 
   const cards = [
     {
@@ -132,6 +135,22 @@ function SummaryRow({ summary }: { summary: EconomicsAggregatedSummary }) {
       tone: ((summary.combined_net_eur ?? 0) >= 0 ? "purple" : "red") as "purple" | "red",
     },
     {
+      label: "Avg Monthly Net (last 12mo)",
+      value: avgLast12 ?? undefined,
+      prefix: "€",
+      decimals: 2,
+      tone: ((avgLast12 ?? 0) >= 0 ? "green" : "red") as "green" | "red",
+      hint: "Months with no activity are excluded from the average",
+    },
+    {
+      label: "Portfolio Yield on Cost",
+      value: yoc ?? undefined,
+      suffix: "%",
+      decimals: 2,
+      tone: "green" as const,
+      hint: "Annualized dividends on current cost basis, held positions only",
+    },
+    {
       label: "Option Positions in Scope",
       value: summary.total_option_positions ?? 0,
       decimals: 0,
@@ -146,7 +165,7 @@ function SummaryRow({ summary }: { summary: EconomicsAggregatedSummary }) {
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4 xl:grid-cols-7">
       {cards.map((card, index) => (
         <Reveal key={card.label} index={index} className="h-full">
           <StatCard
@@ -155,6 +174,7 @@ function SummaryRow({ summary }: { summary: EconomicsAggregatedSummary }) {
             display={"display" in card ? card.display : undefined}
             prefix={card.prefix}
             decimals={card.decimals}
+            suffix={"suffix" in card ? card.suffix : undefined}
             tone={card.tone}
             hint={card.hint}
           />
@@ -465,7 +485,7 @@ export default function EconomicsOverviewView() {
         </div>
       )}
 
-      {data && <SummaryRow summary={data.summary} />}
+      {data && <SummaryRow summary={data.summary} monthly={data.monthly} />}
 
       {(coverage || accountIds.length > 0) && (
         <div className="rounded-[var(--radius)] border border-border bg-bg-card px-4 py-3 text-sm text-text-muted">

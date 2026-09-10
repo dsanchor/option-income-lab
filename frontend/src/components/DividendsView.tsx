@@ -7,6 +7,7 @@ import Reveal from "@/components/Reveal";
 import StatCard from "@/components/StatCard";
 import AccountBadge from "@/components/AccountBadge";
 import { listAccounts } from "@/lib/portfolio-api";
+import { averageLastNExcludingZero } from "@/lib/format";
 import type { BrokerAccount } from "@/types/portfolio";
 import {
   Area,
@@ -171,15 +172,25 @@ function ChartTooltip({
   );
 }
 
-function SummaryRow({ summary }: { summary: DividendsSummary }) {
+function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: DividendsMonthlyRow[] }) {
   const totalNet = getSummaryTotalNet(summary);
   const cashNet = getSummaryCashNet(summary);
   const derechosNet = getSummaryDerechosNet(summary);
+  const avgLast12 = averageLastNExcludingZero(monthly.map((row) => getTotalNet(row)), 12);
   const cards = [
     { label: "Total Gross (EUR)", value: summary.total_gross_eur ?? 0, prefix: "€", suffix: "", decimals: 2, tone: "blue" as const },
     { label: "Total Withholding (EUR)", value: summary.total_withholding_eur ?? 0, prefix: "€", suffix: "", decimals: 2, tone: "orange" as const },
     { label: "Dividend Count", value: summary.total_dividends ?? 0, suffix: "", decimals: 0, tone: "purple" as const },
     { label: "Effective Withholding %", value: summary.effective_withholding_pct ?? 0, prefix: "", suffix: "%", decimals: 2, tone: "red" as const },
+    {
+      label: "Avg Monthly Net (last 12mo)",
+      value: avgLast12 ?? undefined,
+      prefix: "€",
+      suffix: "",
+      decimals: 2,
+      tone: ((avgLast12 ?? 0) >= 0 ? "green" : "red") as "green" | "red",
+      hint: "Months with no activity are excluded from the average",
+    },
     {
       label: "Portfolio Yield on Cost",
       value: summary.portfolio_yoc_pct ?? undefined,
@@ -977,7 +988,7 @@ export default function DividendsView() {
         </div>
       )}
 
-      {data && <SummaryRow summary={data.summary} />}
+      {data && <SummaryRow summary={data.summary} monthly={data.monthly} />}
 
       <div className="surface p-4">
         <div className="mb-3 flex items-center justify-between">
