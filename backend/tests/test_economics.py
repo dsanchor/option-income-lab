@@ -198,6 +198,7 @@ def _sample_dividend_movements():
             "fees": {"total_eur": "0"},
             "withholding": {"source": {"amount_eur": "1"}},
             "net": {"eur_amount": "9"},
+            "source_derechos_amount": "2",
         },
         {
             "id": "div-msft",
@@ -251,6 +252,113 @@ def test_api_dividends_economics_smoke(monkeypatch, economics_client):
     }
 
 
+def test_api_dividends_economics_exposes_cash_derechos_and_total_fields(monkeypatch, economics_client):
+    monkeypatch.setattr(
+        cp.CosmosPortfolioService,
+        "get_all_movements_for_holdings",
+        lambda self: _sample_dividend_movements(),
+    )
+
+    response = economics_client.get("/api/economics/dividends")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"]["total_net_eur"] == 17.0
+    assert body["summary"]["cash_net"] == 17.0
+    assert body["summary"]["derechos_net"] == 2.0
+    assert body["summary"]["total_net"] == 19.0
+    assert body["monthly"] == [
+        {
+            "month": "2024-01",
+            "gross_eur": 10.0,
+            "fees_eur": 0.0,
+            "withholding_source_eur": 1.0,
+            "withholding_destination_eur": 0.0,
+            "withholding_total_eur": 1.0,
+            "net_eur": 9.0,
+            "cash_net": 9.0,
+            "derechos_net": 2.0,
+            "total_net": 11.0,
+            "dividend_count": 1,
+        },
+        {
+            "month": "2024-02",
+            "gross_eur": 8.0,
+            "fees_eur": 0.0,
+            "withholding_source_eur": 0.0,
+            "withholding_destination_eur": 0.0,
+            "withholding_total_eur": 0.0,
+            "net_eur": 8.0,
+            "cash_net": 8.0,
+            "derechos_net": 0.0,
+            "total_net": 8.0,
+            "dividend_count": 1,
+        },
+    ]
+    assert body["yearly"] == [
+        {
+            "year": 2024,
+            "gross_eur": 18.0,
+            "withholding_eur": 1.0,
+            "net_eur": 17.0,
+            "cash_net": 17.0,
+            "derechos_net": 2.0,
+            "total_net": 19.0,
+            "dividend_count": 2,
+        }
+    ]
+    assert body["by_symbol"] == [
+        {
+            "symbol": "AAPL",
+            "gross_eur": 10.0,
+            "withholding_total_eur": 1.0,
+            "net_eur": 9.0,
+            "cash_net": 9.0,
+            "derechos_net": 2.0,
+            "total_net": 11.0,
+            "dividend_count": 1,
+        },
+        {
+            "symbol": "MSFT",
+            "gross_eur": 8.0,
+            "withholding_total_eur": 0.0,
+            "net_eur": 8.0,
+            "cash_net": 8.0,
+            "derechos_net": 0.0,
+            "total_net": 8.0,
+            "dividend_count": 1,
+        },
+    ]
+    assert body["cumulative"] == [
+        {
+            "month": "2024-01",
+            "cumulative_net_eur": 9.0,
+            "cumulative_cash_net_eur": 9.0,
+            "cumulative_derechos_net_eur": 2.0,
+            "cumulative_total_net_eur": 11.0,
+            "cash_net": 9.0,
+            "derechos_net": 2.0,
+            "total_net": 11.0,
+        },
+        {
+            "month": "2024-02",
+            "cumulative_net_eur": 17.0,
+            "cumulative_cash_net_eur": 17.0,
+            "cumulative_derechos_net_eur": 2.0,
+            "cumulative_total_net_eur": 19.0,
+            "cash_net": 17.0,
+            "derechos_net": 2.0,
+            "total_net": 19.0,
+        },
+    ]
+    positions = {position["id"]: position for position in body["positions"]}
+    assert positions["div-aapl"]["net_eur"] == 9.0
+    assert positions["div-aapl"]["cash_net"] == 9.0
+    assert positions["div-aapl"]["derechos_eur"] == 2.0
+    assert positions["div-aapl"]["derechos_net"] == 2.0
+    assert positions["div-aapl"]["total_net"] == 11.0
+
+
 def test_api_economics_overview_smoke(monkeypatch, economics_client):
     monkeypatch.setattr(
         cp.CosmosPortfolioService,
@@ -270,3 +378,42 @@ def test_api_economics_overview_smoke(monkeypatch, economics_client):
         "applied_filters",
         "meta",
     }
+
+
+def test_api_economics_overview_exposes_dividend_breakdown_fields(monkeypatch, economics_client):
+    monkeypatch.setattr(
+        cp.CosmosPortfolioService,
+        "get_all_movements_for_holdings",
+        lambda self: _sample_dividend_movements(),
+    )
+
+    response = economics_client.get("/api/economics/overview")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"]["dividends_net_eur"] == 17.0
+    assert body["summary"]["dividends_cash_net_eur"] == 17.0
+    assert body["summary"]["dividends_derechos_net_eur"] == 2.0
+    assert body["summary"]["dividends_total_net_eur"] == 19.0
+    assert body["summary"]["cash_net"] == 17.0
+    assert body["summary"]["derechos_net"] == 2.0
+    assert body["summary"]["total_net"] == 19.0
+
+    january = next(row for row in body["monthly"] if row["month"] == "2024-01")
+    assert january["dividends_net_eur"] == 9.0
+    assert january["dividends_cash_net_eur"] == 9.0
+    assert january["dividends_derechos_net_eur"] == 2.0
+    assert january["dividends_total_net_eur"] == 11.0
+    assert january["cash_net"] == 9.0
+    assert january["derechos_net"] == 2.0
+    assert january["total_net"] == 11.0
+
+    aapl = next(row for row in body["by_symbol"] if row["symbol"] == "AAPL")
+    assert aapl["dividends_net_eur"] == 9.0
+    assert aapl["dividends_cash_net_eur"] == 9.0
+    assert aapl["dividends_derechos_net_eur"] == 2.0
+    assert aapl["dividends_total_net_eur"] == 11.0
+    assert aapl["cash_net"] == 9.0
+    assert aapl["derechos_net"] == 2.0
+    assert aapl["total_net"] == 11.0
+    assert body["meta"]["combined_total_available"] is True

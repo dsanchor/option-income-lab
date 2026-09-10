@@ -100,6 +100,9 @@ export interface DividendsSummary {
   total_fees_eur: number;
   total_withholding_eur: number;
   total_net_eur: number;
+  cash_net?: number | null;
+  derechos_net?: number | null;
+  total_net?: number | null;
   effective_withholding_pct: number;
   total_dividends: number;
   total_accounts: number;
@@ -113,6 +116,9 @@ export interface DividendsMonthlyRow {
   withholding_destination_eur: number;
   withholding_total_eur: number;
   net_eur: number;
+  cash_net?: number | null;
+  derechos_net?: number | null;
+  total_net?: number | null;
   dividend_count: number;
 }
 
@@ -121,6 +127,9 @@ export interface DividendsBySymbolRow {
   gross_eur: number;
   withholding_total_eur: number;
   net_eur: number;
+  cash_net?: number | null;
+  derechos_net?: number | null;
+  total_net?: number | null;
   dividend_count: number;
 }
 
@@ -129,12 +138,21 @@ export interface DividendsYearlyRow {
   gross_eur: number;
   withholding_eur: number;
   net_eur: number;
+  cash_net?: number | null;
+  derechos_net?: number | null;
+  total_net?: number | null;
   dividend_count: number;
 }
 
 export interface DividendsCumulativeRow {
   month: string;
   cumulative_net_eur: number;
+  cash_net?: number | null;
+  derechos_net?: number | null;
+  total_net?: number | null;
+  cumulative_cash_net_eur?: number | null;
+  cumulative_derechos_net_eur?: number | null;
+  cumulative_total_net_eur?: number | null;
 }
 
 export interface DividendPosition {
@@ -151,6 +169,10 @@ export interface DividendPosition {
   withholding_destination_eur: number;
   withholding_total_eur: number;
   net_eur: number;
+  cash_net?: number | null;
+  derechos_net?: number | null;
+  derechos_eur?: number | null;
+  total_net?: number | null;
   correction_status: string;
 }
 

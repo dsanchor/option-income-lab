@@ -102,7 +102,9 @@ def _extract_dividend_position(movement: Dict[str, Any]) -> Optional[Dict[str, A
     withholding_source_eur = _decimal(withholding_source.get("amount_eur", "0"))
     withholding_destination_eur = _decimal(withholding_destination.get("amount_eur", "0"))
     withholding_total_eur = withholding_source_eur + withholding_destination_eur
-    net_eur = _decimal((movement.get("net") or {}).get("eur_amount", "0"))
+    cash_net_eur = _decimal((movement.get("net") or {}).get("eur_amount", "0"))
+    derechos_eur = _decimal(movement.get("source_derechos_amount") or "0")
+    total_net_eur = cash_net_eur + derechos_eur
 
     symbol = str(
         movement.get("ticker")
@@ -123,7 +125,11 @@ def _extract_dividend_position(movement: Dict[str, Any]) -> Optional[Dict[str, A
         "withholding_source_eur": _round2(withholding_source_eur),
         "withholding_destination_eur": _round2(withholding_destination_eur),
         "withholding_total_eur": _round2(withholding_total_eur),
-        "net_eur": _round2(net_eur),
+        "net_eur": _round2(cash_net_eur),
+        "cash_net": _round2(cash_net_eur),
+        "derechos_eur": _round2(derechos_eur),
+        "derechos_net": _round2(derechos_eur),
+        "total_net": _round2(total_net_eur),
         "correction_status": correction_status or "ACTIVE",
         "_year": year,
         "_month": month,
@@ -133,7 +139,10 @@ def _extract_dividend_position(movement: Dict[str, Any]) -> Optional[Dict[str, A
         "_withholding_source_eur": withholding_source_eur,
         "_withholding_destination_eur": withholding_destination_eur,
         "_withholding_total_eur": withholding_total_eur,
-        "_net_eur": net_eur,
+        "_net_eur": cash_net_eur,
+        "_cash_net_eur": cash_net_eur,
+        "_derechos_eur": derechos_eur,
+        "_total_net_eur": total_net_eur,
     }
 
 
@@ -141,7 +150,9 @@ def _summarize_dividends(positions: List[Dict[str, Any]]) -> Dict[str, Any]:
     total_gross = sum((p["_gross_eur"] for p in positions), _ZERO)
     total_fees = sum((p["_fees_eur"] for p in positions), _ZERO)
     total_withholding = sum((p["_withholding_total_eur"] for p in positions), _ZERO)
-    total_net = sum((p["_net_eur"] for p in positions), _ZERO)
+    total_cash_net = sum((p["_cash_net_eur"] for p in positions), _ZERO)
+    total_derechos = sum((p["_derechos_eur"] for p in positions), _ZERO)
+    total_combined_net = sum((p["_total_net_eur"] for p in positions), _ZERO)
     effective_withholding_pct = _ZERO
     if total_gross != _ZERO:
         effective_withholding_pct = (total_withholding / total_gross) * Decimal("100")
@@ -153,7 +164,10 @@ def _summarize_dividends(positions: List[Dict[str, Any]]) -> Dict[str, Any]:
         "total_gross_eur": _round2(total_gross),
         "total_fees_eur": _round2(total_fees),
         "total_withholding_eur": _round2(total_withholding),
-        "total_net_eur": _round2(total_net),
+        "total_net_eur": _round2(total_cash_net),
+        "cash_net": _round2(total_cash_net),
+        "derechos_net": _round2(total_derechos),
+        "total_net": _round2(total_combined_net),
         "effective_withholding_pct": _round2(effective_withholding_pct),
         "total_dividends": len(positions),
         "total_accounts": len(represented_accounts),
@@ -210,7 +224,8 @@ def build_dividends_economics_report(
     monthly_groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     symbol_groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     yearly_groups: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-    cumulative_month_net: Dict[str, Decimal] = defaultdict(lambda: _ZERO)
+    cumulative_month_cash_net: Dict[str, Decimal] = defaultdict(lambda: _ZERO)
+    cumulative_month_derechos: Dict[str, Decimal] = defaultdict(lambda: _ZERO)
 
     for position in filtered_positions:
         monthly_groups[position["_month_key"]].append(position)
@@ -218,7 +233,8 @@ def build_dividends_economics_report(
 
     for position in all_years_scope_positions:
         yearly_groups[position["_year"]].append(position)
-        cumulative_month_net[position["_month_key"]] += position["_net_eur"]
+        cumulative_month_cash_net[position["_month_key"]] += position["_cash_net_eur"]
+        cumulative_month_derechos[position["_month_key"]] += position["_derechos_eur"]
 
     monthly = []
     for month_key in sorted(monthly_groups):
@@ -228,7 +244,9 @@ def build_dividends_economics_report(
         withholding_source_total = sum((p["_withholding_source_eur"] for p in group_positions), _ZERO)
         withholding_destination_total = sum((p["_withholding_destination_eur"] for p in group_positions), _ZERO)
         withholding_total = withholding_source_total + withholding_destination_total
-        net_total = sum((p["_net_eur"] for p in group_positions), _ZERO)
+        cash_net_total = sum((p["_cash_net_eur"] for p in group_positions), _ZERO)
+        derechos_total = sum((p["_derechos_eur"] for p in group_positions), _ZERO)
+        total_net = sum((p["_total_net_eur"] for p in group_positions), _ZERO)
         monthly.append({
             "month": month_key,
             "gross_eur": _round2(gross_total),
@@ -236,7 +254,10 @@ def build_dividends_economics_report(
             "withholding_source_eur": _round2(withholding_source_total),
             "withholding_destination_eur": _round2(withholding_destination_total),
             "withholding_total_eur": _round2(withholding_total),
-            "net_eur": _round2(net_total),
+            "net_eur": _round2(cash_net_total),
+            "cash_net": _round2(cash_net_total),
+            "derechos_net": _round2(derechos_total),
+            "total_net": _round2(total_net),
             "dividend_count": len(group_positions),
         })
 
@@ -245,12 +266,17 @@ def build_dividends_economics_report(
         group_positions = symbol_groups[grouped_symbol]
         gross_total = sum((p["_gross_eur"] for p in group_positions), _ZERO)
         withholding_total = sum((p["_withholding_total_eur"] for p in group_positions), _ZERO)
-        net_total = sum((p["_net_eur"] for p in group_positions), _ZERO)
+        cash_net_total = sum((p["_cash_net_eur"] for p in group_positions), _ZERO)
+        derechos_total = sum((p["_derechos_eur"] for p in group_positions), _ZERO)
+        total_net = sum((p["_total_net_eur"] for p in group_positions), _ZERO)
         by_symbol.append({
             "symbol": grouped_symbol,
             "gross_eur": _round2(gross_total),
             "withholding_total_eur": _round2(withholding_total),
-            "net_eur": _round2(net_total),
+            "net_eur": _round2(cash_net_total),
+            "cash_net": _round2(cash_net_total),
+            "derechos_net": _round2(derechos_total),
+            "total_net": _round2(total_net),
             "dividend_count": len(group_positions),
         })
 
@@ -259,22 +285,40 @@ def build_dividends_economics_report(
         group_positions = yearly_groups[grouped_year]
         gross_total = sum((p["_gross_eur"] for p in group_positions), _ZERO)
         withholding_total = sum((p["_withholding_total_eur"] for p in group_positions), _ZERO)
-        net_total = sum((p["_net_eur"] for p in group_positions), _ZERO)
+        cash_net_total = sum((p["_cash_net_eur"] for p in group_positions), _ZERO)
+        derechos_total = sum((p["_derechos_eur"] for p in group_positions), _ZERO)
+        total_net = sum((p["_total_net_eur"] for p in group_positions), _ZERO)
         yearly.append({
             "year": grouped_year,
             "gross_eur": _round2(gross_total),
             "withholding_eur": _round2(withholding_total),
-            "net_eur": _round2(net_total),
+            "net_eur": _round2(cash_net_total),
+            "cash_net": _round2(cash_net_total),
+            "derechos_net": _round2(derechos_total),
+            "total_net": _round2(total_net),
             "dividend_count": len(group_positions),
         })
 
     cumulative = []
+    running_cash_net = _ZERO
+    running_derechos = _ZERO
     running_total = _ZERO
-    for month_key in sorted(cumulative_month_net):
-        running_total += cumulative_month_net[month_key]
+    for month_key in sorted(cumulative_month_cash_net):
+        month_cash_net = cumulative_month_cash_net[month_key]
+        month_derechos = cumulative_month_derechos[month_key]
+        month_total_net = month_cash_net + month_derechos
+        running_cash_net += month_cash_net
+        running_derechos += month_derechos
+        running_total += month_total_net
         cumulative.append({
             "month": month_key,
-            "cumulative_net_eur": _round2(running_total),
+            "cumulative_net_eur": _round2(running_cash_net),
+            "cumulative_cash_net_eur": _round2(running_cash_net),
+            "cumulative_derechos_net_eur": _round2(running_derechos),
+            "cumulative_total_net_eur": _round2(running_total),
+            "cash_net": _round2(running_cash_net),
+            "derechos_net": _round2(running_derechos),
+            "total_net": _round2(running_total),
         })
 
     positions = sorted(

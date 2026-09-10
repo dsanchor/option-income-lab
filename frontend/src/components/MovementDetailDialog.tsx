@@ -50,6 +50,12 @@ function formatEurAmount(amount: string | null | undefined, currency?: string): 
   return eur;
 }
 
+function hasNonZeroAmount(amount: string | null | undefined): boolean {
+  if (!amount) return false;
+  const parsed = Number(amount);
+  return !Number.isNaN(parsed) && parsed !== 0;
+}
+
 export interface MovementDetailDialogProps {
   movement: LedgerMovement;
   accounts?: BrokerAccount[];
@@ -279,6 +285,9 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
               <Field label="Gross" value={formatEurAmount(m.gross?.eur_amount, m.gross?.currency)} mono />
               <Field label="Fees" value={formatEurAmount(m.fees?.total_eur, m.fees?.currency)} mono />
               <Field label="Net" value={formatEurAmount(m.net?.eur_amount, m.net?.currency)} mono />
+              {m.txn_type === "DIVIDEND" && hasNonZeroAmount(m.source_derechos_amount) && (
+                <Field label="Derechos" value={formatEurAmount(m.source_derechos_amount)} mono />
+              )}
               {m.withholding?.source && (
                 <Field
                   label={`WHT Source (${m.withholding.source.country ?? ""})`}

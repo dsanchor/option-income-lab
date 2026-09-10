@@ -473,6 +473,12 @@ def _build_economics_overview_report(
                 "month": month_key,
                 "options_net_native": 0.0,
                 "dividends_net_eur": 0.0,
+                "dividends_cash_net_eur": 0.0,
+                "dividends_derechos_net_eur": 0.0,
+                "dividends_total_net_eur": 0.0,
+                "cash_net": 0.0,
+                "derechos_net": 0.0,
+                "total_net": 0.0,
                 "option_positions": 0,
                 "dividend_events": 0,
             },
@@ -490,11 +496,26 @@ def _build_economics_overview_report(
                 "month": month_key,
                 "options_net_native": 0.0,
                 "dividends_net_eur": 0.0,
+                "dividends_cash_net_eur": 0.0,
+                "dividends_derechos_net_eur": 0.0,
+                "dividends_total_net_eur": 0.0,
+                "cash_net": 0.0,
+                "derechos_net": 0.0,
+                "total_net": 0.0,
                 "option_positions": 0,
                 "dividend_events": 0,
             },
         )
         monthly_rows[month_key]["dividends_net_eur"] = row.get("net_eur") or 0.0
+        monthly_rows[month_key]["dividends_cash_net_eur"] = row.get("cash_net") or row.get("net_eur") or 0.0
+        monthly_rows[month_key]["dividends_derechos_net_eur"] = row.get("derechos_net") or 0.0
+        monthly_rows[month_key]["dividends_total_net_eur"] = row.get("total_net") or (
+            (row.get("cash_net") or row.get("net_eur") or 0.0)
+            + (row.get("derechos_net") or 0.0)
+        )
+        monthly_rows[month_key]["cash_net"] = monthly_rows[month_key]["dividends_cash_net_eur"]
+        monthly_rows[month_key]["derechos_net"] = monthly_rows[month_key]["dividends_derechos_net_eur"]
+        monthly_rows[month_key]["total_net"] = monthly_rows[month_key]["dividends_total_net_eur"]
         monthly_rows[month_key]["dividend_events"] = row.get("dividend_count") or 0
 
     for row in options_report.get("by_symbol", []):
@@ -507,6 +528,12 @@ def _build_economics_overview_report(
                 "symbol": symbol,
                 "options_net_native": 0.0,
                 "dividends_net_eur": 0.0,
+                "dividends_cash_net_eur": 0.0,
+                "dividends_derechos_net_eur": 0.0,
+                "dividends_total_net_eur": 0.0,
+                "cash_net": 0.0,
+                "derechos_net": 0.0,
+                "total_net": 0.0,
                 "option_positions": 0,
                 "dividend_events": 0,
             },
@@ -524,11 +551,26 @@ def _build_economics_overview_report(
                 "symbol": symbol,
                 "options_net_native": 0.0,
                 "dividends_net_eur": 0.0,
+                "dividends_cash_net_eur": 0.0,
+                "dividends_derechos_net_eur": 0.0,
+                "dividends_total_net_eur": 0.0,
+                "cash_net": 0.0,
+                "derechos_net": 0.0,
+                "total_net": 0.0,
                 "option_positions": 0,
                 "dividend_events": 0,
             },
         )
         symbol_rows[symbol]["dividends_net_eur"] = row.get("net_eur") or 0.0
+        symbol_rows[symbol]["dividends_cash_net_eur"] = row.get("cash_net") or row.get("net_eur") or 0.0
+        symbol_rows[symbol]["dividends_derechos_net_eur"] = row.get("derechos_net") or 0.0
+        symbol_rows[symbol]["dividends_total_net_eur"] = row.get("total_net") or (
+            (row.get("cash_net") or row.get("net_eur") or 0.0)
+            + (row.get("derechos_net") or 0.0)
+        )
+        symbol_rows[symbol]["cash_net"] = symbol_rows[symbol]["dividends_cash_net_eur"]
+        symbol_rows[symbol]["derechos_net"] = symbol_rows[symbol]["dividends_derechos_net_eur"]
+        symbol_rows[symbol]["total_net"] = symbol_rows[symbol]["dividends_total_net_eur"]
         symbol_rows[symbol]["dividend_events"] = row.get("dividend_count") or 0
 
     filtered_symbols = {
@@ -539,6 +581,7 @@ def _build_economics_overview_report(
             or row.get("dividend_events")
             or row.get("options_net_native")
             or row.get("dividends_net_eur")
+            or row.get("dividends_total_net_eur")
         )
     }
     available_years = set(options_report.get("filters", {}).get("years", []))
@@ -551,6 +594,20 @@ def _build_economics_overview_report(
             "options_net_native": options_report.get("summary", {}).get("net_income", 0.0),
             "options_currency": "USD",
             "dividends_net_eur": dividends_report.get("summary", {}).get("total_net_eur", 0.0),
+            "dividends_cash_net_eur": dividends_report.get("summary", {}).get("cash_net", dividends_report.get("summary", {}).get("total_net_eur", 0.0)),
+            "dividends_derechos_net_eur": dividends_report.get("summary", {}).get("derechos_net", 0.0),
+            "dividends_total_net_eur": dividends_report.get("summary", {}).get(
+                "total_net",
+                (dividends_report.get("summary", {}).get("cash_net", dividends_report.get("summary", {}).get("total_net_eur", 0.0)) or 0.0)
+                + (dividends_report.get("summary", {}).get("derechos_net", 0.0) or 0.0),
+            ),
+            "cash_net": dividends_report.get("summary", {}).get("cash_net", dividends_report.get("summary", {}).get("total_net_eur", 0.0)),
+            "derechos_net": dividends_report.get("summary", {}).get("derechos_net", 0.0),
+            "total_net": dividends_report.get("summary", {}).get(
+                "total_net",
+                (dividends_report.get("summary", {}).get("cash_net", dividends_report.get("summary", {}).get("total_net_eur", 0.0)) or 0.0)
+                + (dividends_report.get("summary", {}).get("derechos_net", 0.0) or 0.0),
+            ),
             "total_option_positions": options_report.get("summary", {}).get("total_positions", 0),
             "total_dividend_events": dividends_report.get("summary", {}).get("total_dividends", 0),
             "total_symbols": len(filtered_symbols),
@@ -573,8 +630,56 @@ def _build_economics_overview_report(
             "dividends_bucket_field": "trade_date",
             "options_currency_native": "USD",
             "dividends_currency": "EUR",
-            "combined_total_available": False,
+            "combined_total_available": True,
         },
+    }
+
+
+def _decorate_dividends_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
+    cash_net = summary.get("cash_net", summary.get("cash_net_eur", summary.get("total_net_eur", 0.0))) or 0.0
+    derechos_net = summary.get("derechos_net", summary.get("derechos_eur", 0.0)) or 0.0
+    total_net = summary.get("total_net", summary.get("total_combined_net_eur", cash_net + derechos_net)) or 0.0
+    return {
+        **summary,
+        "cash_net": cash_net,
+        "derechos_net": derechos_net,
+        "total_net": total_net,
+    }
+
+
+def _decorate_dividends_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    cash_net = row.get("cash_net", row.get("cash_net_eur", row.get("net_eur", 0.0))) or 0.0
+    derechos_net = row.get("derechos_net", row.get("derechos_eur", 0.0)) or 0.0
+    total_net = row.get("total_net", row.get("total_net_eur", cash_net + derechos_net)) or 0.0
+    return {
+        **row,
+        "cash_net": cash_net,
+        "derechos_net": derechos_net,
+        "total_net": total_net,
+    }
+
+
+def _decorate_dividends_cumulative_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    cash_net = row.get("cash_net", row.get("cumulative_cash_net_eur", row.get("cumulative_net_eur", 0.0))) or 0.0
+    derechos_net = row.get("derechos_net", row.get("cumulative_derechos_net_eur", row.get("derechos_eur", 0.0))) or 0.0
+    total_net = row.get("total_net", row.get("cumulative_total_net_eur", cash_net + derechos_net)) or 0.0
+    return {
+        **row,
+        "cash_net": cash_net,
+        "derechos_net": derechos_net,
+        "total_net": total_net,
+    }
+
+
+def _serialize_dividends_economics_report(report: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        **report,
+        "summary": _decorate_dividends_summary(report.get("summary", {})),
+        "monthly": [_decorate_dividends_row(row) for row in report.get("monthly", [])],
+        "by_symbol": [_decorate_dividends_row(row) for row in report.get("by_symbol", [])],
+        "yearly": [_decorate_dividends_row(row) for row in report.get("yearly", [])],
+        "cumulative": [_decorate_dividends_cumulative_row(row) for row in report.get("cumulative", [])],
+        "positions": [_decorate_dividends_row(row) for row in report.get("positions", [])],
     }
 
 
@@ -1202,15 +1307,14 @@ async def api_dividends_economics(request: Request,
 
         portfolio_svc = CosmosPortfolioService(portfolio_container, None)
         movements = portfolio_svc.get_all_movements_for_holdings()
-        return JSONResponse(
-            build_dividends_economics_report(
-                movements,
-                year=year,
-                month_filter=month_list,
-                symbol_filter=symbol_list,
-                account_filter=account_list,
-            )
+        report = build_dividends_economics_report(
+            movements,
+            year=year,
+            month_filter=month_list,
+            symbol_filter=symbol_list,
+            account_filter=account_list,
         )
+        return JSONResponse(_serialize_dividends_economics_report(report))
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
@@ -1268,15 +1372,17 @@ async def api_economics_overview(request: Request,
             month_filter=month_list,
             symbol_filter=symbol_list,
         )
-        dividends_report = build_dividends_economics_report(
+        dividends_report = _serialize_dividends_economics_report(
+            build_dividends_economics_report(
             movements,
             year=year,
             month_filter=month_list,
             symbol_filter=symbol_list,
+            )
         )
         return JSONResponse(
             _build_economics_overview_report(
-                options_report,
+            options_report,
                 dividends_report,
                 year=year,
                 month_filter=month_list,

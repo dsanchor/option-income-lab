@@ -57,6 +57,20 @@ describe("Economics type contracts", () => {
     }
   });
 
+  it("extends dividend report types with cash, derechos, and total net fields", () => {
+    for (const field of [
+      "cash_net?: number | null;",
+      "derechos_net?: number | null;",
+      "total_net?: number | null;",
+      "cumulative_total_net_eur?: number | null;",
+    ]) {
+      assert.ok(
+        economicsTypes.includes(field),
+        `Expected economics.ts to include "${field}".`
+      );
+    }
+  });
+
   it("wires the new report contracts into the dedicated views", () => {
     assert.ok(
       dividendsView.includes("DividendsReport") &&
