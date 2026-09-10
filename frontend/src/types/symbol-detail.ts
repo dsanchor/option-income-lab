@@ -25,6 +25,7 @@ export interface Position {
   strike?: number;
   expiration?: string;
   status?: string;
+  coverage_status?: "linked" | "unlinked" | "unresolved_security" | "account_filtered_out" | null;
   contracts?: number;
   assignment_risk?: string | null;
   moneyness?: string | null;
@@ -32,6 +33,9 @@ export interface Position {
   display_buyback?: number | null;
   opened_at?: string | null;
   close_reason?: string | null;
+  warnings?: string[] | null;
+  linked_accounts?: string[] | null;
+  linked_movement_count?: number | null;
   notes?: string | null;
   source?: { agent_type?: string; premium?: unknown; [k: string]: unknown };
   [k: string]: unknown;

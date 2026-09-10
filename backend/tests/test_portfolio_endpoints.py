@@ -263,6 +263,11 @@ _PURCHASES_CSV = (
     "2024\tApple Inc.\t10/01/2024\t182,50\t10\t1.825,00\t7,50\n"
 ).encode()
 
+_OPTIONS_CSV = (
+    "Símbolo\tTipo\tFecha\tStrike\tExpiración\tImporte USD Bruto\tImporte EUR Bruto\tComisión EUR\tCuenta\n"
+    "AAPL\tCALL_SELL\t19/07/2024\t210\t19/07/2024\t150.00\t138.00\t3.25\t_unassigned\n"
+).encode()
+
 
 class TestImportSessionEndpoints:
     def test_create_session_201(self, client):
@@ -408,6 +413,16 @@ class TestImportSessionEndpoints:
         assert resp.status_code == 409
         assert resp.json()["error"] == "already_committed"
 
+    def test_create_options_session_201(self, client):
+        c, _ = client
+        resp = c.post(
+            "/api/import/sessions",
+            files={"file": ("options.csv", io.BytesIO(_OPTIONS_CSV), "text/csv")},
+            data={"format_hint": "options"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["detected_format"] == "options"
+
 
 # ---------------------------------------------------------------------------
 # Portfolio holdings & movements endpoints
@@ -497,6 +512,45 @@ class TestPortfolioEndpoints:
         assert resp.status_code == 200
         mvt = resp.json()["movements"][0]
         assert mvt["company_name"] == "Apple Inc."
+
+    def test_unlinked_option_movement_includes_warning_code(self, client):
+        c, fake = client
+        fake.portfolio_container._store["txn_option_unlinked_001"] = {
+            "id": "txn_option_unlinked_001",
+            "doc_type": "ledger_txn",
+            "account_id": "_unassigned",
+            "txn_type": "CALL_SELL",
+            "security_id": "XNYS:AAPL",
+            "ticker": "AAPL",
+            "trade_date": "2024-07-19",
+            "quantity": "0",
+            "option_link_kind": "OPEN_SELL",
+            "option_type": "call",
+        }
+        resp = c.get("/api/portfolio/movements")
+        assert resp.status_code == 200
+        movement = next(m for m in resp.json()["movements"] if m["id"] == "txn_option_unlinked_001")
+        assert movement["movement_warnings"] == ["OPTION_MOVEMENT_UNLINKED"]
+
+    def test_linked_option_movement_omits_warning_code(self, client):
+        c, fake = client
+        fake.portfolio_container._store["txn_option_linked_001"] = {
+            "id": "txn_option_linked_001",
+            "doc_type": "ledger_txn",
+            "account_id": "_unassigned",
+            "txn_type": "PUT_BUY",
+            "security_id": "XNYS:AAPL",
+            "ticker": "AAPL",
+            "trade_date": "2024-08-16",
+            "quantity": "0",
+            "option_position_id": "pos_put_001",
+            "option_link_kind": "CLOSE_BUY",
+            "option_type": "put",
+        }
+        resp = c.get("/api/portfolio/movements")
+        assert resp.status_code == 200
+        movement = next(m for m in resp.json()["movements"] if m["id"] == "txn_option_linked_001")
+        assert "movement_warnings" not in movement
 
 
 # ---------------------------------------------------------------------------

@@ -253,6 +253,26 @@ def _buy_body(**kwargs):
     return base
 
 
+def _option_body(**kwargs):
+    base = {
+        "txn_type": "CALL_SELL",
+        "security_id": "XNYS:AAPL",
+        "trade_date": "2026-01-15",
+        "account_id": "_unassigned",
+        "quantity": "0",
+        "gross": {"amount": "150.00", "currency": "USD", "eur_amount": "138.00"},
+        "fees": {"total": "3.50", "currency": "USD", "total_eur": "3.25"},
+        "option_position_id": "pos_call_001",
+        "option_link_kind": "OPEN_SELL",
+        "option_type": "call",
+        "option_strike": 210.0,
+        "option_expiration": "2026-01-16",
+        "option_symbol": "AAPL",
+    }
+    base.update(kwargs)
+    return base
+
+
 class TestManualMovementCreation:
     def test_buy_creates_doc(self):
         svc, _ = _make_svc()
@@ -347,6 +367,18 @@ class TestManualMovementCreation:
         doc = svc.create_manual_movement(_buy_body())
         assert doc["withholding"] == {"source": None, "destination": None}
 
+    def test_option_sell_allows_missing_option_position_id(self):
+        svc, _ = _make_svc()
+        doc = svc.create_manual_movement(_option_body(option_position_id=None))
+        assert "option_position_id" not in doc or doc["option_position_id"] is None
+
+    def test_option_sell_uses_sell_like_net(self):
+        svc, _ = _make_svc()
+        doc = svc.create_manual_movement(_option_body())
+        assert doc["quantity"] == "0"
+        assert Decimal(doc["net"]["amount"]) == Decimal("146.500000")
+        assert Decimal(doc["net"]["eur_amount"]) == Decimal("134.750000")
+
 
 # ---------------------------------------------------------------------------
 # Movement Correction
@@ -416,6 +448,72 @@ class TestMovementCorrection:
                 account_id="_unassigned",
                 correction_data={"account_id": "_unassigned", "correction_note": ""},
             )
+
+    def test_option_correction_recomputes_sell_like_and_buy_like_net(self):
+        svc, _ = _make_svc()
+        sell_doc = svc.create_manual_movement(_option_body())
+        sell_result = svc.correct_movement(
+            movement_id=sell_doc["id"],
+            account_id="_unassigned",
+            correction_data={
+                "account_id": "_unassigned",
+                "correction_note": "adjust premium",
+                "gross": {"amount": "175.00", "currency": "USD", "eur_amount": "161.00"},
+                "fees": {"total": "4.00", "currency": "USD", "total_eur": "3.75"},
+            },
+        )
+        assert Decimal(sell_result["replacement"]["net"]["amount"]) == Decimal("171.000000")
+        assert Decimal(sell_result["replacement"]["net"]["eur_amount"]) == Decimal("157.250000")
+
+        buy_doc = svc.create_manual_movement(_option_body(
+            txn_type="PUT_BUY",
+            option_position_id="pos_put_001",
+            option_link_kind="CLOSE_BUY",
+            option_type="put",
+            gross={"amount": "80.00", "currency": "USD", "eur_amount": "74.00"},
+            fees={"total": "2.00", "currency": "USD", "total_eur": "1.85"},
+        ))
+        buy_result = svc.correct_movement(
+            movement_id=buy_doc["id"],
+            account_id="_unassigned",
+            correction_data={
+                "account_id": "_unassigned",
+                "correction_note": "adjust buyback",
+                "gross": {"amount": "90.00", "currency": "USD", "eur_amount": "83.00"},
+                "fees": {"total": "2.50", "currency": "USD", "total_eur": "2.25"},
+            },
+        )
+        assert Decimal(buy_result["replacement"]["net"]["amount"]) == Decimal("92.500000")
+        assert Decimal(buy_result["replacement"]["net"]["eur_amount"]) == Decimal("85.250000")
+
+    def test_option_correction_can_add_option_position_id_after_creation(self):
+        svc, _ = _make_svc()
+        unlinked = svc.create_manual_movement(_option_body(option_position_id=None))
+        result = svc.correct_movement(
+            movement_id=unlinked["id"],
+            account_id="_unassigned",
+            correction_data={
+                "account_id": "_unassigned",
+                "correction_note": "link movement to option position",
+                "option_position_id": "pos_call_002",
+            },
+        )
+        assert result["replacement"]["option_position_id"] == "pos_call_002"
+
+    def test_option_correction_can_add_option_close_date_after_creation(self):
+        svc, _ = _make_svc()
+        doc = svc.create_manual_movement(_option_body(option_close_date=None))
+        assert doc.get("option_close_date") is None
+        result = svc.correct_movement(
+            movement_id=doc["id"],
+            account_id="_unassigned",
+            correction_data={
+                "account_id": "_unassigned",
+                "correction_note": "record eventual close date",
+                "option_close_date": "2026-01-22",
+            },
+        )
+        assert result["replacement"]["option_close_date"] == "2026-01-22"
 
 
 # ---------------------------------------------------------------------------

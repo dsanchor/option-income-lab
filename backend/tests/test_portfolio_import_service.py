@@ -48,6 +48,10 @@ class FakePortfolioContainer:
     def __init__(self):
         self._store: dict = {}
 
+    def create_item(self, body: dict):
+        self._store[body["id"]] = dict(body)
+        return dict(body)
+
     def upsert_item(self, body: dict):
         self._store[body["id"]] = dict(body)
         return dict(body)
@@ -55,7 +59,12 @@ class FakePortfolioContainer:
     def query_items(self, query="", parameters=None, enable_cross_partition_query=True, partition_key=None):
         if "COUNT" in query:
             return iter([0])
-        return iter([])
+        items = list(self._store.values())
+        if "doc_type = 'account'" in query:
+            items = [d for d in items if d.get("doc_type") == "account"]
+        elif "doc_type = 'ledger_txn'" in query:
+            items = [d for d in items if d.get("doc_type") == "ledger_txn"]
+        return iter(items)
 
     def read_item(self, item: str, partition_key: str):
         from azure.cosmos.exceptions import CosmosResourceNotFoundError
@@ -123,6 +132,10 @@ def _make_import_service(preload_securities=None):
     return ImportService(portfolio_svc, securities_svc)
 
 
+def _create_account(portfolio_svc, name="IB Main", broker="interactive_brokers"):
+    return portfolio_svc.create_account(broker=broker, name=name, currency="EUR")
+
+
 # ---------------------------------------------------------------------------
 # CSV fixtures
 # ---------------------------------------------------------------------------
@@ -151,6 +164,35 @@ def _sales_csv(rows=None):
     if rows is None:
         rows = [
             "2024\tApple Inc.\t20/06/2024\t5\t7,50\t1.050,00\n",
+        ]
+    return (header + "".join(rows)).encode("utf-8")
+
+
+def _options_csv(rows=None, with_net=False, with_close_date=False):
+    if with_net and with_close_date:
+        header = (
+            "Símbolo\tTipo\tFecha\tStrike\tExpiración\tImporte USD Bruto\t"
+            "Importe EUR Bruto\tComisión EUR\tImporte EUR Neto\tFecha de cierre\tCuenta\n"
+        )
+    elif with_net:
+        header = (
+            "Símbolo\tTipo\tFecha\tStrike\tExpiración\tImporte USD Bruto\t"
+            "Importe EUR Bruto\tComisión EUR\tImporte EUR Neto\tCuenta\n"
+        )
+    elif with_close_date:
+        header = (
+            "Símbolo\tTipo\tFecha\tStrike\tExpiración\tImporte USD Bruto\t"
+            "Importe EUR Bruto\tComisión EUR\tFecha de cierre\tCuenta\n"
+        )
+    else:
+        header = (
+            "Símbolo\tTipo\tFecha\tStrike\tExpiración\tImporte USD Bruto\t"
+            "Importe EUR Bruto\tComisión EUR\tCuenta\n"
+        )
+    if rows is None:
+        rows = [
+            "AAPL\tCALL_SELL\t19/07/2024\t210\t19/07/2024\t150.00\t138.00\t3.25\tIB Main\n",
+            "AAPL\tPUT_BUY\t16/08/2024\t180\t16/08/2024\t80.00\t74.00\t-1.25\tIB Main\n",
         ]
     return (header + "".join(rows)).encode("utf-8")
 
@@ -236,6 +278,19 @@ class TestCreateSession:
         svc = _make_import_service()
         with pytest.raises(ValueError):
             svc.create_session(b"not,a,valid,csv", format_hint="dividends")
+
+    def test_options_account_name_resolves_to_account_id(self):
+        svc = _make_import_service(preload_securities=[_AAPL_SEC])
+        acct = _create_account(svc.portfolio_svc)
+        session = svc.create_session(
+            _options_csv(rows=[
+                "AAPL\tCALL_SELL\t19/07/2024\t210\t19/07/2024\t150.00\t138.00\t3.25\tIB Main\n",
+            ]),
+            format_hint="options",
+        )
+        stored = svc.portfolio_svc.get_session(session["session_id"])
+        parsed_row = stored["parsed_rows"][0]
+        assert parsed_row["account_id"] == acct["account_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +489,57 @@ class TestGeneratePreview:
         assert "XNYS:AAPL" in sids
         # Skipped rows in skip_reasons
         assert preview["preview"]["skipped_rows"] >= 1
+
+    def test_options_preview_uses_existing_net_formula_with_negative_commission(self):
+        svc = _make_import_service(preload_securities=[_AAPL_SEC])
+        acct = _create_account(svc.portfolio_svc)
+        session = svc.create_session(
+            _options_csv(rows=[
+                "AAPL\tCALL_SELL\t19/07/2024\t210\t19/07/2024\t150.00\t138.00\t3.25\t26/07/2024\tIB Main\n",
+                "AAPL\tPUT_BUY\t16/08/2024\t180\t16/08/2024\t80.00\t74.00\t-1.25\t\tIB Main\n",
+            ], with_close_date=True),
+            format_hint="options",
+        )
+        sid = session["session_id"]
+        q = session["questions"][0]
+        svc.answer_question(sid, {
+            "question_id": q["question_id"],
+            "answer_type": "SELECTED_CANDIDATE",
+            "selected_security_id": "XNYS:AAPL",
+        })
+        preview = svc.generate_preview(sid)
+        movements = sorted(preview["preview"]["movements"], key=lambda m: m["trade_date"])
+        sell = next(m for m in movements if m["txn_type"] == "CALL_SELL")
+        buy = next(m for m in movements if m["txn_type"] == "PUT_BUY")
+        assert sell["net_eur"] == "134.750000"
+        assert buy["net_eur"] == "72.750000"
+
+        committed = svc.commit_session(sid)
+        assert committed["state"] == "COMMITTED"
+        txns = [
+            v for v in svc.portfolio_svc.portfolio_container._store.values()
+            if v.get("doc_type") == "ledger_txn"
+        ]
+        txns_by_type = {t["txn_type"]: t for t in txns}
+        assert txns_by_type["CALL_SELL"]["account_id"] == acct["account_id"]
+        assert txns_by_type["CALL_SELL"]["option_position_id"] is None
+        assert txns_by_type["CALL_SELL"]["option_link_kind"] == "OPEN_SELL"
+        assert txns_by_type["CALL_SELL"]["option_type"] == "call"
+        assert txns_by_type["CALL_SELL"]["option_close_date"] == "2024-07-26"
+        assert txns_by_type["PUT_BUY"]["option_link_kind"] == "CLOSE_BUY"
+        assert txns_by_type["PUT_BUY"]["option_type"] == "put"
+        assert txns_by_type["PUT_BUY"]["option_close_date"] is None
+
+    def test_options_parser_invalid_type_reaches_session_creation_error(self):
+        svc = _make_import_service()
+        _create_account(svc.portfolio_svc)
+        with pytest.raises(ValueError, match="Row 2: Invalid Tipo value"):
+            svc.create_session(
+                _options_csv(rows=[
+                    "AAPL\tOTHER\t19/07/2024\t210\t19/07/2024\t150.00\t138.00\t3.25\tacct_ib_main\n",
+                ]),
+                format_hint="options",
+            )
 
 
 # ---------------------------------------------------------------------------

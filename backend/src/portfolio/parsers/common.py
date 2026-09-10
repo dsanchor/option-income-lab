@@ -45,6 +45,7 @@ def parse_spanish_decimal(raw: str) -> Optional[Decimal]:
     Handles:
       "1.234,56"  → Decimal("1234.56")
       "1234,56"   → Decimal("1234.56")
+      "1234.56"   → Decimal("1234.56")
       "0"         → Decimal("0")
       ""          → None
       "N/A"       → None
@@ -56,6 +57,16 @@ def parse_spanish_decimal(raw: str) -> Optional[Decimal]:
     s = str(raw).strip()
     if not s or s.upper() in {"N/A", "NA", "NONE", "-", "—"}:
         return None
+    if "," not in s and "." in s:
+        signless = s[1:] if s[:1] in {"+", "-"} else s
+        parts = signless.split(".")
+        if len(parts) == 2 and all(part.isdigit() for part in parts):
+            left, right = parts
+            if 1 <= len(right) <= 2:
+                try:
+                    return Decimal(s)
+                except InvalidOperation:
+                    raise ValueError(f"Cannot parse decimal: {raw!r}")
     # Spanish convention: dots are ALWAYS thousands separators (even without a comma).
     # A dot-only string such as "1.234" means 1234 (not 1.234).
     s = s.replace(".", "")

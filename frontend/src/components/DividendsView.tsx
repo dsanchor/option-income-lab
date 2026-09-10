@@ -143,6 +143,7 @@ function resolveDividendSortValue(
   if (sortKey === "cash_net") return getCashNet(row);
   if (sortKey === "derechos_net") return getDerechosNet(row);
   if (sortKey === "total_net") return getTotalNet(row);
+  if (sortKey === "yoc_pct") return (row as Partial<DividendsBySymbolRow>).yoc_pct ?? -Infinity;
   return (row as unknown as Record<string, unknown>)[sortKey];
 }
 
@@ -175,26 +176,19 @@ function SummaryRow({ summary }: { summary: DividendsSummary }) {
   const cashNet = getSummaryCashNet(summary);
   const derechosNet = getSummaryDerechosNet(summary);
   const cards = [
-    {
-      label: "Cash Dividends",
-      value: cashNet,
-      prefix: "€",
-      suffix: "",
-      decimals: 2,
-      tone: (cashNet >= 0 ? "green" : "red") as "green" | "red",
-    },
-    {
-      label: "Derechos Dividends",
-      value: derechosNet,
-      prefix: "€",
-      suffix: "",
-      decimals: 2,
-      tone: (derechosNet >= 0 ? "blue" : "red") as "blue" | "red",
-    },
     { label: "Total Gross (EUR)", value: summary.total_gross_eur ?? 0, prefix: "€", suffix: "", decimals: 2, tone: "blue" as const },
     { label: "Total Withholding (EUR)", value: summary.total_withholding_eur ?? 0, prefix: "€", suffix: "", decimals: 2, tone: "orange" as const },
     { label: "Dividend Count", value: summary.total_dividends ?? 0, suffix: "", decimals: 0, tone: "purple" as const },
     { label: "Effective Withholding %", value: summary.effective_withholding_pct ?? 0, prefix: "", suffix: "%", decimals: 2, tone: "red" as const },
+    {
+      label: "Portfolio Yield on Cost",
+      value: summary.portfolio_yoc_pct ?? undefined,
+      prefix: "",
+      suffix: "%",
+      decimals: 2,
+      tone: "green" as const,
+      hint: "Annualized on current cost basis, held positions only",
+    },
   ];
 
   return (
@@ -216,13 +210,13 @@ function SummaryRow({ summary }: { summary: DividendsSummary }) {
               <div className={`mt-1 font-mono text-lg ${signedColor(cashNet)}`}>{eur(cashNet)}</div>
             </div>
             <div className="rounded-[var(--radius)] border border-border/70 bg-bg-card/40 px-3 py-2">
-              <div className="text-[11px] uppercase tracking-wide text-text-muted">Derechos</div>
+              <div className="text-[11px] uppercase tracking-wide text-text-muted">Rights</div>
               <div className={`mt-1 font-mono text-lg ${signedColor(derechosNet)}`}>{eur(derechosNet)}</div>
             </div>
           </div>
         </div>
       </Reveal>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         {cards.map((card, index) => (
           <Reveal key={card.label} index={index + 1} className="h-full">
             <StatCard
@@ -232,6 +226,7 @@ function SummaryRow({ summary }: { summary: DividendsSummary }) {
               suffix={card.suffix}
               decimals={card.decimals}
               tone={card.tone}
+              hint={"hint" in card ? card.hint : undefined}
             />
           </Reveal>
         ))}
@@ -257,7 +252,7 @@ function MonthlySection({ rows }: { rows: DividendsMonthlyRow[] }) {
               <th className="px-3 py-2 text-right font-medium">Gross</th>
               <th className="px-3 py-2 text-right font-medium">Withholding</th>
               <th className="px-3 py-2 text-right font-medium">Cash Net</th>
-              <th className="px-3 py-2 text-right font-medium">Derechos</th>
+              <th className="px-3 py-2 text-right font-medium">Rights</th>
               <th className="px-3 py-2 text-right font-medium">Total Net</th>
               <th className="px-3 py-2 text-right font-medium">Dividend Count</th>
             </tr>
@@ -290,7 +285,7 @@ function MonthlySection({ rows }: { rows: DividendsMonthlyRow[] }) {
 
 type DividendsBySymbolKey = keyof Pick<
   DividendsBySymbolRow,
-  "symbol" | "gross_eur" | "withholding_total_eur" | "net_eur" | "cash_net" | "derechos_net" | "total_net" | "dividend_count"
+  "symbol" | "gross_eur" | "withholding_total_eur" | "net_eur" | "cash_net" | "derechos_net" | "total_net" | "dividend_count" | "yoc_pct"
 >;
 
 const BY_SYMBOL_COLS: { key: DividendsBySymbolKey; label: string; num?: boolean }[] = [
@@ -298,10 +293,27 @@ const BY_SYMBOL_COLS: { key: DividendsBySymbolKey; label: string; num?: boolean 
   { key: "gross_eur", label: "Gross", num: true },
   { key: "withholding_total_eur", label: "Withholding", num: true },
   { key: "cash_net", label: "Cash Net", num: true },
-  { key: "derechos_net", label: "Derechos", num: true },
+  { key: "derechos_net", label: "Rights", num: true },
   { key: "total_net", label: "Total Net", num: true },
   { key: "dividend_count", label: "Dividend Count", num: true },
+  { key: "yoc_pct", label: "YoC", num: true },
 ];
+
+function yocLabel(row: Pick<DividendsBySymbolRow, "yoc_pct" | "yoc_basis" | "yoc_dividend_frequency">) {
+  if (row.yoc_basis === "insufficient_history") {
+    return { text: "—", title: "Not enough dividend history to infer a cadence yet" };
+  }
+  if (row.yoc_pct == null) {
+    return { text: "—", title: "No current holding / cost basis for this symbol" };
+  }
+  const freq = row.yoc_dividend_frequency;
+  const freqLabel =
+    freq === 12 ? "monthly" : freq === 4 ? "quarterly" : freq === 2 ? "semi-annual" : freq === 1 ? "annual" : null;
+  return {
+    text: `${row.yoc_pct.toFixed(2)}%`,
+    title: freqLabel ? `Annualized on cost basis, inferred ${freqLabel} cadence` : "Annualized on cost basis",
+  };
+}
 
 function BySymbolSection({ rows }: { rows: DividendsBySymbolRow[] }) {
   const [sortKey, setSortKey] = useState<DividendsBySymbolKey>("total_net");
@@ -353,12 +365,14 @@ function BySymbolSection({ rows }: { rows: DividendsBySymbolRow[] }) {
           <tbody>
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-text-muted">
+                <td colSpan={8} className="px-3 py-6 text-center text-text-muted">
                   No symbol-level dividends available.
                 </td>
               </tr>
             )}
-            {sorted.map((row) => (
+            {sorted.map((row) => {
+              const yoc = yocLabel(row);
+              return (
               <tr key={row.symbol} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
                 <td className="px-3 py-2 font-semibold">{row.symbol}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.gross_eur)}</td>
@@ -367,8 +381,12 @@ function BySymbolSection({ rows }: { rows: DividendsBySymbolRow[] }) {
                 <td className={`px-3 py-2 text-right font-mono ${signedColor(getDerechosNet(row))}`}>{eur(getDerechosNet(row))}</td>
                 <td className={`px-3 py-2 text-right font-mono ${signedColor(getTotalNet(row))}`}>{eur(getTotalNet(row))}</td>
                 <td className="px-3 py-2 text-right font-mono">{row.dividend_count}</td>
+                <td className="px-3 py-2 text-right font-mono text-text-muted" title={yoc.title}>
+                  {yoc.text}
+                </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -386,7 +404,7 @@ const BY_YEAR_COLS: { key: DividendsYearlyKey; label: string; num?: boolean }[] 
   { key: "gross_eur", label: "Gross", num: true },
   { key: "withholding_eur", label: "Withholding", num: true },
   { key: "cash_net", label: "Cash Net", num: true },
-  { key: "derechos_net", label: "Derechos", num: true },
+  { key: "derechos_net", label: "Rights", num: true },
   { key: "total_net", label: "Total Net", num: true },
   { key: "dividend_count", label: "Dividend Count", num: true },
 ];
@@ -758,7 +776,7 @@ const POSITION_COLS: {
   { key: "withholding_destination_eur", label: "Withholding Dest", num: true },
   { key: "withholding_total_eur", label: "Withholding Total", num: true, sortable: true },
   { key: "cash_net", label: "Cash Net EUR", num: true, sortable: true },
-  { key: "derechos_net", label: "Derechos EUR", num: true, sortable: true },
+  { key: "derechos_net", label: "Rights EUR", num: true, sortable: true },
   { key: "total_net", label: "Total EUR", num: true, sortable: true },
 ];
 

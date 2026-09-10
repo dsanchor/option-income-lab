@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from statistics import median
 from typing import Any, Dict, Iterable, List, Optional
 
 _ZERO = Decimal("0")
@@ -77,6 +78,15 @@ def _parse_trade_date(value: Any) -> tuple[Optional[int], Optional[int], Optiona
     return trade_dt.year, trade_dt.month, month_key, raw
 
 
+def _parse_iso_date(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.strptime(value[:10], "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
 def _extract_dividend_position(movement: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if movement.get("txn_type") != "DIVIDEND":
         return None
@@ -144,6 +154,111 @@ def _extract_dividend_position(movement: Dict[str, Any]) -> Optional[Dict[str, A
         "_derechos_eur": derechos_eur,
         "_total_net_eur": total_net_eur,
     }
+
+
+def infer_dividend_frequency(event_dates: List[str]) -> Optional[int]:
+    """Infer annual payment count from the median gap between dividend dates.
+
+    Thresholds use midpoints between common cadences so occasional special or
+    shifted payments do not overreact:
+      - < 60 days   → monthly   (12)
+      - < 135 days  → quarterly (4)
+      - < 270 days  → semiannual (2)
+      - otherwise   → annual    (1)
+    """
+    parsed_dates = [parsed for raw in event_dates if (parsed := _parse_iso_date(raw)) is not None]
+    if len(parsed_dates) < 2:
+        return None
+
+    parsed_dates.sort()
+    gaps = [
+        (current - previous).days
+        for previous, current in zip(parsed_dates, parsed_dates[1:])
+    ]
+    if not gaps:
+        return None
+
+    median_gap = median(gaps)
+    if median_gap < 60:
+        return 12
+    if median_gap < 135:
+        return 4
+    if median_gap < 270:
+        return 2
+    return 1
+
+
+def build_dividend_yoc_snapshot(
+    movements: List[dict],
+    *,
+    symbol_filter: List[str] | None = None,
+    account_filter: List[str] | None = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Build per-symbol trailing-dividend inputs used for Yield on Cost.
+
+    This intentionally ignores year/month filters. YoC is derived from the
+    full dividend history available for the selected symbol/account scope,
+    then later joined to current holdings cost basis.
+    """
+    normalized_symbols = _normalize_str_filter(symbol_filter, uppercase=True)
+    normalized_accounts = _normalize_str_filter(account_filter)
+    per_symbol_event_totals: Dict[str, Dict[str, Decimal]] = defaultdict(dict)
+
+    for movement in movements:
+        position = _extract_dividend_position(movement)
+        if position is None:
+            continue
+        if normalized_symbols is not None and position["symbol"] not in normalized_symbols:
+            continue
+        if normalized_accounts is not None and position["account_id"] not in normalized_accounts:
+            continue
+
+        symbol_events = per_symbol_event_totals[position["symbol"]]
+        trade_date = position["trade_date"]
+        symbol_events[trade_date] = symbol_events.get(trade_date, _ZERO) + position["_total_net_eur"]
+
+    snapshot: Dict[str, Dict[str, Any]] = {}
+    for symbol, event_totals in per_symbol_event_totals.items():
+        sorted_events = sorted(event_totals.items(), key=lambda item: item[0])
+        event_dates = [event_date for event_date, _ in sorted_events]
+
+        if len(sorted_events) < 2:
+            snapshot[symbol] = {
+                "event_dates": event_dates,
+                "event_net_eur": [_round2(amount) for _, amount in sorted_events],
+                "yoc_basis": "insufficient_history",
+                "yoc_dividend_frequency": None,
+                "yoc_trailing_annual_dividend_net_eur": None,
+            }
+            continue
+
+        frequency = infer_dividend_frequency(event_dates)
+        if frequency is None or len(sorted_events) < frequency:
+            # We intentionally return no annualized YoC input here. Even if a
+            # cadence can be guessed from 2+ events, fewer than N observed
+            # payments would understate a "trailing annual" sum.
+            snapshot[symbol] = {
+                "event_dates": event_dates,
+                "event_net_eur": [_round2(amount) for _, amount in sorted_events],
+                "yoc_basis": "insufficient_history",
+                "yoc_dividend_frequency": frequency,
+                "yoc_trailing_annual_dividend_net_eur": None,
+            }
+            continue
+
+        trailing_annual_dividend_net = sum(
+            (amount for _, amount in sorted_events[-frequency:]),
+            _ZERO,
+        )
+        snapshot[symbol] = {
+            "event_dates": event_dates,
+            "event_net_eur": [_round2(amount) for _, amount in sorted_events],
+            "yoc_basis": "annualized",
+            "yoc_dividend_frequency": frequency,
+            "yoc_trailing_annual_dividend_net_eur": _round2(trailing_annual_dividend_net),
+        }
+
+    return snapshot
 
 
 def _summarize_dividends(positions: List[Dict[str, Any]]) -> Dict[str, Any]:

@@ -93,6 +93,29 @@ def _dividend_body(security_id="XNYS:AAPL", gross_eur="100.00",
     }
 
 
+def _option_body(txn_type="CALL_SELL", gross_amount="150.00", fees_amount="3.50",
+                 gross_eur="138.00", fees_eur="3.25", account_id="_unassigned",
+                 trade_date="2024-07-19", option_position_id="pos_call_001",
+                 option_link_kind="OPEN_SELL", option_type="call",
+                 option_close_date=None):
+    return {
+        "txn_type": txn_type,
+        "security_id": "XNYS:AAPL",
+        "trade_date": trade_date,
+        "quantity": "0",
+        "gross": {"amount": gross_amount, "currency": "USD", "eur_amount": gross_eur},
+        "fees": {"total": fees_amount, "currency": "USD", "total_eur": fees_eur},
+        "account_id": account_id,
+        "option_position_id": option_position_id,
+        "option_link_kind": option_link_kind,
+        "option_type": option_type,
+        "option_strike": 210.0,
+        "option_expiration": "2024-07-19",
+        "option_symbol": "AAPL",
+        "option_close_date": option_close_date,
+    }
+
+
 def _seed_movement(fake, movement_id, security_id, txn_type, quantity, gross_eur,
                    account_id="_unassigned", commission_eur="0", trade_date="2024-01-15",
                    sales_type=None, correction_status="ACTIVE"):
@@ -260,6 +283,51 @@ class TestManualDividend:
         wht = resp.json().get("withholding", {})
         src = wht.get("source") or {}
         assert Decimal(src.get("amount_eur", "0")) == Decimal("12.94")
+
+
+# ===========================================================================
+# Option movement creation
+# ===========================================================================
+
+class TestManualOptionMovements:
+    def test_option_sell_allows_missing_option_position_id(self, client):
+        c, _ = client
+        body = _option_body()
+        del body["option_position_id"]
+        resp = c.post("/api/portfolio/movements", json=body)
+        assert resp.status_code == 201
+        assert resp.json().get("option_position_id") is None
+
+    def test_option_sell_persists_metadata_and_zero_quantity(self, client):
+        c, _ = client
+        resp = c.post(
+            "/api/portfolio/movements",
+            json=_option_body(option_close_date="2024-07-26"),
+        )
+        assert resp.status_code == 201
+        doc = resp.json()
+        assert doc["txn_type"] == "CALL_SELL"
+        assert doc["quantity"] == "0"
+        assert doc["option_position_id"] == "pos_call_001"
+        assert doc["option_link_kind"] == "OPEN_SELL"
+        assert doc["option_type"] == "call"
+        assert doc["option_close_date"] == "2024-07-26"
+        assert Decimal(doc["net"]["amount"]) == Decimal("146.500000")
+        assert Decimal(doc["net"]["eur_amount"]) == Decimal("134.750000")
+
+    def test_option_unlinked_movement_warning_only_on_listing(self, client):
+        c, _ = client
+        create_resp = c.post(
+            "/api/portfolio/movements",
+            json=_option_body(option_position_id=None),
+        )
+        assert create_resp.status_code == 201
+        movement_id = create_resp.json()["id"]
+
+        list_resp = c.get("/api/portfolio/movements")
+        assert list_resp.status_code == 200
+        listed = next(m for m in list_resp.json()["movements"] if m["id"] == movement_id)
+        assert listed["movement_warnings"] == ["OPTION_MOVEMENT_UNLINKED"]
 
 
 # ===========================================================================

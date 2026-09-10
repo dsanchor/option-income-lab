@@ -10,6 +10,7 @@ import threading
 import time
 from calendar import month_abbr, monthrange
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
@@ -25,7 +26,17 @@ from fastapi.responses import JSONResponse
 from src.cosmos_db import is_watchlist_paused
 from src.scheduler_registry import _MAX_TASK_DURATION_SECONDS
 from src.best_options import DEFAULT_DTE_MIN, DEFAULT_DTE_MAX
-from src.dividends_economics import build_dividends_economics_report
+from src.dividends_economics import (
+    build_dividend_yoc_snapshot,
+    build_dividends_economics_report,
+)
+from src.portfolio.option_linkage_service import (
+    OPTION_ASSIGNMENT_STOCK_MISSING,
+    OPTION_MANUAL_CLOSE_BUY_MISSING,
+    OPTION_OPENING_SELL_MISSING,
+    OPTION_SECURITY_UNRESOLVED,
+    build_option_position_linkage,
+)
 
 try:
     import yfinance as yf
@@ -205,29 +216,92 @@ def _average(values: List[float]) -> float:
     return _round2(sum(values) / len(values)) if values else 0.0
 
 
-def _group_economics_metrics(positions: List[Dict[str, Any]]) -> Dict[str, float]:
-    total_premium = sum(p["premium"] for p in positions)
-    total_buyback = sum(
-        p["buyback_cost"] for p in positions if p["buyback_cost"] is not None
-    )
-    total_net = total_premium - total_buyback
-    # Weighted RoC: net / total capital deployed (sum of strikes × 100)
-    total_capital = sum(
-        p["strike"] * 100 for p in positions if p["strike"] is not None and p["strike"] > 0
-    )
-    avg_roc_pct = _round2((total_net / total_capital) * 100) if total_capital > 0 else 0.0
-    # Annualized: weight by average days to expiration
-    days_values = [p["_days_to_exp"] for p in positions if p.get("_days_to_exp") and p["_days_to_exp"] > 0]
-    avg_days = sum(days_values) / len(days_values) if days_values else 0
-    avg_roc_annualized = _round2(avg_roc_pct * (365 / avg_days)) if avg_days > 0 else avg_roc_pct
+def _normalize_csv_values(values: Optional[Any], *, upper: bool = False) -> Optional[List[str]]:
+    if values is None:
+        return None
+    if isinstance(values, str):
+        raw_values = [item.strip() for item in values.split(",")]
+    elif isinstance(values, (list, tuple, set)):
+        raw_values = [str(item).strip() for item in values]
+    else:
+        raw_values = [str(values).strip()]
+    cleaned = [value.upper() if upper else value for value in raw_values if value]
+    return cleaned or None
+
+
+def _sum_movement_amount(movements: List[Dict[str, Any]], *path: str) -> float:
+    total = 0.0
+    for movement in movements:
+        value: Any = movement
+        for key in path:
+            if not isinstance(value, dict):
+                value = None
+                break
+            value = value.get(key)
+        numeric = _parse_numeric(value)
+        if numeric is not None:
+            total += numeric
+    return total
+
+
+def _build_position_economics_group(positions: List[Dict[str, Any]]) -> Dict[str, float]:
+    total_premium_usd = sum(position["premium_usd"] for position in positions)
+    total_buyback_usd = sum(position["buyback_usd"] for position in positions)
+    net_option_usd_gross = sum(position["net_option_usd_gross"] for position in positions)
+    net_income_eur = sum(position["net_income_eur"] for position in positions)
+    total_commission_eur = sum(position["total_commission_eur"] for position in positions)
+
+    roc_positions = [
+        position for position in positions
+        if position.get("_roc_strike") is not None and position.get("coverage_status") == "linked"
+    ]
+    total_roc_strike = sum(position["_roc_strike"] for position in roc_positions)
+    net_for_roc = sum(position["net_option_usd_gross"] for position in roc_positions)
+    avg_roc_pct = _round2((net_for_roc / total_roc_strike) * 100) if total_roc_strike > 0 else 0.0
+
+    annualized_positions = [
+        position for position in roc_positions
+        if position.get("roc_annualized") is not None
+    ]
+    if annualized_positions:
+        annualized_denominator = sum(position["_roc_strike"] for position in annualized_positions)
+        annualized_numerator = sum(
+            position["roc_annualized"] * position["_roc_strike"]
+            for position in annualized_positions
+        )
+        avg_roc_annualized = _round2(annualized_numerator / annualized_denominator) if annualized_denominator > 0 else avg_roc_pct
+    else:
+        avg_roc_annualized = avg_roc_pct
+
     return {
-        "premium": _round2(total_premium),
-        "buyback": _round2(total_buyback),
-        "net": _round2(total_net),
+        "total_premium_usd": _round2(total_premium_usd),
+        "total_buyback_usd": _round2(total_buyback_usd),
+        "net_option_usd_gross": _round2(net_option_usd_gross),
+        "net_income_eur": _round2(net_income_eur),
+        "total_commission_eur": _round2(total_commission_eur),
         "count": len(positions),
         "avg_roc_pct": avg_roc_pct,
         "avg_roc_annualized": avg_roc_annualized,
     }
+
+
+def _classify_position_win(position: Dict[str, Any]) -> Optional[bool]:
+    if position.get("coverage_status") != "linked":
+        return None
+    if not position.get("_scoped_has_opening_sell"):
+        return None
+
+    status = position.get("status")
+    close_reason = position.get("close_reason")
+    if status == "rolled" or close_reason == "manual":
+        if not position.get("_scoped_has_closing_buy"):
+            return None
+        return (position.get("net_option_usd_gross") or 0.0) > 0
+    if status in {"assigned", "expired"} or close_reason in {"assigned", "expired"}:
+        if position.get("_scoped_has_closing_buy"):
+            return None
+        return True
+    return None
 
 
 def _build_economics_report(symbol_docs: List[Dict[str, Any]],
@@ -236,114 +310,166 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
                             symbol_filter: Optional[List[str]] = None,
                             option_type: Optional[str] = None,
                             status_filter: Optional[str] = None,
-                            now: Optional[datetime] = None) -> Dict[str, Any]:
+                            account_filter: Optional[List[str]] = None,
+                            now: Optional[datetime] = None,
+                            movements: Optional[List[Dict[str, Any]]] = None,
+                            securities: Optional[List[Dict[str, Any]]] = None,
+                            portfolio_svc=None,
+                            securities_svc=None) -> Dict[str, Any]:
     now = now or datetime.now(timezone.utc)
+    normalized_symbol_filter = _normalize_csv_values(symbol_filter, upper=True)
+    normalized_account_filter = _normalize_csv_values(account_filter)
+
+    linkage = build_option_position_linkage(
+        symbol_docs,
+        account_filter=normalized_account_filter,
+        movements=movements,
+        securities=securities,
+        portfolio_svc=portfolio_svc,
+        securities_svc=securities_svc,
+    )
+
     all_positions: List[Dict[str, Any]] = []
     available_years: set[int] = set()
     available_symbols: set[str] = set()
 
-    for symbol_doc in symbol_docs:
-        symbol = str(symbol_doc.get("symbol", "")).upper()
-        if not symbol:
+    for linked_position in linkage.get("positions", []):
+        symbol = str(linked_position.get("symbol", "")).upper()
+        position_id = linked_position.get("position_id")
+        if not symbol or not position_id:
             continue
-        for position in symbol_doc.get("positions", []):
-            source = position.get("source")
-            if not isinstance(source, dict):
-                source = {}
-            premium = _parse_numeric(source.get("premium"))
-            if premium is None:
-                continue
 
-            # Options contracts are for 100 shares
-            CONTRACT_MULTIPLIER = 100
+        opened_dt = _parse_datetime_value(linked_position.get("opened_at"))
+        closed_dt = _parse_datetime_value(linked_position.get("closed_at"))
+        expiration_dt = _parse_date_value(linked_position.get("expiration"))
+        strike = _parse_numeric(linked_position.get("strike"))
+        status = str(linked_position.get("status", "active")).lower()
+        close_reason = linked_position.get("close_reason")
+        position_type = str(linked_position.get("type", "")).lower()
 
-            opened_dt = _parse_datetime_value(position.get("opened_at"))
-            closed_dt = _parse_datetime_value(position.get("closed_at"))
-            expiration_dt = _parse_date_value(position.get("expiration"))
-            strike = _parse_numeric(position.get("strike"))
-            buyback_cost = _parse_numeric(position.get("buyback_cost"))
-            status = str(position.get("status", "active")).lower()
-            pos_type = str(position.get("type", "")).lower()
+        expected_open_txn = "CALL_SELL" if position_type == "call" else "PUT_SELL"
+        expected_close_txn = "CALL_BUY" if position_type == "call" else "PUT_BUY"
+        scoped_option_moves = linkage.get("scoped_option_moves_by_position_id", {}).get(position_id, [])
+        opening_moves = [move for move in scoped_option_moves if move.get("txn_type") == expected_open_txn]
+        closing_moves = [move for move in scoped_option_moves if move.get("txn_type") == expected_close_txn]
 
-            # Dollar amounts (per contract = premium × 100)
-            premium_total = premium * CONTRACT_MULTIPLIER
-            buyback_total = buyback_cost * CONTRACT_MULTIPLIER if buyback_cost is not None else None
+        premium_usd = _round2(_sum_movement_amount(opening_moves, "gross", "amount"))
+        buyback_usd = _round2(_sum_movement_amount(closing_moves, "gross", "amount"))
+        net_option_usd_gross = _round2(premium_usd - buyback_usd)
+        opening_net_eur = _sum_movement_amount(opening_moves, "net", "eur_amount")
+        closing_net_eur = _sum_movement_amount(closing_moves, "net", "eur_amount")
+        net_income_eur = _round2(opening_net_eur - closing_net_eur)
+        total_commission_eur = _round2(_sum_movement_amount(scoped_option_moves, "fees", "total_eur"))
 
-            # Net RoC uses (premium - buyback) when buyback exists
-            net_per_share = premium - buyback_cost if buyback_cost is not None else premium
-            roc_pct = None
-            if strike not in (None, 0):
-                roc_pct = _round2((net_per_share / strike) * 100)
+        days_to_expiration = None
+        if opened_dt and expiration_dt:
+            candidate_days = (
+                expiration_dt.date() - opened_dt.astimezone(timezone.utc).date()
+            ).days
+            if candidate_days > 0:
+                days_to_expiration = candidate_days
 
-            roc_annualized = None
-            days_to_expiration = 0
-            if roc_pct is not None and opened_dt and expiration_dt:
-                days_to_expiration = (
-                    expiration_dt.date() - opened_dt.astimezone(timezone.utc).date()
-                ).days
-                if days_to_expiration > 0:
-                    roc_annualized = _round2(
-                        roc_pct * (365 / days_to_expiration)
-                    )
+        days_held = None
+        if opened_dt is not None:
+            end_dt = closed_dt or now
+            days_held = max(
+                (end_dt.astimezone(timezone.utc).date()
+                 - opened_dt.astimezone(timezone.utc).date()).days,
+                0,
+            )
+            if days_to_expiration is not None:
+                days_held = min(days_held, days_to_expiration)
 
-            days_held = None
-            if opened_dt is not None:
-                end_dt = closed_dt or now
-                days_held = max(
-                    (end_dt.astimezone(timezone.utc).date()
-                     - opened_dt.astimezone(timezone.utc).date()).days,
-                    0,
-                )
-                # Cap at expiration date to avoid inflated days when
-                # position is closed late (after expiration)
-                if expiration_dt and days_to_expiration > 0:
-                    days_held = min(days_held, days_to_expiration)
+        roc_pct = None
+        if strike not in (None, 0):
+            roc_pct = _round2((net_option_usd_gross / strike) * 100)
 
-            position_data = {
-                "symbol": symbol,
-                "position_id": position.get("position_id"),
-                "type": pos_type,
-                "strike": strike,
-                "expiration": position.get("expiration"),
-                "premium": _round2(premium_total),
-                "premium_per_share": _round2(premium),
-                "buyback_cost": _round2(buyback_total) if buyback_total is not None else None,
-                "buyback_per_share": _round2(buyback_cost) if buyback_cost is not None else None,
-                "net": _round2(premium_total - buyback_total) if buyback_total is not None else _round2(premium_total),
-                "roc_pct": roc_pct,
-                "roc_annualized": roc_annualized,
-                "days_held": days_held,
-                "status": status,
-                "opened_at": position.get("opened_at"),
-                "_opened_year": opened_dt.year if opened_dt else None,
-                "_opened_month": opened_dt.month if opened_dt else None,
-                "_days_to_exp": days_to_expiration if days_to_expiration > 0 else None,
-            }
-            all_positions.append(position_data)
-            available_symbols.add(symbol)
-            if opened_dt is not None:
-                available_years.add(opened_dt.year)
+        roc_annualized = None
+        if roc_pct is not None and days_to_expiration and days_to_expiration > 0:
+            roc_annualized = _round2(roc_pct * (365 / days_to_expiration))
+
+        position_data = {
+            "symbol": symbol,
+            "position_id": position_id,
+            "type": position_type,
+            "strike": strike,
+            "expiration": linked_position.get("expiration"),
+            "status": status,
+            "close_reason": close_reason,
+            "opened_at": linked_position.get("opened_at"),
+            "closed_at": linked_position.get("closed_at"),
+            "rolled_from": linked_position.get("rolled_from"),
+            "rolled_to": linked_position.get("rolled_to"),
+            "days_held": days_held,
+            "premium_usd": premium_usd,
+            "buyback_usd": buyback_usd,
+            "net_option_usd_gross": net_option_usd_gross,
+            "net_income_eur": net_income_eur,
+            "total_commission_eur": total_commission_eur,
+            "roc_pct": roc_pct,
+            "roc_annualized": roc_annualized,
+            "linked_accounts": linked_position.get("linked_accounts", []),
+            "linked_movement_count": linked_position.get("linked_movement_count", 0),
+            "coverage_status": linked_position.get("coverage_status", "unlinked"),
+            "warnings": linked_position.get("warnings", []),
+            "resolved_security_id": linked_position.get("resolved_security_id"),
+            "_opened_year": opened_dt.year if opened_dt else None,
+            "_opened_month": opened_dt.month if opened_dt else None,
+            "_roc_strike": strike if strike not in (None, 0) else None,
+            "_scoped_has_opening_sell": bool(opening_moves),
+            "_scoped_has_closing_buy": bool(closing_moves),
+        }
+        all_positions.append(position_data)
+        available_symbols.add(symbol)
+        if opened_dt is not None:
+            available_years.add(opened_dt.year)
 
     filtered_positions = [
         position for position in all_positions
         if (year is None or position["_opened_year"] == year)
         and (month_filter is None or position["_opened_month"] in month_filter)
-        and (symbol_filter is None or position["symbol"] in symbol_filter)
+        and (normalized_symbol_filter is None or position["symbol"] in normalized_symbol_filter)
         and (option_type is None or position["type"] == option_type)
         and (status_filter is None or position["status"] == status_filter)
     ]
 
-    summary_metrics = _group_economics_metrics(filtered_positions)
-    settled_positions = [
-        position for position in filtered_positions
-        if position["status"] in {"closed", "rolled"}
+    summary_metrics = _build_position_economics_group(filtered_positions)
+    settled_results = [
+        result
+        for position in filtered_positions
+        for result in [_classify_position_win(position)]
+        if result is not None
     ]
-    wins = [
-        position for position in settled_positions
-        if position["status"] == "closed"
-        or (position["status"] == "rolled" and (position.get("net") or 0) > 0)
-    ]
-    win_rate = _round2((len(wins) / len(settled_positions)) * 100) if settled_positions else 0.0
+    win_rate = _round2((sum(1 for result in settled_results if result) / len(settled_results)) * 100) if settled_results else 0.0
+
+    linked_positions_count = sum(1 for position in filtered_positions if position.get("coverage_status") == "linked")
+    coverage = {
+        "linked_positions": linked_positions_count,
+        "total_positions": len(filtered_positions),
+        "linked_ratio": round(linked_positions_count / len(filtered_positions), 4) if filtered_positions else 0.0,
+        "positions_with_unresolved_security": sum(
+            1 for position in filtered_positions
+            if OPTION_SECURITY_UNRESOLVED in position.get("warnings", [])
+        ),
+        "positions_missing_opening_sell": sum(
+            1 for position in filtered_positions
+            if OPTION_OPENING_SELL_MISSING in position.get("warnings", [])
+        ),
+        "positions_missing_closing_buy": sum(
+            1 for position in filtered_positions
+            if OPTION_MANUAL_CLOSE_BUY_MISSING in position.get("warnings", [])
+        ),
+        "positions_missing_assignment_stock": sum(
+            1 for position in filtered_positions
+            if OPTION_ASSIGNMENT_STOCK_MISSING in position.get("warnings", [])
+        ),
+        "excluded_unlinked_positions": sum(
+            1 for position in filtered_positions if position.get("coverage_status") == "unlinked"
+        ),
+        "excluded_positions_linked_only_outside_account_filter": sum(
+            1 for position in filtered_positions if position.get("coverage_status") == "account_filtered_out"
+        ),
+    }
 
     monthly_groups: Dict[tuple[int, int], List[Dict[str, Any]]] = defaultdict(list)
     symbol_groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
@@ -355,20 +481,22 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
     monthly = []
     for (group_year, group_month) in sorted(monthly_groups):
         group_positions = monthly_groups[(group_year, group_month)]
-        metrics = _group_economics_metrics(group_positions)
-        calls_in_group = [p for p in group_positions if p["type"] == "call"]
-        puts_in_group = [p for p in group_positions if p["type"] == "put"]
-        calls_metrics = _group_economics_metrics(calls_in_group) if calls_in_group else {"net": 0}
-        puts_metrics = _group_economics_metrics(puts_in_group) if puts_in_group else {"net": 0}
+        metrics = _build_position_economics_group(group_positions)
+        calls_in_group = [position for position in group_positions if position["type"] == "call"]
+        puts_in_group = [position for position in group_positions if position["type"] == "put"]
+        calls_metrics = _build_position_economics_group(calls_in_group)
+        puts_metrics = _build_position_economics_group(puts_in_group)
         monthly.append({
             "month": group_month,
             "year": group_year,
             "label": f"{month_abbr[group_month]} {group_year}",
-            "premium": metrics["premium"],
-            "buyback": metrics["buyback"],
-            "net": metrics["net"],
-            "calls_net": calls_metrics["net"],
-            "puts_net": puts_metrics["net"],
+            "total_premium_usd": metrics["total_premium_usd"],
+            "total_buyback_usd": metrics["total_buyback_usd"],
+            "net_option_usd_gross": metrics["net_option_usd_gross"],
+            "net_income_eur": metrics["net_income_eur"],
+            "total_commission_eur": metrics["total_commission_eur"],
+            "calls_net_income_eur": calls_metrics["net_income_eur"],
+            "puts_net_income_eur": puts_metrics["net_income_eur"],
             "positions_count": metrics["count"],
             "avg_roc_pct": metrics["avg_roc_pct"],
             "avg_roc_annualized": metrics["avg_roc_annualized"],
@@ -379,47 +507,56 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
     by_symbol = []
     for grouped_symbol in sorted(symbol_groups):
         group_positions = symbol_groups[grouped_symbol]
-        metrics = _group_economics_metrics(group_positions)
+        metrics = _build_position_economics_group(group_positions)
         by_symbol.append({
             "symbol": grouped_symbol,
-            "premium": metrics["premium"],
-            "buyback": metrics["buyback"],
-            "net": metrics["net"],
+            "total_premium_usd": metrics["total_premium_usd"],
+            "total_buyback_usd": metrics["total_buyback_usd"],
+            "net_option_usd_gross": metrics["net_option_usd_gross"],
+            "net_income_eur": metrics["net_income_eur"],
+            "total_commission_eur": metrics["total_commission_eur"],
             "positions_count": metrics["count"],
             "avg_roc_pct": metrics["avg_roc_pct"],
             "avg_roc_annualized": metrics["avg_roc_annualized"],
         })
 
-    calls_positions = [p for p in filtered_positions if p["type"] == "call"]
-    puts_positions = [p for p in filtered_positions if p["type"] == "put"]
-    calls_metrics = _group_economics_metrics(calls_positions)
-    puts_metrics = _group_economics_metrics(puts_positions)
+    calls_positions = [position for position in filtered_positions if position["type"] == "call"]
+    puts_positions = [position for position in filtered_positions if position["type"] == "put"]
+    calls_metrics = _build_position_economics_group(calls_positions)
+    puts_metrics = _build_position_economics_group(puts_positions)
 
     return {
         "summary": {
-            "total_premium": summary_metrics["premium"],
-            "total_buyback": summary_metrics["buyback"],
-            "net_income": summary_metrics["net"],
+            "total_premium_usd": summary_metrics["total_premium_usd"],
+            "total_buyback_usd": summary_metrics["total_buyback_usd"],
+            "net_option_usd_gross": summary_metrics["net_option_usd_gross"],
+            "net_income_eur": summary_metrics["net_income_eur"],
+            "total_commission_eur": summary_metrics["total_commission_eur"],
             "avg_roc_pct": summary_metrics["avg_roc_pct"],
             "avg_roc_annualized": summary_metrics["avg_roc_annualized"],
             "win_rate": win_rate,
-            "total_positions": summary_metrics["count"],
+            "total_positions": len(filtered_positions),
+            "coverage": coverage,
         },
         "monthly": monthly,
         "by_symbol": by_symbol,
         "by_type": {
             "calls": {
-                "premium": calls_metrics["premium"],
-                "buyback": calls_metrics["buyback"],
-                "net": calls_metrics["net"],
+                "total_premium_usd": calls_metrics["total_premium_usd"],
+                "total_buyback_usd": calls_metrics["total_buyback_usd"],
+                "net_option_usd_gross": calls_metrics["net_option_usd_gross"],
+                "net_income_eur": calls_metrics["net_income_eur"],
+                "total_commission_eur": calls_metrics["total_commission_eur"],
                 "count": calls_metrics["count"],
                 "avg_roc_pct": calls_metrics["avg_roc_pct"],
                 "avg_roc_annualized": calls_metrics["avg_roc_annualized"],
             },
             "puts": {
-                "premium": puts_metrics["premium"],
-                "buyback": puts_metrics["buyback"],
-                "net": puts_metrics["net"],
+                "total_premium_usd": puts_metrics["total_premium_usd"],
+                "total_buyback_usd": puts_metrics["total_buyback_usd"],
+                "net_option_usd_gross": puts_metrics["net_option_usd_gross"],
+                "net_income_eur": puts_metrics["net_income_eur"],
+                "total_commission_eur": puts_metrics["total_commission_eur"],
                 "count": puts_metrics["count"],
                 "avg_roc_pct": puts_metrics["avg_roc_pct"],
                 "avg_roc_annualized": puts_metrics["avg_roc_annualized"],
@@ -427,10 +564,7 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
         },
         "positions": sorted(
             [
-                {
-                    key: value for key, value in position.items()
-                    if not key.startswith("_")
-                }
+                {key: value for key, value in position.items() if not key.startswith("_")}
                 for position in filtered_positions
             ],
             key=lambda position: position.get("opened_at") or "",
@@ -442,9 +576,11 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
         },
         "applied_filters": {
             "year": year,
-            "symbols": symbol_filter,
+            "months": month_filter,
+            "symbols": normalized_symbol_filter,
             "type": option_type,
             "status": status_filter,
+            "account_ids": normalized_account_filter,
         },
     }
 
@@ -456,6 +592,7 @@ def _build_economics_overview_report(
     year: Optional[int] = None,
     month_filter: Optional[List[int]] = None,
     symbol_filter: Optional[List[str]] = None,
+    account_filter: Optional[List[str]] = None,
     source: str = "both",
 ) -> Dict[str, Any]:
     monthly_rows: Dict[str, Dict[str, Any]] = {}
@@ -471,19 +608,21 @@ def _build_economics_overview_report(
             month_key,
             {
                 "month": month_key,
-                "options_net_native": 0.0,
+                "options_net_eur": 0.0,
                 "dividends_net_eur": 0.0,
                 "dividends_cash_net_eur": 0.0,
                 "dividends_derechos_net_eur": 0.0,
                 "dividends_total_net_eur": 0.0,
-                "cash_net": 0.0,
-                "derechos_net": 0.0,
-                "total_net": 0.0,
+                "combined_net_eur": 0.0,
                 "option_positions": 0,
                 "dividend_events": 0,
             },
         )
-        monthly_rows[month_key]["options_net_native"] = row.get("net") or 0.0
+        monthly_rows[month_key]["options_net_eur"] = row.get("net_income_eur") or 0.0
+        monthly_rows[month_key]["combined_net_eur"] = _round2(
+            (monthly_rows[month_key].get("options_net_eur") or 0.0)
+            + (monthly_rows[month_key].get("dividends_total_net_eur") or 0.0)
+        )
         monthly_rows[month_key]["option_positions"] = row.get("positions_count") or 0
 
     for row in dividends_report.get("monthly", []):
@@ -494,14 +633,12 @@ def _build_economics_overview_report(
             month_key,
             {
                 "month": month_key,
-                "options_net_native": 0.0,
+                "options_net_eur": 0.0,
                 "dividends_net_eur": 0.0,
                 "dividends_cash_net_eur": 0.0,
                 "dividends_derechos_net_eur": 0.0,
                 "dividends_total_net_eur": 0.0,
-                "cash_net": 0.0,
-                "derechos_net": 0.0,
-                "total_net": 0.0,
+                "combined_net_eur": 0.0,
                 "option_positions": 0,
                 "dividend_events": 0,
             },
@@ -513,9 +650,10 @@ def _build_economics_overview_report(
             (row.get("cash_net") or row.get("net_eur") or 0.0)
             + (row.get("derechos_net") or 0.0)
         )
-        monthly_rows[month_key]["cash_net"] = monthly_rows[month_key]["dividends_cash_net_eur"]
-        monthly_rows[month_key]["derechos_net"] = monthly_rows[month_key]["dividends_derechos_net_eur"]
-        monthly_rows[month_key]["total_net"] = monthly_rows[month_key]["dividends_total_net_eur"]
+        monthly_rows[month_key]["combined_net_eur"] = _round2(
+            (monthly_rows[month_key].get("options_net_eur") or 0.0)
+            + (monthly_rows[month_key].get("dividends_total_net_eur") or 0.0)
+        )
         monthly_rows[month_key]["dividend_events"] = row.get("dividend_count") or 0
 
     for row in options_report.get("by_symbol", []):
@@ -526,19 +664,21 @@ def _build_economics_overview_report(
             symbol,
             {
                 "symbol": symbol,
-                "options_net_native": 0.0,
+                "options_net_eur": 0.0,
                 "dividends_net_eur": 0.0,
                 "dividends_cash_net_eur": 0.0,
                 "dividends_derechos_net_eur": 0.0,
                 "dividends_total_net_eur": 0.0,
-                "cash_net": 0.0,
-                "derechos_net": 0.0,
-                "total_net": 0.0,
+                "combined_net_eur": 0.0,
                 "option_positions": 0,
                 "dividend_events": 0,
             },
         )
-        symbol_rows[symbol]["options_net_native"] = row.get("net") or 0.0
+        symbol_rows[symbol]["options_net_eur"] = row.get("net_income_eur") or 0.0
+        symbol_rows[symbol]["combined_net_eur"] = _round2(
+            (symbol_rows[symbol].get("options_net_eur") or 0.0)
+            + (symbol_rows[symbol].get("dividends_total_net_eur") or 0.0)
+        )
         symbol_rows[symbol]["option_positions"] = row.get("positions_count") or 0
 
     for row in dividends_report.get("by_symbol", []):
@@ -549,14 +689,12 @@ def _build_economics_overview_report(
             symbol,
             {
                 "symbol": symbol,
-                "options_net_native": 0.0,
+                "options_net_eur": 0.0,
                 "dividends_net_eur": 0.0,
                 "dividends_cash_net_eur": 0.0,
                 "dividends_derechos_net_eur": 0.0,
                 "dividends_total_net_eur": 0.0,
-                "cash_net": 0.0,
-                "derechos_net": 0.0,
-                "total_net": 0.0,
+                "combined_net_eur": 0.0,
                 "option_positions": 0,
                 "dividend_events": 0,
             },
@@ -568,9 +706,10 @@ def _build_economics_overview_report(
             (row.get("cash_net") or row.get("net_eur") or 0.0)
             + (row.get("derechos_net") or 0.0)
         )
-        symbol_rows[symbol]["cash_net"] = symbol_rows[symbol]["dividends_cash_net_eur"]
-        symbol_rows[symbol]["derechos_net"] = symbol_rows[symbol]["dividends_derechos_net_eur"]
-        symbol_rows[symbol]["total_net"] = symbol_rows[symbol]["dividends_total_net_eur"]
+        symbol_rows[symbol]["combined_net_eur"] = _round2(
+            (symbol_rows[symbol].get("options_net_eur") or 0.0)
+            + (symbol_rows[symbol].get("dividends_total_net_eur") or 0.0)
+        )
         symbol_rows[symbol]["dividend_events"] = row.get("dividend_count") or 0
 
     filtered_symbols = {
@@ -579,8 +718,7 @@ def _build_economics_overview_report(
         if (
             row.get("option_positions")
             or row.get("dividend_events")
-            or row.get("options_net_native")
-            or row.get("dividends_net_eur")
+            or row.get("options_net_eur")
             or row.get("dividends_total_net_eur")
         )
     }
@@ -589,29 +727,28 @@ def _build_economics_overview_report(
     available_symbols = set(options_report.get("filters", {}).get("symbols", []))
     available_symbols.update(dividends_report.get("filters", {}).get("symbols", []))
 
+    options_net_eur = options_report.get("summary", {}).get("net_income_eur", 0.0)
+    dividends_net_eur = dividends_report.get("summary", {}).get("total_net_eur", 0.0)
+    dividends_cash_net_eur = dividends_report.get("summary", {}).get("cash_net", dividends_net_eur)
+    dividends_derechos_net_eur = dividends_report.get("summary", {}).get("derechos_net", 0.0)
+    dividends_total_net_eur = dividends_report.get("summary", {}).get(
+        "total_net",
+        (dividends_cash_net_eur or 0.0) + (dividends_derechos_net_eur or 0.0),
+    )
+
     return {
         "summary": {
-            "options_net_native": options_report.get("summary", {}).get("net_income", 0.0),
-            "options_currency": "USD",
-            "dividends_net_eur": dividends_report.get("summary", {}).get("total_net_eur", 0.0),
-            "dividends_cash_net_eur": dividends_report.get("summary", {}).get("cash_net", dividends_report.get("summary", {}).get("total_net_eur", 0.0)),
-            "dividends_derechos_net_eur": dividends_report.get("summary", {}).get("derechos_net", 0.0),
-            "dividends_total_net_eur": dividends_report.get("summary", {}).get(
-                "total_net",
-                (dividends_report.get("summary", {}).get("cash_net", dividends_report.get("summary", {}).get("total_net_eur", 0.0)) or 0.0)
-                + (dividends_report.get("summary", {}).get("derechos_net", 0.0) or 0.0),
-            ),
-            "cash_net": dividends_report.get("summary", {}).get("cash_net", dividends_report.get("summary", {}).get("total_net_eur", 0.0)),
-            "derechos_net": dividends_report.get("summary", {}).get("derechos_net", 0.0),
-            "total_net": dividends_report.get("summary", {}).get(
-                "total_net",
-                (dividends_report.get("summary", {}).get("cash_net", dividends_report.get("summary", {}).get("total_net_eur", 0.0)) or 0.0)
-                + (dividends_report.get("summary", {}).get("derechos_net", 0.0) or 0.0),
-            ),
+            "options_net_eur": options_net_eur,
+            "dividends_net_eur": dividends_net_eur,
+            "dividends_cash_net_eur": dividends_cash_net_eur,
+            "dividends_derechos_net_eur": dividends_derechos_net_eur,
+            "dividends_total_net_eur": dividends_total_net_eur,
+            "portfolio_yoc_pct": dividends_report.get("summary", {}).get("portfolio_yoc_pct"),
+            "combined_net_eur": _round2((options_net_eur or 0.0) + (dividends_total_net_eur or 0.0)),
             "total_option_positions": options_report.get("summary", {}).get("total_positions", 0),
+            "options_coverage": options_report.get("summary", {}).get("coverage", {}),
             "total_dividend_events": dividends_report.get("summary", {}).get("total_dividends", 0),
             "total_symbols": len(filtered_symbols),
-            "fx_mode": "side_by_side",
         },
         "monthly": [monthly_rows[key] for key in sorted(monthly_rows)],
         "by_symbol": [symbol_rows[key] for key in sorted(symbol_rows)],
@@ -623,12 +760,13 @@ def _build_economics_overview_report(
             "year": year,
             "months": month_filter,
             "symbols": symbol_filter,
+            "account_ids": account_filter,
             "source": source,
         },
         "meta": {
             "options_bucket_field": "opened_at",
             "dividends_bucket_field": "trade_date",
-            "options_currency_native": "USD",
+            "options_currency": "EUR",
             "dividends_currency": "EUR",
             "combined_total_available": True,
         },
@@ -681,6 +819,167 @@ def _serialize_dividends_economics_report(report: Dict[str, Any]) -> Dict[str, A
         "cumulative": [_decorate_dividends_cumulative_row(row) for row in report.get("cumulative", [])],
         "positions": [_decorate_dividends_row(row) for row in report.get("positions", [])],
     }
+
+
+def _decimal_or_none(value: Any) -> Optional[Decimal]:
+    if isinstance(value, Decimal):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _round_decimal2(value: Decimal) -> float:
+    return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _build_holdings_snapshot_by_ticker(
+    holdings_svc: Any,
+    account_filter: Optional[List[str]] = None,
+) -> Dict[str, Dict[str, Decimal]]:
+    per_ticker: Dict[str, Dict[str, Decimal]] = defaultdict(
+        lambda: {"shares": Decimal("0"), "remaining_cost_basis_eur": Decimal("0")}
+    )
+
+    if account_filter:
+        account_ids = list(dict.fromkeys(account_filter))
+        results = [holdings_svc.compute_holdings(account_id=account_id) for account_id in account_ids]
+    else:
+        results = [holdings_svc.compute_holdings()]
+
+    for result in results:
+        for holding in result.get("holdings", []):
+            ticker = str(holding.get("ticker") or "").strip().upper()
+            if not ticker:
+                continue
+            shares = _decimal_or_none(holding.get("total_shares")) or Decimal("0")
+            remaining_cost_basis = (
+                _decimal_or_none(holding.get("remaining_cost_basis_eur")) or Decimal("0")
+            )
+            per_ticker[ticker]["shares"] += shares
+            per_ticker[ticker]["remaining_cost_basis_eur"] += remaining_cost_basis
+
+    return dict(per_ticker)
+
+
+def _apply_dividends_yoc(
+    report: Dict[str, Any],
+    movements: List[Dict[str, Any]],
+    holdings_by_ticker: Dict[str, Dict[str, Any]],
+    *,
+    symbol_filter: Optional[List[str]] = None,
+    account_filter: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Enrich a dividends economics report with Yield on Cost metrics.
+
+    YoC intentionally uses full dividend history for the selected
+    symbol/account scope and the current holdings cost basis snapshot, even
+    when the visible report is filtered by year/month.
+    """
+    yoc_inputs = build_dividend_yoc_snapshot(
+        movements,
+        symbol_filter=symbol_filter,
+        account_filter=account_filter,
+    )
+    enriched_rows: List[Dict[str, Any]] = []
+    portfolio_dividend_total = Decimal("0")
+    portfolio_cost_basis_total = Decimal("0")
+
+    for row in report.get("by_symbol", []):
+        symbol = str(row.get("symbol") or "").strip().upper()
+        yoc_row = yoc_inputs.get(symbol, {})
+        holding = holdings_by_ticker.get(symbol, {})
+        shares = _decimal_or_none(holding.get("shares")) or Decimal("0")
+        remaining_cost_basis = _decimal_or_none(holding.get("remaining_cost_basis_eur"))
+        trailing_annual_dividend = _decimal_or_none(
+            yoc_row.get("yoc_trailing_annual_dividend_net_eur")
+        )
+
+        yoc_pct = None
+        yoc_basis = None
+        if (
+            yoc_row.get("yoc_basis") == "annualized"
+            and shares > 0
+            and remaining_cost_basis is not None
+            and remaining_cost_basis > 0
+            and trailing_annual_dividend is not None
+        ):
+            yoc_pct = _round_decimal2(
+                (trailing_annual_dividend / remaining_cost_basis) * Decimal("100")
+            )
+            yoc_basis = "annualized"
+            portfolio_dividend_total += trailing_annual_dividend
+            portfolio_cost_basis_total += remaining_cost_basis
+        elif yoc_row.get("yoc_basis") == "insufficient_history" and shares > 0:
+            yoc_basis = "insufficient_history"
+
+        enriched_rows.append(
+            {
+                **row,
+                "yoc_pct": yoc_pct,
+                "yoc_basis": yoc_basis,
+                "yoc_dividend_frequency": yoc_row.get("yoc_dividend_frequency"),
+                "yoc_trailing_annual_dividend_net_eur": (
+                    _round_decimal2(trailing_annual_dividend)
+                    if trailing_annual_dividend is not None
+                    else None
+                ),
+                "yoc_cost_basis_eur": (
+                    _round_decimal2(remaining_cost_basis)
+                    if remaining_cost_basis is not None
+                    else None
+                ),
+            }
+        )
+
+    portfolio_yoc_pct = None
+    if portfolio_cost_basis_total > 0:
+        portfolio_yoc_pct = _round_decimal2(
+            (portfolio_dividend_total / portfolio_cost_basis_total) * Decimal("100")
+        )
+
+    summary = dict(report.get("summary", {}))
+    summary["portfolio_yoc_pct"] = portfolio_yoc_pct
+
+    meta = dict(report.get("meta", {}))
+    meta["portfolio_yoc_scope"] = (
+        "current_cost_basis_with_full_dividend_history_symbol_account_filtered"
+    )
+    meta["portfolio_yoc_respects_year_month_filters"] = False
+
+    return {
+        **report,
+        "summary": summary,
+        "by_symbol": enriched_rows,
+        "meta": meta,
+    }
+
+
+def _enrich_dividends_report_with_yoc(
+    report: Dict[str, Any],
+    movements: List[Dict[str, Any]],
+    holdings_svc: Any,
+    *,
+    symbol_filter: Optional[List[str]] = None,
+    account_filter: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    holdings_by_ticker = _build_holdings_snapshot_by_ticker(
+        holdings_svc,
+        account_filter=account_filter,
+    )
+    return _apply_dividends_yoc(
+        report,
+        movements,
+        holdings_by_ticker,
+        symbol_filter=symbol_filter,
+        account_filter=account_filter,
+    )
 
 
 def _count_by_range(entries: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -1216,9 +1515,13 @@ async def api_economics(request: Request,
                         month: Optional[str] = Query(default=None),
                         symbol: Optional[str] = Query(default=None),
                         option_type: Optional[str] = Query(default=None, alias="type"),
-                        status: Optional[str] = Query(default=None)):
+                        status: Optional[str] = Query(default=None),
+                        account_id: Optional[str] = Query(default=None)):
     try:
         cosmos = _get_cosmos(request)
+        portfolio_container = getattr(cosmos, "portfolio_container", None)
+        if portfolio_container is None:
+            raise RuntimeError("CosmosDB portfolio container not available")
         # Support comma-separated symbols (e.g., ?symbol=MSFT,AAPL)
         symbol_list = None
         if symbol:
@@ -1234,6 +1537,11 @@ async def api_economics(request: Request,
                     month_list = None
             except ValueError:
                 month_list = None
+        account_list = None
+        if account_id:
+            account_list = [a.strip() for a in account_id.split(",") if a.strip()]
+            if not account_list:
+                account_list = None
         normalized_type = option_type.strip().lower() if option_type else None
         normalized_status = status.strip().lower() if status else None
 
@@ -1242,9 +1550,9 @@ async def api_economics(request: Request,
                 {"error": "type must be 'call' or 'put'"},
                 status_code=400,
             )
-        if normalized_status and normalized_status not in {"active", "closed", "rolled"}:
+        if normalized_status and normalized_status not in {"active", "closed", "rolled", "assigned", "expired"}:
             return JSONResponse(
-                {"error": "status must be 'active', 'closed', or 'rolled'"},
+                {"error": "status must be 'active', 'closed', 'rolled', 'assigned', or 'expired'"},
                 status_code=400,
             )
 
@@ -1254,6 +1562,11 @@ async def api_economics(request: Request,
             if callable(get_all_symbols)
             else cosmos.list_symbols()
         )
+        from src.portfolio.cosmos_portfolio import CosmosPortfolioService
+        from src.portfolio.cosmos_securities import CosmosSecuritiesService
+
+        portfolio_svc = CosmosPortfolioService(portfolio_container, None)
+        securities_svc = CosmosSecuritiesService(cosmos.container)
         return JSONResponse(
             _build_economics_report(
                 symbol_docs,
@@ -1262,6 +1575,9 @@ async def api_economics(request: Request,
                 symbol_filter=symbol_list,
                 option_type=normalized_type,
                 status_filter=normalized_status,
+                account_filter=account_list,
+                portfolio_svc=portfolio_svc,
+                securities_svc=securities_svc,
             )
         )
     except RuntimeError as e:
@@ -1304,15 +1620,25 @@ async def api_dividends_economics(request: Request,
                 account_list = None
 
         from src.portfolio.cosmos_portfolio import CosmosPortfolioService
+        from src.portfolio.cosmos_securities import CosmosSecuritiesService
+        from src.portfolio.holdings_service import HoldingsService
 
         portfolio_svc = CosmosPortfolioService(portfolio_container, None)
+        securities_svc = CosmosSecuritiesService(cosmos.container)
+        holdings_svc = HoldingsService(portfolio_svc, securities_svc)
         movements = portfolio_svc.get_all_movements_for_holdings()
-        report = build_dividends_economics_report(
+        report = _enrich_dividends_report_with_yoc(
+            build_dividends_economics_report(
+                movements,
+                year=year,
+                month_filter=month_list,
+                symbol_filter=symbol_list,
+                account_filter=account_list,
+            ),
             movements,
-            year=year,
-            month_filter=month_list,
             symbol_filter=symbol_list,
             account_filter=account_list,
+            holdings_svc=holdings_svc,
         )
         return JSONResponse(_serialize_dividends_economics_report(report))
     except RuntimeError as e:
@@ -1326,7 +1652,8 @@ async def api_economics_overview(request: Request,
                                  year: Optional[int] = Query(default=None),
                                  month: Optional[str] = Query(default=None),
                                  symbol: Optional[str] = Query(default=None),
-                                 source: Optional[str] = Query(default=None)):
+                                 source: Optional[str] = Query(default=None),
+                                 account_id: Optional[str] = Query(default=None)):
     try:
         cosmos = _get_cosmos(request)
         portfolio_container = getattr(cosmos, "portfolio_container", None)
@@ -1347,6 +1674,11 @@ async def api_economics_overview(request: Request,
                     month_list = None
             except ValueError:
                 month_list = None
+        account_list = None
+        if account_id:
+            account_list = [a.strip() for a in account_id.split(",") if a.strip()]
+            if not account_list:
+                account_list = None
 
         normalized_source = source.strip().lower() if source else "both"
         if normalized_source not in {"options", "dividends", "both"}:
@@ -1363,30 +1695,45 @@ async def api_economics_overview(request: Request,
         )
 
         from src.portfolio.cosmos_portfolio import CosmosPortfolioService
+        from src.portfolio.cosmos_securities import CosmosSecuritiesService
+        from src.portfolio.holdings_service import HoldingsService
 
         portfolio_svc = CosmosPortfolioService(portfolio_container, None)
+        securities_svc = CosmosSecuritiesService(cosmos.container)
+        holdings_svc = HoldingsService(portfolio_svc, securities_svc)
         movements = portfolio_svc.get_all_movements_for_holdings()
         options_report = _build_economics_report(
             symbol_docs,
             year=year,
             month_filter=month_list,
             symbol_filter=symbol_list,
+            account_filter=account_list,
+            movements=movements,
+            securities=securities_svc.list_securities(),
         )
         dividends_report = _serialize_dividends_economics_report(
-            build_dividends_economics_report(
-            movements,
-            year=year,
-            month_filter=month_list,
-            symbol_filter=symbol_list,
+            _enrich_dividends_report_with_yoc(
+                build_dividends_economics_report(
+                    movements,
+                    year=year,
+                    month_filter=month_list,
+                    symbol_filter=symbol_list,
+                    account_filter=account_list,
+                ),
+                movements,
+                symbol_filter=symbol_list,
+                account_filter=account_list,
+                holdings_svc=holdings_svc,
             )
         )
         return JSONResponse(
             _build_economics_overview_report(
-            options_report,
+                options_report,
                 dividends_report,
                 year=year,
                 month_filter=month_list,
                 symbol_filter=symbol_list,
+                account_filter=account_list,
                 source=normalized_source,
             )
         )
@@ -1676,6 +2023,27 @@ def _compute_symbol_detail(
         p["display_premium"] = _parse_numeric(source.get("premium"))
         p["display_buyback"] = _parse_numeric(pos.get("buyback_cost"))
         positions.append(p)
+
+    if securities_svc and holdings_svc:
+        try:
+            linkage = build_option_position_linkage(
+                [doc],
+                portfolio_svc=holdings_svc.portfolio_svc,
+                securities_svc=securities_svc,
+            )
+            linkage_by_position_id = {
+                row.get("position_id"): row for row in linkage.get("positions", [])
+            }
+            for position in positions:
+                linked = linkage_by_position_id.get(position.get("position_id"))
+                if not linked:
+                    continue
+                position["warnings"] = linked.get("warnings", [])
+                position["coverage_status"] = linked.get("coverage_status")
+                position["linked_accounts"] = linked.get("linked_accounts", [])
+                position["linked_movement_count"] = linked.get("linked_movement_count", 0)
+        except Exception as exc:
+            logger.warning("_compute_symbol_detail option linkage failed for %s: %s", sym, exc)
 
     active_positions = [p for p in doc.get("positions", []) if p.get("status") == "active"]
     summary_in_calls = sum(100 for p in active_positions if p.get("type") == "call")
@@ -3739,9 +4107,21 @@ def _compute_dashboard_data(cosmos) -> Dict[str, Any]:
 
     # Annualized RoC on currently-open positions (income currently working).
     # Reuses the economics engine for a consistent, capital-weighted figure.
-    open_roc_annualized = _build_economics_report(
-        all_symbols, status_filter="active"
-    )["summary"]["avg_roc_annualized"]
+    open_roc_annualized = 0.0
+    portfolio_container = getattr(cosmos, "portfolio_container", None)
+    if portfolio_container is not None:
+        try:
+            from src.portfolio.cosmos_portfolio import CosmosPortfolioService
+            from src.portfolio.cosmos_securities import CosmosSecuritiesService
+
+            open_roc_annualized = _build_economics_report(
+                all_symbols,
+                status_filter="active",
+                portfolio_svc=CosmosPortfolioService(portfolio_container, None),
+                securities_svc=CosmosSecuritiesService(cosmos.container),
+            )["summary"]["avg_roc_annualized"]
+        except Exception as exc:
+            logger.warning("_compute_summary_dashboard economics load failed: %s", exc)
 
     activity = []
     for d in all_activities[:100]:

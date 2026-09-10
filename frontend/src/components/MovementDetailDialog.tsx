@@ -2,11 +2,11 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { X, History, Link2, Trash2 } from "lucide-react";
-import type { LedgerMovement, WarningType } from "@/types/portfolio";
-import { SALES_TYPE_LABELS } from "@/types/portfolio";
+import type { LedgerMovement, OptionTxnType, WarningType } from "@/types/portfolio";
+import { OPTION_TXN_TYPES, SALES_TYPE_LABELS } from "@/types/portfolio";
 import type { BrokerAccount } from "@/types/portfolio";
 import { getAccountName } from "@/lib/accountDisplay";
-import { getMovements, voidCorporateActionGroup } from "@/lib/portfolio-api";
+import { correctMovement, getMovements, voidCorporateActionGroup } from "@/lib/portfolio-api";
 import MovementCorrectionDialog from "./MovementCorrectionDialog";
 import ReassignmentDialog from "./ReassignmentDialog";
 import CorporateActionForm, { buildCaInitialState } from "./CorporateActionForm";
@@ -17,6 +17,10 @@ const TXN_BADGE: Record<string, string> = {
   DIVIDEND: "bg-accent-blue/15 text-accent-blue",
   TRANSFER_OUT: "bg-accent-orange/15 text-accent-orange",
   TRANSFER_IN: "bg-accent-orange/15 text-accent-orange",
+  CALL_SELL: "bg-accent-purple/15 text-accent-purple",
+  CALL_BUY: "bg-accent-cyan/15 text-accent-cyan",
+  PUT_SELL: "bg-accent-purple/15 text-accent-purple",
+  PUT_BUY: "bg-accent-cyan/15 text-accent-cyan",
 };
 
 const WARNING_SHORT: Record<WarningType, string> = {
@@ -26,6 +30,10 @@ const WARNING_SHORT: Record<WarningType, string> = {
   DERECHOS_WITH_QUANTITY: "Rights sale with quantity",
   ACCIONES_ZERO_QUANTITY: "Share sale, zero quantity",
   INVALID_SALES_TYPE: "Invalid sale type",
+};
+
+const MOVEMENT_WARNING_LABELS: Record<string, string> = {
+  OPTION_MOVEMENT_UNLINKED: "Option movement not linked to a position",
 };
 
 function Field({ label, value, mono = false }: { label: string; value: string | null | undefined; mono?: boolean }) {
@@ -93,6 +101,10 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
   const [showCorrect, setShowCorrect] = useState(false);
   const [showReassign, setShowReassign] = useState(false);
   const [showGroupCorrect, setShowGroupCorrect] = useState(false);
+  const [quickOptionPositionId, setQuickOptionPositionId] = useState(m.option_position_id ?? "");
+  const [quickLinkNote, setQuickLinkNote] = useState("Link option movement to position");
+  const [quickLinkSaving, setQuickLinkSaving] = useState(false);
+  const [quickLinkError, setQuickLinkError] = useState<string | null>(null);
 
   // Corporate action group state
   const [groupLegs, setGroupLegs] = useState<LedgerMovement[] | null>(null);
@@ -114,12 +126,25 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
   // Fetch sibling legs when this is a CA group member
   useEffect(() => {
     if (!m.ca_group_id) return;
-    setGroupLoading(true);
-    setGroupError(null);
-    getMovements({ security_id: m.security_id, ca_group_id: m.ca_group_id, limit: 20 })
-      .then((r) => setGroupLegs(r.movements))
-      .catch(() => setGroupError("Could not load group legs."))
-      .finally(() => setGroupLoading(false));
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setGroupLoading(true);
+      setGroupError(null);
+      getMovements({ security_id: m.security_id, ca_group_id: m.ca_group_id, limit: 20 })
+        .then((r) => {
+          if (!cancelled) setGroupLegs(r.movements);
+        })
+        .catch(() => {
+          if (!cancelled) setGroupError("Could not load group legs.");
+        })
+        .finally(() => {
+          if (!cancelled) setGroupLoading(false);
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [m.ca_group_id, m.security_id]);
 
   async function handleVoidGroup() {
@@ -143,6 +168,46 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
   }
 
   const importSourceLabel = m.import_source === "csv_import" ? "CSV Import" : "Manual";
+  const movementWarnings = m.movement_warnings ?? [];
+  const isOptionTxn = OPTION_TXN_TYPES.includes(m.txn_type as OptionTxnType);
+  const hasOptionMetadata = isOptionTxn || Boolean(
+    m.option_position_id ||
+    m.option_link_kind ||
+    m.option_type ||
+    m.option_strike != null ||
+    m.option_expiration ||
+    m.option_symbol ||
+    m.option_close_date
+  );
+  const hasUnlinkedOptionWarning = movementWarnings.includes("OPTION_MOVEMENT_UNLINKED");
+
+  async function handleQuickLinkSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!quickOptionPositionId.trim()) {
+      setQuickLinkError("Position ID is required to link this movement.");
+      return;
+    }
+    if (!quickLinkNote.trim()) {
+      setQuickLinkError("Correction note is required.");
+      return;
+    }
+
+    setQuickLinkSaving(true);
+    setQuickLinkError(null);
+    try {
+      await correctMovement(m.id, {
+        account_id: m.account_id,
+        correction_note: quickLinkNote.trim(),
+        option_position_id: quickOptionPositionId.trim(),
+      });
+      onRefresh();
+    } catch (err) {
+      const e = err as { data?: { detail?: string } };
+      setQuickLinkError(e.data?.detail ?? (err instanceof Error ? err.message : "Could not link movement."));
+    } finally {
+      setQuickLinkSaving(false);
+    }
+  }
 
   if (showGroupCorrect && m.ca_group_id) {
     return (
@@ -320,6 +385,42 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
             </div>
           )}
 
+          {hasUnlinkedOptionWarning && (
+            <div className="rounded-[var(--radius)] border border-accent-orange/30 bg-accent-orange/5 px-4 py-3 text-sm text-text-muted space-y-3">
+              <div>
+                <span className="text-accent-orange mr-1">⚠</span>
+                <span className="font-medium text-text">This option movement is not linked to a position yet.</span>
+              </div>
+              <p className="text-xs">
+                Add the matching <span className="font-mono">option_position_id</span> now, or use the full correction flow for additional metadata.
+              </p>
+              <form onSubmit={handleQuickLinkSubmit} className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                <input
+                  type="text"
+                  value={quickOptionPositionId}
+                  onChange={(e) => setQuickOptionPositionId(e.target.value)}
+                  placeholder="position_id"
+                  className="w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent-orange focus:outline-none"
+                />
+                <input
+                  type="text"
+                  value={quickLinkNote}
+                  onChange={(e) => setQuickLinkNote(e.target.value)}
+                  placeholder="Correction note"
+                  className="w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent-orange focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={quickLinkSaving}
+                  className="rounded-[var(--radius)] bg-accent-orange/15 px-3 py-2 text-sm text-accent-orange hover:bg-accent-orange/25 disabled:opacity-50"
+                >
+                  {quickLinkSaving ? "Linking…" : "Link"}
+                </button>
+              </form>
+              {quickLinkError && <div className="text-xs text-accent-red">{quickLinkError}</div>}
+            </div>
+          )}
+
           {/* Derechos note */}
           {m.txn_type === "SELL" && m.sales_type === "DERECHOS" && (
             <div className="rounded-[var(--radius)] border border-accent-blue/20 bg-accent-blue/5 px-4 py-2 text-xs text-text-muted">
@@ -327,10 +428,42 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
             </div>
           )}
 
+          {hasOptionMetadata && (
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-2">Option linkage</div>
+              <div className="grid grid-cols-2 gap-4 rounded-[var(--radius)] border border-border bg-bg-card/50 p-3 sm:grid-cols-3">
+                <Field label="Position ID" value={m.option_position_id ?? null} mono />
+                <Field label="Link kind" value={m.option_link_kind ?? null} />
+                <Field label="Option type" value={m.option_type ?? null} />
+                <Field
+                  label="Strike"
+                  value={m.option_strike != null ? String(m.option_strike) : null}
+                  mono
+                />
+                <Field label="Expiration" value={m.option_expiration ?? null} mono />
+                <Field label="Close date" value={m.option_close_date ?? null} mono />
+                <Field label="Option symbol" value={m.option_symbol ?? null} mono />
+              </div>
+            </div>
+          )}
+
           {/* Warnings */}
-          {m.warnings && m.warnings.length > 0 && (
+          {(m.warnings && m.warnings.length > 0) || movementWarnings.length > 0 ? (
             <div className="rounded-[var(--radius)] border border-accent-orange/30 bg-accent-orange/5 px-4 py-2 space-y-1">
-              {m.warnings.map((w, i) => (
+              {movementWarnings.map((warning, i) => (
+                <div key={`${warning}-${i}`} className="flex items-start gap-2 text-xs text-text-muted">
+                  <span className="text-accent-orange mt-0.5 shrink-0">⚠</span>
+                  <span>
+                    <span className="font-medium text-text mr-1">
+                      {MOVEMENT_WARNING_LABELS[warning] ?? warning}:
+                    </span>
+                    {warning === "OPTION_MOVEMENT_UNLINKED"
+                      ? "Set option_position_id to link this movement with its option position."
+                      : warning}
+                  </span>
+                </div>
+              ))}
+              {m.warnings?.map((w, i) => (
                 <div key={i} className="flex items-start gap-2 text-xs text-text-muted">
                   <span className="text-accent-orange mt-0.5 shrink-0">⚠</span>
                   <span>
@@ -342,7 +475,7 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
                 </div>
               ))}
             </div>
-          )}
+          ) : null}
 
           {/* Transfer details */}
           {(m.txn_type === "TRANSFER_OUT" || m.txn_type === "TRANSFER_IN") && (

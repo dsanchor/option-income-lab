@@ -8,6 +8,7 @@ import pytest
 from decimal import Decimal
 
 from src.portfolio.parsers.dividends import parse_dividends
+from src.portfolio.parsers.options import parse_options
 from src.portfolio.parsers.purchases import parse_purchases
 from src.portfolio.parsers.sales import parse_sales
 from src.portfolio.parsers.common import (
@@ -83,6 +84,10 @@ class TestParseSpanishDecimal:
     def test_comma_only_decimal(self):
         """Comma-only decimal string is parsed correctly."""
         assert parse_spanish_decimal("0,50") == Decimal("0.50")
+
+    def test_plain_dot_decimal_supported(self):
+        """Single-dot decimals with 1-2 decimal digits are accepted."""
+        assert parse_spanish_decimal("150.25") == Decimal("150.25")
 
 
 class TestParseSpanishDate:
@@ -366,6 +371,66 @@ class TestSalesParser:
     def test_wrong_columns_raises(self):
         with pytest.raises(ValueError):
             parse_sales(_encode("Col1\tCol2\n1\t2\n"))
+
+
+# ---------------------------------------------------------------------------
+# Options parser
+# ---------------------------------------------------------------------------
+
+OPTIONS_CSV = """\
+Símbolo\tTipo\tFecha\tStrike\tExpiración\tImporte USD Bruto\tImporte EUR Bruto\tComisión EUR\tCuenta
+AAPL\tCALL_SELL\t19/07/2024\t210\t19/07/2024\t150.00\t138.00\t3.25\tacct_ib_main
+MSFT\tput buy\t16/08/2024\t400\t16/08/2024\t80,00\t74,00\t-1,25\tacct_ib_main
+"""
+
+OPTIONS_CSV_WITH_NET = """\
+Symbol\tType\tDate\tStrike\tExpiration\tGross USD\tGross EUR\tCommission EUR\tNet EUR\tAccount
+AAPL\tcall sell\t19/07/2024\t210\t19/07/2024\t150.00\t138.00\t3.25\t134.75\tacct_ib_main
+"""
+
+OPTIONS_CSV_WITH_CLOSE_DATE = """\
+Symbol\tType\tDate\tStrike\tExpiration\tGross USD\tGross EUR\tCommission EUR\tClose Date\tAccount
+AAPL\tcall sell\t19/07/2024\t210\t19/07/2024\t150.00\t138.00\t3.25\t26/07/2024\tacct_ib_main
+MSFT\tput buy\t16/08/2024\t400\t16/08/2024\t80,00\t74,00\t-1,25\t\tacct_ib_main
+"""
+
+OPTIONS_CSV_INVALID_TYPE = """\
+Símbolo\tTipo\tFecha\tStrike\tExpiración\tImporte USD Bruto\tImporte EUR Bruto\tComisión EUR\tCuenta
+AAPL\troll\t19/07/2024\t210\t19/07/2024\t150.00\t138.00\t3.25\tacct_ib_main
+"""
+
+
+class TestOptionsParser:
+    def test_basic_parse(self):
+        rows = parse_options(_encode(OPTIONS_CSV))
+        assert len(rows) == 2
+
+    def test_type_normalization(self):
+        rows = parse_options(_encode(OPTIONS_CSV))
+        assert rows[0]["txn_type"] == "CALL_SELL"
+        assert rows[1]["txn_type"] == "PUT_BUY"
+
+    def test_plain_decimal_point_numbers_supported(self):
+        rows = parse_options(_encode(OPTIONS_CSV))
+        assert rows[0]["gross_usd"] == Decimal("150.00")
+        assert rows[0]["gross_eur"] == Decimal("138.00")
+
+    def test_negative_commission_supported(self):
+        rows = parse_options(_encode(OPTIONS_CSV))
+        assert rows[1]["commission_eur"] == Decimal("-1.25")
+
+    def test_optional_net_column_supported(self):
+        rows = parse_options(_encode(OPTIONS_CSV_WITH_NET))
+        assert rows[0]["net_eur"] == Decimal("134.75")
+
+    def test_optional_close_date_column_supported(self):
+        rows = parse_options(_encode(OPTIONS_CSV_WITH_CLOSE_DATE))
+        assert rows[0]["option_close_date"] == "2024-07-26"
+        assert rows[1]["option_close_date"] is None
+
+    def test_invalid_type_raises_with_row_context(self):
+        with pytest.raises(ValueError, match="Row 2: Invalid Tipo value"):
+            parse_options(_encode(OPTIONS_CSV_INVALID_TYPE))
 
 
 # ---------------------------------------------------------------------------

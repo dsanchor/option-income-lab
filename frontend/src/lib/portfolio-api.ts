@@ -241,7 +241,7 @@ export async function deleteAccount(accountId: string): Promise<void> {
 
 // ─── Phase 2: Manual Movement Entry ──────────────────────────────────────────
 
-/** POST /api/portfolio/movements — BUY, SELL, or DIVIDEND only. */
+/** POST /api/portfolio/movements — manual stock, dividend, or option movement. */
 export async function createMovement(data: ManualMovementRequest): Promise<LedgerMovement> {
   return fetchJSON<LedgerMovement>("/api/portfolio/movements", {
     method: "POST",

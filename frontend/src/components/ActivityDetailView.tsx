@@ -271,7 +271,17 @@ export default function ActivityDetailView({ data }: { data: ActivityDetail }) {
   return (
     <div className="space-y-6">
       <div className="space-y-2">
-        <h1 className="text-2xl font-semibold">Activity Detail</h1>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h1 className="text-2xl font-semibold">Activity Detail</h1>
+          {data.symbol && (
+            <Link
+              href={`/symbols/${encodeURIComponent(data.symbol)}`}
+              className="rounded-[var(--radius-pill)] border border-accent-blue/40 bg-accent-blue/10 px-3 py-1 text-sm font-medium text-accent-blue hover:underline"
+            >
+              {data.symbol} →
+            </Link>
+          )}
+        </div>
 
         {data.is_alert && (
           <div className="rounded-[var(--radius)] border border-accent-orange/40 bg-accent-orange/10 px-4 py-2 text-sm text-accent-orange">

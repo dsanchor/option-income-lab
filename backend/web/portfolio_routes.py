@@ -43,6 +43,7 @@ from src.portfolio.fx_service import (
     FxRateNotFoundError,
     get_fx_rate,
 )
+from src.portfolio.models import OPTION_TXN_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,13 @@ _COSMOS_SYSTEM_KEYS = {"_rid", "_self", "_etag", "_attachments", "_ts"}
 
 def _clean(doc: dict) -> dict:
     return {k: v for k, v in doc.items() if k not in _COSMOS_SYSTEM_KEYS}
+
+
+def _movement_warning_codes(doc: Dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    if doc.get("txn_type") in OPTION_TXN_TYPES and not doc.get("option_position_id"):
+        warnings.append("OPTION_MOVEMENT_UNLINKED")
+    return warnings
 
 
 # ---------------------------------------------------------------------------
@@ -292,11 +300,11 @@ async def create_import_session(
         return _err("parse_error", "Empty file", 400)
 
     # Validate format_hint
-    valid_formats = {"dividends", "purchases", "sales", None}
+    valid_formats = {"dividends", "purchases", "sales", "options", None}
     if format_hint not in valid_formats:
         return _err(
             "validation_error",
-            f"format_hint must be one of: dividends, purchases, sales",
+            f"format_hint must be one of: dividends, purchases, sales, options",
             400,
         )
 
@@ -530,11 +538,14 @@ async def get_movements(
     offset: int = Query(default=0, ge=0),
 ):
     """GET /api/portfolio/movements — paginated ledger entries."""
-    _ALLOWED_TXN_TYPES = {"BUY", "SELL", "DIVIDEND", "TRANSFER_OUT", "TRANSFER_IN"}
+    _ALLOWED_TXN_TYPES = {
+        "BUY", "SELL", "DIVIDEND", "TRANSFER_OUT", "TRANSFER_IN", *OPTION_TXN_TYPES
+    }
     if txn_type and txn_type not in _ALLOWED_TXN_TYPES:
         return _err(
             "validation_error",
-            "txn_type must be BUY, SELL, DIVIDEND, TRANSFER_OUT, or TRANSFER_IN",
+            "txn_type must be BUY, SELL, DIVIDEND, TRANSFER_OUT, TRANSFER_IN, "
+            "CALL_SELL, CALL_BUY, PUT_SELL, or PUT_BUY",
             400,
         )
 
@@ -562,8 +573,15 @@ async def get_movements(
             for m in movements:
                 if not m.get("company_name"):
                     m["company_name"] = names.get(m.get("security_id"), "")
+        response_movements = []
+        for movement in movements:
+            cleaned = _clean(movement)
+            movement_warnings = _movement_warning_codes(cleaned)
+            if movement_warnings:
+                cleaned["movement_warnings"] = movement_warnings
+            response_movements.append(cleaned)
         return JSONResponse({
-            "movements": [_clean(m) for m in movements],
+            "movements": response_movements,
             "total_count": total,
             "limit": limit,
             "offset": offset,
@@ -793,17 +811,19 @@ async def delete_account(request: Request, account_id: str):
 
 @router.post("/api/portfolio/movements")
 async def create_movement(request: Request):
-    """POST /api/portfolio/movements — create a manual BUY, SELL, or DIVIDEND."""
+    """POST /api/portfolio/movements — create a manual stock, dividend, or option movement."""
     try:
         body = await request.json()
     except Exception:
         return _err("validation_error", "Invalid JSON body", 400)
 
     txn_type = body.get("txn_type", "")
-    if txn_type not in {"BUY", "SELL", "DIVIDEND"}:
+    option_txn_types = set(OPTION_TXN_TYPES)
+    if txn_type not in {"BUY", "SELL", "DIVIDEND"} | option_txn_types:
         return _err(
             "validation_error",
-            "txn_type must be BUY, SELL, or DIVIDEND (use POST /api/portfolio/transfers for transfers)",
+            "txn_type must be BUY, SELL, DIVIDEND, CALL_SELL, CALL_BUY, PUT_SELL, or "
+            "PUT_BUY (use POST /api/portfolio/transfers for transfers)",
             400,
         )
 
@@ -813,6 +833,38 @@ async def create_movement(request: Request):
 
     if not isinstance(body.get("gross"), dict) or not body["gross"].get("eur_amount"):
         return _err("validation_error", "gross must include eur_amount", 400)
+
+    if txn_type in option_txn_types:
+        if body.get("option_link_kind") not in {"OPEN_SELL", "CLOSE_BUY"}:
+            return _err(
+                "validation_error",
+                "option_link_kind must be OPEN_SELL or CLOSE_BUY for option movements",
+                400,
+            )
+        if body.get("option_type") not in {"call", "put"}:
+            return _err(
+                "validation_error",
+                "option_type must be call or put for option movements",
+                400,
+            )
+        if txn_type in {"CALL_SELL", "CALL_BUY"} and body.get("option_type") != "call":
+            return _err("validation_error", "CALL_* movements require option_type=call", 400)
+        if txn_type in {"PUT_SELL", "PUT_BUY"} and body.get("option_type") != "put":
+            return _err("validation_error", "PUT_* movements require option_type=put", 400)
+        if txn_type in {"CALL_SELL", "PUT_SELL"} and body.get("option_link_kind") != "OPEN_SELL":
+            return _err(
+                "validation_error",
+                "CALL_SELL and PUT_SELL require option_link_kind=OPEN_SELL",
+                400,
+            )
+        if txn_type in {"CALL_BUY", "PUT_BUY"} and body.get("option_link_kind") != "CLOSE_BUY":
+            return _err(
+                "validation_error",
+                "CALL_BUY and PUT_BUY require option_link_kind=CLOSE_BUY",
+                400,
+            )
+        if "quantity" in body and str(body.get("quantity", "0")) != "0":
+            return _err("validation_error", "quantity must be 0 for option movements", 400)
 
     try:
         svc = _get_portfolio_svc(request)

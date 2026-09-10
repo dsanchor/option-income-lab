@@ -9,15 +9,33 @@ import type {
   FxRateSource,
   LedgerMovement,
   MovementCorrectionRequest,
+  OptionContractType,
+  OptionLinkKind,
+  OptionTxnType,
   WithholdingLegInput,
 } from "@/types/portfolio";
-import { SALES_TYPE_LABELS } from "@/types/portfolio";
+import { OPTION_TXN_TYPES, SALES_TYPE_LABELS } from "@/types/portfolio";
 import { getAccountName } from "@/lib/accountDisplay";
 
 const inputCls =
   "w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent-blue focus:outline-none";
 const labelCls = "mb-1 block text-xs font-medium text-text-muted";
 const sectionHeadCls = "text-xs font-semibold uppercase tracking-wide text-text-muted mb-2";
+
+const OPTION_LINK_KIND_OPTIONS: OptionLinkKind[] = ["OPEN_SELL", "CLOSE_BUY", "ASSIGNMENT_STOCK"];
+const OPTION_TYPE_OPTIONS: OptionContractType[] = ["call", "put"];
+const OPTION_LINK_KIND_BY_TXN_TYPE: Record<OptionTxnType, Extract<OptionLinkKind, "OPEN_SELL" | "CLOSE_BUY">> = {
+  CALL_SELL: "OPEN_SELL",
+  CALL_BUY: "CLOSE_BUY",
+  PUT_SELL: "OPEN_SELL",
+  PUT_BUY: "CLOSE_BUY",
+};
+const OPTION_TYPE_BY_TXN_TYPE: Record<OptionTxnType, OptionContractType> = {
+  CALL_SELL: "call",
+  CALL_BUY: "call",
+  PUT_SELL: "put",
+  PUT_BUY: "put",
+};
 
 type WithholdingDestState = "not_captured" | "zero" | "value";
 
@@ -248,6 +266,9 @@ export default function MovementCorrectionDialog({
   onCorrected,
 }: MovementCorrectionDialogProps) {
   const isTransfer = m.txn_type === "TRANSFER_OUT" || m.txn_type === "TRANSFER_IN";
+  const isOptionTxn = OPTION_TXN_TYPES.includes(m.txn_type as OptionTxnType);
+  const supportsOptionMetadata = isOptionTxn || m.txn_type === "BUY" || m.txn_type === "SELL";
+  const optionTxnType = isOptionTxn ? (m.txn_type as OptionTxnType) : null;
   const hasWithholding = m.txn_type === "DIVIDEND" || m.txn_type === "SELL";
   const originalGross = m.gross;
   const originalFees = m.fees;
@@ -283,6 +304,23 @@ export default function MovementCorrectionDialog({
   const [costBasisStatus, setCostBasisStatus] = useState<CostBasisStatus>(
     m.cost_basis_status ?? "COMPLETE"
   );
+
+  // ── Option metadata ────────────────────────────────────────────────────────
+  const [optionPositionId, setOptionPositionId] = useState(m.option_position_id ?? "");
+  const [optionLinkKind, setOptionLinkKind] = useState<OptionLinkKind | "">(
+    (m.option_link_kind as OptionLinkKind | undefined) ??
+      (optionTxnType ? OPTION_LINK_KIND_BY_TXN_TYPE[optionTxnType] : "")
+  );
+  const [optionType, setOptionType] = useState<OptionContractType | "">(
+    (m.option_type as OptionContractType | undefined) ??
+      (optionTxnType ? OPTION_TYPE_BY_TXN_TYPE[optionTxnType] : "")
+  );
+  const [optionStrike, setOptionStrike] = useState(
+    m.option_strike != null ? String(m.option_strike) : ""
+  );
+  const [optionExpiration, setOptionExpiration] = useState(m.option_expiration ?? "");
+  const [optionSymbol, setOptionSymbol] = useState(m.option_symbol ?? "");
+  const [optionCloseDate, setOptionCloseDate] = useState(m.option_close_date ?? "");
 
   // ── Withholding source ─────────────────────────────────────────────────────
   const [whtSrcCountry, setWhtSrcCountry] = useState(originalWithholding?.source?.country ?? "");
@@ -333,8 +371,9 @@ export default function MovementCorrectionDialog({
     const whtSrc = hasWithholding ? (parseFloat(whtSrcAmount) || 0) : 0;
     const whtDest =
       hasWithholding && whtDestState === "value" ? (parseFloat(whtDestAmount) || 0) : 0;
-    return g - f - whtSrc - whtDest;
-  }, [grossEurAmount, feesEur, hasWithholding, whtSrcAmount, whtDestState, whtDestAmount]);
+    const isBuyLike = m.txn_type === "BUY" || m.txn_type === "CALL_BUY" || m.txn_type === "PUT_BUY";
+    return isBuyLike ? g + f : g - f - whtSrc - whtDest;
+  }, [grossEurAmount, feesEur, hasWithholding, m.txn_type, whtSrcAmount, whtDestState, whtDestAmount]);
 
   // Amendment H.1: derived WHT rates (amounts are primary inputs)
   const grossEurNum = parseFloat(grossEurAmount) || (grossCurrency === "EUR" ? parseFloat(grossAmount) : 0);
@@ -382,7 +421,7 @@ export default function MovementCorrectionDialog({
           payload.quantity = quantity;
           hasChanges = true;
         }
-      } else if (m.quantity !== null && quantity && quantity !== m.quantity) {
+      } else if (!isOptionTxn && m.quantity !== null && quantity && quantity !== m.quantity) {
         payload.quantity = quantity;
         hasChanges = true;
       }
@@ -445,6 +484,57 @@ export default function MovementCorrectionDialog({
       if (m.txn_type === "BUY" && costBasisStatus !== (m.cost_basis_status ?? "COMPLETE")) {
         payload.cost_basis_status = costBasisStatus;
         hasChanges = true;
+      }
+
+      if (supportsOptionMetadata) {
+        const normalizedOptionPositionId = optionPositionId.trim();
+        const originalOptionPositionId = m.option_position_id ?? "";
+        if (normalizedOptionPositionId && normalizedOptionPositionId !== originalOptionPositionId) {
+          payload.option_position_id = normalizedOptionPositionId;
+          hasChanges = true;
+        }
+
+        const originalLinkKind = (m.option_link_kind as OptionLinkKind | undefined) ?? "";
+        if (optionLinkKind && optionLinkKind !== originalLinkKind) {
+          payload.option_link_kind = optionLinkKind;
+          hasChanges = true;
+        }
+
+        const originalOptionType = (m.option_type as OptionContractType | undefined) ?? "";
+        if (optionType && optionType !== originalOptionType) {
+          payload.option_type = optionType;
+          hasChanges = true;
+        }
+
+        const originalStrike = m.option_strike != null ? String(m.option_strike) : "";
+        if (optionStrike.trim() && optionStrike.trim() !== originalStrike) {
+          payload.option_strike = Number(optionStrike);
+          hasChanges = true;
+        }
+
+        if (optionExpiration && optionExpiration !== (m.option_expiration ?? "")) {
+          payload.option_expiration = optionExpiration;
+          hasChanges = true;
+        }
+
+        const normalizedOptionSymbol = optionSymbol.trim();
+        if (normalizedOptionSymbol && normalizedOptionSymbol !== (m.option_symbol ?? "")) {
+          payload.option_symbol = normalizedOptionSymbol;
+          hasChanges = true;
+        }
+
+        if (optionCloseDate && optionCloseDate !== (m.option_close_date ?? "")) {
+          payload.option_close_date = optionCloseDate;
+          hasChanges = true;
+        }
+
+        if ((payload.option_link_kind || optionLinkKind) === "ASSIGNMENT_STOCK" && !(
+          payload.option_position_id || normalizedOptionPositionId || m.option_position_id
+        )) {
+          setError("Assignment-linked stock movements require an option position ID.");
+          setSaving(false);
+          return;
+        }
       }
 
       // Withholding (DIVIDEND always visible; SELL only when toggle enabled)
@@ -690,7 +780,7 @@ export default function MovementCorrectionDialog({
                 </div>
 
                 {/* Quantity: BUY/SELL — required when original had one */}
-                {m.txn_type !== "DIVIDEND" && m.quantity !== null && (
+                {!isOptionTxn && m.txn_type !== "DIVIDEND" && m.quantity !== null && (
                   <div>
                     <label className={labelCls}>Quantity</label>
                     <input
@@ -704,6 +794,12 @@ export default function MovementCorrectionDialog({
                   </div>
                 )}
               </div>
+
+              {isOptionTxn && (
+                <div className="rounded-[var(--radius)] border border-accent-purple/20 bg-accent-purple/5 px-3 py-2 text-xs text-text-muted">
+                  Quantity is fixed at <strong className="text-text">0</strong> for option movements and cannot be edited.
+                </div>
+              )}
 
               {/* Quantity toggle for DIVIDEND (nullable per Amendment I) */}
               {m.txn_type === "DIVIDEND" && (
@@ -888,6 +984,120 @@ export default function MovementCorrectionDialog({
                       ⚠ Incomplete — e.g. zero-cost corporate-action acquisition.
                     </p>
                   )}
+                </div>
+              )}
+
+              {supportsOptionMetadata && (
+                <div className="rounded-[var(--radius)] border border-border bg-bg-card/30 px-4 py-3 space-y-4">
+                  <div className={sectionHeadCls}>Option linkage</div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="sm:col-span-2">
+                      <label className={labelCls}>Position ID</label>
+                      <input
+                        type="text"
+                        value={optionPositionId}
+                        onChange={(e) => setOptionPositionId(e.target.value)}
+                        placeholder="Optional for option premiums; required for assignment-linked stock"
+                        className={inputCls}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Link kind</label>
+                      <select
+                        value={optionLinkKind}
+                        onChange={(e) => setOptionLinkKind(e.target.value as OptionLinkKind | "")}
+                        className={inputCls}
+                        disabled={isOptionTxn}
+                      >
+                        {isOptionTxn ? (
+                          <option value={optionTxnType ? OPTION_LINK_KIND_BY_TXN_TYPE[optionTxnType] : optionLinkKind}>
+                            {optionTxnType ? OPTION_LINK_KIND_BY_TXN_TYPE[optionTxnType] : optionLinkKind}
+                          </option>
+                        ) : (
+                          <>
+                            <option value="">— Not linked —</option>
+                            {OPTION_LINK_KIND_OPTIONS.filter((kind) => kind === "ASSIGNMENT_STOCK").map((kind) => (
+                              <option key={kind} value={kind}>
+                                {kind}
+                              </option>
+                            ))}
+                          </>
+                        )}
+                      </select>
+                      <p className="mt-1 text-xs text-text-muted">
+                        {isOptionTxn
+                          ? "Auto-set by the movement type."
+                          : "Stock BUY/SELL movements only support ASSIGNMENT_STOCK when linked."}
+                      </p>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Option type</label>
+                      <select
+                        value={optionType}
+                        onChange={(e) => setOptionType(e.target.value as OptionContractType | "")}
+                        className={inputCls}
+                        disabled={isOptionTxn}
+                      >
+                        {isOptionTxn ? (
+                          <option value={optionTxnType ? OPTION_TYPE_BY_TXN_TYPE[optionTxnType] : optionType}>
+                            {optionTxnType ? OPTION_TYPE_BY_TXN_TYPE[optionTxnType] : optionType}
+                          </option>
+                        ) : (
+                          <>
+                            <option value="">— Unknown —</option>
+                            {OPTION_TYPE_OPTIONS.map((kind) => (
+                              <option key={kind} value={kind}>
+                                {kind}
+                              </option>
+                            ))}
+                          </>
+                        )}
+                      </select>
+                      <p className="mt-1 text-xs text-text-muted">
+                        {isOptionTxn ? "Auto-set by the movement type." : "Optional metadata for assignment-linked stock movements."}
+                      </p>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Strike</label>
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        value={optionStrike}
+                        onChange={(e) => setOptionStrike(e.target.value)}
+                        placeholder="0.00"
+                        className={inputCls}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Expiration</label>
+                      <input
+                        type="date"
+                        value={optionExpiration}
+                        onChange={(e) => setOptionExpiration(e.target.value)}
+                        className={inputCls}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Option symbol</label>
+                      <input
+                        type="text"
+                        value={optionSymbol}
+                        onChange={(e) => setOptionSymbol(e.target.value)}
+                        placeholder="Broker contract label"
+                        className={inputCls}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Close date</label>
+                      <input
+                        type="date"
+                        value={optionCloseDate}
+                        onChange={(e) => setOptionCloseDate(e.target.value)}
+                        className={inputCls}
+                      />
+                    </div>
+                  </div>
                 </div>
               )}
 

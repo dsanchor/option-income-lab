@@ -63,7 +63,8 @@ def _seed(fake, mid, txn_type="BUY", quantity="100", gross_eur="18250",
 
 
 def _correct(c, mid, account_id="_unassigned", note="fixing quantity",
-             quantity=None, gross_eur=None, commission_eur=None, trade_date=None):
+             quantity=None, gross_eur=None, commission_eur=None, trade_date=None,
+             extra=None):
     body = {"account_id": account_id, "correction_note": note}
     if quantity is not None:
         body["quantity"] = quantity
@@ -73,6 +74,8 @@ def _correct(c, mid, account_id="_unassigned", note="fixing quantity",
         body["fees"] = {"total": commission_eur, "currency": "EUR", "total_eur": commission_eur}
     if trade_date is not None:
         body["trade_date"] = trade_date
+    if extra:
+        body.update(extra)
     return c.post(f"/api/portfolio/movements/{mid}/correct", json=body)
 
 
@@ -203,6 +206,72 @@ class TestCorrectionInvariants:
                       json={"account_id": "_unassigned"})
         assert resp.status_code == 400
         assert resp.json()["error"] == "validation_error"
+
+    def test_option_correction_can_add_option_position_id(self, client):
+        c, fake = client
+        fake.portfolio_container._store["mvt_opt_corr_001"] = {
+            "id": "mvt_opt_corr_001",
+            "doc_type": "ledger_txn",
+            "txn_type": "CALL_SELL",
+            "security_id": "XNYS:AAPL",
+            "ticker": "AAPL",
+            "trade_date": "2024-07-19",
+            "quantity": "0",
+            "gross": {"amount": "150.00", "currency": "USD", "eur_amount": "138.00"},
+            "fees": {"total": "3.50", "currency": "USD", "total_eur": "3.25"},
+            "net": {"amount": "146.500000", "currency": "USD", "eur_amount": "134.750000"},
+            "account_id": "_unassigned",
+            "correction_status": "ACTIVE",
+            "import_source": "manual",
+            "created_at": "2026-09-06T10:00:00Z",
+            "warnings": [],
+            "option_link_kind": "OPEN_SELL",
+            "option_type": "call",
+            "option_strike": 210.0,
+            "option_expiration": "2024-07-19",
+            "option_symbol": "AAPL",
+        }
+        resp = _correct(
+            c,
+            "mvt_opt_corr_001",
+            note="link later",
+            extra={"option_position_id": "pos_call_777"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["replacement"]["option_position_id"] == "pos_call_777"
+
+    def test_option_correction_can_add_option_close_date(self, client):
+        c, fake = client
+        fake.portfolio_container._store["mvt_opt_corr_002"] = {
+            "id": "mvt_opt_corr_002",
+            "doc_type": "ledger_txn",
+            "txn_type": "CALL_SELL",
+            "security_id": "XNYS:AAPL",
+            "ticker": "AAPL",
+            "trade_date": "2024-07-19",
+            "quantity": "0",
+            "gross": {"amount": "150.00", "currency": "USD", "eur_amount": "138.00"},
+            "fees": {"total": "3.50", "currency": "USD", "total_eur": "3.25"},
+            "net": {"amount": "146.500000", "currency": "USD", "eur_amount": "134.750000"},
+            "account_id": "_unassigned",
+            "correction_status": "ACTIVE",
+            "import_source": "manual",
+            "created_at": "2026-09-06T10:00:00Z",
+            "warnings": [],
+            "option_link_kind": "OPEN_SELL",
+            "option_type": "call",
+            "option_strike": 210.0,
+            "option_expiration": "2024-07-19",
+            "option_symbol": "AAPL",
+        }
+        resp = _correct(
+            c,
+            "mvt_opt_corr_002",
+            note="record close date later",
+            extra={"option_close_date": "2024-07-26"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["replacement"]["option_close_date"] == "2024-07-26"
 
 
 # ===========================================================================

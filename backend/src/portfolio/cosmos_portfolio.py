@@ -25,6 +25,12 @@ from uuid import uuid4
 
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 
+from .models import (
+    OPTION_BUY_TXN_TYPES as _MODEL_OPTION_BUY_TYPES,
+    OPTION_SELL_TXN_TYPES as _MODEL_OPTION_SELL_TYPES,
+    OPTION_TXN_TYPES as _MODEL_OPTION_TXN_TYPES,
+)
+
 logger = logging.getLogger(__name__)
 
 _COSMOS_SYSTEM_KEYS = {"_rid", "_self", "_etag", "_attachments", "_ts"}
@@ -37,6 +43,16 @@ _EXCLUDED_CORRECTION_STATUSES = {"SUPERSEDED", "VOIDED"}
 
 # Transfer txn_types
 _TRANSFER_TYPES = {"TRANSFER_OUT", "TRANSFER_IN"}
+
+_OPTION_TXN_TYPES = _MODEL_OPTION_TXN_TYPES
+_OPTION_SELL_TYPES = _MODEL_OPTION_SELL_TYPES
+_OPTION_BUY_TYPES = _MODEL_OPTION_BUY_TYPES
+_STOCK_BUY_TYPES = frozenset({"BUY"})
+_STOCK_SELL_TYPES = frozenset({"SELL"})
+_BUY_LIKE_TXN_TYPES = _STOCK_BUY_TYPES | _OPTION_BUY_TYPES
+_SELL_LIKE_TXN_TYPES = _STOCK_SELL_TYPES | _OPTION_SELL_TYPES
+_OPTION_LINK_KINDS = frozenset({"OPEN_SELL", "CLOSE_BUY", "ASSIGNMENT_STOCK"})
+_OPTION_TYPE_VALUES = frozenset({"call", "put"})
 
 # Imported at module level so tests can patch `src.portfolio.cosmos_portfolio.ensure_symbol_config`
 from .symbol_config_sync import ensure_symbol_config  # noqa: E402
@@ -142,6 +158,118 @@ def _ensure_ledger_detail_fields(doc: Dict[str, Any]) -> Dict[str, Any]:
     return doc
 
 
+def _compute_manual_net(
+    txn_type: str,
+    gross: Dict[str, Any],
+    fees: Dict[str, Any],
+    withholding: Optional[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Compute net amounts for manual and corrected ledger movements."""
+    gross_eur = _d(gross.get("eur_amount", "0"))
+    fees_eur = _d(fees.get("total_eur", "0"))
+    gross_amount = _d(gross.get("amount", "0"))
+    fee_amount = _d(fees.get("total", "0"))
+    currency = str(gross.get("currency", "EUR")).upper()
+
+    wht_source_eur = Decimal("0")
+    wht_dest_eur = Decimal("0")
+    if isinstance(withholding, dict):
+        src = withholding.get("source") or {}
+        dst = withholding.get("destination") or {}
+        wht_source_eur = _d(src.get("amount_eur", "0"))
+        wht_dest_eur = _d(dst.get("amount_eur", "0"))
+
+    total_wht_eur = wht_source_eur + wht_dest_eur
+    if txn_type in _BUY_LIKE_TXN_TYPES:
+        net_eur = gross_eur + fees_eur
+        net_amount = gross_amount + fee_amount
+    else:
+        net_eur = gross_eur - fees_eur - total_wht_eur
+        if currency == "EUR":
+            net_amount = gross_amount - fee_amount - total_wht_eur
+        elif total_wht_eur == Decimal("0"):
+            net_amount = gross_amount - fee_amount
+        else:
+            net_amount = net_eur
+
+    return {
+        "amount": str(net_amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+        "currency": currency,
+        "eur_amount": str(net_eur.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+    }
+
+
+def _normalize_option_metadata(txn_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate and extract option-link metadata fields for a movement."""
+    option_position_id = data.get("option_position_id")
+    option_link_kind = data.get("option_link_kind")
+    option_type = data.get("option_type")
+    has_option_metadata = any(
+        data.get(field) is not None
+        for field in (
+            "option_position_id",
+            "option_link_kind",
+            "option_type",
+            "option_strike",
+            "option_expiration",
+            "option_symbol",
+            "option_close_date",
+        )
+    )
+
+    if txn_type in _OPTION_TXN_TYPES:
+        if option_link_kind is not None and option_link_kind not in ("OPEN_SELL", "CLOSE_BUY"):
+            raise ValueError("option_link_kind must be OPEN_SELL or CLOSE_BUY for option movements")
+        if option_type is not None and option_type not in _OPTION_TYPE_VALUES:
+            raise ValueError("option_type must be call or put")
+        if option_link_kind is not None:
+            if txn_type in _OPTION_SELL_TYPES and option_link_kind != "OPEN_SELL":
+                raise ValueError("option_link_kind must be OPEN_SELL for CALL_SELL and PUT_SELL")
+            if txn_type in _OPTION_BUY_TYPES and option_link_kind != "CLOSE_BUY":
+                raise ValueError("option_link_kind must be CLOSE_BUY for CALL_BUY and PUT_BUY")
+        if option_type is not None:
+            if txn_type.startswith("CALL_") and option_type != "call":
+                raise ValueError("option_type must be call for CALL_* movements")
+            if txn_type.startswith("PUT_") and option_type != "put":
+                raise ValueError("option_type must be put for PUT_* movements")
+    elif txn_type in _STOCK_BUY_TYPES | _STOCK_SELL_TYPES:
+        if has_option_metadata:
+            if option_link_kind != "ASSIGNMENT_STOCK":
+                raise ValueError("stock assignment-linked movements require option_link_kind=ASSIGNMENT_STOCK")
+            if not option_position_id:
+                raise ValueError("option_position_id is required when linking stock movements to an option position")
+        if option_link_kind is not None and option_link_kind not in _OPTION_LINK_KINDS:
+            raise ValueError(
+                "option_link_kind must be OPEN_SELL, CLOSE_BUY, or ASSIGNMENT_STOCK"
+            )
+        if option_link_kind in _OPTION_LINK_KINDS and option_link_kind != "ASSIGNMENT_STOCK":
+            raise ValueError("stock movements only support option_link_kind=ASSIGNMENT_STOCK")
+        if option_type is not None and option_type not in _OPTION_TYPE_VALUES:
+            raise ValueError("option_type must be call or put")
+    elif has_option_metadata:
+        raise ValueError("option-link metadata is only applicable to option or stock BUY/SELL movements")
+    elif option_link_kind is not None and option_link_kind not in _OPTION_LINK_KINDS:
+        raise ValueError(
+            "option_link_kind must be OPEN_SELL, CLOSE_BUY, or ASSIGNMENT_STOCK"
+        )
+    elif option_type is not None and option_type not in _OPTION_TYPE_VALUES:
+        raise ValueError("option_type must be call or put")
+
+    metadata: Dict[str, Any] = {}
+    for field in (
+        "option_position_id",
+        "option_link_kind",
+        "option_type",
+        "option_strike",
+        "option_expiration",
+        "option_symbol",
+        "option_close_date",
+    ):
+        if data.get(field) is not None:
+            metadata[field] = data.get(field)
+    return metadata
+
+
 # Leg type → txn_type mapping for corporate-action groups (Amendment H §H.3.3)
 _CA_LEG_TXN_TYPE = {
     "CASH_DIVIDEND": "DIVIDEND",
@@ -177,15 +305,25 @@ def _validate_correction_fields(txn_type: str, correction_data: Dict[str, Any]) 
     type applicability) are centralised here so correct_movement stays readable.
     """
     # ── Type-specific field restrictions ──────────────────────────────────
-    if txn_type == "BUY":
+    if txn_type in _STOCK_BUY_TYPES:
         if "withholding" in correction_data and correction_data["withholding"] is not None:
             raise ValueError("withholding is not applicable to BUY movements")
         if correction_data.get("sales_type") is not None:
             raise ValueError("sales_type is not applicable to BUY movements")
 
-    if txn_type == "SELL":
+    if txn_type in _STOCK_SELL_TYPES:
         if correction_data.get("cost_basis_status") is not None:
             raise ValueError("cost_basis_status is not applicable to SELL movements")
+
+    if txn_type in _OPTION_BUY_TYPES | _OPTION_SELL_TYPES:
+        if "withholding" in correction_data and correction_data["withholding"] is not None:
+            raise ValueError("withholding is not applicable to option movements")
+        if correction_data.get("sales_type") is not None:
+            raise ValueError("sales_type is not applicable to option movements")
+        if correction_data.get("cost_basis_status") is not None:
+            raise ValueError("cost_basis_status is not applicable to option movements")
+        if "quantity" in correction_data and correction_data["quantity"] not in (None, "0", 0, 0.0):
+            raise ValueError("quantity must remain 0 for option movements")
 
     if txn_type == "DIVIDEND":
         if correction_data.get("sales_type") is not None:
@@ -278,6 +416,41 @@ def _validate_correction_fields(txn_type: str, correction_data: Dict[str, Any]) 
             raise ValueError("quantity must be a valid numeric string")
         if q_val < Decimal("0"):
             raise ValueError("quantity must be >= 0")
+        if txn_type in _OPTION_TXN_TYPES and q_val != Decimal("0"):
+            raise ValueError("quantity must remain 0 for option movements")
+
+    # ── Option-link metadata: field-level validation only; full
+    # cross-field coherence is checked again after overlaying onto the
+    # original movement in correct_movement().
+    if correction_data.get("option_link_kind") is not None:
+        if correction_data["option_link_kind"] not in _OPTION_LINK_KINDS:
+            raise ValueError(
+                "option_link_kind must be OPEN_SELL, CLOSE_BUY, or ASSIGNMENT_STOCK"
+            )
+    if correction_data.get("option_type") is not None:
+        if correction_data["option_type"] not in _OPTION_TYPE_VALUES:
+            raise ValueError("option_type must be call or put")
+    if correction_data.get("option_expiration") is not None:
+        try:
+            datetime.fromisoformat(str(correction_data["option_expiration"]).replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                datetime.strptime(str(correction_data["option_expiration"]), "%Y-%m-%d")
+            except ValueError:
+                raise ValueError("option_expiration must be YYYY-MM-DD")
+    if correction_data.get("option_close_date") is not None:
+        try:
+            datetime.fromisoformat(str(correction_data["option_close_date"]).replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                datetime.strptime(str(correction_data["option_close_date"]), "%Y-%m-%d")
+            except ValueError:
+                raise ValueError("option_close_date must be YYYY-MM-DD")
+    if correction_data.get("option_strike") is not None:
+        try:
+            Decimal(str(correction_data["option_strike"]))
+        except Exception:
+            raise ValueError("option_strike must be numeric")
 
 
 class CosmosPortfolioService:
@@ -618,8 +791,11 @@ class CosmosPortfolioService:
             raise ValueError("security_id is required")
         if not trade_date:
             raise ValueError("trade_date is required")
-        if txn_type not in {"BUY", "SELL", "DIVIDEND"}:
-            raise ValueError(f"txn_type must be BUY, SELL, or DIVIDEND for manual creation; got {txn_type!r}")
+        if txn_type not in {"BUY", "SELL", "DIVIDEND"} | _OPTION_TXN_TYPES:
+            raise ValueError(
+                "txn_type must be BUY, SELL, DIVIDEND, CALL_SELL, CALL_BUY, "
+                f"PUT_SELL, or PUT_BUY for manual creation; got {txn_type!r}"
+            )
 
         # DERECHOS: validate quantity=0 semantics
         sales_type = data.get("sales_type")
@@ -627,37 +803,24 @@ class CosmosPortfolioService:
             sales_type = "ACCIONES"
         if txn_type == "SELL" and sales_type not in ("ACCIONES", "DERECHOS"):
             raise ValueError("sales_type must be ACCIONES or DERECHOS")
+        if txn_type in _OPTION_TXN_TYPES and data.get("sales_type") is not None:
+            raise ValueError("sales_type is not applicable to option movements")
+        if txn_type in _OPTION_TXN_TYPES and data.get("cost_basis_status") is not None:
+            raise ValueError("cost_basis_status is not applicable to option movements")
 
         gross = data.get("gross") or {}
         fees = data.get("fees") or {}
         wht = data.get("withholding")
-
+        currency = gross.get("currency", "EUR").upper()
+        option_metadata = _normalize_option_metadata(txn_type, data)
+        quantity = "0" if txn_type in _OPTION_TXN_TYPES else str(data.get("quantity", "0"))
+        if txn_type in _OPTION_TXN_TYPES and _d(data.get("quantity", "0")) != Decimal("0"):
+            raise ValueError("quantity must be 0 for option movements")
+        if txn_type in _OPTION_TXN_TYPES and wht is not None:
+            raise ValueError("withholding is not applicable to option movements")
+        net = _compute_manual_net(txn_type, gross, fees, wht)
         gross_eur = _d(gross.get("eur_amount", "0"))
         fees_eur = _d(fees.get("total_eur", "0"))
-
-        # Withholding
-        wht_source_eur = Decimal("0")
-        wht_dest_eur = Decimal("0")
-        if isinstance(wht, dict):
-            src = wht.get("source") or {}
-            dst = wht.get("destination") or {}
-            wht_source_eur = _d(src.get("amount_eur", "0"))
-            wht_dest_eur = _d(dst.get("amount_eur", "0"))
-
-        # BUY: net = gross + fees (actual cash outflow; net > gross).
-        # SELL/DIVIDEND: net = gross - fees - withholding (actual cash inflow; net < gross).
-        currency = gross.get("currency", "EUR").upper()
-        if txn_type == "BUY":
-            net_eur = gross_eur + fees_eur
-            net_in_currency = (
-                _d(gross.get("amount", "0")) + _d(fees.get("total", "0"))
-            ) if currency == "EUR" else net_eur
-        else:
-            net_eur = gross_eur - fees_eur - wht_source_eur - wht_dest_eur
-            net_in_currency = (
-                _d(gross.get("amount", "0")) - _d(fees.get("total", "0"))
-                - wht_source_eur - wht_dest_eur
-            ) if currency == "EUR" else net_eur
 
         now = self._now()
         movement_id = f"mvt_{uuid4().hex}"
@@ -671,7 +834,7 @@ class CosmosPortfolioService:
             "security_id": security_id,
             "ticker": ticker,
             "trade_date": trade_date,
-            "quantity": str(data.get("quantity", "0")),
+            "quantity": quantity,
             "gross": {
                 "amount": str(gross.get("amount", "0")),
                 "currency": currency,
@@ -682,11 +845,7 @@ class CosmosPortfolioService:
                 "currency": fees.get("currency", currency),
                 "total_eur": str(fees_eur),
             },
-            "net": {
-                "amount": str(net_in_currency.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
-                "currency": currency,
-                "eur_amount": str(net_eur.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
-            },
+            "net": net,
             "import_source": "manual",
             "correction_status": "ACTIVE",
             "created_at": now,
@@ -712,6 +871,8 @@ class CosmosPortfolioService:
             doc["cost_basis_status"] = cost_basis_status
         elif txn_type == "BUY":
             doc["cost_basis_status"] = "COMPLETE"
+
+        doc.update(option_metadata)
 
         if data.get("notes"):
             doc["notes"] = data["notes"]
@@ -805,8 +966,22 @@ class CosmosPortfolioService:
         # Nullable fields (withholding, quantity for DIVIDEND): applied when key is present in
         # the body. An explicit JSON null clears the value, then the write path normalizes
         # the persisted movement back to the required detail-contract shape.
-        _NONNULL_OVERRIDABLE = ("trade_date", "gross", "fees", "fx", "sales_type",
-                                "cost_basis_status", "notes")
+        _NONNULL_OVERRIDABLE = (
+            "trade_date",
+            "gross",
+            "fees",
+            "fx",
+            "sales_type",
+            "cost_basis_status",
+            "notes",
+            "option_position_id",
+            "option_link_kind",
+            "option_type",
+            "option_strike",
+            "option_expiration",
+            "option_symbol",
+            "option_close_date",
+        )
         _NULLABLE_OVERRIDABLE = ("withholding", "quantity")
 
         for field in _NONNULL_OVERRIDABLE:
@@ -822,6 +997,8 @@ class CosmosPortfolioService:
                 else:
                     replacement[field] = val
 
+        replacement.update(_normalize_option_metadata(txn_type, replacement))
+
         # Recompute net whenever gross, fees, or withholding are touched.
         # Key-presence check so explicit null (cleared withholding) also triggers recompute.
         _net_trigger_fields = {"gross", "fees", "withholding"}
@@ -830,29 +1007,14 @@ class CosmosPortfolioService:
             fees = replacement.get("fees") or {}
             wht = replacement.get("withholding")
             gross_eur = _d(gross.get("eur_amount", "0"))
-            fees_eur = _d(fees.get("total_eur", "0"))
-            wht_s = Decimal("0")
-            wht_d = Decimal("0")
-            if isinstance(wht, dict):
-                wht_s = _d((wht.get("source") or {}).get("amount_eur", "0"))
-                wht_d = _d((wht.get("destination") or {}).get("amount_eur", "0"))
-            # BUY: net = gross + fees (outflow; withholding not applicable to BUY).
-            # SELL/DIVIDEND: net = gross - fees - withholding.
-            if txn_type == "BUY":
-                net_eur = gross_eur + fees_eur
-            else:
-                net_eur = gross_eur - fees_eur - wht_s - wht_d
-            currency = gross.get("currency", "EUR").upper()
-            replacement["net"] = {
-                "amount": str(net_eur.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
-                "currency": currency,
-                "eur_amount": str(net_eur.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
-            }
+            replacement["net"] = _compute_manual_net(txn_type, gross, fees, wht)
             # Derive WHT rate_pct server-side after net recompute (Amendment H §H.1.2).
             if isinstance(replacement.get("withholding"), dict):
                 replacement["withholding"] = _apply_wht_rate_derivation(
                     replacement["withholding"], gross_eur
                 )
+        if txn_type in _OPTION_TXN_TYPES:
+            replacement["quantity"] = "0"
         _ensure_ledger_detail_fields(replacement)
 
         # Write replacement
@@ -1709,6 +1871,8 @@ class CosmosPortfolioService:
                 shares += qty
             elif txn_type == "TRANSFER_OUT":
                 shares -= qty
+            elif txn_type in _OPTION_TXN_TYPES:
+                pass
         return shares
 
     def _compute_cost_basis_at_date(
@@ -1737,6 +1901,8 @@ class CosmosPortfolioService:
                 if qty > Decimal("0"):
                     total_cost += cost_basis
                     total_paid_shares += qty
+            elif txn_type in _OPTION_TXN_TYPES:
+                pass
 
         if total_paid_shares <= Decimal("0"):
             return Decimal("0")
@@ -1935,6 +2101,9 @@ class CosmosPortfolioService:
                 "trade_date": d.get("trade_date"),
                 "quantity": d.get("quantity"),
                 "account_id": d.get("account_id"),
+                "option_position_id": d.get("option_position_id"),
+                "option_link_kind": d.get("option_link_kind"),
+                "option_type": d.get("option_type"),
             }
             for d in candidates[: self._PREVIEW_SAMPLE_LIMIT]
         ]

@@ -11,6 +11,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import {
+  CoverageStatusBadge,
+  WarningList,
+} from "@/components/OptionLinkageBadges";
 import { renderMarkdown } from "@/lib/markdown";
 import { ROW_TINT_BG } from "@/lib/badges";
 import type { Position } from "@/types/symbol-detail";
@@ -838,6 +842,8 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
   const srcAgent = source.agent_type ? String(source.agent_type) : null;
   const srcReason = source.reason ? String(source.reason) : null;
   const srcTimestamp = source.timestamp ? String(source.timestamp).slice(0, 19) : null;
+  const linkedAccounts = position.linked_accounts?.filter(Boolean) ?? [];
+  const warnings = position.warnings?.filter(Boolean) ?? [];
 
   return (
     <div className="space-y-4">
@@ -887,6 +893,39 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
 
       <div>
         <DField label="Notes">{position.notes || "—"}</DField>
+      </div>
+
+      <div className="rounded-[var(--radius)] border border-border bg-bg-card px-4 py-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h4 className="text-sm font-semibold">Linkage &amp; Warnings</h4>
+          <CoverageStatusBadge status={position.coverage_status} />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <DField label="Linked Movements">
+            <span className="font-mono">{position.linked_movement_count ?? 0}</span>
+          </DField>
+          <DField label="Linked Accounts">
+            {linkedAccounts.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {linkedAccounts.map((accountId) => (
+                  <span
+                    key={accountId}
+                    className="inline-block rounded-[var(--radius-pill)] border border-border bg-bg-input px-2 py-0.5 font-mono text-xs text-text"
+                  >
+                    {accountId}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              "—"
+            )}
+          </DField>
+          <div className="sm:col-span-2">
+            <DField label="Warnings">
+              <WarningList warnings={warnings} emptyText="No linkage warnings." />
+            </DField>
+          </div>
+        </div>
       </div>
 
       {/* Monitoring history */}

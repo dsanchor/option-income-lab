@@ -1,22 +1,39 @@
 export interface EconomicsSummary {
-  total_premium: number;
-  total_buyback: number;
-  net_income: number;
+  total_premium_usd: number;
+  total_buyback_usd: number;
+  net_option_usd_gross: number;
+  net_income_eur: number;
+  total_commission_eur: number;
   avg_roc_pct: number;
   avg_roc_annualized: number;
   win_rate: number;
   total_positions: number;
+  coverage: EconomicsCoverage;
+}
+
+export interface EconomicsCoverage {
+  linked_positions: number;
+  total_positions: number;
+  linked_ratio: number;
+  positions_with_unresolved_security: number;
+  positions_missing_opening_sell: number;
+  positions_missing_closing_buy: number;
+  positions_missing_assignment_stock: number;
+  excluded_unlinked_positions: number;
+  excluded_positions_linked_only_outside_account_filter: number;
 }
 
 export interface EconomicsMonthlyRow {
   month: number;
   year: number;
   label: string;
-  premium: number;
-  buyback: number;
-  net: number;
-  calls_net: number;
-  puts_net: number;
+  total_premium_usd: number;
+  total_buyback_usd: number;
+  net_option_usd_gross: number;
+  net_income_eur: number;
+  total_commission_eur: number;
+  calls_net_income_eur: number;
+  puts_net_income_eur: number;
   positions_count: number;
   avg_roc_pct: number;
   avg_roc_annualized: number;
@@ -26,18 +43,22 @@ export interface EconomicsMonthlyRow {
 
 export interface EconomicsBySymbolRow {
   symbol: string;
-  premium: number;
-  buyback: number;
-  net: number;
+  total_premium_usd: number;
+  total_buyback_usd: number;
+  net_option_usd_gross: number;
+  net_income_eur: number;
+  total_commission_eur: number;
   positions_count: number;
   avg_roc_pct: number;
   avg_roc_annualized: number;
 }
 
 export interface EconomicsTypeMetrics {
-  premium: number;
-  buyback: number;
-  net: number;
+  total_premium_usd: number;
+  total_buyback_usd: number;
+  net_option_usd_gross: number;
+  net_income_eur: number;
+  total_commission_eur: number;
   count: number;
   avg_roc_pct: number;
   avg_roc_annualized: number;
@@ -49,16 +70,25 @@ export interface EconomicsPosition {
   type: string;
   strike: number | null;
   expiration: string | null;
-  premium: number;
-  premium_per_share: number;
-  buyback_cost: number | null;
-  buyback_per_share: number | null;
-  net: number;
+  premium_usd: number;
+  buyback_usd: number;
+  net_option_usd_gross: number;
+  net_income_eur: number;
+  total_commission_eur: number;
   roc_pct: number | null;
   roc_annualized: number | null;
   days_held: number | null;
   status: string;
+  close_reason: string | null;
   opened_at: string | null;
+  closed_at: string | null;
+  rolled_from: string | null;
+  rolled_to: string | null;
+  linked_accounts: string[];
+  linked_movement_count: number;
+  coverage_status: "linked" | "unlinked" | "unresolved_security" | "account_filtered_out";
+  warnings: string[];
+  resolved_security_id: string | null;
 }
 
 export interface EconomicsFilters {
@@ -75,9 +105,11 @@ export interface EconomicsReport {
   filters: EconomicsFilters;
   applied_filters: {
     year: number | null;
+    months: number[] | null;
     symbols: string[] | null;
     type: string | null;
     status: string | null;
+    account_ids: string[] | null;
   };
 }
 
@@ -86,9 +118,10 @@ export type EconomicsSortKey =
   | "type"
   | "strike"
   | "expiration"
-  | "premium"
-  | "buyback_cost"
-  | "net"
+  | "premium_usd"
+  | "buyback_usd"
+  | "net_option_usd_gross"
+  | "net_income_eur"
   | "roc_pct"
   | "roc_annualized"
   | "days_held"
@@ -106,6 +139,7 @@ export interface DividendsSummary {
   effective_withholding_pct: number;
   total_dividends: number;
   total_accounts: number;
+  portfolio_yoc_pct?: number | null;
 }
 
 export interface DividendsMonthlyRow {
@@ -131,6 +165,11 @@ export interface DividendsBySymbolRow {
   derechos_net?: number | null;
   total_net?: number | null;
   dividend_count: number;
+  yoc_pct?: number | null;
+  yoc_basis?: "annualized" | "insufficient_history" | null;
+  yoc_dividend_frequency?: number | null;
+  yoc_trailing_annual_dividend_net_eur?: number | null;
+  yoc_cost_basis_eur?: number | null;
 }
 
 export interface DividendsYearlyRow {
@@ -209,30 +248,39 @@ export interface DividendsReport {
 export type EconomicsAggregatedSource = "options" | "dividends" | "both";
 
 export interface EconomicsAggregatedSummary {
-  options_net_native: number;
-  options_currency: string;
+  options_net_eur: number;
   dividends_net_eur: number;
+  dividends_cash_net_eur?: number;
+  dividends_derechos_net_eur?: number;
   dividends_total_net_eur?: number;
+  combined_net_eur: number;
   total_option_positions: number;
+  options_coverage: EconomicsCoverage;
   total_dividend_events: number;
   total_symbols: number;
-  fx_mode: string;
+  portfolio_yoc_pct?: number | null;
 }
 
 export interface EconomicsAggregatedMonthlyRow {
   month: string;
-  options_net_native: number;
+  options_net_eur: number;
   dividends_net_eur: number;
+  dividends_cash_net_eur?: number;
+  dividends_derechos_net_eur?: number;
   dividends_total_net_eur?: number;
+  combined_net_eur: number;
   option_positions: number;
   dividend_events: number;
 }
 
 export interface EconomicsAggregatedBySymbolRow {
   symbol: string;
-  options_net_native: number;
+  options_net_eur: number;
   dividends_net_eur: number;
+  dividends_cash_net_eur?: number;
+  dividends_derechos_net_eur?: number;
   dividends_total_net_eur?: number;
+  combined_net_eur: number;
   option_positions: number;
   dividend_events: number;
 }
@@ -246,13 +294,14 @@ export interface EconomicsAggregatedAppliedFilters {
   year: number | null;
   months: number[] | null;
   symbols: string[] | null;
+  account_ids: string[] | null;
   source: EconomicsAggregatedSource | null;
 }
 
 export interface EconomicsAggregatedMeta {
   options_bucket_field: string;
   dividends_bucket_field: string;
-  options_currency_native: string;
+  options_currency: string;
   dividends_currency: string;
   combined_total_available: boolean;
 }

@@ -26,6 +26,7 @@ const FORMAT_OPTIONS: Array<{ value: "" | ImportFormat; label: string }> = [
   { value: "dividends", label: "Dividends" },
   { value: "purchases", label: "Purchases" },
   { value: "sales", label: "Sales" },
+  { value: "options", label: "Options" },
 ];
 
 /**
@@ -394,7 +395,7 @@ export default function ImportChat() {
                 Drag & drop a CSV file or <span className="text-accent-blue">browse</span>
               </div>
               <div className="text-xs text-text-muted">
-                Accepts dividends, purchases, or sales CSV
+                Accepts dividends, purchases, sales, or options CSV
               </div>
             </>
           )}

@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 
 from .cosmos_portfolio import CosmosPortfolioService
 from .cosmos_securities import CosmosSecuritiesService
+from .models import OPTION_TXN_TYPES as _MODEL_OPTION_TXN_TYPES
 from .symbol_config_sync import ensure_symbol_config
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 _TWO_PLACES = Decimal("0.01")
 _SIX_PLACES = Decimal("0.000001")
 _ZERO = Decimal("0")
+OPTION_TXN_TYPES = _MODEL_OPTION_TXN_TYPES
 
 
 def _d(v: Any) -> Decimal:
@@ -250,6 +252,11 @@ class HoldingsService:
                 # Consumes lots in FIFO order; not counted in sale proceeds.
                 agg["total_shares"] -= qty
                 _consume_lots(agg["lots"], qty)
+
+            elif txn_type in OPTION_TXN_TYPES:
+                # Inventory-neutral option cashflows are intentionally excluded
+                # from FIFO holdings, share counts, and stock/dividend totals.
+                pass
 
             for w in m.get("warnings", []):
                 agg["movement_warnings"].append(w)

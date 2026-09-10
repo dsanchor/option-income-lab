@@ -101,7 +101,7 @@ export function TopNav() {
         {/* Desktop nav */}
         <div className="hidden flex-wrap items-center gap-2 md:flex">
           <Link href="/dashboard" className={navClass(dashboardActive)}>
-            <LayoutDashboard size={16} className="shrink-0" /> Dashboard
+            <LayoutDashboard size={16} className="shrink-0" /> Agents HQ
           </Link>
 
           <Dropdown label="Investments" items={DROPDOWNS.Investments} active={symbolsActive} pathname={pathname} />
@@ -143,7 +143,7 @@ export function TopNav() {
             <SymbolSearch mobile />
           </div>
           <div className="flex flex-col gap-1">
-            <MobileLink href="/dashboard" label="Dashboard" icon={LayoutDashboard} active={dashboardActive} />
+            <MobileLink href="/dashboard" label="Agents HQ" icon={LayoutDashboard} active={dashboardActive} />
             <MobileSection label="Investments" items={DROPDOWNS.Investments} pathname={pathname} />
             <MobileLink href="/economics" label="Economics" icon={Banknote} active={isActive(pathname, "/economics")} />
             <MobileLink href="/chat" label="Chat" icon={MessageSquare} active={isActive(pathname, "/chat", true)} />

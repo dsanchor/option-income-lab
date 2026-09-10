@@ -3,8 +3,15 @@
 import { useEffect, useState, useCallback } from "react";
 import { X, RefreshCw } from "lucide-react";
 import { createMovement, createTransfer, getFxRate, listAccounts, listSecurities } from "@/lib/portfolio-api";
-import type { BrokerAccount, ManualMovementRequest, TransferRequest } from "@/types/portfolio";
-import { SALES_TYPE_LABELS } from "@/types/portfolio";
+import type {
+  BrokerAccount,
+  ManualMovementRequest,
+  OptionContractType,
+  OptionLinkKind,
+  OptionTxnType,
+  TransferRequest,
+} from "@/types/portfolio";
+import { OPTION_TXN_TYPES, SALES_TYPE_LABELS } from "@/types/portfolio";
 import type { SecurityMaster } from "@/types/portfolio";
 import CorporateActionForm from "@/components/CorporateActionForm";
 import { formatAccountName } from "@/lib/accountDisplay";
@@ -14,14 +21,32 @@ const inputCls =
 const labelCls = "mb-1 block text-xs font-medium text-text-muted";
 
 /** UI-only type selector — Transfer is NOT a TxnType enum but a separate endpoint. */
-type UiMovementType = "BUY" | "SELL" | "DIVIDEND" | "TRANSFER";
+type UiMovementType = "BUY" | "SELL" | "DIVIDEND" | "TRANSFER" | OptionTxnType;
 
 const TXN_TYPES: Array<{ value: UiMovementType; label: string; description: string }> = [
   { value: "BUY", label: "Buy", description: "Purchase shares or other securities" },
   { value: "SELL", label: "Sell", description: "Sell shares — choose Stocks or Rights" },
   { value: "DIVIDEND", label: "Dividend / Corp. Action", description: "Cash dividend, scrip dividend, or rights issue" },
+  { value: "CALL_SELL", label: "Call Sell", description: "Covered-call opening premium received" },
+  { value: "CALL_BUY", label: "Call Buy", description: "Call buyback paid to close" },
+  { value: "PUT_SELL", label: "Put Sell", description: "Cash-secured-put premium received" },
+  { value: "PUT_BUY", label: "Put Buy", description: "Put buyback paid to close" },
   { value: "TRANSFER", label: "Transfer", description: "Move shares between accounts" },
 ];
+
+const OPTION_LINK_KIND_BY_TXN_TYPE: Record<OptionTxnType, Extract<OptionLinkKind, "OPEN_SELL" | "CLOSE_BUY">> = {
+  CALL_SELL: "OPEN_SELL",
+  CALL_BUY: "CLOSE_BUY",
+  PUT_SELL: "OPEN_SELL",
+  PUT_BUY: "CLOSE_BUY",
+};
+
+const OPTION_TYPE_BY_TXN_TYPE: Record<OptionTxnType, OptionContractType> = {
+  CALL_SELL: "call",
+  CALL_BUY: "call",
+  PUT_SELL: "put",
+  PUT_BUY: "put",
+};
 
 // ─── FX Helper ────────────────────────────────────────────────────────────────
 
@@ -130,6 +155,221 @@ function SecuritySelect({
           </option>
         ))}
       </select>
+    </div>
+  );
+}
+
+// ─── OPTION Form ─────────────────────────────────────────────────────────────
+
+interface OptionFormState {
+  security_id: string;
+  account_id: string;
+  trade_date: string;
+  gross_amount_usd: string;
+  gross_eur_amount: string;
+  commission_eur: string;
+  option_position_id: string;
+  option_strike: string;
+  option_expiration: string;
+  option_symbol: string;
+  option_close_date: string;
+  notes: string;
+}
+
+interface OptionFormProps {
+  txnType: OptionTxnType;
+  form: OptionFormState;
+  onChange: (f: Partial<OptionFormState>) => void;
+  accounts: BrokerAccount[];
+  securities: SecurityMaster[];
+}
+
+function OptionForm({ txnType, form, onChange, accounts, securities }: OptionFormProps) {
+  const optionType = OPTION_TYPE_BY_TXN_TYPE[txnType];
+  const optionLinkKind = OPTION_LINK_KIND_BY_TXN_TYPE[txnType];
+  const grossEur = parseFloat(form.gross_eur_amount) || 0;
+  const commissionEur = parseFloat(form.commission_eur) || 0;
+  const isOpeningSell = optionLinkKind === "OPEN_SELL";
+  const netPreview = grossEur > 0 || commissionEur > 0
+    ? isOpeningSell
+      ? grossEur - commissionEur
+      : grossEur + commissionEur
+    : null;
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-[var(--radius)] border border-accent-purple/20 bg-accent-purple/5 px-3 py-2 text-xs text-text-muted">
+        ℹ Option movements are <strong className="text-text">inventory-neutral</strong>: quantity is fixed at{" "}
+        <strong className="text-text">0</strong> and the backend derives net from gross and commission.
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="sm:col-span-2">
+          <SecuritySelect
+            value={form.security_id}
+            onChange={(v) => onChange({ security_id: v })}
+            securities={securities}
+          />
+        </div>
+        <AccountSelect
+          value={form.account_id}
+          onChange={(v) => onChange({ account_id: v })}
+          accounts={accounts}
+          label="Account"
+        />
+        <div>
+          <label className={labelCls}>Trade date *</label>
+          <input
+            type="date"
+            value={form.trade_date}
+            onChange={(e) => onChange({ trade_date: e.target.value })}
+            className={inputCls}
+            required
+          />
+        </div>
+        <div>
+          <label className={labelCls}>Option type</label>
+          <input
+            type="text"
+            value={optionType}
+            className={`${inputCls} bg-bg-hover text-text-muted`}
+            disabled
+            aria-readonly="true"
+          />
+          <div className="mt-1 text-xs text-text-muted">Auto-set from the selected movement type.</div>
+        </div>
+        <div>
+          <label className={labelCls}>Link kind</label>
+          <input
+            type="text"
+            value={optionLinkKind}
+            className={`${inputCls} bg-bg-hover text-text-muted`}
+            disabled
+            aria-readonly="true"
+          />
+          <div className="mt-1 text-xs text-text-muted">Opening sells use OPEN_SELL; buybacks use CLOSE_BUY.</div>
+        </div>
+        <div className="sm:col-span-2">
+          <label className={labelCls}>Position ID</label>
+          <input
+            type="text"
+            value={form.option_position_id}
+            onChange={(e) => onChange({ option_position_id: e.target.value })}
+            placeholder="Link later — optional"
+            className={inputCls}
+          />
+          <div className="mt-1 text-xs text-text-muted">
+            Optional now. Leave blank if you want to add the position link later from the correction flow.
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>Strike</label>
+          <input
+            type="number"
+            step="any"
+            min="0"
+            value={form.option_strike}
+            onChange={(e) => onChange({ option_strike: e.target.value })}
+            placeholder="0.00"
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <label className={labelCls}>Expiration</label>
+          <input
+            type="date"
+            value={form.option_expiration}
+            onChange={(e) => onChange({ option_expiration: e.target.value })}
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <label className={labelCls}>Option symbol</label>
+          <input
+            type="text"
+            value={form.option_symbol}
+            onChange={(e) => onChange({ option_symbol: e.target.value })}
+            placeholder="Broker contract label (optional)"
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <label className={labelCls}>Close date</label>
+          <input
+            type="date"
+            value={form.option_close_date}
+            onChange={(e) => onChange({ option_close_date: e.target.value })}
+            className={inputCls}
+          />
+          <div className="mt-1 text-xs text-text-muted">Usually added later once the position is closed.</div>
+        </div>
+      </div>
+
+      <div className="rounded-[var(--radius)] border border-border bg-bg-card/40 p-3">
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">Cash flow</div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div>
+            <label className={labelCls}>Gross USD *</label>
+            <input
+              type="number"
+              step="any"
+              min="0"
+              value={form.gross_amount_usd}
+              onChange={(e) => onChange({ gross_amount_usd: e.target.value })}
+              placeholder="0.00"
+              className={inputCls}
+              required
+            />
+          </div>
+          <div>
+            <label className={labelCls}>Gross EUR *</label>
+            <input
+              type="number"
+              step="any"
+              min="0"
+              value={form.gross_eur_amount}
+              onChange={(e) => onChange({ gross_eur_amount: e.target.value })}
+              placeholder="0.00"
+              className={inputCls}
+              required
+            />
+          </div>
+          <div>
+            <label className={labelCls}>Commission EUR *</label>
+            <input
+              type="number"
+              step="any"
+              min="0"
+              value={form.commission_eur}
+              onChange={(e) => onChange({ commission_eur: e.target.value })}
+              placeholder="0.00"
+              className={inputCls}
+              required
+            />
+          </div>
+        </div>
+        {netPreview !== null && (
+          <div className="mt-3 rounded-[var(--radius)] border border-border bg-bg-hover/50 px-3 py-2 text-xs text-text-muted">
+            <span className="font-medium text-text">Estimated net EUR:</span>{" "}
+            <span className="font-mono text-text">
+              €{netPreview.toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}
+            </span>
+            <span className="ml-2">
+              {isOpeningSell ? "(gross − commission)" : "(gross + commission)"} — server recomputes on save.
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div>
+        <label className={labelCls}>Notes</label>
+        <textarea
+          value={form.notes}
+          onChange={(e) => onChange({ notes: e.target.value })}
+          rows={2}
+          className={`${inputCls} resize-none`}
+        />
+      </div>
     </div>
   );
 }
@@ -405,7 +645,7 @@ function TransferForm({ form, onChange, accounts, securities }: TransferFormProp
   return (
     <div className="space-y-3">
       <div className="rounded-[var(--radius)] border border-accent-blue/20 bg-accent-blue/5 px-3 py-2 text-xs text-text-muted">
-        ℹ Transfer moves shares between your accounts. The <strong className="text-text">carried cost basis</strong> is automatically derived from the source account's holdings (editable). Transfer fees are recorded separately and do not change the cost basis.
+        ℹ Transfer moves shares between your accounts. The <strong className="text-text">carried cost basis</strong> is automatically derived from the source account&apos;s holdings (editable). Transfer fees are recorded separately and do not change the cost basis.
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -489,6 +729,20 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
     security_id: "", source_account_id: "_unassigned", dest_account_id: "_unassigned",
     trade_date: "", quantity: "", carried_cost_basis: "", transfer_fees: "", notes: "",
   });
+  const [optionForm, setOptionForm] = useState<OptionFormState>({
+    security_id: "",
+    account_id: "_unassigned",
+    trade_date: "",
+    gross_amount_usd: "",
+    gross_eur_amount: "",
+    commission_eur: "0",
+    option_position_id: "",
+    option_strike: "",
+    option_expiration: "",
+    option_symbol: "",
+    option_close_date: "",
+    notes: "",
+  });
 
   const loadResources = useCallback(async () => {
     try {
@@ -500,7 +754,6 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
     }
   }, []);
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadResources(); }, [loadResources]);
 
   useEffect(() => {
@@ -508,6 +761,8 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  const isOptionTxnType = OPTION_TXN_TYPES.includes(txnType as OptionTxnType);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -576,6 +831,47 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
         };
         await createMovement(req);
 
+      } else if (isOptionTxnType) {
+        const optionLinkKind = OPTION_LINK_KIND_BY_TXN_TYPE[txnType as OptionTxnType];
+        const optionType = OPTION_TYPE_BY_TXN_TYPE[txnType as OptionTxnType];
+        if (
+          !optionForm.security_id ||
+          !optionForm.trade_date ||
+          !optionForm.gross_amount_usd ||
+          !optionForm.gross_eur_amount ||
+          optionForm.commission_eur === ""
+        ) {
+          setError("Symbol, date, gross USD, gross EUR, and commission EUR are required.");
+          return;
+        }
+
+        const grossUsd = Number(optionForm.gross_amount_usd);
+        const grossEur = Number(optionForm.gross_eur_amount);
+        const derivedFxRate =
+          Number.isFinite(grossUsd) && Number.isFinite(grossEur) && grossUsd > 0 && grossEur > 0
+            ? (grossEur / grossUsd).toFixed(9)
+            : null;
+
+        const req: ManualMovementRequest = {
+          txn_type: txnType as OptionTxnType,
+          security_id: optionForm.security_id,
+          account_id: optionForm.account_id || "_unassigned",
+          trade_date: optionForm.trade_date,
+          quantity: "0",
+          gross: makeGross(optionForm.gross_amount_usd, "USD", optionForm.gross_eur_amount),
+          fees: makeFeesInput(optionForm.commission_eur, "EUR"),
+          fx: derivedFxRate ? { rate: derivedFxRate, rate_source: "MANUAL" } : undefined,
+          option_position_id: optionForm.option_position_id.trim() || undefined,
+          option_link_kind: optionLinkKind,
+          option_type: optionType,
+          option_strike: optionForm.option_strike ? Number(optionForm.option_strike) : undefined,
+          option_expiration: optionForm.option_expiration || undefined,
+          option_symbol: optionForm.option_symbol.trim() || undefined,
+          option_close_date: optionForm.option_close_date || undefined,
+          notes: optionForm.notes.trim() || undefined,
+        };
+        await createMovement(req);
+
       } else {
         // TRANSFER — uses POST /api/portfolio/transfers, not /movements
         if (!transferForm.security_id || !transferForm.trade_date || !transferForm.quantity) {
@@ -641,7 +937,7 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
           {/* Type selector */}
           <div>
             <div className={labelCls}>Movement type *</div>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
               {TXN_TYPES.map((t) => (
                 <button
                   key={t.value}
@@ -699,6 +995,15 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
               )}
               {txnType === "SELL" && (
                 <SellForm form={sellForm} onChange={(f) => setSellForm((s) => ({ ...s, ...f }))} accounts={accounts} securities={securities} />
+              )}
+              {isOptionTxnType && (
+                <OptionForm
+                  txnType={txnType as OptionTxnType}
+                  form={optionForm}
+                  onChange={(f) => setOptionForm((s) => ({ ...s, ...f }))}
+                  accounts={accounts}
+                  securities={securities}
+                />
               )}
               {txnType === "TRANSFER" && (
                 <TransferForm form={transferForm} onChange={(f) => setTransferForm((s) => ({ ...s, ...f }))} accounts={accounts} securities={securities} />

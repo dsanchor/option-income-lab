@@ -227,6 +227,37 @@ class TestCostBasis:
         assert Decimal(h["total_invested_eur"]) == Decimal("1825.00")
         assert Decimal(h["total_dividends_eur"]) == Decimal("85.00")
 
+    def test_option_movements_excluded_from_fifo_and_totals(self):
+        movements = [
+            _make_movement("t1", "XNYS:AAPL", "BUY", "10", "1000.00"),
+            _make_movement(
+                "t2",
+                "XNYS:AAPL",
+                "CALL_SELL",
+                "0",
+                "150.00",
+                commission_eur="5.00",
+                net_eur="145.00",
+            ),
+            _make_movement(
+                "t3",
+                "XNYS:AAPL",
+                "PUT_BUY",
+                "0",
+                "50.00",
+                commission_eur="2.00",
+                net_eur="52.00",
+            ),
+        ]
+        portfolio_svc, securities_svc = _make_services(movements)
+        svc = HoldingsService(portfolio_svc, securities_svc)
+        result = svc.compute_holdings()
+        h = result["holdings"][0]
+        assert Decimal(h["total_shares"]) == Decimal("10")
+        assert Decimal(h["total_purchase_outflow_eur"]) == Decimal("1000.00")
+        assert Decimal(h["total_sale_proceeds_eur"]) == Decimal("0.00")
+        assert Decimal(h["total_dividends_eur"]) == Decimal("0.00")
+
 
 class TestMultipleAccounts:
     def test_each_account_tracked(self):

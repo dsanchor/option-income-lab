@@ -5,8 +5,8 @@ import Link from "next/link";
 import { FileUp, Plus } from "lucide-react";
 import { getMovements, deleteMovement, listAccounts } from "@/lib/portfolio-api";
 import { getDefaultMovementsDateRange } from "@/lib/dateHelpers";
-import type { MovementsResponse, LedgerMovement, TxnType, WarningType } from "@/types/portfolio";
-import { SALES_TYPE_LABELS } from "@/types/portfolio";
+import type { MovementsResponse, LedgerMovement, OptionTxnType, TxnType, WarningType } from "@/types/portfolio";
+import { OPTION_TXN_TYPES, SALES_TYPE_LABELS } from "@/types/portfolio";
 import type { BrokerAccount } from "@/types/portfolio";
 import type { MovementsFilter } from "@/lib/portfolio-api";
 import MovementDetailDialog from "./MovementDetailDialog";
@@ -21,6 +21,10 @@ const TXN_BADGE: Record<TxnType, string> = {
   DIVIDEND: "bg-accent-blue/15 text-accent-blue",
   TRANSFER_OUT: "bg-accent-orange/15 text-accent-orange",
   TRANSFER_IN: "bg-accent-orange/15 text-accent-orange",
+  CALL_SELL: "bg-accent-purple/15 text-accent-purple",
+  CALL_BUY: "bg-accent-cyan/15 text-accent-cyan",
+  PUT_SELL: "bg-accent-purple/15 text-accent-purple",
+  PUT_BUY: "bg-accent-cyan/15 text-accent-cyan",
 };
 
 const WARNING_SHORT: Record<WarningType, string> = {
@@ -32,11 +36,15 @@ const WARNING_SHORT: Record<WarningType, string> = {
   INVALID_SALES_TYPE: "Invalid sale type",
 };
 
+const MOVEMENT_WARNING_LABELS: Record<string, string> = {
+  OPTION_MOVEMENT_UNLINKED: "Not linked to a position yet",
+};
+
 const PAGE_SIZE = 50;
 // Symbol-search batch: matches the backend cap (le=500 on the movements route).
 const SEARCH_BATCH_SIZE = 500;
 
-type MovementTypeFilter = "" | "BUY" | "SELL" | "DIVIDEND" | "TRANSFER_OUT" | "TRANSFER_IN";
+type MovementTypeFilter = "" | TxnType;
 
 const TYPE_PILLS: Array<{ value: MovementTypeFilter; label: string }> = [
   { value: "", label: "All" },
@@ -45,6 +53,10 @@ const TYPE_PILLS: Array<{ value: MovementTypeFilter; label: string }> = [
   { value: "DIVIDEND", label: "Dividend" },
   { value: "TRANSFER_OUT", label: "Transfer Out" },
   { value: "TRANSFER_IN", label: "Transfer In" },
+  { value: "CALL_SELL", label: "Call Sell" },
+  { value: "CALL_BUY", label: "Call Buy" },
+  { value: "PUT_SELL", label: "Put Sell" },
+  { value: "PUT_BUY", label: "Put Buy" },
 ];
 
 /** Case-insensitive multi-field symbol predicate — parity with SymbolsTable search. */
@@ -211,12 +223,18 @@ export default function PortfolioMovementsTable() {
     }
   }, []);
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
   useEffect(() => {
     const { from, to } = getDefaultMovementsDateRange();
-    load(0, { date_from: from, date_to: to }, "");
-    loadAccounts();
-  }, []);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      void load(0, { date_from: from, date_to: to }, "");
+      void loadAccounts();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load, loadAccounts]);
 
   // Symbol predicate applied over the full fetch (client mode only).
   const filteredAllRows = useMemo<LedgerMovement[] | null>(() => {
@@ -550,8 +568,11 @@ function MovementRow({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showWarnings, setShowWarnings] = useState(false);
   const hasWarnings = m.warnings && m.warnings.length > 0;
+  const hasMovementWarnings = (m.movement_warnings?.length ?? 0) > 0;
   const hasIncomplete = m.cost_basis_status === "INCOMPLETE";
-  const showWarningIcon = hasWarnings || hasIncomplete;
+  const showWarningIcon = hasWarnings || hasIncomplete || hasMovementWarnings;
+  const isOptionTxn = OPTION_TXN_TYPES.includes(m.txn_type as OptionTxnType);
+  const hasUnlinkedOptionWarning = m.movement_warnings?.includes("OPTION_MOVEMENT_UNLINKED");
 
   return (
     <>
@@ -569,6 +590,14 @@ function MovementRow({
               {SALES_TYPE_LABELS.DERECHOS}
             </span>
           )}
+          {hasUnlinkedOptionWarning && (
+            <span
+              className="ml-1 inline-flex items-center rounded-full px-1.5 py-0.5 text-xs bg-accent-orange/15 text-accent-orange"
+              title="This option movement is not linked to a position yet."
+            >
+              ⚠ Not linked
+            </span>
+          )}
         </td>
         <td className="px-4 py-2">
           <div className="font-mono font-semibold text-text">{m.ticker}</div>
@@ -576,7 +605,7 @@ function MovementRow({
         </td>
         <td className="px-4 py-2 text-right text-text-muted">{m.trade_date}</td>
         <td className="px-4 py-2 text-right font-mono text-text">
-          {m.quantity != null && Number(m.quantity) !== 0
+          {!isOptionTxn && m.quantity != null && Number(m.quantity) !== 0
             ? Number(m.quantity).toLocaleString("es-ES", { maximumFractionDigits: 6 })
             : "—"}
         </td>
@@ -639,6 +668,17 @@ function MovementRow({
                   Zero-cost acquisition — cost basis not yet assigned.
                 </div>
               )}
+              {m.movement_warnings?.map((warning, i) => (
+                <div key={`${warning}-${i}`} className="flex items-start gap-2 text-xs text-text-muted">
+                  <span className="text-accent-orange mt-0.5 shrink-0">⚠</span>
+                  <span>
+                    <span className="font-medium text-text mr-1">{MOVEMENT_WARNING_LABELS[warning] ?? warning}:</span>
+                    {warning === "OPTION_MOVEMENT_UNLINKED"
+                      ? "Add option_position_id from the movement detail correction flow when you know the matching position."
+                      : warning}
+                  </span>
+                </div>
+              ))}
               {m.warnings?.map((w, i) => (
                 <div key={i} className="flex items-start gap-2 text-xs text-text-muted">
                   <span className="text-accent-orange mt-0.5 shrink-0">⚠</span>

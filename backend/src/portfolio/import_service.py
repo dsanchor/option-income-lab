@@ -23,12 +23,14 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from .cosmos_portfolio import CosmosPortfolioService, StorageUnavailableError, _SESSION_TTL_SECONDS
+from .models import OPTION_TXN_TYPES
 
 # Alias for readability in the commit loop
 _VoidedMovementError = CosmosPortfolioService.VoidedMovementError
 from .cosmos_securities import CosmosSecuritiesService, _CollisionError, make_security_id
 from .parsers.common import normalize_company_name, row_idempotency_hash
 from .parsers.dividends import parse_dividends
+from .parsers.options import parse_options
 from .parsers.purchases import parse_purchases
 from .parsers.sales import parse_sales
 from .symbol_config_sync import ensure_symbol_config
@@ -71,6 +73,8 @@ def _detect_format(content: bytes) -> str:
                 return "purchases"
             if "fecha venta" in header:
                 return "sales"
+            if "strike" in header and ("expiracion" in header or "expiration" in header):
+                return "options"
             break
     return "dividends"  # fallback
 
@@ -115,6 +119,9 @@ class ImportService:
 
         # Parse content
         parsed_rows = _parse_content(content, fmt)
+        parsed_rows = _resolve_parsed_row_accounts(
+            parsed_rows, self.portfolio_svc, account_id or "_unassigned"
+        )
 
         session_id = f"imp_{uuid4().hex}"
         batch_id = f"batch_{uuid4().hex[:12]}"
@@ -487,7 +494,67 @@ def _parse_content(content: bytes, fmt: str) -> List[Dict[str, Any]]:
         return parse_purchases(content)
     elif fmt == "sales":
         return parse_sales(content)
+    elif fmt == "options":
+        return parse_options(content)
     raise ValueError(f"Unknown format: {fmt}")
+
+
+def _resolve_parsed_row_accounts(
+    parsed_rows: List[Dict[str, Any]],
+    portfolio_svc: CosmosPortfolioService,
+    default_account_id: str,
+) -> List[Dict[str, Any]]:
+    """Resolve optional per-row account labels to account_id values."""
+    def _normalize_account_label(value: Any) -> str:
+        text = str(value or "").strip().replace("_", " ").replace("-", " ")
+        normalized = normalize_company_name(text)
+        if normalized.startswith("acct "):
+            normalized = normalized[5:].strip()
+        return normalized
+
+    rows_with_account = [row for row in parsed_rows if "account_raw" in row]
+    if not rows_with_account:
+        return parsed_rows
+
+    accounts = portfolio_svc.list_accounts()
+    by_id = {str(a.get("account_id", "")): a for a in accounts if a.get("account_id")}
+    by_name = {}
+    for account in accounts:
+        account_name = account.get("name")
+        if account_name:
+            by_name[_normalize_account_label(account_name)] = account
+        account_id = account.get("account_id")
+        if account_id:
+            by_name[_normalize_account_label(account_id)] = account
+
+    resolved_rows: List[Dict[str, Any]] = []
+    for row in parsed_rows:
+        resolved = dict(row)
+        account_raw = str(row.get("account_raw", "") or "").strip()
+        if not account_raw:
+            resolved["account_id"] = default_account_id
+            resolved_rows.append(resolved)
+            continue
+
+        if account_raw == default_account_id:
+            resolved["account_id"] = default_account_id
+            resolved_rows.append(resolved)
+            continue
+
+        if account_raw in by_id:
+            resolved["account_id"] = account_raw
+            resolved_rows.append(resolved)
+            continue
+
+        normalized = _normalize_account_label(account_raw)
+        match = by_name.get(normalized)
+        if match is None:
+            raise ValueError(
+                f"Unknown account {account_raw!r} in import row {row.get('row_index', 0) + 2}"
+            )
+        resolved["account_id"] = str(match.get("account_id"))
+        resolved_rows.append(resolved)
+    return resolved_rows
 
 
 def _build_preview_movements(
@@ -576,6 +643,8 @@ def _build_preview_movements(
             # DERECHOS sales do not affect share count
             if (movement.get("sales_type") or "ACCIONES") == "ACCIONES":
                 holdings_delta[security_id] = holdings_delta.get(security_id, Decimal("0")) - qty
+        elif txn_type in OPTION_TXN_TYPES:
+            pass
 
         if row_warnings:
             movement["warnings"] = row_warnings
@@ -640,7 +709,7 @@ def _row_to_movement(
         source_derechos = None
         sales_type = None
         sales_type_raw = None
-    else:  # sales
+    elif fmt == "sales":
         trade_date = row.get("sale_date", "")
         gross = row.get("total_proceeds", Decimal("0"))
         commission = row.get("commission", Decimal("0"))
@@ -653,12 +722,41 @@ def _row_to_movement(
         source_derechos = None
         sales_type = row.get("sales_type", "ACCIONES")
         sales_type_raw = row.get("sales_type_raw", "")
+    else:  # options
+        trade_date = row.get("trade_date", "")
+        gross = row.get("gross_usd", Decimal("0"))
+        gross_eur = row.get("gross_eur", Decimal("0"))
+        commission = _derive_option_fee_amount(
+            gross_amount=gross,
+            gross_eur=gross_eur,
+            fee_eur=row.get("commission_eur", Decimal("0")),
+        )
+        net_override = row.get("net_eur")
+        wht_source = Decimal("0")
+        wht_dest = Decimal("0")
+        quantity = Decimal("0")
+        txn_type = row.get("txn_type", "")
+        source_derechos = None
+        sales_type = None
+        sales_type_raw = None
+        gross_currency = "USD"
+        fees_currency = "USD"
+        gross_eur_value = gross_eur
+        fees_eur_value = row.get("commission_eur", Decimal("0"))
+        net = None
+
+    if fmt != "options":
+        gross_currency = currency
+        fees_currency = currency
+        gross_eur_value = gross
+        fees_eur_value = commission
 
     # Deterministic movement ID
+    movement_account_id = row.get("account_id") or account_id
     ticker = security_id_to_ticker(security_id)
     date_compact = (trade_date or "").replace("-", "")
     movement_id = (
-        f"txn_{account_id}_{date_compact}_{ticker}_{txn_type}_{row_index:03d}"
+        f"txn_{movement_account_id}_{date_compact}_{ticker}_{txn_type}_{row_index:03d}"
     )
 
     # Idempotency hash
@@ -676,13 +774,13 @@ def _row_to_movement(
         "quantity": str(quantity.normalize()) if quantity is not None else None,
         "gross": {
             "amount": str(gross.normalize()),
-            "currency": currency,
-            "eur_amount": str(gross.normalize()),
+            "currency": gross_currency,
+            "eur_amount": str(gross_eur_value.normalize()),
         },
         "fees": {
             "total": f"{commission:.2f}",
-            "currency": currency,
-            "total_eur": f"{commission:.2f}",
+            "currency": fees_currency,
+            "total_eur": f"{fees_eur_value:.2f}",
         },
         "withholding": {
             "source": {
@@ -693,13 +791,12 @@ def _row_to_movement(
             } if wht_dest > Decimal("0") else None,
         },
         "net": {
-            "amount": str(net.normalize()),
-            "currency": currency,
-            "eur_amount": str(net.normalize()),
+            "amount": str(net.normalize()) if net is not None else "0",
+            "currency": gross_currency,
+            "eur_amount": str(net.normalize()) if net is not None else "0",
         },
         "fx": {"rate": "1.000000000", "rate_source": "ECB"},
-        "account_id": account_id,
-        "cost_basis_status": cost_basis_status,
+        "account_id": movement_account_id,
         "import_source": "csv_import",
         "batch_id": batch_id,
         "session_id": session_id,
@@ -717,7 +814,55 @@ def _row_to_movement(
         movement["sales_type_raw"] = sales_type_raw or ""
         movement["is_rights_sale"] = (sales_type == "DERECHOS")
 
+    if fmt in {"purchases", "dividends", "sales"}:
+        movement["cost_basis_status"] = cost_basis_status
+
+    if fmt == "options":
+        computed_net = _compute_option_net(
+            txn_type=txn_type,
+            gross=movement["gross"],
+            fees=movement["fees"],
+        )
+        if net_override is not None:
+            movement["net"] = {
+                "amount": computed_net["amount"],
+                "currency": movement["gross"]["currency"],
+                "eur_amount": str(net_override.normalize()),
+            }
+        else:
+            movement["net"] = computed_net
+        movement["option_position_id"] = None
+        movement["option_link_kind"] = "OPEN_SELL" if txn_type.endswith("_SELL") else "CLOSE_BUY"
+        movement["option_type"] = "call" if txn_type.startswith("CALL_") else "put"
+        movement["option_strike"] = row.get("option_strike")
+        movement["option_expiration"] = row.get("option_expiration")
+        movement["option_symbol"] = row.get("empresa_raw", "")
+        movement["option_close_date"] = row.get("option_close_date")
+
     return movement
+
+
+def _derive_option_fee_amount(
+    gross_amount: Decimal,
+    gross_eur: Decimal,
+    fee_eur: Decimal,
+) -> Decimal:
+    if gross_eur in (None, Decimal("0")):
+        return fee_eur
+    try:
+        return (fee_eur * gross_amount / gross_eur).quantize(Decimal("0.01"))
+    except Exception:
+        return fee_eur
+
+
+def _compute_option_net(
+    txn_type: str,
+    gross: Dict[str, Any],
+    fees: Dict[str, Any],
+) -> Dict[str, str]:
+    from .cosmos_portfolio import _compute_manual_net
+
+    return _compute_manual_net(txn_type, gross, fees, None)
 
 
 def security_id_to_ticker(security_id: str) -> str:
@@ -767,7 +912,7 @@ def _deserialize_parsed_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     decimal_fields = {
         "gross", "net", "derechos", "wht_source", "wht_destination",
         "price_per_share", "quantity", "total_cost", "commission",
-        "total_proceeds",
+        "total_proceeds", "gross_usd", "gross_eur", "commission_eur", "net_eur",
     }
     result = []
     for row in rows:

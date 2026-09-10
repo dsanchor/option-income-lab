@@ -4,7 +4,7 @@ import type { MovementWarning, SecurityMaster } from "./portfolio";
 
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
-export type ImportFormat = "dividends" | "purchases" | "sales";
+export type ImportFormat = "dividends" | "purchases" | "sales" | "options";
 
 export type SessionState =
   | "CREATED"

@@ -1,4 +1,9 @@
-from src.dividends_economics import build_dividends_economics_report
+from datetime import datetime, timedelta
+
+from src.dividends_economics import (
+    build_dividend_yoc_snapshot,
+    build_dividends_economics_report,
+)
 
 
 def _dividend_movement(
@@ -121,6 +126,33 @@ def _sample_dividend_movements():
             correction_status="VOIDED",
         ),
     ]
+
+
+def _dividend_history(
+    *,
+    ticker: str,
+    start_date: str,
+    count: int,
+    gap_days: int,
+    net_eur: float,
+    account_id: str = "acct-1",
+):
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    movements = []
+    for index in range(count):
+        trade_date = (start + timedelta(days=gap_days * index)).strftime("%Y-%m-%d")
+        movements.append(
+            _dividend_movement(
+                movement_id=f"{ticker.lower()}-{index + 1}",
+                trade_date=trade_date,
+                ticker=ticker,
+                account_id=account_id,
+                gross_eur=net_eur,
+                fees_eur=0,
+                net_eur=net_eur,
+            )
+        )
+    return movements
 
 
 def test_build_dividends_economics_report_aggregates_active_dividends_only():
@@ -634,4 +666,75 @@ def test_empty_movements_returns_empty_valid_report_shape():
         "bucket_field": "trade_date",
         "value_field": "net.eur_amount",
         "yearly_cumulative_scope": "all_years_symbol_account_filtered",
+    }
+
+
+def test_build_dividend_yoc_snapshot_infers_standard_cadences_and_trailing_totals():
+    movements = (
+        _dividend_history(
+            ticker="MONTHLY",
+            start_date="2025-01-15",
+            count=12,
+            gap_days=30,
+            net_eur=10,
+        )
+        + _dividend_history(
+            ticker="QUARTERLY",
+            start_date="2025-02-01",
+            count=4,
+            gap_days=91,
+            net_eur=15,
+        )
+        + _dividend_history(
+            ticker="SEMI",
+            start_date="2025-03-01",
+            count=2,
+            gap_days=182,
+            net_eur=20,
+        )
+        + _dividend_history(
+            ticker="ANNUAL",
+            start_date="2024-04-01",
+            count=2,
+            gap_days=365,
+            net_eur=25,
+        )
+    )
+
+    snapshot = build_dividend_yoc_snapshot(movements)
+
+    assert snapshot["MONTHLY"]["yoc_basis"] == "annualized"
+    assert snapshot["MONTHLY"]["yoc_dividend_frequency"] == 12
+    assert snapshot["MONTHLY"]["yoc_trailing_annual_dividend_net_eur"] == 120.0
+
+    assert snapshot["QUARTERLY"]["yoc_basis"] == "annualized"
+    assert snapshot["QUARTERLY"]["yoc_dividend_frequency"] == 4
+    assert snapshot["QUARTERLY"]["yoc_trailing_annual_dividend_net_eur"] == 60.0
+
+    assert snapshot["SEMI"]["yoc_basis"] == "annualized"
+    assert snapshot["SEMI"]["yoc_dividend_frequency"] == 2
+    assert snapshot["SEMI"]["yoc_trailing_annual_dividend_net_eur"] == 40.0
+
+    assert snapshot["ANNUAL"]["yoc_basis"] == "annualized"
+    assert snapshot["ANNUAL"]["yoc_dividend_frequency"] == 1
+    assert snapshot["ANNUAL"]["yoc_trailing_annual_dividend_net_eur"] == 25.0
+
+
+def test_build_dividend_yoc_snapshot_marks_insufficient_history_without_annualizing():
+    snapshot = build_dividend_yoc_snapshot(
+        _dividend_history(
+            ticker="NEW",
+            start_date="2026-01-10",
+            count=1,
+            gap_days=30,
+            net_eur=12,
+        )
+    )
+
+    assert snapshot["NEW"] == {
+        "event_dates": ["2026-01-10"],
+        "event_net_eur": [12.0],
+        "yoc_basis": "insufficient_history",
+        "yoc_dividend_frequency": None,
+        "yoc_trailing_annual_dividend_net_eur": None,
     }

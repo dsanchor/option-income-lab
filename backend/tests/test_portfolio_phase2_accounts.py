@@ -407,6 +407,15 @@ class TestMovementsTransferFilter:
         resp = c.get("/api/portfolio/movements?txn_type=DIVIDEND")
         assert resp.status_code == 200
 
+    def test_option_filter_200(self, client):
+        c, fake = client
+        _create(c, broker="heytrade", name="Option Filter Acct")
+        _seed_transfer(fake, "acct_heytrade_option_filter_acct", "CALL_SELL", "txn_call_sell_001")
+        resp = c.get("/api/portfolio/movements?txn_type=CALL_SELL")
+        assert resp.status_code == 200
+        ids = [m["id"] for m in resp.json()["movements"]]
+        assert "txn_call_sell_001" in ids
+
     def test_invalid_txn_type_still_400(self, client):
         c, _ = client
         resp = c.get("/api/portfolio/movements?txn_type=UNKNOWN")

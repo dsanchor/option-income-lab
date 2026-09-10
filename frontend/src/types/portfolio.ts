@@ -2,9 +2,18 @@
 
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
-export type TxnType = "BUY" | "SELL" | "DIVIDEND" | "TRANSFER_OUT" | "TRANSFER_IN";
+export type OptionTxnType = "CALL_SELL" | "CALL_BUY" | "PUT_SELL" | "PUT_BUY";
+export type TxnType =
+  | "BUY"
+  | "SELL"
+  | "DIVIDEND"
+  | "TRANSFER_OUT"
+  | "TRANSFER_IN"
+  | OptionTxnType;
 export type CostBasisStatus = "COMPLETE" | "INCOMPLETE" | "ZERO_COST";
 export type CorrectionStatus = "ACTIVE" | "SUPERSEDED" | "VOIDED";
+export type OptionLinkKind = "OPEN_SELL" | "CLOSE_BUY" | "ASSIGNMENT_STOCK";
+export type OptionContractType = "call" | "put";
 export type WarningType =
   | "NEGATIVE_INVENTORY"
   | "RIGHTS_AMOUNT"
@@ -22,6 +31,13 @@ export const SALES_TYPE_LABELS: Record<"ACCIONES" | "DERECHOS", string> = {
   ACCIONES: "Stocks",
   DERECHOS: "Rights",
 };
+
+export const OPTION_TXN_TYPES: readonly OptionTxnType[] = [
+  "CALL_SELL",
+  "CALL_BUY",
+  "PUT_SELL",
+  "PUT_BUY",
+];
 
 // Amendment H: Corporate action group types (Phase H-α — linked ledger legs)
 export type CaLegType = "CASH_DIVIDEND" | "RIGHTS_SOLD" | "SHARE_ACQUISITION" | "CASH_TOP_UP" | "CONSOLIDATION_OUT" | "CONSOLIDATION_IN" | "FRACTIONAL_CASH_OUT";
@@ -163,6 +179,16 @@ export interface LedgerMovement {
   ca_leg_type?: CaLegType;
   ca_event_type?: CaEventType;
   ca_group_seq?: number;
+
+  // Option movement linkage / metadata
+  option_position_id?: string;
+  option_link_kind?: OptionLinkKind;
+  option_type?: OptionContractType;
+  option_strike?: number;
+  option_expiration?: string;
+  option_symbol?: string;
+  option_close_date?: string;
+  movement_warnings?: string[];
 }
 
 export interface MovementsResponse {
@@ -289,19 +315,26 @@ export interface WithholdingInput {
   destination?: WithholdingLegInput | null;
 }
 
-/** Payload for POST /api/portfolio/movements (BUY / SELL / DIVIDEND only). */
+/** Payload for POST /api/portfolio/movements (manual stock, dividend, or option movement). */
 export interface ManualMovementRequest {
-  txn_type: "BUY" | "SELL" | "DIVIDEND";
+  txn_type: "BUY" | "SELL" | "DIVIDEND" | OptionTxnType;
   security_id: string;
   trade_date: string;
   account_id?: string;           // defaults to "_unassigned"
-  quantity?: string;             // required for BUY/SELL; 0 OK for DIVIDEND
+  quantity?: string;             // required for BUY/SELL; must be "0" for option movements
   gross: AmountInput;
   fees?: FeesInput;
   withholding?: WithholdingInput | null;
   fx?: { rate: string; rate_source: FxRateSource };
   sales_type?: "ACCIONES" | "DERECHOS"; // SELL only; default ACCIONES
   cost_basis_status?: CostBasisStatus;  // BUY only
+  option_position_id?: string;
+  option_link_kind?: OptionLinkKind;
+  option_type?: OptionContractType;
+  option_strike?: number;
+  option_expiration?: string;
+  option_symbol?: string;
+  option_close_date?: string;
   notes?: string;
 }
 
@@ -342,6 +375,13 @@ export interface MovementCorrectionRequest {
   fx?: { rate: string; rate_source: FxRateSource };
   sales_type?: "ACCIONES" | "DERECHOS";
   cost_basis_status?: CostBasisStatus;     // BUY only
+  option_position_id?: string;
+  option_link_kind?: OptionLinkKind;
+  option_type?: OptionContractType;
+  option_strike?: number;
+  option_expiration?: string;
+  option_symbol?: string;
+  option_close_date?: string;
   notes?: string;
 }
 

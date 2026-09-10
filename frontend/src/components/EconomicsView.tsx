@@ -1,10 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import EconomicsTabs from "@/components/EconomicsTabs";
-import MultiSelect from "@/components/MultiSelect";
-import StatCard from "@/components/StatCard";
-import Reveal from "@/components/Reveal";
 import {
   Bar,
   BarChart,
@@ -19,8 +15,21 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import AccountBadge from "@/components/AccountBadge";
+import EconomicsTabs from "@/components/EconomicsTabs";
+import MultiSelect from "@/components/MultiSelect";
+import {
+  CoverageStatusBadge,
+  WarningBadge,
+} from "@/components/OptionLinkageBadges";
+import Reveal from "@/components/Reveal";
+import StatCard from "@/components/StatCard";
+import { getAccountName } from "@/lib/accountDisplay";
+import { listAccounts } from "@/lib/portfolio-api";
+import type { BrokerAccount } from "@/types/portfolio";
 import type {
   EconomicsBySymbolRow,
+  EconomicsCoverage,
   EconomicsMonthlyRow,
   EconomicsPosition,
   EconomicsReport,
@@ -56,16 +65,24 @@ const STATUS_PILLS = [
   { value: "rolled", label: "Rolled" },
 ];
 
-const currency = (v: number | null | undefined) =>
+const usd = (value: number | null | undefined) =>
   new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(Number(v || 0));
+  }).format(Number(value || 0));
 
-const pct = (v: number | null | undefined) => `${Number(v || 0).toFixed(2)}%`;
-const netColor = (v: number) => (v >= 0 ? "text-accent-green" : "text-accent-red");
+const eur = (value: number | null | undefined) =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "EUR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0));
+
+const pct = (value: number | null | undefined) => `${Number(value || 0).toFixed(2)}%`;
+const netColor = (value: number) => (value >= 0 ? "text-accent-green" : "text-accent-red");
 
 function Pills({
   options,
@@ -74,47 +91,127 @@ function Pills({
 }: {
   options: { value: string; label: string }[];
   value: string;
-  onChange: (v: string) => void;
+  onChange: (next: string) => void;
 }) {
   return (
     <div className="flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1">
-      {options.map((o) => (
+      {options.map((option) => (
         <button
-          key={o.value}
+          key={option.value}
           type="button"
-          onClick={() => onChange(o.value)}
+          onClick={() => onChange(option.value)}
           className={`rounded-[var(--radius-pill)] px-3 py-1 text-xs transition ${
-            value === o.value ? "bg-accent-blue text-white" : "text-text-muted hover:text-text"
+            value === option.value ? "bg-accent-blue text-white" : "text-text-muted hover:text-text"
           }`}
         >
-          {o.label}
+          {option.label}
         </button>
       ))}
     </div>
   );
 }
 
+function buildAccountOptions(accounts: BrokerAccount[], selectedAccountIds: string[]) {
+  const seen = new Set<string>();
+  const options = [...accounts]
+    .sort((left, right) => getAccountName(left.account_id, accounts).localeCompare(getAccountName(right.account_id, accounts)))
+    .map((account) => ({
+      value: account.account_id,
+      label: getAccountName(account.account_id, accounts),
+    }))
+    .filter((option) => {
+      if (seen.has(option.value)) return false;
+      seen.add(option.value);
+      return true;
+    });
+
+  for (const accountId of selectedAccountIds) {
+    if (!seen.has(accountId)) {
+      options.push({ value: accountId, label: accountId });
+      seen.add(accountId);
+    }
+  }
+
+  return options;
+}
+
+function readInitialOptionFilters() {
+  const fallbackYear = String(new Date().getFullYear());
+  if (typeof window === "undefined") {
+    return {
+      year: fallbackYear,
+      months: [] as string[],
+      symbols: [] as string[],
+      accountIds: [] as string[],
+      type: "",
+      status: "",
+    };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  return {
+    year: params.get("year") ?? fallbackYear,
+    months: params.get("month") ? params.get("month")!.split(",").filter(Boolean) : [],
+    symbols: params.get("symbol") ? params.get("symbol")!.split(",").filter(Boolean) : [],
+    accountIds: params.get("account_id") ? params.get("account_id")!.split(",").filter(Boolean) : [],
+    type: params.get("type") ?? "",
+    status: params.get("status") ?? "",
+  };
+}
+
 function SummaryRow({ summary }: { summary: EconomicsSummary }) {
-  const net = summary.net_income ?? 0;
-  const roc = summary.avg_roc_annualized ?? summary.avg_roc_pct ?? 0;
   const cards = [
-    { label: "Total Premium Collected", value: summary.total_premium ?? 0, prefix: "$", suffix: "", decimals: 2, tone: "green" as const },
-    { label: "Total Buyback Costs", value: summary.total_buyback ?? 0, prefix: "$", suffix: "", decimals: 2, tone: "orange" as const },
-    { label: "Net Income", value: net, prefix: "$", suffix: "", decimals: 2, tone: (net >= 0 ? "green" : "red") as "green" | "red" },
-    { label: "Avg RoC% (Annualized)", value: roc, prefix: "", suffix: "%", decimals: 2, tone: "blue" as const },
-    { label: "Win Rate", value: summary.win_rate ?? 0, prefix: "", suffix: "%", decimals: 2, tone: "purple" as const },
+    {
+      label: "Premium Sold (USD)",
+      value: summary.total_premium_usd ?? 0,
+      prefix: "$",
+      decimals: 2,
+      tone: "green" as const,
+    },
+    {
+      label: "Buybacks (USD)",
+      value: summary.total_buyback_usd ?? 0,
+      prefix: "$",
+      decimals: 2,
+      tone: "orange" as const,
+    },
+    {
+      label: "Net Cash Flow (EUR)",
+      value: summary.net_income_eur ?? 0,
+      prefix: "€",
+      decimals: 2,
+      tone: ((summary.net_income_eur ?? 0) >= 0 ? "green" : "red") as "green" | "red",
+    },
+    {
+      label: "Avg RoC% (USD basis)",
+      value: summary.avg_roc_pct ?? 0,
+      suffix: "%",
+      decimals: 2,
+      tone: "blue" as const,
+      hint: `Annualized avg: ${pct(summary.avg_roc_annualized)}`,
+    },
+    {
+      label: "Win Rate",
+      value: summary.win_rate ?? 0,
+      suffix: "%",
+      decimals: 2,
+      tone: "purple" as const,
+      hint: `${summary.total_positions ?? 0} positions in scope`,
+    },
   ];
+
   return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-      {cards.map((c, i) => (
-        <Reveal key={c.label} index={i} className="h-full">
+    <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+      {cards.map((card, index) => (
+        <Reveal key={card.label} index={index} className="h-full">
           <StatCard
-            label={c.label}
-            value={c.value}
-            prefix={c.prefix}
-            suffix={c.suffix}
-            decimals={c.decimals}
-            tone={c.tone}
+            label={card.label}
+            value={card.value}
+            prefix={card.prefix}
+            suffix={card.suffix}
+            decimals={card.decimals}
+            tone={card.tone}
+            hint={card.hint}
           />
         </Reveal>
       ))}
@@ -122,9 +219,35 @@ function SummaryRow({ summary }: { summary: EconomicsSummary }) {
   );
 }
 
-/** Dependency-free stacked bar chart: monthly calls net + puts net. */
-const CALLS_COLOR = "#00c493";
-const PUTS_COLOR = "#ff9416";
+function CoverageBanner({ coverage, hasAccountFilter }: { coverage: EconomicsCoverage; hasAccountFilter: boolean }) {
+  const ratio = `${coverage.linked_positions} / ${coverage.total_positions}`;
+  const details = [
+    `${coverage.positions_missing_opening_sell} positions missing opening sells`,
+    `${coverage.positions_missing_closing_buy} positions missing buybacks`,
+    `${coverage.positions_missing_assignment_stock} assigned positions missing stock assignment movements`,
+  ];
+
+  if (coverage.positions_with_unresolved_security > 0) {
+    details.push(`${coverage.positions_with_unresolved_security} positions have unresolved security mapping`);
+  }
+  if (hasAccountFilter && coverage.excluded_positions_linked_only_outside_account_filter > 0) {
+    details.push(
+      `${coverage.excluded_positions_linked_only_outside_account_filter} positions only link outside the selected account filter`,
+    );
+  }
+
+  return (
+    <div className="rounded-[var(--radius)] border border-accent-orange/30 bg-accent-orange/10 px-4 py-3 text-sm text-text">
+      <div className="font-medium text-accent-orange">Coverage: {ratio} positions linked for current filters.</div>
+      <div className="mt-1 text-text-muted">
+        EUR totals reflect linked positions only. {details.join(". ")}.
+      </div>
+    </div>
+  );
+}
+
+const CALLS_COLOR = "#a78bfa";
+const PUTS_COLOR = "#22d3ee";
 const NET_COLOR = "#5b61ff";
 
 function ChartTooltip({
@@ -140,11 +263,11 @@ function ChartTooltip({
   return (
     <div className="rounded-[10px] border border-border bg-bg-card px-3 py-2 text-xs shadow-lg">
       {label && <div className="mb-1 font-medium text-text">{label}</div>}
-      {payload.map((p, i) => (
-        <div key={i} className="flex items-center gap-2">
-          <span className="inline-block h-2 w-2 rounded-sm" style={{ background: p.color }} />
-          <span className="text-text-muted">{p.name}</span>
-          <span className="ml-auto font-mono text-text">{currency(Number(p.value ?? 0))}</span>
+      {payload.map((entry, index) => (
+        <div key={`${entry.name}-${index}`} className="flex items-center gap-2">
+          <span className="inline-block h-2 w-2 rounded-sm" style={{ background: entry.color }} />
+          <span className="text-text-muted">{entry.name}</span>
+          <span className="ml-auto font-mono text-text">{eur(Number(entry.value ?? 0))}</span>
         </div>
       ))}
     </div>
@@ -153,11 +276,12 @@ function ChartTooltip({
 
 function MonthlyNetChart({ rows }: { rows: EconomicsMonthlyRow[] }) {
   if (!rows.length) return <p className="text-sm text-text-muted">No data.</p>;
-  const chartData = rows.map((r) => ({
-    label: r.label,
-    calls_net: r.calls_net,
-    puts_net: r.puts_net,
-    net: r.calls_net + r.puts_net,
+
+  const chartData = rows.map((row) => ({
+    label: row.label,
+    calls_net_income_eur: row.calls_net_income_eur,
+    puts_net_income_eur: row.puts_net_income_eur,
+    net_income_eur: row.net_income_eur,
   }));
 
   return (
@@ -179,33 +303,28 @@ function MonthlyNetChart({ rows }: { rows: EconomicsMonthlyRow[] }) {
             tick={{ fill: "#8d969e", fontSize: 10 }}
             tickLine={false}
             axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
-            tickFormatter={(v) => currency(Number(v))}
-            width={56}
+            tickFormatter={(value) => eur(Number(value))}
+            width={72}
           />
           <ReferenceLine y={0} stroke="rgba(148,163,184,0.35)" />
           <Tooltip cursor={{ fill: "rgba(148,163,184,0.08)" }} content={<ChartTooltip />} />
-          <Legend
-            wrapperStyle={{ fontSize: 11, color: "#8d969e" }}
-            iconType="circle"
-            iconSize={8}
-          />
-          <Bar dataKey="calls_net" name="Calls Net" fill={CALLS_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
-          <Bar dataKey="puts_net" name="Puts Net" fill={PUTS_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
-          <Bar dataKey="net" name="Net" fill={NET_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+          <Legend wrapperStyle={{ fontSize: 11, color: "#8d969e" }} iconType="circle" iconSize={8} />
+          <Bar dataKey="calls_net_income_eur" name="Calls Net" fill={CALLS_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+          <Bar dataKey="puts_net_income_eur" name="Puts Net" fill={PUTS_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+          <Bar dataKey="net_income_eur" name="Net" fill={NET_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
         </BarChart>
       </ResponsiveContainer>
     </div>
   );
 }
 
-/** Recharts donut: calls vs puts net (absolute weights). */
 function TypeDoughnut({ callsNet, putsNet }: { callsNet: number; putsNet: number }) {
-  const a = Math.abs(callsNet);
-  const b = Math.abs(putsNet);
-  const total = a + b;
+  const callsAbs = Math.abs(callsNet);
+  const putsAbs = Math.abs(putsNet);
+  const total = callsAbs + putsAbs;
   const pieData = [
-    { name: "Calls", value: a, raw: callsNet, color: CALLS_COLOR },
-    { name: "Puts", value: b, raw: putsNet, color: PUTS_COLOR },
+    { name: "Calls", value: callsAbs, raw: callsNet, color: CALLS_COLOR },
+    { name: "Puts", value: putsAbs, raw: putsNet, color: PUTS_COLOR },
   ];
 
   return (
@@ -224,21 +343,21 @@ function TypeDoughnut({ callsNet, putsNet }: { callsNet: number; putsNet: number
             stroke="none"
             isAnimationActive={false}
           >
-            {(total > 0 ? pieData : [{ color: "var(--color-border)" }]).map((d, i) => (
-              <Cell key={i} fill={d.color} />
+            {(total > 0 ? pieData : [{ color: "var(--color-border)" }]).map((datum, index) => (
+              <Cell key={index} fill={datum.color} />
             ))}
           </Pie>
           {total > 0 && (
             <Tooltip
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
-                const p = payload[0].payload as { name: string; raw: number; color: string };
+                const point = payload[0].payload as { name: string; raw: number; color: string };
                 return (
                   <div className="rounded-[10px] border border-border bg-bg-card px-3 py-2 text-xs shadow-lg">
                     <span className="flex items-center gap-2">
-                      <span className="inline-block h-2 w-2 rounded-sm" style={{ background: p.color }} />
-                      <span className="text-text-muted">{p.name}</span>
-                      <span className="ml-auto font-mono text-text">{currency(p.raw)}</span>
+                      <span className="inline-block h-2 w-2 rounded-sm" style={{ background: point.color }} />
+                      <span className="text-text-muted">{point.name}</span>
+                      <span className="ml-auto font-mono text-text">{eur(point.raw)}</span>
                     </span>
                   </div>
                 );
@@ -249,36 +368,45 @@ function TypeDoughnut({ callsNet, putsNet }: { callsNet: number; putsNet: number
         </PieChart>
       </ResponsiveContainer>
       <div className="flex justify-center gap-4 text-xs text-text-muted">
-        <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm" style={{ background: CALLS_COLOR }} /> Calls {currency(callsNet)}</span>
-        <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm" style={{ background: PUTS_COLOR }} /> Puts {currency(putsNet)}</span>
+        <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm" style={{ background: CALLS_COLOR }} /> Calls {eur(callsNet)}</span>
+        <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-sm" style={{ background: PUTS_COLOR }} /> Puts {eur(putsNet)}</span>
       </div>
     </div>
   );
 }
 
-const POSITION_COLS: { key: EconomicsSortKey; label: string; num?: boolean }[] = [
-  { key: "symbol", label: "Symbol" },
-  { key: "type", label: "Type" },
-  { key: "strike", label: "Strike", num: true },
-  { key: "expiration", label: "Expiration" },
-  { key: "premium", label: "Premium", num: true },
-  { key: "buyback_cost", label: "Buyback", num: true },
-  { key: "net", label: "Net", num: true },
-  { key: "roc_pct", label: "RoC%", num: true },
-  { key: "roc_annualized", label: "RoC% Ann.", num: true },
-  { key: "days_held", label: "Days Held", num: true },
-  { key: "status", label: "Status" },
-  { key: "opened_at", label: "Opened" },
+type PositionColumn = {
+  label: string;
+  sortKey?: EconomicsSortKey;
+  num?: boolean;
+};
+
+const POSITION_COLS: PositionColumn[] = [
+  { label: "Symbol", sortKey: "symbol" },
+  { label: "Type", sortKey: "type" },
+  { label: "Strike", sortKey: "strike", num: true },
+  { label: "Expiration", sortKey: "expiration" },
+  { label: "Premium Sold (USD)", sortKey: "premium_usd", num: true },
+  { label: "Buybacks (USD)", sortKey: "buyback_usd", num: true },
+  { label: "Net Cash Flow (EUR)", sortKey: "net_income_eur", num: true },
+  { label: "RoC%", sortKey: "roc_pct", num: true },
+  { label: "RoC% Ann.", sortKey: "roc_annualized", num: true },
+  { label: "Days Held", sortKey: "days_held", num: true },
+  { label: "Status", sortKey: "status" },
+  { label: "Accounts" },
+  { label: "Coverage" },
+  { label: "Warnings" },
+  { label: "Opened", sortKey: "opened_at" },
 ];
 
-function compareValues(a: unknown, b: unknown): number {
-  const l = a ?? "";
-  const r = b ?? "";
-  if (typeof l === "number" && typeof r === "number") return l - r;
-  const ld = Date.parse(String(l));
-  const rd = Date.parse(String(r));
-  if (!Number.isNaN(ld) && !Number.isNaN(rd)) return ld - rd;
-  return String(l).localeCompare(String(r));
+function compareValues(left: unknown, right: unknown): number {
+  const a = left ?? "";
+  const b = right ?? "";
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  const aDate = Date.parse(String(a));
+  const bDate = Date.parse(String(b));
+  if (!Number.isNaN(aDate) && !Number.isNaN(bDate)) return aDate - bDate;
+  return String(a).localeCompare(String(b));
 }
 
 function statusBadgeClass(status: string): string {
@@ -287,19 +415,43 @@ function statusBadgeClass(status: string): string {
   return "border-accent-green/40 bg-accent-green/10 text-accent-green";
 }
 
-function PositionsDetail({ rows }: { rows: EconomicsPosition[] }) {
+function renderLinkedAccounts(accountsForRow: string[], accounts: BrokerAccount[]) {
+  if (accountsForRow.length === 0) return <span className="text-text-muted">—</span>;
+
+  const visible = accountsForRow.slice(0, 2);
+  const hiddenCount = accountsForRow.length - visible.length;
+  const tooltip = accountsForRow.map((accountId) => getAccountName(accountId, accounts)).join("\n");
+
+  return (
+    <div className="flex flex-wrap justify-end gap-1" title={tooltip}>
+      {visible.map((accountId) => (
+        <AccountBadge key={accountId} accountId={accountId} accounts={accounts} />
+      ))}
+      {hiddenCount > 0 && (
+        <span className="inline-block rounded-full border border-border bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+          +{hiddenCount}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function PositionsDetail({ rows, accounts }: { rows: EconomicsPosition[]; accounts: BrokerAccount[] }) {
   const [sortKey, setSortKey] = useState<EconomicsSortKey>("opened_at");
   const [dir, setDir] = useState<"asc" | "desc">("desc");
 
-  const sorted = useMemo(() => {
-    return [...rows].sort((a, b) => {
-      const c = compareValues(a[sortKey], b[sortKey]);
-      return dir === "asc" ? c : -c;
-    });
-  }, [rows, sortKey, dir]);
+  const sorted = useMemo(
+    () =>
+      [...rows].sort((left, right) => {
+        const comparison = compareValues(left[sortKey], right[sortKey]);
+        return dir === "asc" ? comparison : -comparison;
+      }),
+    [dir, rows, sortKey],
+  );
 
-  function onSort(key: EconomicsSortKey) {
-    if (key === sortKey) setDir((d) => (d === "asc" ? "desc" : "asc"));
+  function onSort(key?: EconomicsSortKey) {
+    if (!key) return;
+    if (key === sortKey) setDir((current) => (current === "asc" ? "desc" : "asc"));
     else {
       setSortKey(key);
       setDir(key === "opened_at" ? "desc" : "asc");
@@ -315,17 +467,19 @@ function PositionsDetail({ rows }: { rows: EconomicsPosition[] }) {
         </span>
       </summary>
       <div className="overflow-x-auto border-t border-border">
-        <table className="w-full min-w-[960px] text-sm">
+        <table className="w-full min-w-[1380px] text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
-              {POSITION_COLS.map((c) => (
+              {POSITION_COLS.map((column) => (
                 <th
-                  key={c.key}
-                  onClick={() => onSort(c.key)}
-                  className={`cursor-pointer select-none px-3 py-2 font-medium ${c.num ? "text-right" : ""}`}
+                  key={column.label}
+                  onClick={() => onSort(column.sortKey)}
+                  className={`${column.sortKey ? "cursor-pointer select-none hover:text-text" : ""} px-3 py-2 font-medium ${column.num ? "text-right" : ""}`}
                 >
-                  {c.label}
-                  <span className="ml-1">{sortKey === c.key ? (dir === "asc" ? "▲" : "▼") : ""}</span>
+                  {column.label}
+                  {column.sortKey && (
+                    <span className="ml-1">{sortKey === column.sortKey ? (dir === "asc" ? "▲" : "▼") : ""}</span>
+                  )}
                 </th>
               ))}
             </tr>
@@ -338,40 +492,187 @@ function PositionsDetail({ rows }: { rows: EconomicsPosition[] }) {
                 </td>
               </tr>
             )}
-            {sorted.map((p, i) => (
-              <tr key={p.position_id ?? i} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
-                <td className="px-3 py-2 font-semibold">{p.symbol}</td>
-                <td className="px-3 py-2">
-                  <span
-                    className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${
-                      p.type === "call"
-                        ? "border-accent-green/40 bg-accent-green/10 text-accent-green"
-                        : "border-accent-blue/40 bg-accent-blue/10 text-accent-blue"
-                    }`}
-                  >
-                    {p.type.toUpperCase()}
-                  </span>
+            {sorted.map((position, index) => {
+              const warnings = position.warnings?.filter(Boolean) ?? [];
+              return (
+                <tr key={position.position_id ?? index} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
+                  <td className="px-3 py-2 font-semibold">{position.symbol}</td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${
+                        position.type === "call"
+                          ? "border-accent-green/40 bg-accent-green/10 text-accent-green"
+                          : "border-accent-blue/40 bg-accent-blue/10 text-accent-blue"
+                      }`}
+                    >
+                      {position.type.toUpperCase()}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono">{position.strike != null ? usd(position.strike) : "—"}</td>
+                  <td className="px-3 py-2">{position.expiration || "—"}</td>
+                  <td className="px-3 py-2 text-right font-mono">{usd(position.premium_usd)}</td>
+                  <td className="px-3 py-2 text-right font-mono">{usd(position.buyback_usd)}</td>
+                  <td className={`px-3 py-2 text-right font-mono ${netColor(position.net_income_eur)}`}>{eur(position.net_income_eur)}</td>
+                  <td className="px-3 py-2 text-right font-mono">{position.roc_pct != null ? pct(position.roc_pct) : "—"}</td>
+                  <td className="px-3 py-2 text-right font-mono">{position.roc_annualized != null ? pct(position.roc_annualized) : "—"}</td>
+                  <td className="px-3 py-2 text-right font-mono">{position.days_held ?? "—"}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-wrap gap-1">
+                      <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${statusBadgeClass(position.status)}`}>
+                        {position.status}
+                      </span>
+                      {position.close_reason && position.status === "closed" && (
+                        <span className="inline-block rounded-[var(--radius-pill)] border border-border bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+                          {position.close_reason}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-right">{renderLinkedAccounts(position.linked_accounts ?? [], accounts)}</td>
+                  <td className="px-3 py-2"><CoverageStatusBadge status={position.coverage_status} /></td>
+                  <td className="px-3 py-2"><WarningBadge warnings={warnings} /></td>
+                  <td className="px-3 py-2 font-mono">{(position.opened_at || "").slice(0, 10) || "—"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+
+function MonthlySection({ rows }: { rows: EconomicsMonthlyRow[] }) {
+  return (
+    <div className="surface overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3">
+        <h2 className="text-base font-semibold">Monthly P&amp;L</h2>
+        <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+          {rows.length} months
+        </span>
+      </div>
+      <div className="overflow-x-auto border-t border-border">
+        <table className="w-full min-w-[760px] text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
+              <th className="px-3 py-2 font-medium">Month</th>
+              <th className="px-3 py-2 text-right font-medium">Premium Sold (USD)</th>
+              <th className="px-3 py-2 text-right font-medium">Buybacks (USD)</th>
+              <th className="px-3 py-2 text-right font-medium">Net Cash Flow (EUR)</th>
+              <th className="px-3 py-2 text-right font-medium"># Positions</th>
+              <th className="px-3 py-2 text-right font-medium">Avg RoC% (Ann.)</th>
+              <th className="px-3 py-2 text-right font-medium">Calls</th>
+              <th className="px-3 py-2 text-right font-medium">Puts</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={8} className="px-3 py-6 text-center text-text-muted">
+                  No positions match the selected filters.
                 </td>
-                <td className="px-3 py-2 text-right font-mono">{p.strike != null ? currency(p.strike) : "—"}</td>
-                <td className="px-3 py-2">{p.expiration || "—"}</td>
-                <td className="px-3 py-2 text-right font-mono">{currency(p.premium)}</td>
-                <td className="px-3 py-2 text-right font-mono">{p.buyback_cost != null ? currency(p.buyback_cost) : "—"}</td>
-                <td className={`px-3 py-2 text-right font-mono ${netColor(p.net)}`}>{currency(p.net)}</td>
-                <td className="px-3 py-2 text-right font-mono">{p.roc_pct != null ? pct(p.roc_pct) : "—"}</td>
-                <td className="px-3 py-2 text-right font-mono">{p.roc_annualized != null ? pct(p.roc_annualized) : "—"}</td>
-                <td className="px-3 py-2 text-right font-mono">{p.days_held ?? "—"}</td>
-                <td className="px-3 py-2">
-                  <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${statusBadgeClass(p.status)}`}>
-                    {p.status}
-                  </span>
-                </td>
-                <td className="px-3 py-2 font-mono">{(p.opened_at || "").slice(0, 10) || "—"}</td>
+              </tr>
+            )}
+            {rows.map((row) => (
+              <tr key={`${row.year}-${row.month}`} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
+                <td className="px-3 py-2">{row.label}</td>
+                <td className="px-3 py-2 text-right font-mono">{usd(row.total_premium_usd)}</td>
+                <td className="px-3 py-2 text-right font-mono">{usd(row.total_buyback_usd)}</td>
+                <td className={`px-3 py-2 text-right font-mono ${netColor(row.net_income_eur)}`}>{eur(row.net_income_eur)}</td>
+                <td className="px-3 py-2 text-right font-mono">{row.positions_count}</td>
+                <td className="px-3 py-2 text-right font-mono">{pct(row.avg_roc_annualized ?? row.avg_roc_pct)}</td>
+                <td className="px-3 py-2 text-right font-mono">{row.calls_count}</td>
+                <td className="px-3 py-2 text-right font-mono">{row.puts_count}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-    </details>
+    </div>
+  );
+}
+
+type BySymbolKey = keyof Pick<
+  EconomicsBySymbolRow,
+  "symbol" | "total_premium_usd" | "total_buyback_usd" | "net_income_eur" | "positions_count" | "avg_roc_annualized"
+>;
+
+const BY_SYMBOL_COLS: { key: BySymbolKey; label: string; num?: boolean }[] = [
+  { key: "symbol", label: "Symbol" },
+  { key: "total_premium_usd", label: "Premium Sold (USD)", num: true },
+  { key: "total_buyback_usd", label: "Buybacks (USD)", num: true },
+  { key: "net_income_eur", label: "Net Cash Flow (EUR)", num: true },
+  { key: "positions_count", label: "# Positions", num: true },
+  { key: "avg_roc_annualized", label: "Avg RoC% (Ann.)", num: true },
+];
+
+function BySymbolSection({ rows }: { rows: EconomicsBySymbolRow[] }) {
+  const [sortKey, setSortKey] = useState<BySymbolKey>("net_income_eur");
+  const [dir, setDir] = useState<"asc" | "desc">("desc");
+
+  const sorted = useMemo(
+    () =>
+      [...rows].sort((left, right) => {
+        const comparison = compareValues(left[sortKey], right[sortKey]);
+        return dir === "asc" ? comparison : -comparison;
+      }),
+    [dir, rows, sortKey],
+  );
+
+  function onSort(key: BySymbolKey) {
+    if (key === sortKey) setDir((current) => (current === "asc" ? "desc" : "asc"));
+    else {
+      setSortKey(key);
+      setDir(key === "symbol" ? "asc" : "desc");
+    }
+  }
+
+  return (
+    <div className="surface overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3">
+        <h2 className="text-base font-semibold">By Symbol</h2>
+        <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+          {rows.length} symbols
+        </span>
+      </div>
+      <div className="overflow-x-auto border-t border-border">
+        <table className="w-full min-w-[700px] text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
+              {BY_SYMBOL_COLS.map((column) => (
+                <th
+                  key={column.key}
+                  onClick={() => onSort(column.key)}
+                  className={`cursor-pointer select-none px-3 py-2 font-medium hover:text-text ${column.num ? "text-right" : ""}`}
+                >
+                  {column.label}
+                  <span className="ml-1">{sortKey === column.key ? (dir === "asc" ? "▲" : "▼") : ""}</span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-3 py-6 text-center text-text-muted">
+                  No symbol-level economics available.
+                </td>
+              </tr>
+            )}
+            {sorted.map((row) => (
+              <tr key={row.symbol} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
+                <td className="px-3 py-2 font-semibold">{row.symbol}</td>
+                <td className="px-3 py-2 text-right font-mono">{usd(row.total_premium_usd)}</td>
+                <td className="px-3 py-2 text-right font-mono">{usd(row.total_buyback_usd)}</td>
+                <td className={`px-3 py-2 text-right font-mono ${netColor(row.net_income_eur)}`}>{eur(row.net_income_eur)}</td>
+                <td className="px-3 py-2 text-right font-mono">{row.positions_count}</td>
+                <td className="px-3 py-2 text-right font-mono">{pct(row.avg_roc_annualized ?? row.avg_roc_pct)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -384,65 +685,68 @@ export default function EconomicsView({
   title?: string;
   description?: string;
 }) {
-  const [year, setYear] = useState<string>("");
-  const [months, setMonths] = useState<string[]>([]);
-  const [symbols, setSymbols] = useState<string[]>([]);
-  const [type, setType] = useState<string>("");
-  const [status, setStatus] = useState<string>("");
+  const [initialFilters] = useState(readInitialOptionFilters);
+  const [year, setYear] = useState<string>(initialFilters.year);
+  const [months, setMonths] = useState<string[]>(initialFilters.months);
+  const [symbols, setSymbols] = useState<string[]>(initialFilters.symbols);
+  const [accountIds, setAccountIds] = useState<string[]>(initialFilters.accountIds);
+  const [type, setType] = useState<string>(initialFilters.type);
+  const [status, setStatus] = useState<string>(initialFilters.status);
+  const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
   const [data, setData] = useState<EconomicsReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [initialized, setInitialized] = useState(false);
 
-  // Initialize from URL once on mount.
   useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    setYear(p.get("year") ?? String(new Date().getFullYear()));
-    setType(p.get("type") ?? "");
-    setStatus(p.get("status") ?? "");
-    setMonths(p.get("month") ? p.get("month")!.split(",").filter(Boolean) : []);
-    setSymbols(p.get("symbol") ? p.get("symbol")!.split(",").filter(Boolean) : []);
-    setInitialized(true);
+    listAccounts()
+      .then((response) => setAccounts(response.accounts ?? []))
+      .catch(() => setAccounts([]));
   }, []);
 
   const fetchData = useCallback(async () => {
     setError(null);
+    setLoading(true);
+
     const params = new URLSearchParams();
     if (year) params.set("year", year);
     if (months.length) params.set("month", months.join(","));
     if (symbols.length) params.set("symbol", symbols.join(","));
+    if (accountIds.length) params.set("account_id", accountIds.join(","));
     if (type) params.set("type", type);
     if (status) params.set("status", status);
-    const qs = params.toString();
-    // Keep the browser URL in sync (shareable filters).
-    window.history.replaceState({}, "", qs ? `${basePath}?${qs}` : basePath);
+
+    const queryString = params.toString();
+    window.history.replaceState({}, "", queryString ? `${basePath}?${queryString}` : basePath);
+
     try {
-      const res = await fetch(`/api/economics${qs ? `?${qs}` : ""}`);
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      const response = await fetch(`/api/economics${queryString ? `?${queryString}` : ""}`);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
       setData(body as EconomicsReport);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load economics data.");
     } finally {
       setLoading(false);
     }
-  }, [basePath, year, months, symbols, type, status]);
+  }, [accountIds, basePath, months, status, symbols, type, year]);
 
   useEffect(() => {
-    if (!initialized) return;
-    fetchData();
-  }, [initialized, fetchData]);
+    const timeoutId = window.setTimeout(() => {
+      void fetchData();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [fetchData]);
 
   const yearOptions = data?.filters.years ?? [];
-  const symbolOptions = (data?.filters.symbols ?? []).map((s) => ({ value: s, label: s }));
+  const symbolOptions = (data?.filters.symbols ?? []).map((symbol) => ({ value: symbol, label: symbol }));
+  const accountOptions = useMemo(() => buildAccountOptions(accounts, accountIds), [accountIds, accounts]);
+  const coverage = data?.summary.coverage;
 
   return (
     <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-        <p className="mt-1 text-sm text-text-muted">
-          {description}
-        </p>
+        <p className="mt-1 text-sm text-text-muted">{description}</p>
       </div>
 
       <EconomicsTabs />
@@ -454,6 +758,8 @@ export default function EconomicsView({
       )}
 
       {data && <SummaryRow summary={data.summary} />}
+
+      {coverage && <CoverageBanner coverage={coverage} hasAccountFilter={accountIds.length > 0} />}
 
       <div className="surface p-4">
         <div className="mb-3 flex items-center justify-between">
@@ -467,13 +773,13 @@ export default function EconomicsView({
             <span className="text-xs text-text-muted">Year</span>
             <select
               value={year}
-              onChange={(e) => setYear(e.target.value)}
+              onChange={(event) => setYear(event.target.value)}
               className="rounded-[var(--radius)] border border-border bg-bg-input px-3 py-1.5 text-sm text-text"
             >
               <option value="">All Years</option>
-              {yearOptions.map((y) => (
-                <option key={y} value={String(y)}>
-                  {y}
+              {yearOptions.map((option) => (
+                <option key={option} value={String(option)}>
+                  {option}
                 </option>
               ))}
             </select>
@@ -485,6 +791,10 @@ export default function EconomicsView({
           <div className="flex flex-col gap-1">
             <span className="text-xs text-text-muted">Symbols</span>
             <MultiSelect options={symbolOptions} selected={symbols} onChange={setSymbols} allLabel="All Symbols" />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-text-muted">Account</span>
+            <MultiSelect options={accountOptions} selected={accountIds} onChange={setAccountIds} allLabel="All Accounts" />
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-xs text-text-muted">Type</span>
@@ -512,151 +822,19 @@ export default function EconomicsView({
             <h2 className="mb-4 text-base font-semibold">Charts</h2>
             <div className="grid gap-6 lg:grid-cols-2">
               <div>
-                <h3 className="mb-2 text-sm font-medium text-text-muted">Monthly Net Income</h3>
+                <h3 className="mb-2 text-sm font-medium text-text-muted">Monthly Net Cash Flow (EUR)</h3>
                 <MonthlyNetChart rows={data.monthly} />
               </div>
               <div>
-                <h3 className="mb-2 text-sm font-medium text-text-muted">Calls vs Puts Net</h3>
-                <TypeDoughnut callsNet={data.by_type.calls.net} putsNet={data.by_type.puts.net} />
+                <h3 className="mb-2 text-sm font-medium text-text-muted">Calls vs Puts Net Cash Flow (EUR)</h3>
+                <TypeDoughnut callsNet={data.by_type.calls.net_income_eur} putsNet={data.by_type.puts.net_income_eur} />
               </div>
             </div>
           </div>
 
-          <PositionsDetail rows={data.positions} />
+          <PositionsDetail rows={data.positions} accounts={accounts} />
         </>
       )}
-    </div>
-  );
-}
-
-function MonthlySection({ rows }: { rows: EconomicsMonthlyRow[] }) {
-  return (
-    <div className="surface overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3">
-        <h2 className="text-base font-semibold">Monthly P&amp;L</h2>
-        <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
-          {rows.length} months
-        </span>
-      </div>
-      <div className="overflow-x-auto border-t border-border">
-        <table className="w-full min-w-[720px] text-sm">
-          <thead>
-            <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
-              <th className="px-3 py-2 font-medium">Month</th>
-              <th className="px-3 py-2 text-right font-medium">Premium</th>
-              <th className="px-3 py-2 text-right font-medium">Buyback</th>
-              <th className="px-3 py-2 text-right font-medium">Net</th>
-              <th className="px-3 py-2 text-right font-medium"># Positions</th>
-              <th className="px-3 py-2 text-right font-medium">Avg RoC% (Ann.)</th>
-              <th className="px-3 py-2 text-right font-medium">Calls</th>
-              <th className="px-3 py-2 text-right font-medium">Puts</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-text-muted">
-                  No positions match the selected filters.
-                </td>
-              </tr>
-            )}
-            {rows.map((r) => (
-              <tr key={`${r.year}-${r.month}`} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
-                <td className="px-3 py-2">{r.label}</td>
-                <td className="px-3 py-2 text-right font-mono">{currency(r.premium)}</td>
-                <td className="px-3 py-2 text-right font-mono">{currency(r.buyback)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${netColor(r.net)}`}>{currency(r.net)}</td>
-                <td className="px-3 py-2 text-right font-mono">{r.positions_count}</td>
-                <td className="px-3 py-2 text-right font-mono">{pct(r.avg_roc_annualized ?? r.avg_roc_pct)}</td>
-                <td className="px-3 py-2 text-right font-mono">{r.calls_count}</td>
-                <td className="px-3 py-2 text-right font-mono">{r.puts_count}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-type BySymbolKey = keyof Pick<
-  EconomicsBySymbolRow,
-  "symbol" | "premium" | "buyback" | "net" | "positions_count" | "avg_roc_annualized"
->;
-
-const BY_SYMBOL_COLS: { key: BySymbolKey; label: string; num?: boolean }[] = [
-  { key: "symbol", label: "Symbol" },
-  { key: "premium", label: "Premium", num: true },
-  { key: "buyback", label: "Buyback", num: true },
-  { key: "net", label: "Net", num: true },
-  { key: "positions_count", label: "# Positions", num: true },
-  { key: "avg_roc_annualized", label: "Avg RoC% (Ann.)", num: true },
-];
-
-function BySymbolSection({ rows }: { rows: EconomicsBySymbolRow[] }) {
-  const [sortKey, setSortKey] = useState<BySymbolKey>("net");
-  const [dir, setDir] = useState<"asc" | "desc">("desc");
-
-  const sorted = useMemo(() => {
-    return [...rows].sort((a, b) => {
-      const c = compareValues(a[sortKey], b[sortKey]);
-      return dir === "asc" ? c : -c;
-    });
-  }, [rows, sortKey, dir]);
-
-  function onSort(key: BySymbolKey) {
-    if (key === sortKey) setDir((d) => (d === "asc" ? "desc" : "asc"));
-    else {
-      setSortKey(key);
-      setDir(key === "symbol" ? "asc" : "desc");
-    }
-  }
-
-  return (
-    <div className="surface overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3">
-        <h2 className="text-base font-semibold">By Symbol</h2>
-        <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
-          {rows.length} symbols
-        </span>
-      </div>
-      <div className="overflow-x-auto border-t border-border">
-        <table className="w-full min-w-[640px] text-sm">
-          <thead>
-            <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
-              {BY_SYMBOL_COLS.map((c) => (
-                <th
-                  key={c.key}
-                  onClick={() => onSort(c.key)}
-                  className={`cursor-pointer select-none px-3 py-2 font-medium hover:text-text ${c.num ? "text-right" : ""}`}
-                >
-                  {c.label}
-                  <span className="ml-1">{sortKey === c.key ? (dir === "asc" ? "▲" : "▼") : ""}</span>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.length === 0 && (
-              <tr>
-                <td colSpan={6} className="px-3 py-6 text-center text-text-muted">
-                  No symbol-level economics available.
-                </td>
-              </tr>
-            )}
-            {sorted.map((r) => (
-              <tr key={r.symbol} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
-                <td className="px-3 py-2 font-semibold">{r.symbol}</td>
-                <td className="px-3 py-2 text-right font-mono">{currency(r.premium)}</td>
-                <td className="px-3 py-2 text-right font-mono">{currency(r.buyback)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${netColor(r.net)}`}>{currency(r.net)}</td>
-                <td className="px-3 py-2 text-right font-mono">{r.positions_count}</td>
-                <td className="px-3 py-2 text-right font-mono">{pct(r.avg_roc_annualized ?? r.avg_roc_pct)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }

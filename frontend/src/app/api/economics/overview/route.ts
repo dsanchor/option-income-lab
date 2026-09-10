@@ -4,7 +4,7 @@ import { apiFetch } from "@/lib/api";
 export async function GET(req: Request) {
   const incoming = new URL(req.url).searchParams;
   const forwarded = new URLSearchParams();
-  for (const key of ["year", "month", "symbol", "source"]) {
+  for (const key of ["year", "month", "symbol", "source", "account_id"]) {
     const value = incoming.get(key);
     if (value) forwarded.set(key, value);
   }

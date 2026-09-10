@@ -2,6 +2,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { CoverageStatusBadge, WarningBadge } from "@/components/OptionLinkageBadges";
 import PositionDetail from "@/components/PositionDetail";
 import type { Position } from "@/types/symbol-detail";
 
@@ -74,21 +75,21 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
   const [detailsFor, setDetailsFor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [filterNow] = useState(() => Date.now());
 
   // Newest first (mirrors the legacy `| reverse`).
   const ordered = useMemo(() => [...positions].reverse(), [positions]);
 
   const filtered = useMemo(() => {
-    const now = Date.now();
     return ordered.filter((p) => {
       if (status && p.status !== status) return false;
       if (days > 0 && p.opened_at) {
         const ts = new Date(String(p.opened_at).slice(0, 10)).getTime();
-        if (isFinite(ts) && (now - ts) / 86400000 > days) return false;
+        if (isFinite(ts) && (filterNow - ts) / 86400000 > days) return false;
       }
       return true;
     });
-  }, [ordered, status, days]);
+  }, [ordered, status, days, filterNow]);
 
   function resetEditors() {
     setRollFor(null);
@@ -255,6 +256,7 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
               const posId = p.position_id ?? "";
               const isActive = p.status === "active";
               const editingNotes = notesFor === posId;
+              const warnings = p.warnings?.filter(Boolean) ?? [];
               return (
                 <Fragment key={posId || i}>
                   <tr
@@ -298,6 +300,8 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
                             className={p.close_reason === "assigned" ? "border-accent-red/40 bg-accent-red/10 text-accent-red" : "border-border bg-bg-input text-text-muted"}
                           />
                         )}
+                        <CoverageStatusBadge status={p.coverage_status} />
+                        <WarningBadge warnings={warnings} />
                       </span>
                     </td>
                     <td className="px-4 py-3 font-mono">{p.opened_at ? String(p.opened_at).slice(0, 10) : "—"}</td>

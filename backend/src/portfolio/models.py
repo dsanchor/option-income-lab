@@ -25,6 +25,28 @@ class TxnType(str, Enum):
     DIVIDEND = "DIVIDEND"
     TRANSFER_OUT = "TRANSFER_OUT"
     TRANSFER_IN = "TRANSFER_IN"
+    CALL_SELL = "CALL_SELL"
+    CALL_BUY = "CALL_BUY"
+    PUT_SELL = "PUT_SELL"
+    PUT_BUY = "PUT_BUY"
+
+
+OPTION_TXN_TYPES = frozenset({
+    TxnType.CALL_SELL.value,
+    TxnType.CALL_BUY.value,
+    TxnType.PUT_SELL.value,
+    TxnType.PUT_BUY.value,
+})
+
+OPTION_SELL_TXN_TYPES = frozenset({
+    TxnType.CALL_SELL.value,
+    TxnType.PUT_SELL.value,
+})
+
+OPTION_BUY_TXN_TYPES = frozenset({
+    TxnType.CALL_BUY.value,
+    TxnType.PUT_BUY.value,
+})
 
 
 class AccountBroker(str, Enum):
@@ -45,6 +67,7 @@ class ImportFormat(str, Enum):
     dividends = "dividends"
     purchases = "purchases"
     sales = "sales"
+    options = "options"
 
 
 class CostBasisStatus(str, Enum):
@@ -353,6 +376,13 @@ class ManualMovementCreate(BaseModel):
     sales_type: Optional[str] = None      # SELL only: ACCIONES | DERECHOS
     cost_basis_status: Optional[str] = None  # BUY only: COMPLETE | INCOMPLETE
     notes: Optional[str] = None
+    option_position_id: Optional[str] = None
+    option_link_kind: Optional[str] = None   # OPEN_SELL | CLOSE_BUY | ASSIGNMENT_STOCK
+    option_type: Optional[str] = None        # call | put
+    option_strike: Optional[float] = None
+    option_expiration: Optional[str] = None
+    option_symbol: Optional[str] = None
+    option_close_date: Optional[str] = None
     # Corporate-action group fields (Amendment H — set by server, echoed from request)
     ca_group_id: Optional[str] = None
     ca_leg_type: Optional[str] = None
@@ -388,6 +418,22 @@ class ManualMovementCreate(BaseModel):
             raise ValueError("sales_type must be ACCIONES or DERECHOS")
         return v
 
+    @field_validator("option_link_kind")
+    @classmethod
+    def valid_option_link_kind(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("OPEN_SELL", "CLOSE_BUY", "ASSIGNMENT_STOCK"):
+            raise ValueError(
+                "option_link_kind must be OPEN_SELL, CLOSE_BUY, or ASSIGNMENT_STOCK"
+            )
+        return v
+
+    @field_validator("option_type")
+    @classmethod
+    def valid_option_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("call", "put"):
+            raise ValueError("option_type must be call or put")
+        return v
+
 
 # ---------------------------------------------------------------------------
 # Phase 2: Movement correction
@@ -405,6 +451,13 @@ class MovementCorrectionRequest(BaseModel):
     sales_type: Optional[str] = None
     cost_basis_status: Optional[str] = None
     notes: Optional[str] = None
+    option_position_id: Optional[str] = None
+    option_link_kind: Optional[str] = None
+    option_type: Optional[str] = None
+    option_strike: Optional[float] = None
+    option_expiration: Optional[str] = None
+    option_symbol: Optional[str] = None
+    option_close_date: Optional[str] = None
 
     @field_validator("correction_note")
     @classmethod

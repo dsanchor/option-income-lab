@@ -186,10 +186,16 @@ export default function DashboardAgentTables({ tables }: { tables: AgentTable[] 
                     </tr>
                   </thead>
                   <tbody>
-                    {agent.rows.map((row) => (
+                    {agent.rows.map((row) => {
+                      const lastActivityId = row.recent_activities?.[0]?.id;
+                      return (
                       <tr
                         key={row.key}
-                        onClick={() => router.push(`/symbols/${row.symbol}`)}
+                        onClick={() =>
+                          lastActivityId
+                            ? router.push(`/activities/${lastActivityId}`)
+                            : router.push(`/symbols/${row.symbol}`)
+                        }
                         className={`cursor-pointer border-b border-border/40 transition-colors hover:bg-bg-hover ${
                           row.paused ? "opacity-50" : ""
                         }`}
@@ -281,7 +287,8 @@ export default function DashboardAgentTables({ tables }: { tables: AgentTable[] 
                           <TriggerButton agent={agent.key} symbol={row.symbol} compact />
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
