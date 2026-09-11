@@ -204,26 +204,26 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
   ];
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,0.7fr)_minmax(0,1fr)]">
       <Reveal index={0} className="h-full">
-        <div className="surface card-hover relative flex h-full flex-col overflow-hidden p-5">
+        <div className="surface card-hover relative flex h-full flex-col overflow-hidden p-3">
           <span
             className="absolute inset-y-0 left-0 w-1"
             style={{ background: "var(--grad-green)" }}
             aria-hidden
           />
           <div className="text-xs uppercase tracking-wide text-text-muted">Total Dividends</div>
-          <div className={`mt-2 font-mono text-4xl font-semibold tracking-tight ${signedColor(totalNet)}`}>
+          <div className={`mt-1 font-mono text-2xl font-semibold tracking-tight ${signedColor(totalNet)}`}>
             {eur(totalNet)}
           </div>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-[var(--radius)] border border-border/70 bg-bg-card/40 px-3 py-2">
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <div className="rounded-[var(--radius)] border border-border/70 bg-bg-card/40 px-2 py-1.5">
               <div className="text-[11px] uppercase tracking-wide text-text-muted">Cash Net</div>
-              <div className={`mt-1 font-mono text-lg ${signedColor(cashNet)}`}>{eur(cashNet)}</div>
+              <div className={`mt-0.5 font-mono text-sm ${signedColor(cashNet)}`}>{eur(cashNet)}</div>
             </div>
-            <div className="rounded-[var(--radius)] border border-border/70 bg-bg-card/40 px-3 py-2">
+            <div className="rounded-[var(--radius)] border border-border/70 bg-bg-card/40 px-2 py-1.5">
               <div className="text-[11px] uppercase tracking-wide text-text-muted">Rights</div>
-              <div className={`mt-1 font-mono text-lg ${signedColor(derechosNet)}`}>{eur(derechosNet)}</div>
+              <div className={`mt-0.5 font-mono text-sm ${signedColor(derechosNet)}`}>{eur(derechosNet)}</div>
             </div>
           </div>
         </div>

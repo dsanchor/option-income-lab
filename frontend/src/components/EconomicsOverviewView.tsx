@@ -49,7 +49,6 @@ const eur = (value: number | null | undefined) =>
     maximumFractionDigits: 2,
   }).format(Number(value || 0));
 
-const pct = (value: number | null | undefined) => `${Number(value || 0).toFixed(1)}%`;
 const signedColor = (value: number) => (value >= 0 ? "text-accent-green" : "text-accent-red");
 
 function formatMonthLabel(value: string) {
@@ -150,33 +149,20 @@ function SummaryRow({ summary, monthly }: { summary: EconomicsAggregatedSummary;
       tone: "green" as const,
       hint: "Annualized dividends on current cost basis, held positions only",
     },
-    {
-      label: "Option Positions in Scope",
-      value: summary.total_option_positions ?? 0,
-      decimals: 0,
-      tone: "orange" as const,
-    },
-    {
-      label: "Options Coverage",
-      display: coverageDisplay,
-      tone: (coverage.linked_positions === coverage.total_positions ? "green" : "orange") as "green" | "orange",
-      hint: `${pct((coverage.linked_ratio ?? 0) * 100)} linked`,
-    },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4 xl:grid-cols-7">
+    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4 xl:grid-cols-5">
       {cards.map((card, index) => (
         <Reveal key={card.label} index={index} className="h-full">
           <StatCard
             label={card.label}
             value={"value" in card ? card.value : undefined}
-            display={"display" in card ? card.display : undefined}
             prefix={card.prefix}
             decimals={card.decimals}
             suffix={"suffix" in card ? card.suffix : undefined}
             tone={card.tone}
-            hint={card.hint}
+            hint={"hint" in card ? card.hint : undefined}
           />
         </Reveal>
       ))}
