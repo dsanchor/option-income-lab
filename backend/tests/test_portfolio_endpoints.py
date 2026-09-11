@@ -713,6 +713,114 @@ class TestF6DeleteMovementAccountId:
         assert resp.status_code == 404
         assert resp.json()["error"] == "not_found"
 
+    def test_delete_movement_without_purge_chain_leaves_superseded_tombstone(self, client):
+        """Without purge_chain, deleting the ACTIVE leg of a reassigned movement
+        leaves the SUPERSEDED original (deterministic id) behind — reproducing
+        the reported bug where re-import of that row is silently blocked."""
+        c, fake = client
+        fake.portfolio_container._store["txn_broker1_20240101_AAPL_BUY_001"] = {
+            "id": "txn_broker1_20240101_AAPL_BUY_001",
+            "doc_type": "ledger_txn",
+            "account_id": "broker1",
+            "txn_type": "BUY",
+            "correction_status": "SUPERSEDED",
+            "superseded_by": "mvt_new1",
+        }
+        fake.portfolio_container._store["mvt_new1"] = {
+            "id": "mvt_new1",
+            "doc_type": "ledger_txn",
+            "account_id": "broker2",
+            "txn_type": "BUY",
+            "correction_status": "ACTIVE",
+            "reassigned_from": {"account_id": "broker1", "movement_id": "txn_broker1_20240101_AAPL_BUY_001"},
+        }
+        resp = c.delete("/api/portfolio/movements/mvt_new1?account_id=broker2")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["purged_ids"] == ["mvt_new1"]
+        # Tombstone remains — this is the pre-fix, opt-in-default behavior.
+        assert "txn_broker1_20240101_AAPL_BUY_001" in fake.portfolio_container._store
+
+    def test_delete_movement_with_purge_chain_removes_reassignment_tombstone(self, client):
+        """purge_chain=true removes both the active leg and its SUPERSEDED
+        reassignment predecessor, unblocking future re-import of that row."""
+        c, fake = client
+        fake.portfolio_container._store["txn_broker1_20240101_AAPL_BUY_001"] = {
+            "id": "txn_broker1_20240101_AAPL_BUY_001",
+            "doc_type": "ledger_txn",
+            "account_id": "broker1",
+            "txn_type": "BUY",
+            "correction_status": "SUPERSEDED",
+            "superseded_by": "mvt_new1",
+        }
+        fake.portfolio_container._store["mvt_new1"] = {
+            "id": "mvt_new1",
+            "doc_type": "ledger_txn",
+            "account_id": "broker2",
+            "txn_type": "BUY",
+            "correction_status": "ACTIVE",
+            "reassigned_from": {"account_id": "broker1", "movement_id": "txn_broker1_20240101_AAPL_BUY_001"},
+        }
+        resp = c.delete("/api/portfolio/movements/mvt_new1?account_id=broker2&purge_chain=true")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert sorted(data["purged_ids"]) == ["mvt_new1", "txn_broker1_20240101_AAPL_BUY_001"]
+        assert "mvt_new1" not in fake.portfolio_container._store
+        assert "txn_broker1_20240101_AAPL_BUY_001" not in fake.portfolio_container._store
+
+    def test_delete_movement_purge_chain_via_corrects_movement_id(self, client):
+        """purge_chain=true also follows the correction chain (corrects_movement_id)."""
+        c, fake = client
+        fake.portfolio_container._store["txn_broker1_20240101_AAPL_BUY_001"] = {
+            "id": "txn_broker1_20240101_AAPL_BUY_001",
+            "doc_type": "ledger_txn",
+            "account_id": "broker1",
+            "txn_type": "BUY",
+            "correction_status": "SUPERSEDED",
+            "superseded_by": "mvt_corrected1",
+        }
+        fake.portfolio_container._store["mvt_corrected1"] = {
+            "id": "mvt_corrected1",
+            "doc_type": "ledger_txn",
+            "account_id": "broker1",
+            "txn_type": "BUY",
+            "correction_status": "ACTIVE",
+            "corrects_movement_id": "txn_broker1_20240101_AAPL_BUY_001",
+        }
+        resp = c.delete("/api/portfolio/movements/mvt_corrected1?account_id=broker1&purge_chain=true")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert sorted(data["purged_ids"]) == ["mvt_corrected1", "txn_broker1_20240101_AAPL_BUY_001"]
+        assert "mvt_corrected1" not in fake.portfolio_container._store
+        assert "txn_broker1_20240101_AAPL_BUY_001" not in fake.portfolio_container._store
+
+    def test_delete_movement_purge_chain_rejects_ca_group_leg_in_chain(self, client):
+        """If a chain member belongs to a CA group, the whole purge is rejected."""
+        c, fake = client
+        fake.portfolio_container._store["txn_broker1_20240101_AAPL_BUY_001"] = {
+            "id": "txn_broker1_20240101_AAPL_BUY_001",
+            "doc_type": "ledger_txn",
+            "account_id": "broker1",
+            "txn_type": "BUY",
+            "correction_status": "SUPERSEDED",
+            "superseded_by": "mvt_corrected1",
+            "ca_group_id": "cag_1",
+        }
+        fake.portfolio_container._store["mvt_corrected1"] = {
+            "id": "mvt_corrected1",
+            "doc_type": "ledger_txn",
+            "account_id": "broker1",
+            "txn_type": "BUY",
+            "correction_status": "ACTIVE",
+            "corrects_movement_id": "txn_broker1_20240101_AAPL_BUY_001",
+        }
+        resp = c.delete("/api/portfolio/movements/mvt_corrected1?account_id=broker1&purge_chain=true")
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "group_leg_hard_delete_required"
+        # Nothing deleted — all-or-nothing.
+        assert "mvt_corrected1" in fake.portfolio_container._store
+        assert "txn_broker1_20240101_AAPL_BUY_001" in fake.portfolio_container._store
+
 
 # ---------------------------------------------------------------------------
 # Corporate-action group delete

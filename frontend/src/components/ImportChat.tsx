@@ -174,6 +174,22 @@ export default function ImportChat() {
             </>
           )}
         </div>
+        {committed.commit_skip_reasons && committed.commit_skip_reasons.length > 0 && (
+          <div className="mx-auto max-w-xl rounded-[var(--radius)] border border-accent-orange/30 bg-accent-orange/5 p-3 text-left text-xs text-text-muted">
+            <div className="mb-1 font-semibold text-accent-orange">Why rows were skipped</div>
+            <ul className="space-y-1">
+              {committed.commit_skip_reasons.map((s) => (
+                <li key={s.id}>
+                  {s.row_index != null && <span className="font-mono">row {s.row_index}</span>}{" "}
+                  <span className="font-mono">{s.id}</span> —{" "}
+                  {s.reason === "SUPERSEDED_OR_VOIDED_ID_COLLISION"
+                    ? `blocked by an existing ${s.blocking_status ?? "SUPERSEDED"} movement with the same id. Delete it (with "purge chain" if it was corrected/reassigned) before re-importing.`
+                    : s.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="flex justify-center gap-3 pt-2">
           <a
             href="/portfolio/holdings"

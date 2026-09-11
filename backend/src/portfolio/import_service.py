@@ -303,6 +303,7 @@ class ImportService:
         # Write ledger_txns — idempotency via upsert on deterministic ID
         committed = 0
         skipped_count = 0
+        commit_skip_reasons: List[Dict[str, Any]] = []
         account_id = doc.get("account_id", "_unassigned")
 
         for movement in movements:
@@ -316,9 +317,22 @@ class ImportService:
                     movement.get("id"), exc,
                 )
                 skipped_count += 1
+                commit_skip_reasons.append({
+                    "row_index": movement.get("source_row_index"),
+                    "id": movement.get("id"),
+                    "reason": "SUPERSEDED_OR_VOIDED_ID_COLLISION",
+                    "blocking_status": getattr(exc, "status", None),
+                    "message": str(exc),
+                })
             except Exception as exc:
                 logger.warning("Failed to write ledger_txn %s: %s", movement.get("id"), exc)
                 skipped_count += 1
+                commit_skip_reasons.append({
+                    "row_index": movement.get("source_row_index"),
+                    "id": movement.get("id"),
+                    "reason": "WRITE_ERROR",
+                    "message": str(exc),
+                })
 
         # ── Synchronous best-effort enrollment in symbol_config ──────────
         # Ledger writes are already committed above.  Config enrollment is a
@@ -346,6 +360,7 @@ class ImportService:
         doc["state"] = "COMMITTED"
         doc["committed_count"] = committed
         doc["skipped_count"] = skipped_count
+        doc["commit_skip_reasons"] = commit_skip_reasons
         self.portfolio_svc.update_session(doc)
 
         result: Dict[str, Any] = {
@@ -355,6 +370,8 @@ class ImportService:
             "skipped_count": skipped_count,
             "enrolled_security_ids": sorted(enrolled_ids),
         }
+        if commit_skip_reasons:
+            result["commit_skip_reasons"] = commit_skip_reasons
         if enrollment_warnings:
             result["enrollment_warnings"] = enrollment_warnings
         return result

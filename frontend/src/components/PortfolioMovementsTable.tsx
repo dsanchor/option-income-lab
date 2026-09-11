@@ -277,7 +277,11 @@ export default function PortfolioMovementsTable() {
   async function handleDelete(id: string, accountId?: string) {
     setDeleteError(null);
     try {
-      await deleteMovement(id, accountId);
+      // purge_chain=true: also removes any SUPERSEDED/VOIDED correction or
+      // account-reassignment history behind this movement, so it can be
+      // freely re-imported later instead of leaving an orphaned tombstone
+      // that blocks re-import under the same deterministic id.
+      await deleteMovement(id, accountId, true);
       load(offset, buildFilter(), securityId);
     } catch (err) {
       const e = err as { data?: { detail?: string; error?: string } };

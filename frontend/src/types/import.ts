@@ -133,11 +133,20 @@ export interface ImportPreviewResponse {
 
 // ─── Commit ───────────────────────────────────────────────────────────────────
 
+export interface CommitSkipReason {
+  row_index: number | null;
+  id: string;
+  reason: "SUPERSEDED_OR_VOIDED_ID_COLLISION" | "WRITE_ERROR";
+  blocking_status?: string | null;
+  message: string;
+}
+
 export interface CommitResult {
   session_id: string;
   state: SessionState;
   committed_count: number;
   skipped_count: number;
+  commit_skip_reasons?: CommitSkipReason[];
 }
 
 // ─── Upload params ────────────────────────────────────────────────────────────

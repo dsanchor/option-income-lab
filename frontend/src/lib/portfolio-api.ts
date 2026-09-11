@@ -139,9 +139,11 @@ export async function getMovements(
 export async function deleteMovement(
   movementId: string,
   accountId?: string,
-): Promise<Pick<LedgerMovement, "id"> & { deleted_at: string }> {
+  purgeChain?: boolean,
+): Promise<{ deleted: boolean; id: string; purged_ids: string[] }> {
   const params = new URLSearchParams();
   if (accountId) params.set("account_id", accountId);
+  if (purgeChain) params.set("purge_chain", "true");
   const qs = params.toString() ? `?${params.toString()}` : "";
   return fetchJSON(`/api/portfolio/movements/${encodeURIComponent(movementId)}${qs}`, {
     method: "DELETE",

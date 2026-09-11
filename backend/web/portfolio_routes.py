@@ -602,6 +602,7 @@ async def delete_movement(
     request: Request,
     movement_id: str,
     account_id: Optional[str] = Query(default=None),
+    purge_chain: bool = Query(default=False),
 ):
     """DELETE /api/portfolio/movements/{movement_id} — permanently delete a movement.
 
@@ -609,10 +610,15 @@ async def delete_movement(
     Group legs (ca_group_id present) are rejected; use the group endpoint instead.
 
     Query params:
-      account_id  — required partition key (defaults to _unassigned if omitted)
+      account_id    — required partition key (defaults to _unassigned if omitted)
+      purge_chain   — when true, also deletes every document linked to this one
+                      via correction or account-reassignment history (both
+                      directions). Prevents orphaned SUPERSEDED/VOIDED tombstones
+                      from permanently blocking a future CSV re-import of the
+                      same row. Defaults to false to preserve prior behavior.
 
     Responses:
-      200  {"deleted": true, "id": "..."}
+      200  {"deleted": true, "id": "...", "purged_ids": ["..."]}
       404  not_found
       400  group_leg_hard_delete_required
     """
@@ -621,7 +627,7 @@ async def delete_movement(
 
     try:
         svc = _get_portfolio_svc(request)
-        result = svc.delete_movement(movement_id, account_id)
+        result = svc.delete_movement(movement_id, account_id, purge_chain=purge_chain)
         return JSONResponse(result)
     except LookupError as exc:
         return _err("not_found", str(exc), 404)
