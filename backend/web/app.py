@@ -1755,7 +1755,7 @@ async def api_economics_overview(request: Request,
 async def api_get_symbol(request: Request, symbol: str):
     try:
         cosmos = _get_cosmos(request)
-        doc = cosmos.get_symbol(symbol.upper())
+        doc = cosmos.get_symbol(_ticker_from_symbol_param(symbol))
         if not doc:
             return JSONResponse({"error": f"Symbol {symbol} not found"},
                                 status_code=404)
@@ -1870,7 +1870,7 @@ def _compute_symbol_detail(
     - Returns a dict with `_multiple_choices` key (list of candidates) if the
       bare ticker resolves to multiple security_master documents.
     """
-    sym = symbol.upper()
+    sym = _ticker_from_symbol_param(symbol)
     doc = cosmos.get_symbol(sym)
 
     # ── portfolio_only path: no symbol_config but may have security + ledger ──
@@ -2290,7 +2290,7 @@ async def api_symbol_detail(request: Request, symbol: str):
                 )
             lookup_ticker = ticker
         else:
-            lookup_ticker = symbol.upper()
+            lookup_ticker = _ticker_from_symbol_param(symbol)
             # Check for ambiguity via security_master
             try:
                 all_secs = securities_svc.list_securities()
@@ -2700,12 +2700,12 @@ async def api_clear_symbol_watchlist_pause(request: Request, symbol: str):
 async def api_delete_symbol(request: Request, symbol: str):
     try:
         cosmos = _get_cosmos(request)
-        doc = cosmos.get_symbol(symbol.upper())
+        doc = cosmos.get_symbol(_ticker_from_symbol_param(symbol))
         if not doc:
             return JSONResponse({"error": f"Symbol {symbol} not found"},
                                 status_code=404)
-        cosmos.delete_symbol(symbol.upper())
-        return JSONResponse({"status": "deleted", "symbol": symbol.upper()})
+        cosmos.delete_symbol(_ticker_from_symbol_param(symbol))
+        return JSONResponse({"status": "deleted", "symbol": _ticker_from_symbol_param(symbol)})
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
@@ -2744,7 +2744,7 @@ async def api_symbol_linkable_positions(request: Request, symbol: str, txn_type:
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
 
-    doc = cosmos.get_symbol(symbol.upper())
+    doc = cosmos.get_symbol(_ticker_from_symbol_param(symbol))
     if not doc:
         return JSONResponse({"positions": []})
 
@@ -2877,7 +2877,7 @@ async def api_add_position(request: Request, symbol: str):
             return JSONResponse({"error": "is_paper must be a boolean"}, status_code=400)
         is_paper = bool(raw_is_paper)
 
-        doc = cosmos.add_position(symbol.upper(), position_type, strike,
+        doc = cosmos.add_position(_ticker_from_symbol_param(symbol), position_type, strike,
                                   expiration, notes, source=source, is_paper=is_paper)
         return JSONResponse(_clean_doc(doc), status_code=201)
     except ValueError as e:
@@ -3020,7 +3020,7 @@ async def api_roll_position_from_activity(request: Request, symbol: str,
         }
 
         doc = cosmos.roll_position(
-            symbol.upper(), position_id, position_type,
+            _ticker_from_symbol_param(symbol), position_id, position_type,
             float(strike), expiration,
             source=snapshot, closing_source=snapshot,
         )
@@ -3115,7 +3115,7 @@ async def api_manual_roll_position(request: Request, symbol: str,
                 buyback_cost = None
 
         doc = cosmos.roll_position(
-            symbol.upper(), position_id, pos["type"],
+            _ticker_from_symbol_param(symbol), position_id, pos["type"],
             float(new_strike), new_expiration,
             source=source,
             notes=notes,
@@ -3168,7 +3168,7 @@ async def api_close_position(request: Request, symbol: str, position_id: str):
         if close_reason != "manual":
             buyback_cost = None
         doc = cosmos.close_position(
-            symbol.upper(), position_id, close_reason=close_reason,
+            _ticker_from_symbol_param(symbol), position_id, close_reason=close_reason,
             buyback_cost=buyback_cost,
         )
         return JSONResponse(_clean_doc(doc))
@@ -3201,7 +3201,7 @@ async def api_update_position_notes(request: Request, symbol: str,
         if not isinstance(notes, str):
             return JSONResponse({"error": "notes must be a string"},
                                 status_code=400)
-        doc = cosmos.update_position_notes(symbol.upper(), position_id, notes)
+        doc = cosmos.update_position_notes(_ticker_from_symbol_param(symbol), position_id, notes)
         return JSONResponse(_clean_doc(doc))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=404)
@@ -3243,7 +3243,7 @@ async def api_update_position_premium(request: Request, symbol: str,
             return JSONResponse(
                 {"error": "premium must be a finite, non-negative number"},
                                 status_code=400)
-        doc = cosmos.update_position_premium(symbol.upper(), position_id, premium)
+        doc = cosmos.update_position_premium(_ticker_from_symbol_param(symbol), position_id, premium)
         return JSONResponse(_clean_doc(doc))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=404)
@@ -3285,7 +3285,7 @@ async def api_update_position_buyback_cost(request: Request, symbol: str,
             return JSONResponse(
                 {"error": "buyback_cost must be a finite, non-negative number"},
                                 status_code=400)
-        doc = cosmos.update_position_buyback_cost(symbol.upper(), position_id,
+        doc = cosmos.update_position_buyback_cost(_ticker_from_symbol_param(symbol), position_id,
                                                   buyback_cost)
         return JSONResponse(_clean_doc(doc))
     except ValueError as e:
@@ -3326,7 +3326,7 @@ async def api_set_position_paper(request: Request, symbol: str,
         if not isinstance(is_paper, bool):
             return JSONResponse({"error": "is_paper must be a boolean"},
                                 status_code=400)
-        doc = cosmos.set_position_paper(symbol.upper(), position_id, is_paper)
+        doc = cosmos.set_position_paper(_ticker_from_symbol_param(symbol), position_id, is_paper)
         return JSONResponse(_clean_doc(doc))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=404)
@@ -3348,7 +3348,7 @@ async def api_delete_position(request: Request, symbol: str, position_id: str):
         _guard = enforce_us_options_eligible(_dp_doc)
         if _guard:
             return _guard
-        doc = cosmos.delete_position(symbol.upper(), position_id)
+        doc = cosmos.delete_position(_ticker_from_symbol_param(symbol), position_id)
         return JSONResponse(_clean_doc(doc))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=404)
@@ -3372,7 +3372,7 @@ async def api_position_snapshots(request: Request, symbol: str, position_id: str
         _guard = enforce_us_options_eligible(_ps_doc)
         if _guard:
             return _guard
-        snapshots = cosmos.get_position_snapshots(symbol.upper(), position_id,
+        snapshots = cosmos.get_position_snapshots(_ticker_from_symbol_param(symbol), position_id,
                                                   limit=limit)
         snapshots.reverse()
         return JSONResponse({"snapshots": snapshots})
@@ -3387,7 +3387,7 @@ async def api_dps_analysis(request: Request, symbol: str, position_id: str):
     """Run deterministic position scoring (DPS) for an open position."""
     try:
         cosmos = _get_cosmos(request)
-        symbol = symbol.upper()
+        symbol = _ticker_from_symbol_param(symbol)
 
         # Find the position
         sym_doc = cosmos.get_symbol(symbol)
@@ -3472,7 +3472,7 @@ async def api_dps_insights(request: Request, symbol: str, position_id: str):
     """Generate LLM narrative summary of position's DPS health (one-shot)."""
     try:
         cosmos = _get_cosmos(request)
-        symbol = symbol.upper()
+        symbol = _ticker_from_symbol_param(symbol)
 
         # Find the position
         sym_doc = cosmos.get_symbol(symbol)
@@ -3540,7 +3540,7 @@ async def api_roll_table(request: Request, symbol: str, position_id: str):
     """Compute roll scenarios table for an open position (calls and puts)."""
     try:
         cosmos = _get_cosmos(request)
-        symbol = symbol.upper()
+        symbol = _ticker_from_symbol_param(symbol)
 
         sym_doc = cosmos.get_symbol(symbol)
         if not sym_doc:
@@ -3653,7 +3653,7 @@ async def api_list_plans(request: Request,
 async def api_list_symbol_plans(request: Request, symbol: str):
     try:
         cosmos = _get_cosmos(request)
-        symbol = symbol.upper()
+        symbol = _ticker_from_symbol_param(symbol)
         if not cosmos.get_symbol(symbol):
             return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
         plans = cosmos.get_plans(symbol=symbol)
@@ -3668,7 +3668,7 @@ async def api_list_symbol_plans(request: Request, symbol: str):
 async def api_create_plan(request: Request, symbol: str):
     try:
         cosmos = _get_cosmos(request)
-        symbol = symbol.upper()
+        symbol = _ticker_from_symbol_param(symbol)
         if not cosmos.get_symbol(symbol):
             return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
 
@@ -3724,7 +3724,7 @@ async def api_create_plan(request: Request, symbol: str):
 async def api_get_plan(request: Request, symbol: str, plan_id: str):
     try:
         cosmos = _get_cosmos(request)
-        doc = cosmos.get_plan(symbol.upper(), plan_id)
+        doc = cosmos.get_plan(_ticker_from_symbol_param(symbol), plan_id)
         if not doc:
             return JSONResponse({"error": f"Plan {plan_id} not found"}, status_code=404)
         return JSONResponse(_clean_doc(doc))
@@ -3782,7 +3782,7 @@ async def api_update_plan(request: Request, symbol: str, plan_id: str):
                 return JSONResponse({"error": "agent_notes must be a list"}, status_code=400)
             updates["agent_notes"] = body["agent_notes"]
 
-        doc = cosmos.update_plan(symbol.upper(), plan_id, updates)
+        doc = cosmos.update_plan(_ticker_from_symbol_param(symbol), plan_id, updates)
         return JSONResponse(_clean_doc(doc))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=404)
@@ -3796,8 +3796,8 @@ async def api_update_plan(request: Request, symbol: str, plan_id: str):
 async def api_delete_plan(request: Request, symbol: str, plan_id: str):
     try:
         cosmos = _get_cosmos(request)
-        cosmos.delete_plan(symbol.upper(), plan_id)
-        return JSONResponse({"status": "deleted", "id": plan_id, "symbol": symbol.upper()})
+        cosmos.delete_plan(_ticker_from_symbol_param(symbol), plan_id)
+        return JSONResponse({"status": "deleted", "id": plan_id, "symbol": _ticker_from_symbol_param(symbol)})
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=404)
     except RuntimeError as e:
@@ -3814,7 +3814,7 @@ async def api_add_plan_note(request: Request, symbol: str, plan_id: str):
         note = body.get("note", "")
         if not isinstance(note, str) or not note.strip():
             return JSONResponse({"error": "note is required"}, status_code=400)
-        doc = cosmos.add_plan_note(symbol.upper(), plan_id, note.strip())
+        doc = cosmos.add_plan_note(_ticker_from_symbol_param(symbol), plan_id, note.strip())
         return JSONResponse(_clean_doc(doc))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=404)
@@ -3848,7 +3848,7 @@ async def api_activities(request: Request, agent_type: str = None,
     try:
         cosmos = _get_cosmos(request)
         if symbol:
-            results = cosmos.get_symbol_activities(symbol.upper(), agent_type, since, limit)
+            results = cosmos.get_symbol_activities(_ticker_from_symbol_param(symbol), agent_type, since, limit)
         else:
             results = cosmos.get_all_activities(agent_type, since, limit)
         return JSONResponse([_clean_doc(r) for r in results])
@@ -4501,7 +4501,7 @@ async def symbol_report_api(request: Request, symbol: str):
     structured markdown report from cached market data + CosmosDB
     activities/alerts.
     """
-    symbol = symbol.upper()
+    symbol = _ticker_from_symbol_param(symbol)
 
     try:
         cosmos = _get_cosmos(request)
@@ -4561,7 +4561,7 @@ async def symbol_technical_analysis_api(request: Request, symbol: str):
     Uses the TechnicalAnalysisAgent to produce a structured markdown analysis
     from cached market data (technicals, overview, forecast, dividends).
     """
-    symbol = symbol.upper()
+    symbol = _ticker_from_symbol_param(symbol)
 
     try:
         cosmos = _get_cosmos(request)
@@ -4636,7 +4636,7 @@ async def api_symbol_forecasts(request: Request, symbol: str,
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
 
-    sym = symbol.upper()
+    sym = _ticker_from_symbol_param(symbol)
 
     # US-options eligibility guard (§J.4.2)
     _fc_doc = _get_symbol_doc_for_guard(cosmos, symbol)
@@ -4716,7 +4716,7 @@ async def api_symbol_forecast_detail(request: Request, symbol: str, forecast_id:
     if _guard:
         return _guard
 
-    doc = cosmos.get_price_forecast(symbol.upper(), forecast_id)
+    doc = cosmos.get_price_forecast(_ticker_from_symbol_param(symbol), forecast_id)
     if not doc:
         return JSONResponse(
             {"error": f"Forecast {forecast_id} not found"}, status_code=404)
@@ -4747,20 +4747,20 @@ async def api_symbol_options_chain(request: Request, symbol: str):
         return JSONResponse({"error": "Data provider not initialized"}, status_code=503)
 
     try:
-        data = await provider.fetch_all(symbol.upper())
+        data = await provider.fetch_all(_ticker_from_symbol_param(symbol))
         raw = data.get("options_chain", "{}")
         result = json.loads(raw) if isinstance(raw, str) else raw
     except Exception as e:
         logger.exception("Options chain fetch failed for %s", symbol)
         return JSONResponse(
-            {"error": f"Failed to fetch options chain: {e}", "symbol": symbol.upper()},
+            {"error": f"Failed to fetch options chain: {e}", "symbol": _ticker_from_symbol_param(symbol)},
             status_code=500,
         )
 
     if not result.get("calls") and not result.get("puts"):
         return JSONResponse(
             {"error": "No options chain data available.",
-             "symbol": symbol.upper()},
+             "symbol": _ticker_from_symbol_param(symbol)},
             status_code=404,
         )
 
@@ -4772,7 +4772,7 @@ async def api_symbol_options_chain(request: Request, symbol: str):
     result = apply_agent_view(result)
 
     return JSONResponse({
-        "symbol": symbol.upper(),
+        "symbol": _ticker_from_symbol_param(symbol),
         "timestamp": result.get("timestamp", ""),
         "calls": result.get("calls", {}),
         "puts": result.get("puts", {}),
@@ -5785,7 +5785,7 @@ async def api_debug_agent_chain(request: Request, symbol: str,
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
 
-    doc = cosmos.get_symbol(symbol.upper())
+    doc = cosmos.get_symbol(_ticker_from_symbol_param(symbol))
     if not doc:
         return JSONResponse({"error": f"Symbol {symbol} not found"},
                             status_code=404)
@@ -5804,7 +5804,7 @@ async def api_debug_agent_chain(request: Request, symbol: str,
     if provider is None:
         return JSONResponse({"error": "Data provider not initialized"}, status_code=503)
 
-    sym_upper = symbol.upper()
+    sym_upper = _ticker_from_symbol_param(symbol)
 
     try:
         data = await provider.fetch_all(sym_upper)
@@ -5964,7 +5964,7 @@ async def api_fetch_preview(request: Request, symbol: str):
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
 
-    doc = cosmos.get_symbol(symbol.upper())
+    doc = cosmos.get_symbol(_ticker_from_symbol_param(symbol))
     if not doc:
         return JSONResponse({"error": f"Symbol {symbol} not found"},
                             status_code=404)
@@ -5976,7 +5976,7 @@ async def api_fetch_preview(request: Request, symbol: str):
     try:
         import time as _time
         t0 = _time.monotonic()
-        data = await provider.fetch_all(symbol.upper(), force_refresh=True)
+        data = await provider.fetch_all(_ticker_from_symbol_param(symbol), force_refresh=True)
         elapsed = _time.monotonic() - t0
     except Exception as e:
         logger.exception("Fetch preview failed for %s", symbol)
@@ -5993,7 +5993,7 @@ async def api_fetch_preview(request: Request, symbol: str):
         }
 
     return JSONResponse({
-        "symbol": symbol.upper(),
+        "symbol": _ticker_from_symbol_param(symbol),
         "resources": resources,
     })
 
@@ -8246,10 +8246,10 @@ async def get_enrichment_history(request: Request, symbol: str):
     if cosmos is None:
         return JSONResponse({"error": "CosmosDB not available"}, status_code=503)
     try:
-        points = cosmos.get_enrichment_history(symbol.upper())
+        points = cosmos.get_enrichment_history(_ticker_from_symbol_param(symbol))
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
-    return JSONResponse({"symbol": symbol.upper(), "points": points})
+    return JSONResponse({"symbol": _ticker_from_symbol_param(symbol), "points": points})
 
 
 @app.post("/api/trigger/plan_monitor")
@@ -9218,7 +9218,7 @@ async def symbol_chat_context(request: Request, symbol: str):
 
     Pass ``"refresh": true`` in the JSON body to bypass the cache.
     """
-    symbol = symbol.upper()
+    symbol = _ticker_from_symbol_param(symbol)
     cosmos = getattr(request.app.state, "cosmos", None)
 
     # US-options eligibility guard (§J.4.2)
@@ -9258,7 +9258,7 @@ async def symbol_chat_api(request: Request, symbol: str):
         return JSONResponse({"error": "No messages provided"},
                             status_code=400)
 
-    symbol = symbol.upper()
+    symbol = _ticker_from_symbol_param(symbol)
 
     # US-options eligibility guard (§J.4.2)
     _chat_cosmos = getattr(request.app.state, "cosmos", None)
