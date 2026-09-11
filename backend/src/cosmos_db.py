@@ -551,7 +551,8 @@ class CosmosDBService:
     def add_position(self, symbol: str, position_type: str,
                      strike: float, expiration: str,
                      notes: str = "",
-                     source: dict | None = None) -> dict:
+                     source: dict | None = None,
+                     is_paper: bool = False) -> dict:
         """Add an open position to a symbol."""
         doc = self.get_symbol(symbol)
         if doc is None:
@@ -568,6 +569,8 @@ class CosmosDBService:
             "status": "active",
             "notes": notes,
         }
+        if is_paper:
+            position["is_paper"] = True
         if source is not None:
             position["source"] = source
         doc["positions"].append(position)
@@ -617,6 +620,8 @@ class CosmosDBService:
             "notes": notes,
             "rolled_from": old_position_id,
         }
+        if old_pos.get("is_paper") is True:
+            new_pos["is_paper"] = True
         if source is not None:
             new_pos["source"] = source
         doc["positions"].append(new_pos)

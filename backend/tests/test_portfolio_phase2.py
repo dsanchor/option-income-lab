@@ -78,10 +78,6 @@ class FakePortfolioContainer:
             if partition_key is not None and doc.get("account_id") != partition_key:
                 continue
 
-            if "COUNT" in query:
-                results.append(doc)
-                continue
-
             # doc_type filter
             if "doc_type = 'ledger_txn'" in query and doc.get("doc_type") != "ledger_txn":
                 continue
@@ -107,6 +103,12 @@ class FakePortfolioContainer:
             if "@security_id" in param_map:
                 if doc.get("security_id") != param_map["@security_id"]:
                     continue
+            if "@txn_type" in param_map:
+                if doc.get("txn_type") != param_map["@txn_type"]:
+                    continue
+            if "@option_position_id" in param_map:
+                if doc.get("option_position_id") != param_map["@option_position_id"]:
+                    continue
 
             # date filters
             if "@date_from" in param_map:
@@ -118,6 +120,11 @@ class FakePortfolioContainer:
             if "@as_of_date" in param_map:
                 if doc.get("trade_date", "") > param_map["@as_of_date"]:
                     continue
+
+            if "c.is_paper = true" in query and not bool(doc.get("is_paper")):
+                continue
+            if "(NOT IS_DEFINED(c.is_paper) OR c.is_paper = false)" in query and bool(doc.get("is_paper")):
+                continue
 
             results.append(dict(doc))
 
@@ -161,9 +168,37 @@ class FakeSymbolsContainer:
 
 
 def _make_svc(docs=None):
-    portfolio_svc = CosmosPortfolioService(FakePortfolioContainer(docs), None)
-    securities_svc = CosmosSecuritiesService(FakeSymbolsContainer())
+    symbols_container = FakeSymbolsContainer()
+    portfolio_svc = CosmosPortfolioService(FakePortfolioContainer(docs), None, symbols_container)
+    securities_svc = CosmosSecuritiesService(symbols_container)
     return portfolio_svc, securities_svc
+
+
+def _seed_symbol_position(
+    symbols_container: FakeSymbolsContainer,
+    *,
+    symbol: str,
+    position_id: str,
+    position_type: str = "call",
+    is_paper: bool = False,
+):
+    position = {
+        "position_id": position_id,
+        "type": position_type,
+        "strike": 210.0,
+        "expiration": "2026-01-16",
+        "opened_at": "2026-01-01T00:00:00Z",
+        "status": "active",
+        "notes": "",
+    }
+    if is_paper:
+        position["is_paper"] = True
+    symbols_container._store[(symbol, f"config_{symbol}")] = {
+        "id": f"config_{symbol}",
+        "symbol": symbol,
+        "doc_type": "symbol_config",
+        "positions": [position],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +414,22 @@ class TestManualMovementCreation:
         assert Decimal(doc["net"]["amount"]) == Decimal("146.500000")
         assert Decimal(doc["net"]["eur_amount"]) == Decimal("134.750000")
 
+    def test_manual_option_movement_persists_is_paper(self):
+        svc, _ = _make_svc()
+        doc = svc.create_manual_movement(_option_body(is_paper=True))
+        assert doc["is_paper"] is True
+
+    def test_manual_option_movement_rejects_paper_real_position_mismatch(self):
+        svc, _ = _make_svc()
+        _seed_symbol_position(
+            svc.symbols_container,
+            symbol="AAPL",
+            position_id="pos_call_001",
+            is_paper=False,
+        )
+        with pytest.raises(ValueError, match="paper parity mismatch"):
+            svc.create_manual_movement(_option_body(is_paper=True))
+
 
 # ---------------------------------------------------------------------------
 # Movement Correction
@@ -500,6 +551,26 @@ class TestMovementCorrection:
         )
         assert result["replacement"]["option_position_id"] == "pos_call_002"
 
+    def test_option_correction_rejects_real_movement_link_to_paper_position(self):
+        svc, _ = _make_svc()
+        linked = svc.create_manual_movement(_option_body(option_position_id=None))
+        _seed_symbol_position(
+            svc.symbols_container,
+            symbol="AAPL",
+            position_id="pos_call_paper",
+            is_paper=True,
+        )
+        with pytest.raises(ValueError, match="paper parity mismatch"):
+            svc.correct_movement(
+                movement_id=linked["id"],
+                account_id="_unassigned",
+                correction_data={
+                    "account_id": "_unassigned",
+                    "correction_note": "attempt mismatched relink",
+                    "option_position_id": "pos_call_paper",
+                },
+            )
+
     def test_option_correction_can_add_option_close_date_after_creation(self):
         svc, _ = _make_svc()
         doc = svc.create_manual_movement(_option_body(option_close_date=None))
@@ -514,6 +585,75 @@ class TestMovementCorrection:
             },
         )
         assert result["replacement"]["option_close_date"] == "2026-01-22"
+
+
+# ---------------------------------------------------------------------------
+# Movements list / duplicate detection
+# ---------------------------------------------------------------------------
+
+class TestMovementsListAndDuplicates:
+    def test_get_movements_filters_by_option_position_id(self):
+        svc, _ = _make_svc([
+            _make_txn(
+                "m_linked_1",
+                "XNYS:AAPL",
+                "CALL_SELL",
+                "0",
+                "100",
+                "acct_a",
+                option_position_id="pos_a",
+            ),
+            _make_txn(
+                "m_linked_2",
+                "XNYS:AAPL",
+                "CALL_BUY",
+                "0",
+                "50",
+                "acct_a",
+                option_position_id="pos_a",
+            ),
+            _make_txn(
+                "m_other",
+                "XNYS:AAPL",
+                "CALL_SELL",
+                "0",
+                "75",
+                "acct_a",
+                option_position_id="pos_b",
+            ),
+        ])
+
+        movements, total = svc.get_movements(option_position_id="pos_a", limit=10, offset=0)
+        assert total == 2
+        assert {movement["id"] for movement in movements} == {"m_linked_1", "m_linked_2"}
+
+    def test_find_probable_duplicate_separates_real_and_paper_lanes(self):
+        svc, _ = _make_svc([
+            _make_txn(
+                "m_real",
+                "XNYS:AAPL",
+                "CALL_SELL",
+                "0",
+                "100",
+                "acct_a",
+                trade_date="2026-01-15",
+                option_position_id="pos_real",
+            ),
+            _make_txn(
+                "m_paper",
+                "XNYS:AAPL",
+                "CALL_SELL",
+                "0",
+                "100",
+                "acct_a",
+                trade_date="2026-01-15",
+                option_position_id="pos_paper",
+                is_paper=True,
+            ),
+        ])
+
+        assert svc.find_probable_duplicate("XNYS:AAPL", "CALL_SELL", "2026-01-15", "0", "100", is_paper=False)["id"] == "m_real"
+        assert svc.find_probable_duplicate("XNYS:AAPL", "CALL_SELL", "2026-01-15", "0", "100", is_paper=True)["id"] == "m_paper"
 
 
 # ---------------------------------------------------------------------------

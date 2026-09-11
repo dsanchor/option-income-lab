@@ -400,7 +400,7 @@ class FakeCosmos:
     def get_position_snapshots(self, symbol, position_id, limit=100):
         return []
 
-    def add_position(self, symbol, pos_type, strike, expiration, notes, source=None):
+    def add_position(self, symbol, pos_type, strike, expiration, notes, source=None, is_paper=False):
         doc = self.get_symbol(symbol)
         return doc or {}
 

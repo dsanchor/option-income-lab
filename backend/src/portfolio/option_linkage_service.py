@@ -63,6 +63,7 @@ def collect_option_positions(symbol_docs: List[Dict[str, Any]]) -> List[Dict[str
                 "symbol": symbol,
                 "position_id": position.get("position_id"),
                 "type": position_type,
+                "is_paper": bool(position.get("is_paper")),
                 "status": str(position.get("status", "active")).strip().lower(),
                 "close_reason": str(position.get("close_reason", "")).strip().lower() or None,
                 "strike": position.get("strike"),

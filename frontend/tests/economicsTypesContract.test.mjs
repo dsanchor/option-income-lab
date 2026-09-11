@@ -57,6 +57,18 @@ describe("Economics type contracts", () => {
     }
   });
 
+  it("includes paper-position fields in the options economics contract", () => {
+    for (const field of [
+      "excluded_paper_positions: number;",
+      "is_paper: boolean;",
+    ]) {
+      assert.ok(
+        economicsTypes.includes(field),
+        `Expected economics.ts to include "${field}".`
+      );
+    }
+  });
+
   it("extends dividend report types with cash, derechos, and total net fields", () => {
     for (const field of [
       "cash_net?: number | null;",

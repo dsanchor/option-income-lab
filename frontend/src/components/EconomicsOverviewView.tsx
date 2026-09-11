@@ -499,6 +499,11 @@ export default function EconomicsOverviewView() {
               Unlinked positions excluded from account-scoped options totals.
             </div>
           )}
+          {coverage && coverage.excluded_paper_positions > 0 && (
+            <div className={coverage || accountIds.length > 0 ? "mt-1" : ""}>
+              Paper positions excluded from real totals.
+            </div>
+          )}
         </div>
       )}
 

@@ -187,6 +187,13 @@ def _sample_option_movements():
     ]
 
 
+def _sample_option_movements_with_paper():
+    return _sample_option_movements() + [
+        _movement("m9", "CALL_SELL", "XNAS:SHOP", "shop-call-paper", "2026-02-05", ACCOUNT_1, "1.3", "0.10", "1.20")
+        | {"is_paper": True}
+    ]
+
+
 def _sample_securities():
     return [
         {"security_id": "XNAS:AAPL", "ticker": "AAPL", "status": "ACTIVE"},
@@ -197,6 +204,29 @@ def _sample_securities():
         {"security_id": "XNAS:META", "ticker": "META", "status": "ACTIVE"},
         {"security_id": "XNAS:NFLX", "ticker": "NFLX", "status": "ACTIVE"},
     ]
+
+
+def _sample_option_symbol_docs_with_paper():
+    docs = _sample_option_symbol_docs()
+    docs.append(
+        {
+            "symbol": "SHOP",
+            "security_id": "XNAS:SHOP",
+            "positions": [
+                {
+                    "position_id": "shop-call-paper",
+                    "type": "call",
+                    "strike": 140,
+                    "expiration": "2026-03-20",
+                    "opened_at": "2026-02-05T00:00:00Z",
+                    "status": "active",
+                    "source": {"premium": 1.3},
+                    "is_paper": True,
+                }
+            ],
+        }
+    )
+    return docs
 
 
 def _sample_dividend_movements():
@@ -300,6 +330,7 @@ def test_build_economics_report_uses_linked_ledger_movements_and_new_summary_fie
             "positions_missing_assignment_stock": 1,
             "excluded_unlinked_positions": 1,
             "excluded_positions_linked_only_outside_account_filter": 0,
+            "excluded_paper_positions": 0,
         },
     }
     assert option_report["filters"] == {
@@ -430,6 +461,7 @@ def test_build_economics_report_applies_filters_and_account_scope():
             "positions_missing_assignment_stock": 0,
             "excluded_unlinked_positions": 0,
             "excluded_positions_linked_only_outside_account_filter": 0,
+            "excluded_paper_positions": 0,
         },
     }
     assert [row["position_id"] for row in report["positions"]] == [
@@ -467,6 +499,7 @@ def test_build_economics_report_account_filter_tracks_both_exclusion_counters():
             "positions_missing_assignment_stock": 1,
             "excluded_unlinked_positions": 1,
             "excluded_positions_linked_only_outside_account_filter": 1,
+            "excluded_paper_positions": 0,
         },
     }
     positions = {position["position_id"]: position for position in report["positions"]}
@@ -474,6 +507,25 @@ def test_build_economics_report_account_filter_tracks_both_exclusion_counters():
     assert positions["amzn-call-filtered-out"]["linked_accounts"] == [ACCOUNT_2]
     assert positions["amzn-call-filtered-out"]["premium_usd"] == 0.0
     assert positions["amzn-call-filtered-out"]["buyback_usd"] == 0.0
+
+
+def test_build_economics_report_excludes_paper_positions_from_real_aggregates():
+    report = _build_economics_report(
+        _sample_option_symbol_docs_with_paper(),
+        now=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        movements=_sample_option_movements_with_paper(),
+        securities=_sample_securities(),
+    )
+
+    positions = {position["position_id"]: position for position in report["positions"]}
+    assert positions["shop-call-paper"]["is_paper"] is True
+    assert report["summary"]["total_positions"] == 8
+    assert report["summary"]["coverage"]["excluded_paper_positions"] == 1
+    assert report["summary"]["total_premium_usd"] == 8.2
+    assert all(row["symbol"] != "SHOP" for row in report["by_symbol"])
+    assert all(row["positions_count"] == 4 for row in report["monthly"])
+    assert report["by_type"]["calls"]["count"] == 4
+    assert report["by_type"]["puts"]["count"] == 4
 
 
 class _FakeEconomicsCosmos(FakeCosmos):
@@ -609,6 +661,7 @@ def test_api_economics_accepts_account_id_and_returns_ledger_backed_contract(eco
             "positions_missing_assignment_stock": 1,
             "excluded_unlinked_positions": 1,
             "excluded_positions_linked_only_outside_account_filter": 1,
+            "excluded_paper_positions": 0,
         },
     }
     assert body["applied_filters"]["account_ids"] == [ACCOUNT_1]
@@ -647,6 +700,7 @@ def test_api_economics_overview_uses_eur_options_fields_and_coverage(economics_c
             "positions_missing_assignment_stock": 1,
             "excluded_unlinked_positions": 1,
             "excluded_positions_linked_only_outside_account_filter": 1,
+            "excluded_paper_positions": 0,
         },
         "total_dividend_events": 1,
         "total_symbols": 8,
@@ -670,6 +724,30 @@ def test_api_economics_overview_uses_eur_options_fields_and_coverage(economics_c
         "dividends_currency": "EUR",
         "combined_total_available": True,
     }
+
+
+def test_api_economics_overview_reports_excluded_paper_positions():
+    original_cosmos = getattr(app.state, "cosmos", None)
+    original_error = getattr(app.state, "cosmos_error", None)
+    fake = _FakeEconomicsCosmos(_sample_option_symbol_docs_with_paper())
+    for security in _sample_securities():
+        _seed_security(fake, security["security_id"], security["ticker"])
+    for movement in _sample_option_movements_with_paper() + _sample_dividend_movements():
+        fake.portfolio_container._store[movement["id"]] = dict(movement)
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            app.state.cosmos = fake
+            app.state.cosmos_error = None
+            response = client.get("/api/economics/overview?account_id=acct-1")
+    finally:
+        app.state.cosmos = original_cosmos
+        app.state.cosmos_error = original_error
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"]["total_option_positions"] == 8
+    assert body["summary"]["options_coverage"]["excluded_paper_positions"] == 1
 
 
 def test_apply_dividends_yoc_uses_weighted_portfolio_cost_basis_and_guards_edge_cases():

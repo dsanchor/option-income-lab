@@ -392,6 +392,7 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
             "symbol": symbol,
             "position_id": position_id,
             "type": position_type,
+            "is_paper": bool(linked_position.get("is_paper")),
             "strike": strike,
             "expiration": linked_position.get("expiration"),
             "status": status,
@@ -432,48 +433,55 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
         and (option_type is None or position["type"] == option_type)
         and (status_filter is None or position["status"] == status_filter)
     ]
+    reportable_positions = [
+        position for position in filtered_positions
+        if not position.get("is_paper")
+    ]
 
-    summary_metrics = _build_position_economics_group(filtered_positions)
+    summary_metrics = _build_position_economics_group(reportable_positions)
     settled_results = [
         result
-        for position in filtered_positions
+        for position in reportable_positions
         for result in [_classify_position_win(position)]
         if result is not None
     ]
     win_rate = _round2((sum(1 for result in settled_results if result) / len(settled_results)) * 100) if settled_results else 0.0
 
-    linked_positions_count = sum(1 for position in filtered_positions if position.get("coverage_status") == "linked")
+    linked_positions_count = sum(1 for position in reportable_positions if position.get("coverage_status") == "linked")
     coverage = {
         "linked_positions": linked_positions_count,
-        "total_positions": len(filtered_positions),
-        "linked_ratio": round(linked_positions_count / len(filtered_positions), 4) if filtered_positions else 0.0,
+        "total_positions": len(reportable_positions),
+        "linked_ratio": round(linked_positions_count / len(reportable_positions), 4) if reportable_positions else 0.0,
         "positions_with_unresolved_security": sum(
-            1 for position in filtered_positions
+            1 for position in reportable_positions
             if OPTION_SECURITY_UNRESOLVED in position.get("warnings", [])
         ),
         "positions_missing_opening_sell": sum(
-            1 for position in filtered_positions
+            1 for position in reportable_positions
             if OPTION_OPENING_SELL_MISSING in position.get("warnings", [])
         ),
         "positions_missing_closing_buy": sum(
-            1 for position in filtered_positions
+            1 for position in reportable_positions
             if OPTION_MANUAL_CLOSE_BUY_MISSING in position.get("warnings", [])
         ),
         "positions_missing_assignment_stock": sum(
-            1 for position in filtered_positions
+            1 for position in reportable_positions
             if OPTION_ASSIGNMENT_STOCK_MISSING in position.get("warnings", [])
         ),
         "excluded_unlinked_positions": sum(
-            1 for position in filtered_positions if position.get("coverage_status") == "unlinked"
+            1 for position in reportable_positions if position.get("coverage_status") == "unlinked"
         ),
         "excluded_positions_linked_only_outside_account_filter": sum(
-            1 for position in filtered_positions if position.get("coverage_status") == "account_filtered_out"
+            1 for position in reportable_positions if position.get("coverage_status") == "account_filtered_out"
+        ),
+        "excluded_paper_positions": sum(
+            1 for position in filtered_positions if position.get("is_paper")
         ),
     }
 
     monthly_groups: Dict[tuple[int, int], List[Dict[str, Any]]] = defaultdict(list)
     symbol_groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    for position in filtered_positions:
+    for position in reportable_positions:
         symbol_groups[position["symbol"]].append(position)
         if position["_opened_year"] and position["_opened_month"]:
             monthly_groups[(position["_opened_year"], position["_opened_month"])].append(position)
@@ -520,8 +528,8 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
             "avg_roc_annualized": metrics["avg_roc_annualized"],
         })
 
-    calls_positions = [position for position in filtered_positions if position["type"] == "call"]
-    puts_positions = [position for position in filtered_positions if position["type"] == "put"]
+    calls_positions = [position for position in reportable_positions if position["type"] == "call"]
+    puts_positions = [position for position in reportable_positions if position["type"] == "put"]
     calls_metrics = _build_position_economics_group(calls_positions)
     puts_metrics = _build_position_economics_group(puts_positions)
 
@@ -535,7 +543,7 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
             "avg_roc_pct": summary_metrics["avg_roc_pct"],
             "avg_roc_annualized": summary_metrics["avg_roc_annualized"],
             "win_rate": win_rate,
-            "total_positions": len(filtered_positions),
+            "total_positions": len(reportable_positions),
             "coverage": coverage,
         },
         "monthly": monthly,
@@ -2864,8 +2872,13 @@ async def api_add_position(request: Request, symbol: str):
                 else:
                     source["premium"] = premium
 
+        raw_is_paper = body.get("is_paper")
+        if raw_is_paper is not None and not isinstance(raw_is_paper, bool):
+            return JSONResponse({"error": "is_paper must be a boolean"}, status_code=400)
+        is_paper = bool(raw_is_paper)
+
         doc = cosmos.add_position(symbol.upper(), position_type, strike,
-                                  expiration, notes, source=source)
+                                  expiration, notes, source=source, is_paper=is_paper)
         return JSONResponse(_clean_doc(doc), status_code=201)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)

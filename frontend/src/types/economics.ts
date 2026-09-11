@@ -21,6 +21,7 @@ export interface EconomicsCoverage {
   positions_missing_assignment_stock: number;
   excluded_unlinked_positions: number;
   excluded_positions_linked_only_outside_account_filter: number;
+  excluded_paper_positions: number;
 }
 
 export interface EconomicsMonthlyRow {
@@ -68,6 +69,7 @@ export interface EconomicsPosition {
   symbol: string;
   position_id: string | null;
   type: string;
+  is_paper: boolean;
   strike: number | null;
   expiration: string | null;
   premium_usd: number;

@@ -209,6 +209,7 @@ export interface LedgerMovement {
   option_symbol?: string;
   option_close_date?: string;
   movement_warnings?: string[];
+  is_paper?: boolean;
 }
 
 export interface MovementsResponse {
@@ -355,7 +356,17 @@ export interface ManualMovementRequest {
   option_expiration?: string;
   option_symbol?: string;
   option_close_date?: string;
+  is_paper?: boolean;
   notes?: string;
+}
+
+export interface AddPositionRequest {
+  type: OptionContractType;
+  strike: number;
+  expiration: string;
+  notes?: string;
+  premium?: number;
+  is_paper?: boolean;
 }
 
 /** Payload for POST /api/portfolio/transfers (creates TRANSFER_OUT + TRANSFER_IN pair). */
@@ -402,6 +413,7 @@ export interface MovementCorrectionRequest {
   option_expiration?: string;
   option_symbol?: string;
   option_close_date?: string;
+  is_paper?: boolean;
   notes?: string;
 }
 

@@ -51,6 +51,10 @@ const statCardSrc   = src("src/components/StatCard.tsx");
 const symbolsPage   = src("src/app/symbols/page.tsx");
 const symbolsTable  = src("src/components/SymbolsTable.tsx");
 const movementsTbl  = src("src/components/PortfolioMovementsTable.tsx");
+const addMovementSrc = src("src/components/AddMovementDialog.tsx");
+const addPositionSrc = src("src/components/AddPositionForm.tsx");
+const optionBadgesSrc = src("src/components/OptionLinkageBadges.tsx");
+const movementDetailSrc = src("src/components/MovementDetailDialog.tsx");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -665,6 +669,60 @@ describe("RG: Non-regression — key invariants not broken by visual contract ch
     assert.ok(
       statCardSrc.includes("text-3xl") && statCardSrc.includes("font-mono"),
       "RG-8: StatCard value must remain text-3xl font-mono — do not reduce Economics card size."
+    );
+  });
+});
+
+describe("PP: Paper positions and movement drilldown source contract", () => {
+  it("PP-1: EconomicsView includes the showPaperPositions toggle and paper-exclusion copy", () => {
+    assert.ok(
+      economicsSrc.includes("showPaperPositions") &&
+      economicsSrc.includes("Show paper positions") &&
+      economicsSrc.includes("excluded_paper_positions"),
+      "PP-1 DEFECT: EconomicsView must include the Show paper positions toggle and paper-exclusion coverage copy."
+    );
+  });
+
+  it("PP-2: EconomicsView keeps MovementDetailDialog and Position Movements drilldown flow", () => {
+    assert.ok(
+      economicsSrc.includes("Position Movements") &&
+      economicsSrc.includes("MovementDetailDialog") &&
+      economicsSrc.includes("option_position_id"),
+      "PP-2 DEFECT: EconomicsView must use the movements-by-position drilldown flow."
+    );
+  });
+
+  it("PP-3: OptionLinkageBadges exports a reusable Paper badge", () => {
+    assert.ok(
+      optionBadgesSrc.includes("export function PaperBadge") &&
+      optionBadgesSrc.includes("Paper"),
+      "PP-3 DEFECT: OptionLinkageBadges must export a reusable PaperBadge."
+    );
+  });
+
+  it("PP-4: AddPositionForm exposes Add Paper Position affordance", () => {
+    assert.ok(
+      addPositionSrc.includes("Add Paper Position") &&
+      addPositionSrc.includes("is_paper"),
+      "PP-4 DEFECT: AddPositionForm must send is_paper via Add Paper Position."
+    );
+  });
+
+  it("PP-5: AddMovementDialog supports paper-position creation flow", () => {
+    assert.ok(
+      addMovementSrc.includes("Paper position") &&
+      addMovementSrc.includes("is_paper") &&
+      addMovementSrc.includes("/api/symbols/") &&
+      addMovementSrc.includes("Failed to create paper position"),
+      "PP-5 DEFECT: AddMovementDialog must support paper-position creation before manual option movement save."
+    );
+  });
+
+  it("PP-6: MovementDetailDialog renders a Paper marker", () => {
+    assert.ok(
+      movementDetailSrc.includes("PaperBadge") &&
+      movementDetailSrc.includes("m.is_paper"),
+      "PP-6 DEFECT: MovementDetailDialog must render a Paper marker for paper movements."
     );
   });
 });

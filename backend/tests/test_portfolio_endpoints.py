@@ -137,12 +137,47 @@ class FakeCosmos:
         self.container = FakeSymbolsContainer()
         self.portfolio_container = FakePortfolioContainer()
         self.import_sessions_container = FakeImportSessionsContainer()
+        self._symbols = {}
 
     def list_symbols(self):
-        return []
+        return list(self._symbols.values())
 
     def get_symbol(self, symbol):
-        return None
+        return self._symbols.get(symbol.upper())
+
+    def add_symbol_doc(self, symbol, *, security_id=None):
+        normalized = symbol.upper()
+        doc = {
+            "id": f"config_{normalized}",
+            "doc_type": "symbol_config",
+            "symbol": normalized,
+            "security_id": security_id or f"XNAS:{normalized}",
+            "positions": [],
+            "watchlist": {},
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+        self._symbols[normalized] = doc
+        self.container._store[(normalized, f"config_{normalized}")] = dict(doc)
+        return doc
+
+    def add_position(self, symbol, position_type, strike, expiration, notes="", source=None, is_paper=False):
+        doc = self._symbols[symbol.upper()]
+        position = {
+            "position_id": f"pos_{symbol.upper()}_{len(doc['positions']) + 1}",
+            "type": position_type,
+            "strike": strike,
+            "expiration": expiration,
+            "opened_at": "2026-01-01T00:00:00Z",
+            "status": "active",
+            "notes": notes,
+        }
+        if source is not None:
+            position["source"] = source
+        if is_paper:
+            position["is_paper"] = True
+        doc["positions"].append(position)
+        self.container._store[(symbol.upper(), f"config_{symbol.upper()}")] = dict(doc)
+        return dict(doc)
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +281,45 @@ class TestSecuritiesEndpoints:
         assert resp.status_code == 200
         ids = [s["security_id"] for s in resp.json()["securities"]]
         assert "XNYS:IBM" in ids
+
+
+class TestPositionAndMovementEndpoints:
+    def test_add_position_accepts_is_paper(self, client):
+        c, fake = client
+        fake.add_symbol_doc("AAPL")
+
+        resp = c.post("/api/symbols/AAPL/positions", json={
+            "type": "call",
+            "strike": 210,
+            "expiration": "2026-01-16",
+            "is_paper": True,
+        })
+
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["positions"][-1]["is_paper"] is True
+
+    def test_create_manual_option_movement_accepts_is_paper(self, client):
+        c, fake = client
+        fake.add_symbol_doc("AAPL")
+
+        resp = c.post("/api/portfolio/movements", json={
+            "txn_type": "CALL_SELL",
+            "security_id": "XNAS:AAPL",
+            "trade_date": "2026-01-15",
+            "quantity": "0",
+            "gross": {"amount": "150.00", "currency": "USD", "eur_amount": "138.00"},
+            "fees": {"total": "3.50", "currency": "USD", "total_eur": "3.25"},
+            "option_position_id": None,
+            "option_link_kind": "OPEN_SELL",
+            "option_type": "call",
+            "option_strike": 210,
+            "option_expiration": "2026-01-16",
+            "is_paper": True,
+        })
+
+        assert resp.status_code == 201
+        assert resp.json()["is_paper"] is True
 
 
 # ---------------------------------------------------------------------------

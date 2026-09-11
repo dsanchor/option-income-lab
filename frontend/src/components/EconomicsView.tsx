@@ -20,14 +20,16 @@ import EconomicsTabs from "@/components/EconomicsTabs";
 import MultiSelect from "@/components/MultiSelect";
 import {
   CoverageStatusBadge,
+  PaperBadge,
   WarningBadge,
 } from "@/components/OptionLinkageBadges";
 import Reveal from "@/components/Reveal";
 import StatCard from "@/components/StatCard";
 import { getAccountName } from "@/lib/accountDisplay";
 import { averageLastNExcludingZero } from "@/lib/format";
-import { listAccounts } from "@/lib/portfolio-api";
-import type { BrokerAccount } from "@/types/portfolio";
+import { getMovements, listAccounts } from "@/lib/portfolio-api";
+import MovementDetailDialog from "@/components/MovementDetailDialog";
+import type { BrokerAccount, LedgerMovement } from "@/types/portfolio";
 import type {
   EconomicsBySymbolRow,
   EconomicsCoverage,
@@ -245,12 +247,15 @@ function CoverageBanner({ coverage, hasAccountFilter }: { coverage: EconomicsCov
       `${coverage.excluded_positions_linked_only_outside_account_filter} positions only link outside the selected account filter`,
     );
   }
+  if (coverage.excluded_paper_positions > 0) {
+    details.push(`${coverage.excluded_paper_positions} paper positions excluded from real totals`);
+  }
 
   return (
     <div className="rounded-[var(--radius)] border border-accent-orange/30 bg-accent-orange/10 px-4 py-3 text-sm text-text">
       <div className="font-medium text-accent-orange">Coverage: {ratio} positions linked for current filters.</div>
       <div className="mt-1 text-text-muted">
-        EUR totals reflect linked positions only. {details.join(". ")}.
+        EUR totals reflect linked non-paper positions only. {details.join(". ")}.
       </div>
     </div>
   );
@@ -403,6 +408,7 @@ const POSITION_COLS: PositionColumn[] = [
   { label: "RoC% Ann.", sortKey: "roc_annualized", num: true },
   { label: "Days Held", sortKey: "days_held", num: true },
   { label: "Status", sortKey: "status" },
+  { label: "Movements" },
   { label: "Accounts" },
   { label: "Coverage" },
   { label: "Warnings" },
@@ -446,17 +452,133 @@ function renderLinkedAccounts(accountsForRow: string[], accounts: BrokerAccount[
   );
 }
 
-function PositionsDetail({ rows, accounts }: { rows: EconomicsPosition[]; accounts: BrokerAccount[] }) {
+function PositionMovementsDialog({
+  position,
+  movements,
+  accounts,
+  loading,
+  error,
+  onClose,
+  onSelect,
+}: {
+  position: EconomicsPosition | null;
+  movements: LedgerMovement[];
+  accounts: BrokerAccount[];
+  loading: boolean;
+  error: string | null;
+  onClose: () => void;
+  onSelect: (movement: LedgerMovement) => void;
+}) {
+  if (!position) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[190] flex items-start justify-center overflow-auto bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="mt-12 mb-12 w-full max-w-[720px] rounded-[var(--radius)] border border-border bg-bg-card"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Position movements"
+      >
+        <div className="flex items-center justify-between border-b border-border px-5 py-3">
+          <div>
+            <h3 className="text-base font-semibold text-text">Position Movements</h3>
+            <p className="mt-0.5 text-xs text-text-muted">
+              {position.symbol} {position.type.toUpperCase()} {position.strike != null ? usd(position.strike) : ""}{" "}
+              {position.expiration ?? ""}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-[var(--radius)] px-2 py-1 text-sm text-text-muted hover:bg-bg-hover hover:text-text"
+          >
+            Close
+          </button>
+        </div>
+        <div className="px-5 py-4">
+          {loading ? (
+            <div className="text-sm text-text-muted">Loading linked movements…</div>
+          ) : error ? (
+            <div className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-4 py-3 text-sm text-accent-red">
+              {error}
+            </div>
+          ) : movements.length === 0 ? (
+            <div className="text-sm text-text-muted">No linked movements found.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[560px] text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
+                    <th className="px-3 py-2 font-medium">Date</th>
+                    <th className="px-3 py-2 font-medium">Type</th>
+                    <th className="px-3 py-2 text-right font-medium">Net (EUR)</th>
+                    <th className="px-3 py-2 font-medium">Account</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {movements.map((movement) => (
+                    <tr
+                      key={movement.id}
+                      className="cursor-pointer border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40"
+                      onClick={() => onSelect(movement)}
+                    >
+                      <td className="px-3 py-2 font-mono">{movement.trade_date}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span>{movement.txn_type}</span>
+                          {movement.is_paper && <PaperBadge />}
+                        </div>
+                      </td>
+                      <td className={`px-3 py-2 text-right font-mono ${netColor(Number(movement.net?.eur_amount ?? 0))}`}>
+                        {eur(Number(movement.net?.eur_amount ?? 0))}
+                      </td>
+                      <td className="px-3 py-2">{getAccountName(movement.account_id, accounts)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PositionsDetail({
+  rows,
+  accounts,
+  onRefresh,
+}: {
+  rows: EconomicsPosition[];
+  accounts: BrokerAccount[];
+  onRefresh: () => void;
+}) {
   const [sortKey, setSortKey] = useState<EconomicsSortKey>("opened_at");
   const [dir, setDir] = useState<"asc" | "desc">("desc");
+  const [showPaperPositions, setShowPaperPositions] = useState(false);
+  const [loadingPositionId, setLoadingPositionId] = useState<string | null>(null);
+  const [movementsError, setMovementsError] = useState<string | null>(null);
+  const [positionMovements, setPositionMovements] = useState<LedgerMovement[]>([]);
+  const [selectedPosition, setSelectedPosition] = useState<EconomicsPosition | null>(null);
+  const [selectedMovement, setSelectedMovement] = useState<LedgerMovement | null>(null);
+
+  const visibleRows = useMemo(
+    () => rows.filter((position) => showPaperPositions || !position.is_paper),
+    [rows, showPaperPositions],
+  );
 
   const sorted = useMemo(
     () =>
-      [...rows].sort((left, right) => {
+      [...visibleRows].sort((left, right) => {
         const comparison = compareValues(left[sortKey], right[sortKey]);
         return dir === "asc" ? comparison : -comparison;
       }),
-    [dir, rows, sortKey],
+    [dir, sortKey, visibleRows],
   );
 
   function onSort(key?: EconomicsSortKey) {
@@ -468,15 +590,57 @@ function PositionsDetail({ rows, accounts }: { rows: EconomicsPosition[]; accoun
     }
   }
 
+  async function handleOpenMovements(position: EconomicsPosition) {
+    if (!position.position_id || position.linked_movement_count === 0) return;
+    setLoadingPositionId(position.position_id);
+    setMovementsError(null);
+    try {
+      const response = await getMovements({
+        option_position_id: position.position_id,
+        limit: Math.max(position.linked_movement_count, 10),
+      });
+      const movements = response.movements ?? [];
+      if (position.linked_movement_count === 1 && movements.length === 1) {
+        setSelectedPosition(null);
+        setPositionMovements([]);
+        setSelectedMovement(movements[0]);
+      } else {
+        setSelectedMovement(null);
+        setSelectedPosition(position);
+        setPositionMovements(movements);
+      }
+    } catch (error) {
+      setSelectedMovement(null);
+      setSelectedPosition(position);
+      setPositionMovements([]);
+      setMovementsError(error instanceof Error ? error.message : "Failed to load linked movements.");
+    } finally {
+      setLoadingPositionId(null);
+    }
+  }
+
   return (
-    <details open className="surface overflow-hidden">
-      <summary className="flex cursor-pointer items-center justify-between px-4 py-3">
-        <span className="text-base font-semibold">Positions Detail</span>
-        <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
-          {rows.length} rows
-        </span>
-      </summary>
-      <div className="overflow-x-auto border-t border-border">
+    <>
+      <details open className="surface overflow-hidden">
+        <summary className="flex cursor-pointer items-center justify-between px-4 py-3">
+          <span className="text-base font-semibold">Positions Detail</span>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-xs font-normal text-text-muted">
+              <input
+                type="checkbox"
+                checked={showPaperPositions}
+                onChange={(event) => setShowPaperPositions(event.target.checked)}
+                onClick={(event) => event.stopPropagation()}
+                className="accent-accent-purple"
+              />
+              <span>Show paper positions</span>
+            </label>
+            <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+              {sorted.length} rows
+            </span>
+          </div>
+        </summary>
+        <div className="overflow-x-auto border-t border-border">
         <table className="w-full min-w-[1380px] text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
@@ -531,12 +695,29 @@ function PositionsDetail({ rows, accounts }: { rows: EconomicsPosition[]; accoun
                       <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${statusBadgeClass(position.status)}`}>
                         {position.status}
                       </span>
+                      {position.is_paper && <PaperBadge />}
                       {position.close_reason && position.status === "closed" && (
                         <span className="inline-block rounded-[var(--radius-pill)] border border-border bg-bg-input px-2 py-0.5 text-xs text-text-muted">
                           {position.close_reason}
                         </span>
                       )}
                     </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    {position.linked_movement_count === 0 || !position.position_id ? (
+                      <span className="text-text-muted">—</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void handleOpenMovements(position)}
+                        disabled={loadingPositionId === position.position_id}
+                        className="rounded-[var(--radius-pill)] border border-accent-blue/40 bg-accent-blue/10 px-2 py-0.5 text-xs text-accent-blue hover:bg-accent-blue/15 disabled:opacity-50"
+                      >
+                        {loadingPositionId === position.position_id
+                          ? "Loading…"
+                          : `${position.linked_movement_count} movement${position.linked_movement_count === 1 ? "" : "s"}`}
+                      </button>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right">{renderLinkedAccounts(position.linked_accounts ?? [], accounts)}</td>
                   <td className="px-3 py-2"><CoverageStatusBadge status={position.coverage_status} /></td>
@@ -547,8 +728,36 @@ function PositionsDetail({ rows, accounts }: { rows: EconomicsPosition[]; accoun
             })}
           </tbody>
         </table>
-      </div>
-    </details>
+        </div>
+      </details>
+
+      <PositionMovementsDialog
+        position={selectedPosition}
+        movements={positionMovements}
+        accounts={accounts}
+        loading={loadingPositionId === selectedPosition?.position_id}
+        error={movementsError}
+        onClose={() => {
+          setSelectedPosition(null);
+          setPositionMovements([]);
+          setMovementsError(null);
+        }}
+        onSelect={(movement) => setSelectedMovement(movement)}
+      />
+      {selectedMovement && (
+        <MovementDetailDialog
+          movement={selectedMovement}
+          accounts={accounts}
+          onClose={() => setSelectedMovement(null)}
+          onRefresh={() => {
+            void onRefresh();
+            setSelectedMovement(null);
+            setSelectedPosition(null);
+            setPositionMovements([]);
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -842,7 +1051,7 @@ export default function EconomicsView({
             </div>
           </div>
 
-          <PositionsDetail rows={data.positions} accounts={accounts} />
+          <PositionsDetail rows={data.positions} accounts={accounts} onRefresh={fetchData} />
         </>
       )}
     </div>

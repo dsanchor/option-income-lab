@@ -89,3 +89,10 @@ Frontend: npx tsc --noEmit — 0 errors
 
 **Verification:** All product code (Linus, Livingston) remains unchanged in revision cycles; test defects were scaffolding issues (false patterns, dead code), not implementation bugs.
 
+## Paper Position Roll Fix (2026-09-11 13:41–13:55 UTC+02:00)
+
+- Fixed `backend/src/cosmos_db.py:613-624` in `roll_position()` so rolled positions inherit `old_pos["is_paper"]` only when it is explicitly `True`. This preserves paper status for paper rolls and avoids introducing `is_paper` on legacy real positions.
+- Checked other position mutation helpers in the same file for the same pattern. `add_position()` already gates `is_paper` correctly; no other helper creates a derived replacement position from an existing one.
+- Added regression tests in `backend/tests/test_cosmos_roll.py:33-55`:
+  - `test_roll_position_preserves_is_paper_for_paper_positions`
+  - `test_roll_position_does_not_introduce_is_paper_for_real_positions`

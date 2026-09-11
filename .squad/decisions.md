@@ -8036,3 +8036,249 @@ Manually-created portfolio movements (Add Movement dialog) and transfer pairs di
 ✅ Manually-created movements display correctly in detail dialog
 ✅ "Void entire group" action now available for Share Consolidation groups with manual legs
 ✅ Movement correction dialog safely initializes sparse movements (transfers, manual edits)
+# Danny decision — Economics options movement drilldown + paper positions
+
+Date: 2026-09-11
+Status: Proposed
+Requested by: dsanchor
+
+## 1) Final naming
+
+**Final user-facing term: `Paper Position`.**
+
+Use it consistently in UI text:
+- button: **Add Paper Position**
+- toggle/checkbox: **Paper position**
+- badge: **Paper**
+- filter: **Show paper positions**
+
+For storage, use a single additive boolean field named **`is_paper`** on both symbol-position rows and ledger movements.
+
+### Why this name/field combo
+- The primary object in scope is the option **position**, not an isolated trade.
+- Reusing `import_source` is the wrong layer: the movement contract only allows `"csv_import" | "manual"` (`frontend/src/types/portfolio.ts:27,338-359`) and manual writes already hardcode `import_source: "manual"` (`backend/src/portfolio/cosmos_portfolio.py:849,958`).
+- Adding a plain string `source: "paper"` would conflict conceptually with the existing **position** `source` object already used for premium/source metadata (`backend/src/portfolio/option_linkage_service.py:61-75`, `backend/web/app.py:2836-2865`).
+
+## 2) Ask 1 — clickable position → movement details
+
+### Backend decision
+**Add `option_position_id` as a new query filter on the existing movements list API. Do not create a new endpoint.**
+
+### Why
+- The frontend already uses a filter-object pattern for `/api/portfolio/movements` (`frontend/src/lib/portfolio-api.ts:110-134`).
+- The route/service currently support only account/security/type/date pagination filters; there is **no existing position-level movement drilldown** (`backend/web/portfolio_routes.py:530-562`, `backend/src/portfolio/cosmos_portfolio.py:1542-1588`).
+- `MovementDetailDialog` already follows an **on-demand fetch → modal** pattern for related records (`frontend/src/components/MovementDetailDialog.tsx:127-136`), so extending the same API is the smallest consistent move.
+
+### Exact backend changes
+1. **`frontend/src/lib/portfolio-api.ts`**
+   - Extend `MovementsFilter` with `option_position_id?: string` beside `ca_group_id` (`frontend/src/lib/portfolio-api.ts:110-134`).
+2. **`backend/web/portfolio_routes.py`**
+   - Add `option_position_id: Optional[str] = Query(default=None)` to `get_movements()` and forward it to `svc.get_movements(...)` (`backend/web/portfolio_routes.py:530-562`).
+3. **`backend/src/portfolio/cosmos_portfolio.py`**
+   - Add `option_position_id: Optional[str] = None` to `get_movements()` and append `c.option_position_id = @option_position_id` when provided (`backend/src/portfolio/cosmos_portfolio.py:1542-1588`).
+
+### UI decision
+**Use an explicit movements link/button in the Positions Detail table.**
+- If `linked_movement_count === 1`: fetch by `option_position_id` and open the existing `MovementDetailDialog` directly.
+- If `linked_movement_count > 1`: open a small **Position Movements** dialog listing the linked movements; clicking a row opens the existing `MovementDetailDialog`.
+- If `linked_movement_count === 0`: render `—` / disabled state.
+
+### Why this pattern
+- `MovementDetailDialog` is single-movement by contract (`frontend/src/components/MovementDetailDialog.tsx:68-101`).
+- `PortfolioMovementsTable` already uses the `selectedMovement` → `MovementDetailDialog` pattern (`frontend/src/components/PortfolioMovementsTable.tsx:102,537-542`).
+- A dialog is more consistent than a popover because rolls/assignment can produce several related movements.
+- Making the whole row clickable is less precise than a dedicated “1 movement” / “3 movements” affordance inside `PositionsDetail` (`frontend/src/components/EconomicsView.tsx:449-545`).
+
+## 3) Ask 3 — paper positions storage + exclusion from real totals
+
+## Data-model decision
+**Use the existing symbol position row + existing `ledger_txn` movement model; add `is_paper: true` instead of inventing a separate paper-only document type.**
+
+### Why
+- Economics positions are built from **symbol docs first**, then enriched from linked ledger movements (`backend/src/portfolio/option_linkage_service.py:50-75`, `backend/web/app.py:323-423`). A movement-only paper model would not create a visible position row.
+- Reusing `option_position_id` linkage preserves `build_option_position_linkage()` as the single join engine (`backend/src/portfolio/option_linkage_service.py:306-425`).
+- Real broker imports stay unaffected because imported movements continue to flow through their current paths; only manual creation paths gain the new flag.
+
+### Exact backend changes
+1. **Paper flag on position docs**
+   - Accept optional `is_paper` in `POST /api/symbols/{symbol}/positions` (`backend/web/app.py:2803-2868`).
+   - Persist it from `CosmosDB.add_position()` onto the stored position row (`backend/src/cosmos_db.py:551-575`).
+2. **Paper flag on ledger movements**
+   - Accept optional `is_paper` in `POST /api/portfolio/movements` manual bodies (`backend/web/portfolio_routes.py:813-897`).
+   - Persist it in `create_manual_movement()` (`backend/src/portfolio/cosmos_portfolio.py:777-879`).
+   - Add the same field to the frontend request/movement types (`frontend/src/types/portfolio.ts:180-212,338-359`).
+3. **Movement/position parity guard**
+   - In `create_manual_movement()` and `correct_movement()`, validate that a movement linked to `option_position_id` matches the target position’s `is_paper` value; do not allow a paper movement to link to a real position or vice versa (`backend/src/portfolio/cosmos_portfolio.py:777-879,951-985`).
+4. **Duplicate detection**
+   - Include `is_paper` in the probable-duplicate fingerprint so a paper entry never blocks the real one, or the reverse (`backend/src/portfolio/cosmos_portfolio.py:1677-1699`).
+5. **Economics linkage/report propagation**
+   - Propagate `is_paper` out of `collect_option_positions()` / `build_option_position_linkage()` (`backend/src/portfolio/option_linkage_service.py:50-75,393-420`).
+   - Add `is_paper` to each economics position row assembled in `_build_economics_report()` (`backend/web/app.py:391-421`).
+
+## Exclusion from real totals
+**Paper positions must be returned in `positions[]`, but excluded from all real aggregates by default.**
+
+### Exact filter extension
+Current economics aggregation sums `filtered_positions` directly (`backend/web/app.py:247-283,436-538`). Extend that by introducing a real-only subset, e.g. conceptually:
+- `reportable_positions = [p for p in filtered_positions if not p.is_paper]`
+
+Use `reportable_positions` — not `filtered_positions` — for:
+- summary metrics (`backend/web/app.py:436`)
+- win rate (`backend/web/app.py:437-443`)
+- coverage counts shown as economics totals (`backend/web/app.py:445-472`)
+- monthly groups (`backend/web/app.py:474-505`)
+- by-symbol groups (`backend/web/app.py:507-521`)
+- by-type summaries (`backend/web/app.py:523-539`)
+- therefore overview too, because `/api/economics/overview` reuses `_build_economics_report()` before composing totals (`backend/web/app.py:1650-1732`)
+
+### UI copy extension
+This mirrors the existing account-scoped exclusion messaging:
+- options detail banner already says **“EUR totals reflect linked positions only”** (`frontend/src/components/EconomicsView.tsx:249-254`)
+- overview already says **“Unlinked positions excluded from account-scoped options totals.”** (`frontend/src/components/EconomicsOverviewView.tsx:499-500`)
+
+Add an additive coverage field such as `excluded_paper_positions` so both UIs can say paper positions are excluded from real totals.
+
+## 4) Exact frontend changes needed
+
+1. **`frontend/src/types/economics.ts`**
+   - Add `is_paper: boolean` to `EconomicsPosition` (`frontend/src/types/economics.ts:67-92`).
+   - Add `excluded_paper_positions: number` to `EconomicsCoverage` (`frontend/src/types/economics.ts:14-24`).
+2. **`frontend/src/components/EconomicsView.tsx`**
+   - In `PositionsDetail`, add a **Movements** cell/button using `linked_movement_count` and the on-demand fetch flow (`frontend/src/components/EconomicsView.tsx:449-545`).
+   - Add local `showPaperPositions` state, default `false`, and filter `rows` client-side by `position.is_paper` before sort/render.
+   - Add a **Paper** badge next to status/coverage badges.
+   - Extend `CoverageBanner` copy to mention excluded paper positions (`frontend/src/components/EconomicsView.tsx:232-255`).
+3. **`frontend/src/components/OptionLinkageBadges.tsx`**
+   - Add a small reusable paper badge helper using the same pill visual system (`frontend/src/components/OptionLinkageBadges.tsx:8-54`).
+4. **`frontend/src/components/MovementDetailDialog.tsx`**
+   - Reuse unchanged for the final detail view, but display a visible **Paper** marker when `movement.is_paper` is true (`frontend/src/components/MovementDetailDialog.tsx:101-140`).
+5. **`frontend/src/components/AddPositionForm.tsx`**
+   - Add **Add Paper Position** affordance in the existing manual position flow and send `is_paper` in the body (`frontend/src/components/AddPositionForm.tsx:7-38`).
+6. **`frontend/src/components/AddMovementDialog.tsx`**
+   - Add `is_paper` to `OptionFormState` and the option submission payload (`frontend/src/components/AddMovementDialog.tsx:165-177,726-859`).
+   - UX rule: when `Paper position` is checked on an opening sell and `option_position_id` is blank, first create a paper position through `/api/symbols/{symbol}/positions`, then create the manual paper movement linked to the returned `position_id`.
+   - When `option_position_id` is already supplied, submit the paper movement directly and rely on the backend parity guard.
+
+## 5) Ask 2 — account-label convention + incidental findings
+
+### Convention confirmed
+Yes: the repo-wide rule is **name-only for informational account labels; broker/type never appear except metadata-management surfaces**.
+- Explicit helper contract: `frontend/src/lib/accountDisplay.ts:42-69`
+- User directive captured in memory: `.squad/decisions.md:167-170`
+
+### Incidental findings in reviewed options/economics paths
+**No additional clearly-wrong raw-ID-as-label usage found** in the reviewed options/economics paths.
+- Economics filters already build labels with `getAccountName(...)` (`frontend/src/components/EconomicsView.tsx:115-121`).
+- Linked accounts tooltip already resolves names via `getAccountName(...)` (`frontend/src/components/EconomicsView.tsx:428-439`).
+- Add Movement option account selector already uses the informational name-only helpers (`frontend/src/components/AddMovementDialog.tsx:215-220`).
+
+## 6) Test coverage Basher should write
+
+### Backend
+1. **Movements filter contract** (`backend/tests/test_portfolio_phase2.py` or a new focused movements-route test)
+   - `GET /api/portfolio/movements?option_position_id=...` returns only active, non-deleted, non-superseded linked movements for that position.
+   - Works alongside account/date/type filters.
+2. **Paper storage contract** (`backend/tests/test_portfolio_phase2.py` + `backend/tests/test_economics.py`)
+   - `POST /api/symbols/{symbol}/positions` persists `is_paper=true`.
+   - `POST /api/portfolio/movements` persists `is_paper=true` on manual option movements.
+   - Real/manual/imported movements remain non-paper by default.
+3. **Parity guard**
+   - Reject paper movement → real position link.
+   - Reject real movement → paper position link.
+   - Correction/relink path enforces the same rule.
+4. **Economics exclusion** (`backend/tests/test_economics.py`)
+   - Paper positions still appear in `positions[]` with `is_paper=true`.
+   - Paper positions are excluded from `summary`, `monthly`, `by_symbol`, `by_type`, and overview totals by default.
+   - `excluded_paper_positions` is reported.
+5. **Duplicate check**
+   - Same real fingerprint and same paper fingerprint collide within their own lane, but real vs paper do not conflict.
+
+### Frontend
+1. **Economics contract/source test** (`frontend/tests/economicsTypesContract.test.mjs`)
+   - `EconomicsPosition.is_paper` and `EconomicsCoverage.excluded_paper_positions` exist.
+2. **EconomicsView source-contract test** (`frontend/tests/economicsParity.test.mjs` or new options-economics test)
+   - default-hide paper positions
+   - show-paper toggle reveals them
+   - single linked movement opens `MovementDetailDialog`
+   - multi-movement path opens the intermediate list dialog
+3. **Movement detail source-contract** (`frontend/tests/movementDetailDefensiveGuards.test.mjs`)
+   - paper badge/marker renders safely
+4. **Account-label regression guard** (`frontend/tests/movementsAccountLabel.test.mjs`)
+   - only if touched by implementation; keep the options/economics surfaces name-only.
+
+## Final call
+- **Ask 1:** add `option_position_id` to the existing movements filter and use a one-or-many dialog pattern.
+- **Ask 2:** convention confirmed; no extra raw-ID label bug found in reviewed options/economics paths.
+- **Ask 3:** implement **Paper Position** as existing symbol positions + existing ledger movements, both flagged `is_paper`, with paper excluded from all real economics totals by default and hidden in the positions table unless explicitly shown.
+# Livingston implementation note — paper positions
+
+Date: 2026-09-11
+Status: Implemented
+Related spec: `danny-paper-positions-design.md`
+
+## Decisions not fully specified by Danny
+
+1. **Position Movements dialog layout**
+   - Implemented as a compact modal table with Date / Type / Net (EUR) / Account columns.
+   - Rationale: fastest reuse of existing movement detail flow while keeping enough context to choose among multiple linked movements.
+
+2. **Single-movement drilldown fallback**
+   - If a row advertises one linked movement but the API returns a different count, the UI falls back to the list dialog instead of assuming data consistency.
+   - Rationale: safer against stale linkage counts after corrections.
+
+3. **Paper-position auto-create payload**
+   - The Add Movement flow creates the paper position with type/strike/expiration/`is_paper` only; it does not copy movement notes onto the position.
+   - Rationale: movement notes and position notes are different concepts, and Danny did not specify cross-copy behavior.
+
+4. **Parity error text**
+   - Backend mismatch validation message is: `Linked movement/position paper parity mismatch: movement is {paper|real} but option position '{id}' is {paper|real}`.
+   - Rationale: explicit enough for UI surfacing and tests without introducing new error codes.
+REJECT
+
+1. backend/src/cosmos_db.py:612-625 — High
+   `roll_position()` creates the replacement position without copying `old_pos["is_paper"]`.
+   Result: rolling an existing paper position turns the new rolled leg into an unflagged real
+   position. That paper position will then be included in real economics totals and no longer
+   be hidden by the default UI paper filter. This affects both roll entry points in
+   `backend/web/app.py` that call `cosmos.roll_position(...)` (`/positions/{position_id}/roll`
+   and `/positions/roll-from-activity/...`).
+
+Otherwise reviewed areas looked good: manual/default false behavior for existing real create paths,
+duplicate lane split, reportable-position aggregation, drilldown 0/1/N + stale-count fallback,
+paper toggle default-hidden, distinct paper badge, and DividendsView account labels via
+`getAccountName`.
+
+---
+
+APPROVE
+
+Re-review complete. `roll_position()` now copies `is_paper` only when `old_pos.get("is_paper") is True`, so rolled paper positions stay paper while legacy/real positions do not gain the field. `backend/tests/test_cosmos_roll.py` asserts both cases non-vacuously, including explicit absence of `is_paper` for the real-position roll. Verified with:
+
+`cd backend && python3 -m pytest tests/test_cosmos_roll.py tests/test_portfolio_phase2.py tests/test_economics.py -q`
+
+Result: 105 passed.
+# Reuben fix note — paper position roll inheritance
+
+Date: 2026-09-11
+Status: Ready for re-review
+Reviewer finding addressed: `backend/src/cosmos_db.py` `roll_position()` did not preserve `is_paper`
+
+## What changed
+
+- Updated `backend/src/cosmos_db.py` `roll_position()` so the replacement position copies `is_paper` from the source position only when `old_pos.get("is_paper") is True`.
+- This keeps rolled paper positions flagged as paper.
+- It does **not** add `is_paper: true` to legacy real positions that predate the field, and it leaves real rolls with the field absent/false.
+
+## Same-pattern check
+
+- Reviewed other position mutation helpers in `backend/src/cosmos_db.py`.
+- `add_position()` already writes `is_paper` only when explicitly requested.
+- No other helper in that file creates a new derived position from an existing one, so no additional code changes were required.
+
+## Regression coverage
+
+Added `backend/tests/test_cosmos_roll.py` with:
+- `test_roll_position_preserves_is_paper_for_paper_positions`
+- `test_roll_position_does_not_introduce_is_paper_for_real_positions`
+
+These cover the rejected case directly at the shared helper used by both roll entry points in `backend/web/app.py`.

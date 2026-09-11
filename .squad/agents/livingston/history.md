@@ -24,3 +24,12 @@
 
 ### 2026-09-08 — FIFO, cost-basis, and corporate-action semantics
 - Confirmed/implemented the current contract that BUY cost uses net economics, zero-cost scrip shares enter holdings at zero cost, and grouped corporate actions must preserve event-level meaning.
+
+## Learnings
+
+### 2026-09-11 — Paper positions + economics movement drilldown
+- Implemented paper-position persistence and movement parity across `backend/web/app.py`, `backend/src/cosmos_db.py`, `backend/web/portfolio_routes.py`, and `backend/src/portfolio/cosmos_portfolio.py`.
+- Added `option_position_id` filtering to the movements API and wired the economics drilldown UI in `frontend/src/lib/portfolio-api.ts` and `frontend/src/components/EconomicsView.tsx`.
+- Propagated `is_paper` through linkage/report layers in `backend/src/portfolio/option_linkage_service.py`, `backend/web/app.py`, `frontend/src/types/economics.ts`, and `frontend/src/types/portfolio.ts`.
+- Added paper-aware UX in `frontend/src/components/OptionLinkageBadges.tsx`, `MovementDetailDialog.tsx`, `AddPositionForm.tsx`, `AddMovementDialog.tsx`, and `EconomicsOverviewView.tsx`.
+- No intentional spec deviations in backend contract scope; frontend implementation detail choices are recorded in `.squad/decisions/inbox/livingston-paper-positions-impl.md`.

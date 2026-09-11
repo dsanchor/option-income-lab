@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import type { AddPositionRequest } from "@/types/portfolio";
 
 /** Add a manual position (call/put) for this symbol. Mirrors the legacy "Add Position" form. */
 export default function AddPositionForm({ symbol }: { symbol: string }) {
@@ -15,7 +16,7 @@ export default function AddPositionForm({ symbol }: { symbol: string }) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  async function submit() {
+  async function submit(isPaper = false) {
     setError(null);
     setSuccess(null);
     if (!strike || !expiration) {
@@ -24,11 +25,12 @@ export default function AddPositionForm({ symbol }: { symbol: string }) {
     }
     setSaving(true);
     try {
-      const payload: Record<string, unknown> = {
+      const payload: AddPositionRequest = {
         type,
         strike: parseFloat(strike),
         expiration,
         notes: notes.trim(),
+        is_paper: isPaper || undefined,
       };
       if (premium) payload.premium = parseFloat(premium);
       const res = await fetch(`/api/symbols/${encodeURIComponent(symbol)}/positions`, {
@@ -97,11 +99,19 @@ export default function AddPositionForm({ symbol }: { symbol: string }) {
         />
         <button
           type="button"
-          onClick={submit}
+          onClick={() => void submit(false)}
           disabled={saving}
           className="rounded-[var(--radius-pill)] bg-accent-blue px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
         >
-          {saving ? "Adding…" : "+ Add"}
+          {saving ? "Adding…" : "+ Add Position"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void submit(true)}
+          disabled={saving}
+          className="rounded-[var(--radius-pill)] border border-accent-purple/40 bg-accent-purple/10 px-4 py-2 text-sm font-medium text-accent-purple transition hover:opacity-90 disabled:opacity-50"
+        >
+          {saving ? "Adding…" : "Add Paper Position"}
         </button>
       </div>
       {error && <p className="mt-2 text-sm text-accent-red">{error}</p>}

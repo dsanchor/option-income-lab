@@ -26,6 +26,8 @@ const COVERAGE_STATUS_META: Record<string, { label: string; className: string }>
 
 const WARNING_BADGE_CLASS =
   "border-accent-orange/40 bg-accent-orange/10 text-accent-orange";
+const PAPER_BADGE_CLASS =
+  "border-accent-purple/40 bg-accent-purple/10 text-accent-purple";
 
 function pillClassName(className: string) {
   return `inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${className}`;
@@ -97,5 +99,13 @@ export function WarningList({
         </li>
       ))}
     </ul>
+  );
+}
+
+export function PaperBadge({ className = "" }: { className?: string }) {
+  return (
+    <span className={`${pillClassName(PAPER_BADGE_CLASS)} ${className}`.trim()}>
+      Paper
+    </span>
   );
 }

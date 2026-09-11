@@ -6,6 +6,7 @@ import MultiSelect from "@/components/MultiSelect";
 import Reveal from "@/components/Reveal";
 import StatCard from "@/components/StatCard";
 import AccountBadge from "@/components/AccountBadge";
+import { getAccountName } from "@/lib/accountDisplay";
 import { listAccounts } from "@/lib/portfolio-api";
 import { averageLastNExcludingZero } from "@/lib/format";
 import type { BrokerAccount } from "@/types/portfolio";
@@ -945,7 +946,10 @@ export default function DividendsView() {
 
   const yearOptions = data?.filters.years ?? [];
   const symbolOptions = (data?.filters.symbols ?? []).map((symbol) => ({ value: symbol, label: symbol }));
-  const accountOptions = (data?.filters.account_ids ?? []).map((accountId) => ({ value: accountId, label: accountId }));
+  const accountOptions = (data?.filters.account_ids ?? []).map((accountId) => ({
+    value: accountId,
+    label: getAccountName(accountId, accounts),
+  }));
   const yoyRows = comparisonData?.monthly ?? EMPTY_MONTHLY_ROWS;
   const yearlyRows = comparisonData?.yearly ?? EMPTY_YEARLY_ROWS;
   const cumulativeRows = comparisonData?.cumulative ?? EMPTY_CUMULATIVE_ROWS;

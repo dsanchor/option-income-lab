@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { X, RefreshCw } from "lucide-react";
 import { createMovement, createTransfer, getFxRate, listAccounts, listSecurities } from "@/lib/portfolio-api";
 import type {
+  AddPositionRequest,
   BrokerAccount,
   ManualMovementRequest,
   OptionContractType,
@@ -174,6 +175,7 @@ interface OptionFormState {
   option_expiration: string;
   option_symbol: string;
   option_close_date: string;
+  is_paper: boolean;
   notes: string;
 }
 
@@ -297,6 +299,15 @@ function OptionForm({ txnType, form, onChange, accounts, securities }: OptionFor
           />
           <div className="mt-1 text-xs text-text-muted">Usually added later once the position is closed.</div>
         </div>
+        <label className="flex items-center gap-2 rounded-[var(--radius)] border border-border bg-bg-card/40 px-3 py-2 text-sm text-text sm:col-span-2">
+          <input
+            type="checkbox"
+            checked={form.is_paper}
+            onChange={(e) => onChange({ is_paper: e.target.checked })}
+            className="accent-accent-purple"
+          />
+          <span>Paper position</span>
+        </label>
       </div>
 
       <div className="rounded-[var(--radius)] border border-border bg-bg-card/40 p-3">
@@ -735,6 +746,7 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
     option_expiration: "",
     option_symbol: "",
     option_close_date: "",
+    is_paper: false,
     notes: "",
   });
 
@@ -828,6 +840,7 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
       } else if (isOptionTxnType) {
         const optionLinkKind = OPTION_LINK_KIND_BY_TXN_TYPE[txnType as OptionTxnType];
         const optionType = OPTION_TYPE_BY_TXN_TYPE[txnType as OptionTxnType];
+        const isOpeningSell = optionLinkKind === "OPEN_SELL";
         if (
           !optionForm.security_id ||
           !optionForm.trade_date ||
@@ -846,6 +859,45 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
             ? (grossEur / grossUsd).toFixed(9)
             : null;
 
+        let optionPositionId = optionForm.option_position_id.trim() || undefined;
+        if (optionForm.is_paper && isOpeningSell && !optionPositionId) {
+          if (!optionForm.option_strike || !optionForm.option_expiration) {
+            setError("Strike and expiration are required to create a paper position.");
+            return;
+          }
+          const security = securities.find((item) => item.security_id === optionForm.security_id);
+          if (!security?.ticker) {
+            setError("Selected symbol is missing ticker data required to create a paper position.");
+            return;
+          }
+          const positionPayload: AddPositionRequest = {
+            type: optionType,
+            strike: Number(optionForm.option_strike),
+            expiration: optionForm.option_expiration,
+            is_paper: true,
+          };
+          const positionResponse = await fetch(
+            `/api/symbols/${encodeURIComponent(security.ticker)}/positions`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(positionPayload),
+            },
+          );
+          const positionBody = await positionResponse.json().catch(() => ({}));
+          if (!positionResponse.ok) {
+            throw new Error(positionBody.error || "Failed to create paper position");
+          }
+          const createdPosition =
+            Array.isArray(positionBody.positions) && positionBody.positions.length > 0
+              ? positionBody.positions[positionBody.positions.length - 1]
+              : null;
+          optionPositionId = createdPosition?.position_id;
+          if (!optionPositionId) {
+            throw new Error("Paper position creation succeeded without a position_id");
+          }
+        }
+
         const req: ManualMovementRequest = {
           txn_type: txnType as OptionTxnType,
           security_id: optionForm.security_id,
@@ -855,13 +907,14 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
           gross: makeGross(optionForm.gross_amount_usd, "USD", optionForm.gross_eur_amount),
           fees: makeFeesInput(optionForm.commission_eur, "EUR"),
           fx: derivedFxRate ? { rate: derivedFxRate, rate_source: "MANUAL" } : undefined,
-          option_position_id: optionForm.option_position_id.trim() || undefined,
+          option_position_id: optionPositionId,
           option_link_kind: optionLinkKind,
           option_type: optionType,
           option_strike: optionForm.option_strike ? Number(optionForm.option_strike) : undefined,
           option_expiration: optionForm.option_expiration || undefined,
           option_symbol: optionForm.option_symbol.trim() || undefined,
           option_close_date: optionForm.option_close_date || undefined,
+          is_paper: optionForm.is_paper || undefined,
           notes: optionForm.notes.trim() || undefined,
         };
         await createMovement(req);

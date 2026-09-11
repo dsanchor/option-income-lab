@@ -112,6 +112,7 @@ export interface MovementsFilter {
   security_id?: string;
   txn_type?: string;
   ca_group_id?: string;        // filter to one corporate-action group
+  option_position_id?: string;
   date_from?: string;
   date_to?: string;
   limit?: number;
@@ -126,6 +127,7 @@ export async function getMovements(
   if (filter.security_id) params.set("security_id", filter.security_id);
   if (filter.txn_type) params.set("txn_type", filter.txn_type);
   if (filter.ca_group_id) params.set("ca_group_id", filter.ca_group_id);
+  if (filter.option_position_id) params.set("option_position_id", filter.option_position_id);
   if (filter.date_from) params.set("date_from", filter.date_from);
   if (filter.date_to) params.set("date_to", filter.date_to);
   if (filter.limit !== undefined) params.set("limit", String(filter.limit));
