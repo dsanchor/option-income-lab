@@ -380,9 +380,12 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
             if days_to_expiration is not None:
                 days_held = min(days_held, days_to_expiration)
 
+        # Capital at risk for a covered option is strike * 100 (contract
+        # multiplier — one contract controls 100 shares), matching the
+        # "collateral" convention used elsewhere (e.g. best_options.py).
         roc_pct = None
         if strike not in (None, 0):
-            roc_pct = _round2((net_option_usd_gross / strike) * 100)
+            roc_pct = _round2((net_option_usd_gross / (strike * 100)) * 100)
 
         roc_annualized = None
         if roc_pct is not None and days_to_expiration and days_to_expiration > 0:
@@ -416,7 +419,7 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
             "resolved_security_id": linked_position.get("resolved_security_id"),
             "_opened_year": opened_dt.year if opened_dt else None,
             "_opened_month": opened_dt.month if opened_dt else None,
-            "_roc_strike": strike if strike not in (None, 0) else None,
+            "_roc_strike": (strike * 100) if strike not in (None, 0) else None,
             "_scoped_has_opening_sell": bool(opening_moves),
             "_scoped_has_closing_buy": bool(closing_moves),
         }
