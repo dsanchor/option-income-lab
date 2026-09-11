@@ -99,11 +99,11 @@ describe("MovementDetailDialog defensive guards", () => {
     assert.match(source, /m\.withholding\?\.destination/);
   });
 
-  it("renders the Paper marker through the shared badge helper", () => {
+  it("does not render a movement-level paper marker", () => {
     const dialogPath = fileURLToPath(new URL("../src/components/MovementDetailDialog.tsx", import.meta.url));
     const source = readFileSync(dialogPath, "utf8");
 
-    assert.match(source, /PaperBadge/);
-    assert.match(source, /m\.is_paper/);
+    assert.doesNotMatch(source, /PaperBadge/);
+    assert.doesNotMatch(source, /m\.is_paper/);
   });
 });

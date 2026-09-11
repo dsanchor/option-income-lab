@@ -179,6 +179,19 @@ class FakeCosmos:
         self.container._store[(symbol.upper(), f"config_{symbol.upper()}")] = dict(doc)
         return dict(doc)
 
+    def set_position_paper(self, symbol, position_id, is_paper):
+        doc = self._symbols[symbol.upper()]
+        for position in doc["positions"]:
+            if position["position_id"] != position_id:
+                continue
+            if is_paper:
+                position["is_paper"] = True
+            else:
+                position.pop("is_paper", None)
+            self.container._store[(symbol.upper(), f"config_{symbol.upper()}")] = dict(doc)
+            return dict(doc)
+        raise ValueError(f"Position {position_id} not found")
+
 
 # ---------------------------------------------------------------------------
 # App fixture
@@ -299,7 +312,7 @@ class TestPositionAndMovementEndpoints:
         body = resp.json()
         assert body["positions"][-1]["is_paper"] is True
 
-    def test_create_manual_option_movement_accepts_is_paper(self, client):
+    def test_create_manual_option_movement_ignores_is_paper(self, client):
         c, fake = client
         fake.add_symbol_doc("AAPL")
 
@@ -319,7 +332,30 @@ class TestPositionAndMovementEndpoints:
         })
 
         assert resp.status_code == 201
-        assert resp.json()["is_paper"] is True
+        assert "is_paper" not in resp.json()
+
+    def test_patch_position_paper_toggles_flag(self, client):
+        c, fake = client
+        fake.add_symbol_doc("AAPL")
+        position_id = fake._symbols["AAPL"]["positions"][0]["position_id"] if fake._symbols["AAPL"]["positions"] else None
+        if position_id is None:
+            position_id = fake.add_position("AAPL", "call", 210, "2026-01-16")["positions"][0]["position_id"]
+
+        resp = c.patch(
+            f"/api/symbols/AAPL/positions/{position_id}/paper",
+            json={"is_paper": True},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["positions"][0]["is_paper"] is True
+
+        resp = c.patch(
+            f"/api/symbols/AAPL/positions/{position_id}/paper",
+            json={"is_paper": False},
+        )
+
+        assert resp.status_code == 200
+        assert "is_paper" not in resp.json()["positions"][0]
 
 
 # ---------------------------------------------------------------------------

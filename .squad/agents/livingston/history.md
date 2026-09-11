@@ -27,6 +27,11 @@
 
 ## Learnings
 
+### 2026-09-11 — Paper positions simplified to a position-only toggle
+- Reverted movement-side `is_paper` plumbing from manual creation/correction/duplicate detection so paper status lives only on the symbol position document, per direct user direction.
+- Added a dedicated toggle endpoint in `backend/web/app.py:3300` (`PATCH /api/symbols/{symbol}/positions/{position_id}/paper`) backed by `backend/src/cosmos_db.py:703`, instead of faking/linking paper movements.
+- Added `coverage_status = "paper"` in `backend/src/portfolio/option_linkage_service.py:407` and suppressed linkage warnings for paper positions so they disappear from the unlinked-warning bucket without affecting real-economics totals.
+
 ### 2026-09-11 — Paper positions + economics movement drilldown
 - Implemented paper-position persistence and movement parity across `backend/web/app.py`, `backend/src/cosmos_db.py`, `backend/web/portfolio_routes.py`, and `backend/src/portfolio/cosmos_portfolio.py`.
 - Added `option_position_id` filtering to the movements API and wired the economics drilldown UI in `frontend/src/lib/portfolio-api.ts` and `frontend/src/components/EconomicsView.tsx`.

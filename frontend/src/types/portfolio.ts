@@ -209,7 +209,6 @@ export interface LedgerMovement {
   option_symbol?: string;
   option_close_date?: string;
   movement_warnings?: string[];
-  is_paper?: boolean;
 }
 
 export interface MovementsResponse {
@@ -356,7 +355,6 @@ export interface ManualMovementRequest {
   option_expiration?: string;
   option_symbol?: string;
   option_close_date?: string;
-  is_paper?: boolean;
   notes?: string;
 }
 
@@ -413,7 +411,6 @@ export interface MovementCorrectionRequest {
   option_expiration?: string;
   option_symbol?: string;
   option_close_date?: string;
-  is_paper?: boolean;
   notes?: string;
 }
 

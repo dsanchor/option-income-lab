@@ -174,33 +174,6 @@ def _make_svc(docs=None):
     return portfolio_svc, securities_svc
 
 
-def _seed_symbol_position(
-    symbols_container: FakeSymbolsContainer,
-    *,
-    symbol: str,
-    position_id: str,
-    position_type: str = "call",
-    is_paper: bool = False,
-):
-    position = {
-        "position_id": position_id,
-        "type": position_type,
-        "strike": 210.0,
-        "expiration": "2026-01-16",
-        "opened_at": "2026-01-01T00:00:00Z",
-        "status": "active",
-        "notes": "",
-    }
-    if is_paper:
-        position["is_paper"] = True
-    symbols_container._store[(symbol, f"config_{symbol}")] = {
-        "id": f"config_{symbol}",
-        "symbol": symbol,
-        "doc_type": "symbol_config",
-        "positions": [position],
-    }
-
-
 # ---------------------------------------------------------------------------
 # Account CRUD
 # ---------------------------------------------------------------------------
@@ -414,21 +387,10 @@ class TestManualMovementCreation:
         assert Decimal(doc["net"]["amount"]) == Decimal("146.500000")
         assert Decimal(doc["net"]["eur_amount"]) == Decimal("134.750000")
 
-    def test_manual_option_movement_persists_is_paper(self):
+    def test_manual_option_movement_ignores_is_paper_field(self):
         svc, _ = _make_svc()
         doc = svc.create_manual_movement(_option_body(is_paper=True))
-        assert doc["is_paper"] is True
-
-    def test_manual_option_movement_rejects_paper_real_position_mismatch(self):
-        svc, _ = _make_svc()
-        _seed_symbol_position(
-            svc.symbols_container,
-            symbol="AAPL",
-            position_id="pos_call_001",
-            is_paper=False,
-        )
-        with pytest.raises(ValueError, match="paper parity mismatch"):
-            svc.create_manual_movement(_option_body(is_paper=True))
+        assert "is_paper" not in doc
 
 
 # ---------------------------------------------------------------------------
@@ -551,25 +513,19 @@ class TestMovementCorrection:
         )
         assert result["replacement"]["option_position_id"] == "pos_call_002"
 
-    def test_option_correction_rejects_real_movement_link_to_paper_position(self):
+    def test_option_correction_drops_legacy_is_paper_field(self):
         svc, _ = _make_svc()
         linked = svc.create_manual_movement(_option_body(option_position_id=None))
-        _seed_symbol_position(
-            svc.symbols_container,
-            symbol="AAPL",
-            position_id="pos_call_paper",
-            is_paper=True,
+        svc.portfolio_container._store[linked["id"]]["is_paper"] = True
+        result = svc.correct_movement(
+            movement_id=linked["id"],
+            account_id="_unassigned",
+            correction_data={
+                "account_id": "_unassigned",
+                "correction_note": "remove legacy movement paper flag",
+            },
         )
-        with pytest.raises(ValueError, match="paper parity mismatch"):
-            svc.correct_movement(
-                movement_id=linked["id"],
-                account_id="_unassigned",
-                correction_data={
-                    "account_id": "_unassigned",
-                    "correction_note": "attempt mismatched relink",
-                    "option_position_id": "pos_call_paper",
-                },
-            )
+        assert "is_paper" not in result["replacement"]
 
     def test_option_correction_can_add_option_close_date_after_creation(self):
         svc, _ = _make_svc()
@@ -627,7 +583,7 @@ class TestMovementsListAndDuplicates:
         assert total == 2
         assert {movement["id"] for movement in movements} == {"m_linked_1", "m_linked_2"}
 
-    def test_find_probable_duplicate_separates_real_and_paper_lanes(self):
+    def test_find_probable_duplicate_ignores_legacy_paper_flag(self):
         svc, _ = _make_svc([
             _make_txn(
                 "m_real",
@@ -652,8 +608,8 @@ class TestMovementsListAndDuplicates:
             ),
         ])
 
-        assert svc.find_probable_duplicate("XNYS:AAPL", "CALL_SELL", "2026-01-15", "0", "100", is_paper=False)["id"] == "m_real"
-        assert svc.find_probable_duplicate("XNYS:AAPL", "CALL_SELL", "2026-01-15", "0", "100", is_paper=True)["id"] == "m_paper"
+        duplicate = svc.find_probable_duplicate("XNYS:AAPL", "CALL_SELL", "2026-01-15", "0", "100")
+        assert duplicate["id"] in {"m_real", "m_paper"}
 
 
 # ---------------------------------------------------------------------------

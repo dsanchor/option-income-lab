@@ -254,6 +254,18 @@ export async function deleteAccount(accountId: string): Promise<void> {
   });
 }
 
+export async function setPositionPaper(
+  symbol: string,
+  positionId: string,
+  isPaper: boolean,
+): Promise<unknown> {
+  return fetchJSON(`/api/symbols/${encodeURIComponent(symbol)}/positions/${encodeURIComponent(positionId)}/paper`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_paper: isPaper }),
+  });
+}
+
 // ─── Phase 2: Manual Movement Entry ──────────────────────────────────────────
 
 /** POST /api/portfolio/movements — manual stock, dividend, or option movement. */

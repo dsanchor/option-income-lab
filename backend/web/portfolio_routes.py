@@ -833,9 +833,6 @@ async def create_movement(request: Request):
         if not body.get(field):
             return _err("validation_error", f"{field} is required", 400)
 
-    if body.get("is_paper") is not None and not isinstance(body.get("is_paper"), bool):
-        return _err("validation_error", "is_paper must be a boolean", 400)
-
     if not isinstance(body.get("gross"), dict) or not body["gross"].get("eur_amount"):
         return _err("validation_error", "gross must include eur_amount", 400)
 
@@ -881,7 +878,6 @@ async def create_movement(request: Request):
             trade_date=body["trade_date"],
             quantity=str(body.get("quantity", "0")),
             gross_eur=str(body["gross"].get("eur_amount", "0")),
-            is_paper=bool(body.get("is_paper")),
         )
         if duplicate:
             return JSONResponse(

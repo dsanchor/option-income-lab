@@ -5,6 +5,11 @@ const WARNING_LABELS: Record<string, string> = {
   OPTION_ASSIGNMENT_STOCK_MISSING: "Missing assignment stock movement",
 };
 
+const PAPER_BADGE_CLASS =
+  "border-accent-purple/40 bg-accent-purple/10 text-accent-purple";
+const WARNING_BADGE_CLASS =
+  "border-accent-orange/40 bg-accent-orange/10 text-accent-orange";
+
 const COVERAGE_STATUS_META: Record<string, { label: string; className: string }> = {
   linked: {
     label: "Linked",
@@ -22,12 +27,11 @@ const COVERAGE_STATUS_META: Record<string, { label: string; className: string }>
     label: "Filtered",
     className: "border-accent-blue/40 bg-accent-blue/10 text-accent-blue",
   },
+  paper: {
+    label: "Paper",
+    className: PAPER_BADGE_CLASS,
+  },
 };
-
-const WARNING_BADGE_CLASS =
-  "border-accent-orange/40 bg-accent-orange/10 text-accent-orange";
-const PAPER_BADGE_CLASS =
-  "border-accent-purple/40 bg-accent-purple/10 text-accent-purple";
 
 function pillClassName(className: string) {
   return `inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${className}`;

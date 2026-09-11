@@ -708,21 +708,22 @@ describe("PP: Paper positions and movement drilldown source contract", () => {
     );
   });
 
-  it("PP-5: AddMovementDialog supports paper-position creation flow", () => {
+  it("PP-5: AddMovementDialog no longer carries paper-position movement plumbing", () => {
     assert.ok(
-      addMovementSrc.includes("Paper position") &&
-      addMovementSrc.includes("is_paper") &&
-      addMovementSrc.includes("/api/symbols/") &&
-      addMovementSrc.includes("Failed to create paper position"),
-      "PP-5 DEFECT: AddMovementDialog must support paper-position creation before manual option movement save."
+      !addMovementSrc.includes("Paper position") &&
+      !addMovementSrc.includes("Failed to create paper position") &&
+      !addMovementSrc.includes("is_paper: optionForm.is_paper"),
+      "PP-5 DEFECT: AddMovementDialog must stay movement-only; paper is now toggled on positions, not manual movements."
     );
   });
 
-  it("PP-6: MovementDetailDialog renders a Paper marker", () => {
+  it("PP-6: EconomicsView exposes mark/unmark paper actions instead of movement paper badges", () => {
     assert.ok(
-      movementDetailSrc.includes("PaperBadge") &&
-      movementDetailSrc.includes("m.is_paper"),
-      "PP-6 DEFECT: MovementDetailDialog must render a Paper marker for paper movements."
+      economicsSrc.includes("setPositionPaper") &&
+      economicsSrc.includes("Mark as Paper") &&
+      economicsSrc.includes("Unmark Paper") &&
+      !movementDetailSrc.includes("m.is_paper"),
+      "PP-6 DEFECT: Paper toggling must live on positions, and movement detail must not render movement-level paper flags."
     );
   });
 });

@@ -700,6 +700,29 @@ class CosmosDBService:
         doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
         return self.container.replace_item(item=doc["id"], body=doc)
 
+    def set_position_paper(self, symbol: str, position_id: str,
+                           is_paper: bool) -> dict:
+        """Toggle the paper flag on a position."""
+        doc = self.get_symbol(symbol)
+        if doc is None:
+            raise ValueError(f"Symbol {symbol} not found")
+
+        found = False
+        for pos in doc.get("positions", []):
+            if pos["position_id"] == position_id:
+                if is_paper:
+                    pos["is_paper"] = True
+                else:
+                    pos.pop("is_paper", None)
+                found = True
+                break
+
+        if not found:
+            raise ValueError(f"Position {position_id} not found")
+
+        doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        return self.container.replace_item(item=doc["id"], body=doc)
+
     def update_position_buyback_cost(self, symbol: str, position_id: str,
                                       buyback_cost: float) -> dict:
         """Update the buyback cost on a rolled position."""
@@ -1262,6 +1285,7 @@ class CosmosDBService:
             "doc_type": "banner",
             "timestamp": now,
             "updated_at": now,
+            "generated_at": now,
             "items": items,
         }
         if model:

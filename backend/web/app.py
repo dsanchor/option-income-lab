@@ -3296,6 +3296,46 @@ async def api_update_position_buyback_cost(request: Request, symbol: str,
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.patch("/api/symbols/{symbol}/positions/{position_id}/paper")
+async def api_set_position_paper(request: Request, symbol: str,
+                                 position_id: str):
+    """Toggle the paper flag on a position."""
+    try:
+        cosmos = _get_cosmos(request)
+
+        # US-options eligibility guard (§J.4.2)
+        _paper_doc = _get_symbol_doc_for_guard(cosmos, symbol)
+        if not _paper_doc:
+            return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
+        from src.us_exchange_eligibility import enforce_us_options_eligible
+        _guard = enforce_us_options_eligible(_paper_doc)
+        if _guard:
+            return _guard
+
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "JSON body must be an object"},
+                                status_code=400)
+        if "is_paper" not in body:
+            return JSONResponse({"error": "is_paper is required"},
+                                status_code=400)
+        is_paper = body.get("is_paper")
+        if not isinstance(is_paper, bool):
+            return JSONResponse({"error": "is_paper must be a boolean"},
+                                status_code=400)
+        doc = cosmos.set_position_paper(symbol.upper(), position_id, is_paper)
+        return JSONResponse(_clean_doc(doc))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.delete("/api/symbols/{symbol}/positions/{position_id}")
 async def api_delete_position(request: Request, symbol: str, position_id: str):
     try:

@@ -419,10 +419,6 @@ def _validate_correction_fields(txn_type: str, correction_data: Dict[str, Any]) 
         if txn_type in _OPTION_TXN_TYPES and q_val != Decimal("0"):
             raise ValueError("quantity must remain 0 for option movements")
 
-    if "is_paper" in correction_data and correction_data["is_paper"] is not None:
-        if not isinstance(correction_data["is_paper"], bool):
-            raise ValueError("is_paper must be a boolean")
-
     # ── Option-link metadata: field-level validation only; full
     # cross-field coherence is checked again after overlaying onto the
     # original movement in correct_movement().
@@ -496,45 +492,6 @@ class CosmosPortfolioService:
                 "portfolio container not configured — "
                 "run scripts/provision_cosmosdb.sh"
             )
-
-    def _get_symbol_doc_for_security(self, security_id: str) -> Optional[Dict[str, Any]]:
-        if self.symbols_container is None or not security_id:
-            return None
-        symbol = security_id.split(":")[-1].strip().upper()
-        if not symbol:
-            return None
-        try:
-            return self.symbols_container.read_item(
-                item=f"config_{symbol}",
-                partition_key=symbol,
-            )
-        except CosmosResourceNotFoundError:
-            return None
-
-    def _validate_option_position_paper_parity(
-        self,
-        *,
-        security_id: str,
-        option_position_id: Optional[str],
-        movement_is_paper: bool,
-    ) -> None:
-        if not option_position_id:
-            return
-        symbol_doc = self._get_symbol_doc_for_security(security_id)
-        if not symbol_doc:
-            return
-        for position in symbol_doc.get("positions", []):
-            if position.get("position_id") != option_position_id:
-                continue
-            position_is_paper = bool(position.get("is_paper"))
-            if position_is_paper != movement_is_paper:
-                movement_label = "paper" if movement_is_paper else "real"
-                position_label = "paper" if position_is_paper else "real"
-                raise ValueError(
-                    f"Linked movement/position paper parity mismatch: movement is {movement_label} "
-                    f"but option position {option_position_id!r} is {position_label}"
-                )
-            return
 
     # ── Import Sessions ─────────────────────────────────────────────────
 
@@ -854,9 +811,6 @@ class CosmosPortfolioService:
         gross = data.get("gross") or {}
         fees = data.get("fees") or {}
         wht = data.get("withholding")
-        if data.get("is_paper") is not None and not isinstance(data.get("is_paper"), bool):
-            raise ValueError("is_paper must be a boolean")
-        is_paper = bool(data.get("is_paper"))
         currency = gross.get("currency", "EUR").upper()
         option_metadata = _normalize_option_metadata(txn_type, data)
         quantity = "0" if txn_type in _OPTION_TXN_TYPES else str(data.get("quantity", "0"))
@@ -867,11 +821,6 @@ class CosmosPortfolioService:
         net = _compute_manual_net(txn_type, gross, fees, wht)
         gross_eur = _d(gross.get("eur_amount", "0"))
         fees_eur = _d(fees.get("total_eur", "0"))
-        self._validate_option_position_paper_parity(
-            security_id=security_id,
-            option_position_id=option_metadata.get("option_position_id"),
-            movement_is_paper=is_paper,
-        )
 
         now = self._now()
         movement_id = f"mvt_{uuid4().hex}"
@@ -924,8 +873,6 @@ class CosmosPortfolioService:
             doc["cost_basis_status"] = "COMPLETE"
 
         doc.update(option_metadata)
-        if is_paper:
-            doc["is_paper"] = True
 
         if data.get("notes"):
             doc["notes"] = data["notes"]
@@ -1050,18 +997,9 @@ class CosmosPortfolioService:
                 else:
                     replacement[field] = val
 
-        if "is_paper" in correction_data:
-            if correction_data["is_paper"]:
-                replacement["is_paper"] = True
-            else:
-                replacement.pop("is_paper", None)
+        replacement.pop("is_paper", None)
 
         replacement.update(_normalize_option_metadata(txn_type, replacement))
-        self._validate_option_position_paper_parity(
-            security_id=str(replacement.get("security_id", "")),
-            option_position_id=replacement.get("option_position_id"),
-            movement_is_paper=bool(replacement.get("is_paper")),
-        )
 
         # Recompute net whenever gross, fees, or withholding are touched.
         # Key-presence check so explicit null (cleared withholding) also triggers recompute.
@@ -1749,7 +1687,6 @@ class CosmosPortfolioService:
         trade_date: str,
         quantity: str,
         gross_eur: str,
-        is_paper: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Check for an existing committed movement with matching fingerprint."""
         self._require_portfolio()
@@ -1767,10 +1704,6 @@ class CosmosPortfolioService:
             {"name": "@trade_date", "value": trade_date},
             {"name": "@quantity", "value": quantity},
         ]
-        if is_paper:
-            query += " AND c.is_paper = true"
-        else:
-            query += " AND (NOT IS_DEFINED(c.is_paper) OR c.is_paper = false)"
         try:
             results = list(self.portfolio_container.query_items(
                 query=query,

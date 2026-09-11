@@ -283,6 +283,8 @@ def _build_position_warnings(
     option_movements: List[Dict[str, Any]],
     assignment_movements: List[Dict[str, Any]],
 ) -> List[str]:
+    if row.get("is_paper"):
+        return []
     if row.get("security_unresolved"):
         return [OPTION_SECURITY_UNRESOLVED]
 
@@ -401,7 +403,9 @@ def build_option_position_linkage(
         linked_count = len(option_movements) + len(assignment_movements)
         scoped_linked_count = len(scoped_option_rows) + len(scoped_assignment_rows)
 
-        if row.get("security_unresolved"):
+        if row.get("is_paper"):
+            coverage_status = "paper"
+        elif row.get("security_unresolved"):
             coverage_status = "unresolved_security"
         elif scoped_linked_count > 0:
             coverage_status = "linked"

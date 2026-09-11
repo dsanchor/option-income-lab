@@ -61,6 +61,7 @@ describe("Economics type contracts", () => {
     for (const field of [
       "excluded_paper_positions: number;",
       "is_paper: boolean;",
+      '| "paper"',
     ]) {
       assert.ok(
         economicsTypes.includes(field),

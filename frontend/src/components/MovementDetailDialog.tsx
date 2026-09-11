@@ -7,7 +7,6 @@ import { OPTION_TXN_TYPES, SALES_TYPE_LABELS } from "@/types/portfolio";
 import type { BrokerAccount } from "@/types/portfolio";
 import { getAccountName } from "@/lib/accountDisplay";
 import { correctMovement, getMovements, voidCorporateActionGroup } from "@/lib/portfolio-api";
-import { PaperBadge } from "@/components/OptionLinkageBadges";
 import MovementCorrectionDialog from "./MovementCorrectionDialog";
 import ReassignmentDialog from "./ReassignmentDialog";
 import CorporateActionForm, { buildCaInitialState } from "./CorporateActionForm";
@@ -309,7 +308,6 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
                 {m.correction_status}
               </span>
             )}
-            {m.is_paper && <PaperBadge />}
             <h3 className="text-base font-semibold text-text">
               {m.ticker} — {m.company_name}
             </h3>

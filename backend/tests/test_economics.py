@@ -190,7 +190,6 @@ def _sample_option_movements():
 def _sample_option_movements_with_paper():
     return _sample_option_movements() + [
         _movement("m9", "CALL_SELL", "XNAS:SHOP", "shop-call-paper", "2026-02-05", ACCOUNT_1, "1.3", "0.10", "1.20")
-        | {"is_paper": True}
     ]
 
 
@@ -203,6 +202,7 @@ def _sample_securities():
         {"security_id": "XNAS:AMZN", "ticker": "AMZN", "status": "ACTIVE"},
         {"security_id": "XNAS:META", "ticker": "META", "status": "ACTIVE"},
         {"security_id": "XNAS:NFLX", "ticker": "NFLX", "status": "ACTIVE"},
+        {"security_id": "XNAS:SHOP", "ticker": "SHOP", "status": "ACTIVE"},
     ]
 
 
@@ -519,6 +519,8 @@ def test_build_economics_report_excludes_paper_positions_from_real_aggregates():
 
     positions = {position["position_id"]: position for position in report["positions"]}
     assert positions["shop-call-paper"]["is_paper"] is True
+    assert positions["shop-call-paper"]["coverage_status"] == "paper"
+    assert positions["shop-call-paper"]["warnings"] == []
     assert report["summary"]["total_positions"] == 8
     assert report["summary"]["coverage"]["excluded_paper_positions"] == 1
     assert report["summary"]["total_premium_usd"] == 8.2

@@ -54,3 +54,21 @@ def test_roll_position_does_not_introduce_is_paper_for_real_positions():
     assert rolled_position.get("is_paper") in (None, False)
     assert "is_paper" not in rolled_position
     service.container.replace_item.assert_called_once()
+
+
+def test_set_position_paper_adds_flag_when_enabled():
+    service = _service_with_doc(_active_symbol_doc())
+
+    result = service.set_position_paper("AAPL", "pos-old", True)
+
+    assert result["positions"][0]["is_paper"] is True
+    service.container.replace_item.assert_called_once()
+
+
+def test_set_position_paper_removes_flag_when_disabled():
+    service = _service_with_doc(_active_symbol_doc(is_paper=True))
+
+    result = service.set_position_paper("AAPL", "pos-old", False)
+
+    assert "is_paper" not in result["positions"][0]
+    service.container.replace_item.assert_called_once()

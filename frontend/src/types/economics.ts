@@ -88,7 +88,7 @@ export interface EconomicsPosition {
   rolled_to: string | null;
   linked_accounts: string[];
   linked_movement_count: number;
-  coverage_status: "linked" | "unlinked" | "unresolved_security" | "account_filtered_out";
+  coverage_status: "linked" | "unlinked" | "unresolved_security" | "account_filtered_out" | "paper";
   warnings: string[];
   resolved_security_id: string | null;
 }

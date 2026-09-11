@@ -27,7 +27,7 @@ import Reveal from "@/components/Reveal";
 import StatCard from "@/components/StatCard";
 import { getAccountName } from "@/lib/accountDisplay";
 import { averageLastNExcludingZero } from "@/lib/format";
-import { getMovements, listAccounts } from "@/lib/portfolio-api";
+import { getMovements, listAccounts, setPositionPaper } from "@/lib/portfolio-api";
 import MovementDetailDialog from "@/components/MovementDetailDialog";
 import type { BrokerAccount, LedgerMovement } from "@/types/portfolio";
 import type {
@@ -411,6 +411,7 @@ const POSITION_COLS: PositionColumn[] = [
   { label: "Movements" },
   { label: "Accounts" },
   { label: "Coverage" },
+  { label: "Paper" },
   { label: "Warnings" },
   { label: "Opened", sortKey: "opened_at" },
 ];
@@ -530,7 +531,6 @@ function PositionMovementsDialog({
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap items-center gap-2">
                           <span>{movement.txn_type}</span>
-                          {movement.is_paper && <PaperBadge />}
                         </div>
                       </td>
                       <td className={`px-3 py-2 text-right font-mono ${netColor(Number(movement.net?.eur_amount ?? 0))}`}>
@@ -562,6 +562,8 @@ function PositionsDetail({
   const [dir, setDir] = useState<"asc" | "desc">("desc");
   const [showPaperPositions, setShowPaperPositions] = useState(false);
   const [loadingPositionId, setLoadingPositionId] = useState<string | null>(null);
+  const [togglingPaperPositionId, setTogglingPaperPositionId] = useState<string | null>(null);
+  const [paperToggleError, setPaperToggleError] = useState<string | null>(null);
   const [movementsError, setMovementsError] = useState<string | null>(null);
   const [positionMovements, setPositionMovements] = useState<LedgerMovement[]>([]);
   const [selectedPosition, setSelectedPosition] = useState<EconomicsPosition | null>(null);
@@ -619,8 +621,28 @@ function PositionsDetail({
     }
   }
 
+  async function handleTogglePaper(position: EconomicsPosition) {
+    if (!position.position_id) return;
+    setTogglingPaperPositionId(position.position_id);
+    setPaperToggleError(null);
+    try {
+      await setPositionPaper(position.symbol, position.position_id, !position.is_paper);
+      await onRefresh();
+    } catch (error) {
+      setPaperToggleError(error instanceof Error ? error.message : "Failed to update paper position.");
+    } finally {
+      setTogglingPaperPositionId(null);
+    }
+  }
+
   return (
     <>
+      {paperToggleError && (
+        <div className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-3 py-2 text-sm text-accent-red">
+          {paperToggleError}
+        </div>
+      )}
+
       <details open className="surface overflow-hidden">
         <summary className="flex cursor-pointer items-center justify-between px-4 py-3">
           <span className="text-base font-semibold">Positions Detail</span>
@@ -721,6 +743,24 @@ function PositionsDetail({
                   </td>
                   <td className="px-3 py-2 text-right">{renderLinkedAccounts(position.linked_accounts ?? [], accounts)}</td>
                   <td className="px-3 py-2"><CoverageStatusBadge status={position.coverage_status} /></td>
+                  <td className="px-3 py-2">
+                    {position.position_id ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleTogglePaper(position)}
+                        disabled={togglingPaperPositionId === position.position_id}
+                        className="rounded-[var(--radius-pill)] border border-accent-purple/40 bg-accent-purple/10 px-2 py-0.5 text-xs text-accent-purple hover:bg-accent-purple/15 disabled:opacity-50"
+                      >
+                        {togglingPaperPositionId === position.position_id
+                          ? "Saving…"
+                          : position.is_paper
+                            ? "Unmark Paper"
+                            : "Mark as Paper"}
+                      </button>
+                    ) : (
+                      <span className="text-text-muted">—</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2"><WarningBadge warnings={warnings} /></td>
                   <td className="px-3 py-2 font-mono">{(position.opened_at || "").slice(0, 10) || "—"}</td>
                 </tr>
