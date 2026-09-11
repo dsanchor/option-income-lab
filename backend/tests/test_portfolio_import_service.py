@@ -14,6 +14,7 @@ from src.portfolio.import_service import (
     StateError,
     UnresolvedQuestionsError,
     AlreadyCommittedError,
+    _build_preview_movements,
 )
 
 
@@ -529,6 +530,45 @@ class TestGeneratePreview:
         assert txns_by_type["PUT_BUY"]["option_link_kind"] == "CLOSE_BUY"
         assert txns_by_type["PUT_BUY"]["option_type"] == "put"
         assert txns_by_type["PUT_BUY"]["option_close_date"] is None
+
+    def test_probable_duplicate_suppressed_when_dup_is_own_row(self):
+        """Re-importing a row that will overwrite itself in place (same
+        deterministic id) must not raise a PROBABLE_DUPLICATE warning."""
+        svc = _make_import_service(preload_securities=[_AAPL_SEC])
+        _create_account(svc.portfolio_svc)
+        session = svc.create_session(
+            _options_csv(rows=[
+                "AAPL\tCALL_SELL\t19/07/2024\t210\t19/07/2024\t150.00\t138.00\t3.25\t26/07/2024\tIB Main\n",
+            ], with_close_date=True),
+            format_hint="options",
+        )
+        sid = session["session_id"]
+        q = session["questions"][0]
+        svc.answer_question(sid, {
+            "question_id": q["question_id"],
+            "answer_type": "SELECTED_CANDIDATE",
+            "selected_security_id": "XNYS:AAPL",
+        })
+
+        doc = svc.portfolio_svc.get_session(sid)
+
+        # No prior committed movement -> no dup found, no warning.
+        svc.portfolio_svc.find_probable_duplicate = lambda *a, **k: None
+        movements, warnings1, _ = _build_preview_movements(doc, svc.portfolio_svc)
+        own_id = movements[0]["id"]
+        assert not any(w["type"] == "PROBABLE_DUPLICATE" for w in warnings1)
+
+        # "Duplicate" found is this exact row's own deterministic id -> the
+        # row will simply be upserted in place; no warning expected.
+        svc.portfolio_svc.find_probable_duplicate = lambda *a, **k: {"id": own_id}
+        _, warnings2, _ = _build_preview_movements(doc, svc.portfolio_svc)
+        assert not any(w["type"] == "PROBABLE_DUPLICATE" for w in warnings2)
+
+        # A genuinely different existing movement matches the fuzzy fields ->
+        # still warn, since this is a real possible duplicate.
+        svc.portfolio_svc.find_probable_duplicate = lambda *a, **k: {"id": "some_other_txn_id"}
+        _, warnings3, _ = _build_preview_movements(doc, svc.portfolio_svc)
+        assert any(w["type"] == "PROBABLE_DUPLICATE" for w in warnings3)
 
     def test_options_parser_invalid_type_reaches_session_creation_error(self):
         svc = _make_import_service()

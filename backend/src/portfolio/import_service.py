@@ -633,7 +633,11 @@ def _build_preview_movements(
                 quantity=movement.get("quantity") or "",
                 gross_eur=movement.get("gross", {}).get("eur_amount", ""),
             )
-            if dup:
+            if dup and dup.get("id") != movement.get("id"):
+                # A different existing movement matches these fields — genuine
+                # possible duplicate. When dup.id equals this row's own
+                # deterministic id, it's simply the same row being re-imported
+                # (idempotent upsert/overwrite) — not worth warning about.
                 row_warnings.append({
                     "type": "PROBABLE_DUPLICATE",
                     "row_index": row.get("row_index"),

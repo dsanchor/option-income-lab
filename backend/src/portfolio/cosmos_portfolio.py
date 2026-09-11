@@ -671,19 +671,80 @@ class CosmosPortfolioService:
                 "Use correct_movement or delete-and-recreate instead."
             )
 
+    def _collect_movement_chain(
+        self, movement_id: str, account_id: str, doc: Dict[str, Any]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Walk the full correction/reassignment chain for a movement.
+
+        Follows both predecessor links (corrects_movement_id /
+        reassigned_from.movement_id, possibly in a different account
+        partition) and successor links (superseded_by) until the whole
+        chain is discovered. Raises ValueError if any chain member
+        (including the starting doc) belongs to a corporate-action group —
+        those must be purged via delete_corporate_action_group() instead.
+        """
+        def _check_ca_group(d: Dict[str, Any]) -> None:
+            if d.get("ca_group_id"):
+                raise ValueError(
+                    f"group_leg_hard_delete_required: Movement {d['id']} belongs to "
+                    f"CA group {d['ca_group_id']!r}. Delete the whole group via "
+                    f"DELETE /api/portfolio/corporate-actions/{d['ca_group_id']}"
+                )
+
+        def _fetch(mid: str, acct: str) -> Optional[Dict[str, Any]]:
+            try:
+                return self.portfolio_container.read_item(item=mid, partition_key=acct)
+            except CosmosResourceNotFoundError:
+                return None
+
+        _check_ca_group(doc)
+        chain: Dict[str, Dict[str, Any]] = {movement_id: doc}
+        frontier = [(movement_id, account_id, doc)]
+        while frontier:
+            cur_id, cur_acct, cur_doc = frontier.pop()
+            predecessor_id = cur_doc.get("corrects_movement_id") or (
+                cur_doc.get("reassigned_from") or {}
+            ).get("movement_id")
+            predecessor_acct = (
+                (cur_doc.get("reassigned_from") or {}).get("account_id") or cur_acct
+            )
+            successor_id = cur_doc.get("superseded_by")
+
+            for nxt_id, nxt_acct in (
+                (predecessor_id, predecessor_acct),
+                (successor_id, cur_acct),
+            ):
+                if not nxt_id or nxt_id in chain:
+                    continue
+                nxt_doc = _fetch(nxt_id, nxt_acct)
+                if nxt_doc is None:
+                    continue
+                _check_ca_group(nxt_doc)
+                chain[nxt_id] = nxt_doc
+                frontier.append((nxt_id, nxt_acct, nxt_doc))
+
+        return chain
+
     def write_ledger_txn(self, txn_doc: Dict[str, Any]) -> Dict[str, Any]:
         """Upsert a ledger_txn document into the portfolio container.
 
-        Safety guard: if a document with the same ID already exists and has
-        correction_status VOIDED or SUPERSEDED, this method raises
-        VoidedMovementError instead of silently restoring the movement to active
-        status. Callers (import commit loop) catch this and count it as skipped.
+        Self-healing overwrite: if a document with the same ID already exists
+        and has correction_status VOIDED or SUPERSEDED, this is a stale
+        tombstone left behind by a correction/reassignment whose active
+        successor was later hard-deleted without purging the whole chain
+        (e.g. via the pre-purge_chain delete_movement() behavior). Re-import
+        of the same CSV row is expected to simply (re)create the movement, so
+        the orphaned chain is purged first and the fresh document is written
+        in its place. If any chain member belongs to a corporate-action group,
+        the overwrite is refused (raises VoidedMovementError) since CA groups
+        must be purged explicitly via delete_corporate_action_group().
         """
         self._require_portfolio()
         doc_id = txn_doc.get("id")
         account_id = txn_doc.get("account_id")
 
-        # Guard: do not overwrite voided/superseded documents
+        # Guard: self-heal stale voided/superseded documents by purging their
+        # whole orphaned chain, rather than silently restoring them to active.
         if doc_id and account_id:
             try:
                 existing = self.portfolio_container.read_item(
@@ -691,7 +752,13 @@ class CosmosPortfolioService:
                 )
                 cs = existing.get("correction_status")
                 if cs in _EXCLUDED_CORRECTION_STATUSES:
-                    raise CosmosPortfolioService.VoidedMovementError(doc_id, cs)
+                    try:
+                        chain = self._collect_movement_chain(doc_id, account_id, existing)
+                    except ValueError:
+                        raise CosmosPortfolioService.VoidedMovementError(doc_id, cs)
+                    for cid, cdoc in chain.items():
+                        cacct = cdoc.get("account_id", account_id)
+                        self.portfolio_container.delete_item(item=cid, partition_key=cacct)
             except CosmosResourceNotFoundError:
                 pass  # New document — proceed with upsert
 
@@ -744,53 +811,19 @@ class CosmosPortfolioService:
         if doc.get("doc_type") != "ledger_txn":
             raise LookupError(f"Movement {movement_id} not found in account {account_id}")
 
-        def _check_ca_group(d: Dict[str, Any]) -> None:
-            if d.get("ca_group_id"):
-                raise ValueError(
-                    f"group_leg_hard_delete_required: Movement {d['id']} belongs to "
-                    f"CA group {d['ca_group_id']!r}. Delete the whole group via "
-                    f"DELETE /api/portfolio/corporate-actions/{d['ca_group_id']}"
-                )
-
-        _check_ca_group(doc)
-
         if not purge_chain:
+            if doc.get("ca_group_id"):
+                raise ValueError(
+                    f"group_leg_hard_delete_required: Movement {doc['id']} belongs to "
+                    f"CA group {doc['ca_group_id']!r}. Delete the whole group via "
+                    f"DELETE /api/portfolio/corporate-actions/{doc['ca_group_id']}"
+                )
             self.portfolio_container.delete_item(item=movement_id, partition_key=account_id)
             return {"deleted": True, "id": movement_id, "purged_ids": [movement_id]}
 
         # Walk the full chain in both directions (correction and reassignment
         # links use different field names but the same superseded_by pointer).
-        chain: Dict[str, Dict[str, Any]] = {movement_id: doc}
-
-        def _fetch(mid: str, acct: str) -> Optional[Dict[str, Any]]:
-            try:
-                return self.portfolio_container.read_item(item=mid, partition_key=acct)
-            except CosmosResourceNotFoundError:
-                return None
-
-        frontier = [(movement_id, account_id, doc)]
-        while frontier:
-            cur_id, cur_acct, cur_doc = frontier.pop()
-            predecessor_id = cur_doc.get("corrects_movement_id") or (
-                cur_doc.get("reassigned_from") or {}
-            ).get("movement_id")
-            predecessor_acct = (
-                (cur_doc.get("reassigned_from") or {}).get("account_id") or cur_acct
-            )
-            successor_id = cur_doc.get("superseded_by")
-
-            for nxt_id, nxt_acct in (
-                (predecessor_id, predecessor_acct),
-                (successor_id, cur_acct),
-            ):
-                if not nxt_id or nxt_id in chain:
-                    continue
-                nxt_doc = _fetch(nxt_id, nxt_acct)
-                if nxt_doc is None:
-                    continue
-                _check_ca_group(nxt_doc)
-                chain[nxt_id] = nxt_doc
-                frontier.append((nxt_id, nxt_acct, nxt_doc))
+        chain = self._collect_movement_chain(movement_id, account_id, doc)
 
         purged_ids: List[str] = []
         for cid, cdoc in chain.items():

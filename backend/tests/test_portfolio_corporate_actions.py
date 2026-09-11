@@ -979,7 +979,7 @@ class TestHardDelete:
             "gross": {"amount": "500.00", "currency": "EUR", "eur_amount": "500.00"},
         })
         result = svc.delete_movement(doc["id"], _ACCOUNT_ID)
-        assert result == {"deleted": True, "id": doc["id"]}
+        assert result == {"deleted": True, "id": doc["id"], "purged_ids": [doc["id"]]}
         assert svc.get_movement(doc["id"], _ACCOUNT_ID) is None
 
     def test_hd2_delete_voided_movement(self, svc):

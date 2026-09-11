@@ -383,6 +383,9 @@ class FakePortfolioForWriteGuard:
         self._store[body["id"]] = dict(body)
         return dict(body)
 
+    def delete_item(self, item=None, partition_key=None, **kw):
+        self._store.pop(item, None)
+
     def read_item(self, item=None, partition_key=None, **kw):
         key = item
         if key not in self._store:
@@ -405,7 +408,9 @@ def _make_svc(initial_docs=None):
 
 
 class TestWriteLedgerTxnSafetyGuard:
-    """write_ledger_txn must never silently restore VOIDED/SUPERSEDED movements."""
+    """write_ledger_txn self-heals stale VOIDED/SUPERSEDED tombstones on
+    re-import: it purges the orphaned chain and writes the incoming doc
+    fresh, rather than silently restoring the old doc to active in place."""
 
     def test_new_document_upserted_normally(self):
         svc, container = _make_svc()
@@ -429,7 +434,9 @@ class TestWriteLedgerTxnSafetyGuard:
         assert result["id"] == "mvt_active_001"
         assert container._store["mvt_active_001"]["quantity"] == "200"
 
-    def test_voided_document_raises_not_overwritten(self):
+    def test_voided_document_purged_and_overwritten(self):
+        """Re-import of a lone VOIDED tombstone (no chain links) purges it
+        and writes the incoming doc in its place instead of raising."""
         voided = {
             "id": "mvt_voided_001", "account_id": "_unassigned",
             "doc_type": "ledger_txn", "txn_type": "BUY",
@@ -439,16 +446,14 @@ class TestWriteLedgerTxnSafetyGuard:
         incoming = {
             "id": "mvt_voided_001", "account_id": "_unassigned",
             "doc_type": "ledger_txn", "txn_type": "BUY",
-            # No correction_status — would silently restore if not guarded
         }
-        with pytest.raises(CosmosPortfolioService.VoidedMovementError) as exc_info:
-            svc.write_ledger_txn(incoming)
-        assert exc_info.value.status == "VOIDED"
-        assert exc_info.value.movement_id == "mvt_voided_001"
-        # Document must remain VOIDED in store
-        assert container._store["mvt_voided_001"]["correction_status"] == "VOIDED"
+        result = svc.write_ledger_txn(incoming)
+        assert result["id"] == "mvt_voided_001"
+        assert container._store["mvt_voided_001"] == incoming
 
-    def test_superseded_document_raises_not_overwritten(self):
+    def test_superseded_document_purged_and_overwritten(self):
+        """Re-import of a lone SUPERSEDED tombstone (no chain links) purges
+        it and writes the incoming doc in its place instead of raising."""
         superseded = {
             "id": "mvt_sup_guard_001", "account_id": "_unassigned",
             "doc_type": "ledger_txn", "txn_type": "SELL",
@@ -459,11 +464,54 @@ class TestWriteLedgerTxnSafetyGuard:
             "id": "mvt_sup_guard_001", "account_id": "_unassigned",
             "doc_type": "ledger_txn", "txn_type": "SELL",
         }
-        with pytest.raises(CosmosPortfolioService.VoidedMovementError) as exc_info:
+        result = svc.write_ledger_txn(incoming)
+        assert result["id"] == "mvt_sup_guard_001"
+        assert container._store["mvt_sup_guard_001"] == incoming
+
+    def test_superseded_chain_purged_before_overwrite(self):
+        """When the SUPERSEDED doc has an active successor (superseded_by),
+        the whole chain is purged before the incoming doc is written."""
+        original = {
+            "id": "mvt_sup_chain_001", "account_id": "_unassigned",
+            "doc_type": "ledger_txn", "txn_type": "SELL",
+            "correction_status": "SUPERSEDED",
+            "superseded_by": "mvt_active_replacement",
+        }
+        replacement = {
+            "id": "mvt_active_replacement", "account_id": "_unassigned",
+            "doc_type": "ledger_txn", "txn_type": "SELL",
+            "correction_status": "ACTIVE",
+            "corrects_movement_id": "mvt_sup_chain_001",
+        }
+        svc, container = _make_svc([original, replacement])
+        incoming = {
+            "id": "mvt_sup_chain_001", "account_id": "_unassigned",
+            "doc_type": "ledger_txn", "txn_type": "SELL",
+        }
+        result = svc.write_ledger_txn(incoming)
+        assert result["id"] == "mvt_sup_chain_001"
+        assert container._store["mvt_sup_chain_001"] == incoming
+        # The old active replacement is gone — chain was fully purged.
+        assert "mvt_active_replacement" not in container._store
+
+    def test_superseded_ca_group_member_still_raises(self):
+        """A SUPERSEDED doc that belongs to a corporate-action group must
+        still refuse the self-heal purge — CA groups require an explicit,
+        all-or-nothing purge via delete_corporate_action_group()."""
+        superseded = {
+            "id": "mvt_sup_ca_001", "account_id": "_unassigned",
+            "doc_type": "ledger_txn", "txn_type": "SELL",
+            "correction_status": "SUPERSEDED",
+            "ca_group_id": "ca_group_xyz",
+        }
+        svc, container = _make_svc([superseded])
+        incoming = {
+            "id": "mvt_sup_ca_001", "account_id": "_unassigned",
+            "doc_type": "ledger_txn", "txn_type": "SELL",
+        }
+        with pytest.raises(CosmosPortfolioService.VoidedMovementError):
             svc.write_ledger_txn(incoming)
-        assert exc_info.value.status == "SUPERSEDED"
-        # Document must remain SUPERSEDED in store
-        assert container._store["mvt_sup_guard_001"]["correction_status"] == "SUPERSEDED"
+        assert container._store["mvt_sup_ca_001"]["correction_status"] == "SUPERSEDED"
 
     def test_document_without_account_id_skips_guard(self):
         """If account_id is missing, the guard cannot query Cosmos — proceed with upsert."""
