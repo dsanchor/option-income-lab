@@ -953,8 +953,11 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h4 className="text-sm font-semibold">Linkage &amp; Warnings</h4>
           <div className="flex items-center gap-2">
-            {position.is_paper && <span className="rounded-[var(--radius-pill)] border border-accent-purple/40 bg-accent-purple/10 px-2 py-0.5 text-xs text-accent-purple">📝 Paper</span>}
-            <CoverageStatusBadge status={position.coverage_status} />
+            {position.is_paper ? (
+              <span className="rounded-[var(--radius-pill)] border border-accent-purple/40 bg-accent-purple/10 px-2 py-0.5 text-xs text-accent-purple">📝 Paper</span>
+            ) : (
+              <CoverageStatusBadge status={position.coverage_status} />
+            )}
           </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
