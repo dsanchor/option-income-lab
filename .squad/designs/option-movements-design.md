@@ -3,7 +3,11 @@
 **Date:** 2026-09-09  
 **Author:** Danny  
 **Requested by:** dsanchor  
-**Status:** PROPOSED — design only, no implementation code in this task.
+**Status:** IMPLEMENTED (2026-09-10/11) — see "Post-implementation deviations" note below for two decisions that changed live during the build and are no longer accurately described by the body of this document.
+
+> **Post-implementation deviations from this design (authoritative, override the sections below):**
+> 1. **`option_position_id` is OPTIONAL at movement creation, not required.** dsanchor decided mid-build that linking a movement to a position must always be a deliberate manual step (from the position side, or by editing the movement later), never required up front and never auto-matched/auto-created. Unlinked option movements are created successfully and flagged with a new `movement_warnings` code `OPTION_MOVEMENT_UNLINKED` (see §3 for the warning family this belongs to). `option_position_id` remains editable after creation via `correct_movement()`.
+> 2. **A new optional field, `option_close_date`, was added that is not described anywhere else in this document.** It is an optional snapshot field on option movements (nullable at creation, since the close date is frequently unknown until later), and — like `option_position_id` — it is editable post-creation via `correct_movement()`. It is also an optional column in the bulk options CSV import format (see the "Bulk CSV import" addendum near the end of this file).
 
 **Authoritative sources reviewed:**
 - Position persistence lifecycle: `backend/src/cosmos_db.py:551-654`
@@ -32,7 +36,7 @@ These stay inside the existing `ledger_txn` document family, but are treated as 
 
 - they never affect share lots,
 - they never count toward stock purchase/sale totals,
-- they always carry a required `option_position_id`,
+- they carry an **optional** `option_position_id` (linking is a deliberate manual step, done at creation or later via correction — never required, never auto-matched; unlinked movements are flagged with a warning, see the deviations note above),
 - they store **real traded totals** in original currency plus EUR-converted amounts,
 - they become the **only source** for Options/Economics aggregates.
 
@@ -87,18 +91,19 @@ Do **not** create a second movement schema. Reuse existing `ledger_txn` fields f
 | `fees.total` / `fees.total_eur` | optional but strongly recommended | Commission in native + EUR |
 | `net.amount` / `net.eur_amount` | server-derived | SELL-like for opens, BUY-like for buybacks |
 | `fx.rate` / `fx.rate_source` | required | Same pattern as current ledger FX |
-| `option_position_id` | required | Many-to-one link to symbols-container position |
+| `option_position_id` | optional (manual link, editable later) | Many-to-one link to symbols-container position |
 
 #### Recommended new option metadata fields
 
 | Field | Required? | Applies to | Purpose |
 |---|---|---|---|
-| `option_position_id` | yes for option txns; optional for stock BUY/SELL | all linked option-related txns | canonical cross-container link |
-| `option_link_kind` | yes for option txns; optional for assignment stock txns | all linked option-related txns | `OPEN_SELL`, `CLOSE_BUY`, `ASSIGNMENT_STOCK` |
-| `option_type` | yes for option txns; optional for assignment stock txns | linked txns | denormalized `call` / `put` |
+| `option_position_id` | optional for all txns (option and stock); manual link, editable later via correction | all linked option-related txns | canonical cross-container link |
+| `option_link_kind` | optional (denormalized once linked) | all linked option-related txns | `OPEN_SELL`, `CLOSE_BUY`, `ASSIGNMENT_STOCK` |
+| `option_type` | optional (denormalized once linked) | linked txns | denormalized `call` / `put` |
 | `option_strike` | optional snapshot | linked txns | informational only |
 | `option_expiration` | optional snapshot | linked txns | informational only |
 | `option_symbol` | optional snapshot | linked txns | denormalized ticker for debugging/export |
+| `option_close_date` | optional snapshot, nullable at creation, editable later via correction | linked txns | added post-design; close date is frequently unknown until after the movement is created |
 
 This mirrors the repo's established flat metadata style (`transfer_*`, `ca_*`) in `frontend/src/types/portfolio.ts:148-165` and `backend/src/portfolio/cosmos_portfolio.py:1644-1658`, `backend/src/portfolio/cosmos_portfolio.py:1248-1282`.
 
@@ -387,8 +392,8 @@ Why this matters: this function currently drives FIFO and total purchase/sale/di
 | Function / lines | Current behavior | Required change |
 |---|---|---|
 | `_validate_correction_fields()` `172-280` | Type-specific rules only for `BUY`, `SELL`, `DIVIDEND` | Add explicit rule buckets: stock-buy-like, stock-sell-like, option-buy-like, option-sell-like, dividend, transfer; disallow `sales_type` / `cost_basis_status` on option txns |
-| `create_manual_movement()` `604-739` | Allows only `BUY`, `SELL`, `DIVIDEND`; net semantics keyed only on `BUY` vs others | Allow the four option txns; require `option_position_id`; persist `quantity="0"`; use BUY-like net for `*_BUY`, SELL-like net for `*_SELL`; preserve option metadata |
-| `correct_movement()` `741-870` | Recompute net only with `txn_type == 'BUY'` special-case; transfer-only non-correctable guard | Extend classification so `CALL_BUY`/`PUT_BUY` follow BUY-like recompute and `CALL_SELL`/`PUT_SELL` follow SELL-like recompute; option txns remain correctable |
+| `create_manual_movement()` `604-739` | Allows only `BUY`, `SELL`, `DIVIDEND`; net semantics keyed only on `BUY` vs others | Allow the four option txns; `option_position_id` is **optional** (manual link, not required — flag unlinked movements via `movement_warnings`); persist `quantity="0"`; use BUY-like net for `*_BUY`, SELL-like net for `*_SELL`; preserve option metadata |
+| `correct_movement()` `741-870` | Recompute net only with `txn_type == 'BUY'` special-case; transfer-only non-correctable guard | Extend classification so `CALL_BUY`/`PUT_BUY` follow BUY-like recompute and `CALL_SELL`/`PUT_SELL` follow SELL-like recompute; option txns remain correctable; **also accept post-creation edits to `option_position_id` and `option_close_date`** |
 | `_compute_shares_at_date()` `1683-1698` | Explicitly handles `BUY`, `SELL`, `TRANSFER_IN`, `TRANSFER_OUT`; unknown types silently ignored | Add explicit option branch to keep transfer availability logic intentional |
 | `_compute_cost_basis_at_date()` `1707-1724` | Explicitly handles `BUY` and `TRANSFER_IN`; unknown types silently ignored | Add explicit option branch to keep transfer carried-cost math intentional |
 | `reassign_movement()` `1763-1832` | Type-agnostic copy preserves unknown fields, but preview/reporting does not expose option linkage | Preserve new option metadata explicitly in response contracts/tests; reassignment should be allowed for option movements |
@@ -607,8 +612,8 @@ This prevents a near-zero EUR total during backfill from being mistaken for “n
 ### Phase 1 — must ship together
 
 1. Extend enum + contracts with `CALL_SELL`, `CALL_BUY`, `PUT_SELL`, `PUT_BUY`.
-2. Add option linkage fields (`option_position_id`, `option_link_kind`, snapshots).
-3. Update manual create/list/detail/correct/reassign flows to understand option movements.
+2. Add option linkage fields (`option_position_id`, `option_link_kind`, snapshots) **and `option_close_date`** (added post-design; optional, editable post-creation).
+3. Update manual create/list/detail/correct/reassign flows to understand option movements. **`option_position_id` ships optional/manual-link, not required — see the deviations note at the top of this document.**
 4. Make FIFO/transfer math explicitly exclude option movements.
 5. Add warning engine and row-level surfacing on positions.
 6. Rewrite Options + Overview reports to ledger-backed logic.
@@ -628,9 +633,31 @@ This prevents a near-zero EUR total during backfill from being mistaken for “n
 
 ### Phase 3 — optional refinements
 
-1. Import support for options CSVs, if ever needed.
+1. ~~Import support for options CSVs, if ever needed.~~ **Shipped ahead of schedule** — see the "Bulk CSV import (implemented)" addendum below. Bulk-imported movements are always created **unlinked**; linking is a manual step, matching the Phase 1 linking decision.
 2. More rigorous assignment validation (date/amount/quantity heuristics) once contract counts exist.
 3. Optional commission-aware RoC variant if product wants it later.
+
+---
+
+## Addendum — Bulk CSV import (implemented, not in original design)
+
+A CSV bulk importer for option movements was added (`backend/src/portfolio/parsers/options.py`), following the same bilingual-header convention as the existing stock `sales.py` parser. Movements are always created **unlinked** (no auto-match/auto-create of `option_position_id`) — linking remains a deliberate manual step via the movement detail/correction flow, per the Phase 1 deviation noted at the top of this document. Unlinked imported movements surface the `OPTION_MOVEMENT_UNLINKED` warning like any manually-created unlinked movement.
+
+Column aliases accepted (case-insensitive, bilingual ES/EN):
+
+| Field | Required? | Aliases |
+|---|---|---|
+| symbol/company | required | `simbolo` / `empresa` / `ticker` / `symbol` / `company` |
+| type | required | `tipo` / `type` |
+| date | required | `fecha` / `date` |
+| strike | required | `strike` |
+| expiration | required | `expiracion` / `vencimiento` / `expiration` |
+| gross USD | required | `importe usd bruto` / `bruto usd` / `gross usd` / `usd gross` |
+| gross EUR | required | `importe eur bruto` / `bruto eur` / `gross eur` / `eur gross` |
+| commission EUR | optional, may be negative (adds to net) | `comision eur` / `comision` / `commission eur` / `commission` / `fees` |
+| net EUR | optional (server-derived if omitted) | `importe eur neto` / `neto eur` / `net eur` / `eur net` |
+| close date | optional (often unknown at import time) | `fecha cierre` / `fecha de cierre` / `close date` / `closing date` |
+| account | required | `cuenta` / `account` |
 
 ---
 
