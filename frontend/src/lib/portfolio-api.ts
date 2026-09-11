@@ -33,6 +33,8 @@ import type {
   CorporateActionVoidResponse,
   CorporateActionCorrectRequest,
   CorporateActionCorrectResponse,
+  OptionTxnType,
+  LinkablePositionsResponse,
 } from "@/types/portfolio";
 import type {
   ImportSession,
@@ -73,6 +75,17 @@ export async function listSecurities(): Promise<SecuritiesResponse> {
 
 export async function getSecurity(securityId: string): Promise<SecurityMaster> {
   return fetchJSON<SecurityMaster>(`/api/securities/${encodeURIComponent(securityId)}`);
+}
+
+/** Option positions eligible to link to a given option movement type, for the "link
+ * this movement to a position" picker. `symbol` must be the bare ticker (not MIC:TICKER). */
+export async function getLinkablePositions(
+  symbol: string,
+  txnType: OptionTxnType,
+): Promise<LinkablePositionsResponse> {
+  return fetchJSON<LinkablePositionsResponse>(
+    `/api/symbols/${encodeURIComponent(symbol)}/positions/linkable?txn_type=${encodeURIComponent(txnType)}`,
+  );
 }
 
 export async function createSecurity(

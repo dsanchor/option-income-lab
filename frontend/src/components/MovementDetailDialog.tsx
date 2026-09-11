@@ -10,6 +10,7 @@ import { correctMovement, getMovements, voidCorporateActionGroup } from "@/lib/p
 import MovementCorrectionDialog from "./MovementCorrectionDialog";
 import ReassignmentDialog from "./ReassignmentDialog";
 import CorporateActionForm, { buildCaInitialState } from "./CorporateActionForm";
+import OptionPositionLinkPicker from "./OptionPositionLinkPicker";
 
 const TXN_BADGE: Record<string, string> = {
   BUY: "bg-accent-green/15 text-accent-green",
@@ -394,28 +395,29 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
               <p className="text-xs">
                 Add the matching <span className="font-mono">option_position_id</span> now, or use the full correction flow for additional metadata.
               </p>
-              <form onSubmit={handleQuickLinkSubmit} className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-                <input
-                  type="text"
+              <form onSubmit={handleQuickLinkSubmit} className="space-y-2">
+                <OptionPositionLinkPicker
+                  symbol={m.ticker ?? null}
+                  txnType={m.txn_type as OptionTxnType}
                   value={quickOptionPositionId}
-                  onChange={(e) => setQuickOptionPositionId(e.target.value)}
-                  placeholder="position_id"
-                  className="w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent-orange focus:outline-none"
+                  onChange={setQuickOptionPositionId}
                 />
-                <input
-                  type="text"
-                  value={quickLinkNote}
-                  onChange={(e) => setQuickLinkNote(e.target.value)}
-                  placeholder="Correction note"
-                  className="w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent-orange focus:outline-none"
-                />
-                <button
-                  type="submit"
-                  disabled={quickLinkSaving}
-                  className="rounded-[var(--radius)] bg-accent-orange/15 px-3 py-2 text-sm text-accent-orange hover:bg-accent-orange/25 disabled:opacity-50"
-                >
-                  {quickLinkSaving ? "Linking…" : "Link"}
-                </button>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                  <input
+                    type="text"
+                    value={quickLinkNote}
+                    onChange={(e) => setQuickLinkNote(e.target.value)}
+                    placeholder="Correction note"
+                    className="w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent-orange focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={quickLinkSaving}
+                    className="rounded-[var(--radius)] bg-accent-orange/15 px-3 py-2 text-sm text-accent-orange hover:bg-accent-orange/25 disabled:opacity-50"
+                  >
+                    {quickLinkSaving ? "Linking…" : "Link"}
+                  </button>
+                </div>
               </form>
               {quickLinkError && <div className="text-xs text-accent-red">{quickLinkError}</div>}
             </div>

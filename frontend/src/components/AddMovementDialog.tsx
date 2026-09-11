@@ -14,6 +14,7 @@ import type {
 import { OPTION_TXN_TYPES, SALES_TYPE_LABELS } from "@/types/portfolio";
 import type { SecurityMaster } from "@/types/portfolio";
 import CorporateActionForm from "@/components/CorporateActionForm";
+import OptionPositionLinkPicker from "@/components/OptionPositionLinkPicker";
 import { formatAccountName } from "@/lib/accountDisplay";
 
 const inputCls =
@@ -249,19 +250,12 @@ function OptionForm({ txnType, form, onChange, accounts, securities }: OptionFor
           />
           <div className="mt-1 text-xs text-text-muted">Opening sells use OPEN_SELL; buybacks use CLOSE_BUY.</div>
         </div>
-        <div className="sm:col-span-2">
-          <label className={labelCls}>Position ID</label>
-          <input
-            type="text"
-            value={form.option_position_id}
-            onChange={(e) => onChange({ option_position_id: e.target.value })}
-            placeholder="Link later — optional"
-            className={inputCls}
-          />
-          <div className="mt-1 text-xs text-text-muted">
-            Optional now. Leave blank if you want to add the position link later from the correction flow.
-          </div>
-        </div>
+        <OptionPositionLinkPicker
+          symbol={securities.find((s) => s.security_id === form.security_id)?.ticker ?? null}
+          txnType={txnType}
+          value={form.option_position_id}
+          onChange={(positionId) => onChange({ option_position_id: positionId })}
+        />
         <div>
           <label className={labelCls}>Strike</label>
           <input

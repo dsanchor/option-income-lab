@@ -39,6 +39,26 @@ export const OPTION_TXN_TYPES: readonly OptionTxnType[] = [
   "PUT_BUY",
 ];
 
+/** A symbol's option position eligible to link to a given option movement
+ * (see GET /api/symbols/{symbol}/positions/linkable). */
+export interface LinkablePosition {
+  position_id: string;
+  type: OptionContractType;
+  strike: number | null;
+  expiration: string | null;
+  status: string;
+  close_reason: string | null;
+  opened_at: string | null;
+  closed_at: string | null;
+  has_opening_sell: boolean;
+  has_closing_buy: boolean;
+}
+
+export interface LinkablePositionsResponse {
+  positions: LinkablePosition[];
+}
+
+
 // Amendment H: Corporate action group types (Phase H-α — linked ledger legs)
 export type CaLegType = "CASH_DIVIDEND" | "RIGHTS_SOLD" | "SHARE_ACQUISITION" | "CASH_TOP_UP" | "CONSOLIDATION_OUT" | "CONSOLIDATION_IN" | "FRACTIONAL_CASH_OUT";
 export type CaEventType = "DIVIDEND_WITH_SCRIP" | "SCRIP_DIVIDEND" | "RIGHTS_ISSUE" | "CASH_DIVIDEND" | "SHARE_CONSOLIDATION";

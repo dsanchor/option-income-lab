@@ -2708,6 +2708,98 @@ async def api_delete_symbol(request: Request, symbol: str):
 # REST API — Position Management
 # ===========================================================================
 
+@app.get("/api/symbols/{symbol}/positions/linkable")
+async def api_symbol_linkable_positions(request: Request, symbol: str, txn_type: str = ""):
+    """List this symbol's option positions eligible to link to a given option movement.
+
+    Eligibility rules (see .squad/designs/option-movements-design.md):
+    - `CALL_SELL` / `PUT_SELL`: same option type (call/put), and the position does
+      NOT already have a linked opening-sell movement.
+    - `CALL_BUY` / `PUT_BUY`: same option type, the position was closed via a
+      buyback (`status == "rolled"` or `close_reason == "manual"`), and it does
+      NOT already have a linked closing-buy movement.
+
+    Returns positions regardless of open/closed status — a closed legacy
+    position with no linked movement is still a valid candidate.
+    """
+    from src.portfolio.models import OPTION_TXN_TYPES
+
+    normalized_txn_type = (txn_type or "").strip().upper()
+    if normalized_txn_type not in OPTION_TXN_TYPES:
+        return JSONResponse(
+            {"error": f"txn_type must be one of {sorted(OPTION_TXN_TYPES)}"},
+            status_code=400,
+        )
+
+    try:
+        cosmos = _get_cosmos(request)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+
+    doc = cosmos.get_symbol(symbol.upper())
+    if not doc:
+        return JSONResponse({"positions": []})
+
+    try:
+        from src.portfolio.cosmos_securities import CosmosSecuritiesService
+        from src.portfolio.cosmos_portfolio import CosmosPortfolioService
+
+        securities_svc = CosmosSecuritiesService(cosmos.container)
+        portfolio_container = getattr(cosmos, "portfolio_container", None)
+        portfolio_svc = (
+            CosmosPortfolioService(portfolio_container, None)
+            if portfolio_container is not None
+            else None
+        )
+
+        linkage = build_option_position_linkage(
+            [doc],
+            portfolio_svc=portfolio_svc,
+            securities_svc=securities_svc,
+        )
+    except Exception as e:
+        logger.warning("api_symbol_linkable_positions linkage failed for %s: %s", symbol, e)
+        return JSONResponse({"error": "Failed to compute position linkage"}, status_code=500)
+
+    position_type = "call" if normalized_txn_type.startswith("CALL") else "put"
+    is_opening = normalized_txn_type.endswith("_SELL")
+    expected_open_txn = "CALL_SELL" if position_type == "call" else "PUT_SELL"
+    expected_close_txn = "CALL_BUY" if position_type == "call" else "PUT_BUY"
+    option_moves_by_position_id = linkage.get("option_moves_by_position_id", {})
+
+    results: List[Dict[str, Any]] = []
+    for row in linkage.get("positions", []):
+        if row.get("type") != position_type:
+            continue
+        moves = option_moves_by_position_id.get(row.get("position_id"), [])
+        has_opening_sell = any(m.get("txn_type") == expected_open_txn for m in moves)
+        has_closing_buy = any(m.get("txn_type") == expected_close_txn for m in moves)
+
+        if is_opening:
+            if has_opening_sell:
+                continue
+        else:
+            requires_closing_buy = row.get("status") == "rolled" or row.get("close_reason") == "manual"
+            if not requires_closing_buy or has_closing_buy:
+                continue
+
+        results.append({
+            "position_id": row.get("position_id"),
+            "type": row.get("type"),
+            "strike": row.get("strike"),
+            "expiration": row.get("expiration"),
+            "status": row.get("status"),
+            "close_reason": row.get("close_reason"),
+            "opened_at": row.get("opened_at"),
+            "closed_at": row.get("closed_at"),
+            "has_opening_sell": has_opening_sell,
+            "has_closing_buy": has_closing_buy,
+        })
+
+    results.sort(key=lambda r: (r.get("opened_at") or "", r.get("expiration") or ""), reverse=True)
+    return JSONResponse({"positions": results})
+
+
 @app.post("/api/symbols/{symbol}/positions")
 async def api_add_position(request: Request, symbol: str):
     try:

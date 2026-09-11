@@ -16,6 +16,7 @@ import type {
 } from "@/types/portfolio";
 import { OPTION_TXN_TYPES, SALES_TYPE_LABELS } from "@/types/portfolio";
 import { getAccountName } from "@/lib/accountDisplay";
+import OptionPositionLinkPicker from "./OptionPositionLinkPicker";
 
 const inputCls =
   "w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent-blue focus:outline-none";
@@ -992,13 +993,11 @@ export default function MovementCorrectionDialog({
                   <div className={sectionHeadCls}>Option linkage</div>
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="sm:col-span-2">
-                      <label className={labelCls}>Position ID</label>
-                      <input
-                        type="text"
+                      <OptionPositionLinkPicker
+                        symbol={m.ticker ?? null}
+                        txnType={m.txn_type as OptionTxnType}
                         value={optionPositionId}
-                        onChange={(e) => setOptionPositionId(e.target.value)}
-                        placeholder="Optional for option premiums; required for assignment-linked stock"
-                        className={inputCls}
+                        onChange={setOptionPositionId}
                       />
                     </div>
                     <div>
