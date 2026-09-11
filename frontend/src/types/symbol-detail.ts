@@ -32,10 +32,12 @@ export interface Position {
   display_premium?: number | null;
   display_buyback?: number | null;
   opened_at?: string | null;
+  closed_at?: string | null;
   close_reason?: string | null;
   warnings?: string[] | null;
   linked_accounts?: string[] | null;
   linked_movement_count?: number | null;
+  is_paper?: boolean | null;
   notes?: string | null;
   source?: { agent_type?: string; premium?: unknown; [k: string]: unknown };
   [k: string]: unknown;

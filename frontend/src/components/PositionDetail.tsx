@@ -15,9 +15,13 @@ import {
   CoverageStatusBadge,
   WarningList,
 } from "@/components/OptionLinkageBadges";
+import AccountBadge from "@/components/AccountBadge";
+import MovementDetailDialog from "@/components/MovementDetailDialog";
+import { listAccounts, getMovements, setPositionPaper } from "@/lib/portfolio-api";
 import { renderMarkdown } from "@/lib/markdown";
 import { ROW_TINT_BG } from "@/lib/badges";
 import type { Position } from "@/types/symbol-detail";
+import type { BrokerAccount, LedgerMovement } from "@/types/portfolio";
 
 // ── Snapshot chart ────────────────────────────────────────────────────────
 type Snapshot = Record<string, number | string | null | undefined>;
@@ -839,6 +843,56 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
     loadSnapshots();
   }, [loadSnapshots]);
 
+  const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    listAccounts()
+      .then((resp) => { if (!cancelled) setAccounts(resp.accounts); })
+      .catch(() => { /* best-effort; badges fall back to raw account id */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  const [selectedMovement, setSelectedMovement] = useState<LedgerMovement | null>(null);
+
+  const [fetchedMovements, setFetchedMovements] = useState<{ posId: string; movements: LedgerMovement[] } | null>(null);
+  const [movementsLoading, setMovementsLoading] = useState(false);
+  const [movementsError, setMovementsError] = useState<string | null>(null);
+  const linkedMovementCount = position.linked_movement_count ?? 0;
+  useEffect(() => {
+    if (!posId || linkedMovementCount === 0) return;
+    let cancelled = false;
+    (async () => {
+      setMovementsLoading(true);
+      setMovementsError(null);
+      try {
+        const resp = await getMovements({ option_position_id: posId, limit: Math.max(linkedMovementCount, 10) });
+        if (!cancelled) setFetchedMovements({ posId, movements: resp.movements ?? [] });
+      } catch (e) {
+        if (!cancelled) setMovementsError(e instanceof Error ? e.message : "Failed to load linked movements.");
+      } finally {
+        if (!cancelled) setMovementsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [posId, linkedMovementCount]);
+  const linkedMovements = fetchedMovements?.posId === posId && linkedMovementCount > 0 ? fetchedMovements.movements : [];
+
+  const [togglingPaper, setTogglingPaper] = useState(false);
+  const [paperError, setPaperError] = useState<string | null>(null);
+  async function handleTogglePaper() {
+    if (!posId) return;
+    setTogglingPaper(true);
+    setPaperError(null);
+    try {
+      await setPositionPaper(symbol, posId, !position.is_paper);
+      router.refresh();
+    } catch (e) {
+      setPaperError(e instanceof Error ? e.message : "Failed to update paper position.");
+    } finally {
+      setTogglingPaper(false);
+    }
+  }
+
   const srcAgent = source.agent_type ? String(source.agent_type) : null;
   const srcReason = source.reason ? String(source.reason) : null;
   const srcTimestamp = source.timestamp ? String(source.timestamp).slice(0, 19) : null;
@@ -898,22 +952,41 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
       <div className="rounded-[var(--radius)] border border-border bg-bg-card px-4 py-3">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h4 className="text-sm font-semibold">Linkage &amp; Warnings</h4>
-          <CoverageStatusBadge status={position.coverage_status} />
+          <div className="flex items-center gap-2">
+            {position.is_paper && <span className="rounded-[var(--radius-pill)] border border-accent-purple/40 bg-accent-purple/10 px-2 py-0.5 text-xs text-accent-purple">📝 Paper</span>}
+            <CoverageStatusBadge status={position.coverage_status} />
+          </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <DField label="Linked Movements">
-            <span className="font-mono">{position.linked_movement_count ?? 0}</span>
+            {movementsLoading ? (
+              <span className="text-text-muted">Loading…</span>
+            ) : movementsError ? (
+              <span className="text-accent-red">⚠️ {movementsError}</span>
+            ) : linkedMovements.length > 0 ? (
+              <div className="flex flex-col gap-1">
+                {linkedMovements.map((movement) => (
+                  <button
+                    key={movement.id ?? `${movement.trade_date}-${movement.txn_type}`}
+                    type="button"
+                    onClick={() => setSelectedMovement(movement)}
+                    className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1 text-left text-xs text-text transition hover:bg-bg-hover"
+                  >
+                    <span className="font-mono">{movement.trade_date ?? "—"}</span>
+                    <span>{movement.txn_type ?? "—"}</span>
+                    <AccountBadge accountId={movement.account_id ?? ""} accounts={accounts} />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <span className="font-mono">{position.linked_movement_count ?? 0}</span>
+            )}
           </DField>
           <DField label="Linked Accounts">
             {linkedAccounts.length > 0 ? (
               <div className="flex flex-wrap gap-1">
                 {linkedAccounts.map((accountId) => (
-                  <span
-                    key={accountId}
-                    className="inline-block rounded-[var(--radius-pill)] border border-border bg-bg-input px-2 py-0.5 font-mono text-xs text-text"
-                  >
-                    {accountId}
-                  </span>
+                  <AccountBadge key={accountId} accountId={accountId} accounts={accounts} />
                 ))}
               </div>
             ) : (
@@ -925,6 +998,19 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
               <WarningList warnings={warnings} emptyText="No linkage warnings." />
             </DField>
           </div>
+          {linkedMovementCount === 0 && posId && (
+            <div className="sm:col-span-2 flex items-center gap-2 border-t border-dashed border-border pt-2">
+              {paperError && <span className="text-xs text-accent-red">⚠️ {paperError}</span>}
+              <button
+                type="button"
+                onClick={handleTogglePaper}
+                disabled={togglingPaper}
+                className="rounded-[var(--radius-pill)] border border-accent-purple/40 bg-accent-purple/10 px-3 py-1.5 text-xs text-accent-purple transition hover:bg-accent-purple/20 disabled:opacity-50"
+              >
+                {togglingPaper ? "Saving…" : position.is_paper ? "Unmark Paper" : "📝 Mark as Paper"}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -967,6 +1053,18 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
             {deleting ? "Deleting…" : "🗑 Delete Position"}
           </button>
         </div>
+      )}
+
+      {selectedMovement && (
+        <MovementDetailDialog
+          movement={selectedMovement}
+          accounts={accounts}
+          onClose={() => setSelectedMovement(null)}
+          onRefresh={() => {
+            router.refresh();
+            setSelectedMovement(null);
+          }}
+        />
       )}
     </div>
   );

@@ -48,15 +48,11 @@ function Field({ label, value, mono = false }: { label: string; value: string | 
   );
 }
 
-function formatEurAmount(amount: string | null | undefined, currency?: string): string {
+function formatEurAmount(amount: string | null | undefined): string {
   if (!amount) return "—";
   const n = Number(amount);
   if (isNaN(n)) return amount;
-  const eur = `€${n.toLocaleString("es-ES", { minimumFractionDigits: 2 })}`;
-  if (currency && currency !== "EUR") {
-    return `${eur} (${currency})`;
-  }
-  return eur;
+  return `€${n.toLocaleString("es-ES", { minimumFractionDigits: 2 })}`;
 }
 
 function hasNonZeroAmount(amount: string | null | undefined): boolean {
@@ -348,9 +344,9 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-2">Amounts</div>
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 rounded-[var(--radius)] border border-border bg-bg-card/50 p-3">
-              <Field label="Gross" value={formatEurAmount(m.gross?.eur_amount, m.gross?.currency)} mono />
-              <Field label="Fees" value={formatEurAmount(m.fees?.total_eur, m.fees?.currency)} mono />
-              <Field label="Net" value={formatEurAmount(m.net?.eur_amount, m.net?.currency)} mono />
+              <Field label="Gross" value={formatEurAmount(m.gross?.eur_amount)} mono />
+              <Field label="Fees" value={formatEurAmount(m.fees?.total_eur)} mono />
+              <Field label="Net" value={formatEurAmount(m.net?.eur_amount)} mono />
               {m.txn_type === "DIVIDEND" && hasNonZeroAmount(m.source_derechos_amount) && (
                 <Field label="Derechos" value={formatEurAmount(m.source_derechos_amount)} mono />
               )}
@@ -499,7 +495,7 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
                   />
                 )}
                 {m.transfer_fee && m.transfer_fee.total_eur && (
-                  <Field label="Transfer fee" value={formatEurAmount(m.transfer_fee.total_eur, m.transfer_fee.currency)} mono />
+                  <Field label="Transfer fee" value={formatEurAmount(m.transfer_fee.total_eur)} mono />
                 )}
                 {m.transfer_group_id && (
                   <Field label="Group ID" value={m.transfer_group_id} mono />
