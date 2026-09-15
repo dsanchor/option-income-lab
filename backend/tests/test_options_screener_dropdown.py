@@ -324,18 +324,21 @@ class TestDropdownUniversePredicate:
         if "us_options_eligible" in jnj:
             assert jnj["us_options_eligible"] is True
 
-    def test_osd7_us_auto_enrolled_zero_share_excluded_from_overview(self, cosmos_and_client):
-        """OSD-7: US auto-enrolled historical zero-share symbol is hidden from overview by default."""
+    def test_osd7_us_auto_enrolled_zero_share_visible_but_not_screener_eligible(self, cosmos_and_client):
+        """OSD-7 (rev 5): auto-enrolled zero-share symbol is visible (watchlist), but not
+        screener-eligible since it has no shares and no explicit watchlist membership."""
         c, fake = cosmos_and_client
-        # auto_enrolled=True, no portfolio txns -> shares=0 → hidden by default
+        # auto_enrolled=True, no portfolio txns -> shares=0
         fake.container.add_symbol("HIST", exchange="XNYS", auto_enrolled=True)
         resp = c.get("/api/symbols/overview")
         assert resp.status_code == 200
         rows = resp.json().get("rows", [])
-        symbols = {r.get("symbol") for r in rows}
-        assert "HIST" not in symbols, (
-            "OSD-7: auto-enrolled zero-share historical symbol must not appear in overview "
-            "(and therefore cannot appear in dropdown)"
+        hist = next((r for r in rows if r.get("symbol") == "HIST"), None)
+        assert hist is not None, (
+            "OSD-7 (rev 5): zero-share historical symbols are always visible (watchlist), never hidden"
+        )
+        assert hist.get("screener_eligible") is False, (
+            "OSD-7: HIST has no shares and no explicit watchlist membership -> not screener eligible"
         )
 
     def test_osd8_non_us_watchlist_member_has_false_flag(self, cosmos_and_client):
@@ -423,18 +426,12 @@ class TestDropdownUniversePredicate:
         assert resp.status_code == 200
         rows = resp.json().get("rows", [])
         hist2 = next((r for r in rows if r.get("symbol") == "HIST2"), None)
-        # HIST2 appears in overview because shares != 0
-        assert hist2 is not None, "HIST2 must appear in overview (non-zero shares)"
-        if "us_options_eligible" in hist2:
-            # verify: shares < 0, no watchlist -> isScreenerEligible returns false
-            shares = float(hist2.get("portfolio_shares") or "0")
-            is_watchlist = (
-                hist2.get("is_auto_enrolled") is False
-                or hist2.get("row_source") == "watchlist"
-            )
-            assert shares <= 0 and not is_watchlist, (
-                "OSD-10: HIST2 should have negative/zero shares and no watchlist membership"
-            )
+        # HIST2 appears in overview (rev 5: visible in watchlist, negative shares)
+        assert hist2 is not None, "HIST2 must appear in overview (visible in watchlist)"
+        assert hist2.get("screener_eligible") is False, (
+            "OSD-10: HIST2 has negative shares and no explicit watchlist membership -> "
+            "not screener eligible"
+        )
 
     def test_osd11_unknown_mic_with_shares_has_false_flag(self, cosmos_and_client):
         """OSD-11: Symbol with unknown MIC must have us_options_eligible=False even with shares."""

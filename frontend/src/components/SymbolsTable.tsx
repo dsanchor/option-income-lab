@@ -53,25 +53,11 @@ function Pill({ text, className }: { text: string; className: string }) {
   return <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${className}`}>{text}</span>;
 }
 
-/** Returns true for rows that originate from the portfolio (have ledger history). */
+/** Returns true for rows that originate from the portfolio (shares > 0). */
 function isPortfolioRow(r: SymbolRow): boolean {
   if (r.row_source != null) return r.row_source !== "watchlist";
   // Fallback for legacy responses: if portfolio_shares is present, treat as portfolio row
   return r.portfolio_shares != null || r.list_section === "portfolio";
-}
-
-/**
- * Returns true when a row should be hidden under the "hide historical zeros" toggle.
- * Only hides auto-enrolled rows with exactly zero portfolio shares.
- * Explicit watchlist rows (is_auto_enrolled = false) are always shown.
- */
-function isHiddenZeroRow(r: SymbolRow): boolean {
-  if (r.portfolio_shares == null) return false;
-  const shares = parseFloat(r.portfolio_shares);
-  if (!isFinite(shares) || shares !== 0) return false;
-  // Only hide if backend confirms auto-enrolled; default to hiding if field is absent
-  // to match the legacy "hideZeroPortfolio" behavior.
-  return r.is_auto_enrolled !== false;
 }
 
 type SortKey =
@@ -163,7 +149,6 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
   const [dir, setDir] = useState<"asc" | "desc">("asc");
   const [suitabilityFilter, setSuitabilityFilter] = useState<SymbolSuitabilityFilter>("all");
   const [modalSymbol, setModalSymbol] = useState<string | null>(null);
-  const [hideZero, setHideZero] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("portfolio");
 
   // Inline shares editing (watchlist-only rows)
@@ -251,7 +236,6 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
     const query = q.trim().toUpperCase();
     let out = rows.filter((r) => {
       if (removedSymbols.has(r.symbol)) return false;
-      if (hideZero && isHiddenZeroRow(r)) return false;
       return true;
     });
     if (query) {
@@ -280,13 +264,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       return dir === "asc" ? cmp : -cmp;
     });
     return sorted;
-  }, [rows, q, sort, dir, suitabilityFilter, removedSymbols, hideZero]);
-
-  // Count hidden zero-rows for toggle hint
-  const hiddenZeroCount = useMemo(
-    () => rows.filter((r) => !removedSymbols.has(r.symbol) && isHiddenZeroRow(r)).length,
-    [rows, removedSymbols],
-  );
+  }, [rows, q, sort, dir, suitabilityFilter, removedSymbols]);
 
   /** Columns visible in the current view mode (no-modes = always visible). */
   const visibleColumns = useMemo(
@@ -324,7 +302,6 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
     const isPortfolio = isPortfolioRow(r);
     const effectiveShares = localShares[r.symbol] ?? r.total_shares;
     const portfolioSharesNum = parseFloat(r.portfolio_shares ?? "0") || 0;
-    const isZeroHistorical = isHiddenZeroRow(r);
     const href = symbolHref(r.security_id ?? r.symbol);
     const divNum = r.portfolio_dividends_eur != null ? parseFloat(r.portfolio_dividends_eur as string) : NaN;
     const divClass = !isFinite(divNum) || divNum === 0
@@ -338,7 +315,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       <tr
         key={r.symbol}
         onClick={() => setModalSymbol(r.security_id ?? r.symbol)}
-        className={`cursor-pointer border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/50 ${isZeroHistorical ? "opacity-60" : ""}`}
+        className="cursor-pointer border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/50"
       >
         <td className="px-3 py-3">
           <Link
@@ -529,19 +506,6 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
             </button>
           ))}
         </div>
-        <label className="flex items-center gap-1.5 cursor-pointer select-none text-xs text-text-muted hover:text-text">
-          <input
-            type="checkbox"
-            checked={hideZero}
-            onChange={(e) => setHideZero(e.target.checked)}
-            className="rounded border-border"
-            aria-label="Hide historical zero-share symbols"
-          />
-          Hide historical (0 shares)
-          {hiddenZeroCount > 0 && !hideZero && (
-            <span className="text-accent-orange">({hiddenZeroCount} shown)</span>
-          )}
-        </label>
         <span className="ml-auto shrink-0 text-xs text-text-muted">
           {portfolioFiltered.length} portfolio · {watchlistFiltered.length} watchlist
         </span>

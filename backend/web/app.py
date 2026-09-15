@@ -1234,16 +1234,17 @@ from src.calendar_visibility import (  # noqa: E402
 )
 
 
-def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_portfolio: bool = False):
-    """View-model for the Symbols list page — Unified Watchlist (rev 4).
+def _compute_symbols_overview(cosmos, portfolio_container=None):
+    """View-model for the Symbols list page — Unified Watchlist (rev 5).
 
     Returns a single flat ``rows`` array merging portfolio holdings and
     watchlist symbols, plus ``portfolio_summary`` KPI totals.
 
-    Row visibility predicate (§1.1 danny-unified-watchlist-contract.md):
-    - shares != 0 → always visible
-    - explicit watchlist member → always visible
-    - auto-enrolled only + zero shares → hidden by default (include_zero_portfolio=False)
+    Classification rule (rev 5 — supersedes §1.1 danny-unified-watchlist-contract.md):
+    - portfolio_shares > 0 → "portfolio" row
+    - everything else (zero, negative, or no shares at all — including
+      symbols whose only history is closed option positions) → "watchlist"
+      row. Nothing is ever hidden.
 
     Legacy fields (``portfolio_rows``, ``watchlist_rows``, ``portfolio_count``,
     ``watchlist_count``) are preserved for backward-compatible rollout.
@@ -1252,7 +1253,6 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_por
 
     # ── Load portfolio holdings for classification and enrichment ──────────
     holdings_by_ticker: Dict[str, Any] = {}
-    portfolio_tickers: set = set()
     holdings_summary: Dict[str, Any] = {}
     if portfolio_container is not None:
         try:
@@ -1263,12 +1263,6 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_por
             portfolio_svc = CosmosPortfolioService(portfolio_container, None)
             securities_svc = CosmosSecuritiesService(cosmos.container)
             holdings_svc = HoldingsService(portfolio_svc, securities_svc)
-
-            # Membership: ALL ledger history (including deleted/superseded) per §5.4.1
-            all_sids: set = portfolio_svc.get_ledger_security_ids_all()
-            for sid in all_sids:
-                ticker = sid.split(":")[-1].upper() if ":" in sid else sid.upper()
-                portfolio_tickers.add(ticker)
 
             # Holdings data for portfolio-derived fields (active movements only)
             holdings_result = holdings_svc.compute_holdings()
@@ -1318,7 +1312,6 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_por
         sym = (s.get("symbol") or "").upper()
 
         # Determine portfolio classification and add portfolio-derived fields
-        is_portfolio = sym in portfolio_tickers
         holding = holdings_by_ticker.get(sym)
         is_auto_enrolled = bool(s.get("_auto_enrolled", False))
         explicit_watchlist = _is_watchlist_member(s)
@@ -1329,10 +1322,9 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_por
         )
         screener_eligible: bool = sym in screener_universe
 
-        # Resolve portfolio_shares for visibility predicate
+        # Resolve portfolio_shares for classification
         portfolio_shares_str: str | None = holding.get("total_shares") if holding else None
 
-        # Visibility predicate (§1.1): skip auto-enrolled zero-share rows when toggled off
         if portfolio_shares_str is not None:
             try:
                 from decimal import Decimal as _D
@@ -1342,15 +1334,11 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_por
         else:
             shares_val = None  # type: ignore[assignment]
 
-        has_nonzero_shares = shares_val is not None and shares_val != 0
-        is_hidden_by_default = (
-            is_auto_enrolled
-            and not explicit_watchlist
-            and (shares_val is None or shares_val == 0)
-        )
-
-        if is_hidden_by_default and not include_zero_portfolio:
-            continue  # skip — will not appear in rows
+        # Classification rule (rev 5): only strictly-positive share counts are
+        # "portfolio". Zero, negative, or no shares at all (e.g. a symbol with
+        # only closed option positions or fully-sold stock) → "watchlist".
+        # Nothing is ever hidden.
+        is_portfolio = shares_val is not None and shares_val > 0
 
         # Determine row_source
         if is_portfolio and explicit_watchlist:
@@ -1503,16 +1491,12 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, include_zero_por
 @app.get("/api/symbols/overview")
 async def api_symbols_overview(
     request: Request,
-    include_zero_portfolio: bool = Query(default=False),
 ):
     try:
         cosmos = _get_cosmos(request)
         portfolio_container = getattr(cosmos, "portfolio_container", None)
         return JSONResponse(
-            _compute_symbols_overview(
-                cosmos, portfolio_container,
-                include_zero_portfolio=include_zero_portfolio,
-            )
+            _compute_symbols_overview(cosmos, portfolio_container)
         )
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)

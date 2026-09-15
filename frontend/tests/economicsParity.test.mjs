@@ -566,10 +566,10 @@ describe("AC: Accessibility — focus/active states present on all filter contro
     assert.ok(hasAccessibleLabel, "AC-3: Search input must have aria-label or accessible placeholder.");
   });
 
-  it("AC-4: SymbolsTable hide-zero checkbox has aria-label", () => {
+  it("AC-4: SymbolsTable no longer has a hide-zero checkbox (rev 5: historicals always visible)", () => {
     assert.ok(
-      symbolsTable.includes('aria-label="Hide historical zero-share symbols"'),
-      "AC-4: Hide-zero checkbox must have aria-label for screen readers."
+      !symbolsTable.includes('aria-label="Hide historical zero-share symbols"'),
+      "AC-4: Rev 5 removed the hide-zero toggle entirely; historicals now always show in watchlist."
     );
   });
 

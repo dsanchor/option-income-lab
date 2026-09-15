@@ -8,13 +8,13 @@ SCOPE
 ──────────────────────────────────────────────────────────────────────────────
 These tests verify the UNIFIED overview API shape (post-merge):
 
-  Part 1: Unified row predicate — §1.1 / §1.2
-    - non-zero portfolio shares → visible
-    - negative shares → always visible
-    - explicit watchlist member + zero shares → visible
-    - auto-enrolled only + zero shares → hidden by default
-    - auto-enrolled only + zero shares + include_zero=True → visible
-    - pure watchlist (no portfolio) → visible
+  Part 1: Unified row predicate — rev 5 (§1.1 superseded)
+    - portfolio_shares > 0 → row_source = "portfolio"
+    - everything else (zero, negative, or no shares — including symbols
+      whose only history is closed option positions) → row_source =
+      "watchlist". Nothing is ever hidden.
+    - explicit watchlist member + zero shares → visible, watchlist
+    - pure watchlist (no portfolio) → visible, watchlist
 
   Part 2: is_watchlist_member helper — §1.2
     - manually added (_auto_enrolled=False) → True
@@ -307,7 +307,7 @@ class TestUnifiedRowPredicate:
         assert "AAPL" in syms, "Active holding must appear in unified rows"
 
     def test_negative_shares_always_visible(self, client):
-        """Negative shares (anomaly) → always visible even when toggle ON."""
+        """Rev 5: negative shares (anomaly) → always visible, classified as watchlist."""
         c, fake = client
         # Create a symbol with a net negative position (buy fewer than sold)
         fake.container.seed_security("XNYS:AAPL", "Apple Inc.")
@@ -329,6 +329,9 @@ class TestUnifiedRowPredicate:
             assert Decimal(aapl_row["portfolio_shares"]) < 0, (
                 "Negative shares should be reflected in portfolio_shares"
             )
+        assert aapl_row["row_source"] == "watchlist", (
+            "Rev 5: only shares > 0 counts as portfolio; negative shares → watchlist"
+        )
 
     def test_explicit_watchlist_member_zero_shares_visible(self, client):
         """Manual watchlist + historical zero shares → visible (F-5)."""
@@ -351,8 +354,8 @@ class TestUnifiedRowPredicate:
             "(contract §1.1: manual watchlist overrides zero-share filter)"
         )
 
-    def test_auto_enrolled_zero_shares_hidden_by_default(self, client):
-        """Auto-enrolled only + zero shares → hidden by default (F-4)."""
+    def test_auto_enrolled_zero_shares_visible_in_watchlist(self, client):
+        """Rev 5: auto-enrolled only + zero shares → visible, in watchlist (never hidden)."""
         c, fake = client
         fake.container.seed_security("XNYS:O", "Realty Income")
         fake.container.seed_config("O", extra={
@@ -368,14 +371,17 @@ class TestUnifiedRowPredicate:
 
         resp = c.get("/api/symbols/overview")
         data = resp.json()
-        all_symbols = {r["symbol"] for r in data.get("rows", [])}
-        assert "O" not in all_symbols, (
-            "Auto-enrolled only symbol with zero shares must be HIDDEN by default "
-            "(contract §1.1: HIDDEN_DEFAULT)"
+        rows_by_sym = {r["symbol"]: r for r in data.get("rows", [])}
+        assert "O" in rows_by_sym, (
+            "Rev 5: zero-share symbols are never hidden — they surface in watchlist"
+        )
+        assert rows_by_sym["O"]["row_source"] == "watchlist", (
+            "Rev 5: zero-share symbols (even with ledger history) are classified as watchlist, "
+            "not portfolio — only shares > 0 counts as portfolio"
         )
 
-    def test_auto_enrolled_zero_shares_visible_with_toggle(self, client):
-        """F-7: include_zero=true reveals auto-enrolled zero-share symbols."""
+    def test_auto_enrolled_zero_shares_visible_regardless(self, client):
+        """Rev 5: no more include_zero toggle — zero-share symbols always visible."""
         c, fake = client
         fake.container.seed_config("O", extra={
             "security_id": "XNYS:O",
@@ -386,11 +392,11 @@ class TestUnifiedRowPredicate:
         _add_buy(fake, "XNYS:O", quantity="50", doc_id="txn_o_buy2")
         _add_sell(fake, "XNYS:O", quantity="50", doc_id="txn_o_sell2")
 
-        resp = c.get("/api/symbols/overview?include_zero_portfolio=true")
+        resp = c.get("/api/symbols/overview")
         data = resp.json()
         all_symbols = {r["symbol"] for r in data.get("rows", [])}
         assert "O" in all_symbols, (
-            "include_zero=true must reveal auto-enrolled zero-share symbols (F-7)"
+            "Rev 5: auto-enrolled zero-share symbols are always visible (in watchlist)"
         )
 
     def test_watchlist_only_symbol_visible(self, client):
@@ -487,8 +493,8 @@ class TestIsWatchlistMemberPredicate:
             "telegram_notifications_enabled=True implies explicit watchlist membership"
         )
 
-    def test_auto_enrolled_all_toggles_off_not_member_hidden(self, client):
-        """Auto-enrolled, all toggles off → NOT explicit member → hidden when zero shares."""
+    def test_auto_enrolled_all_toggles_off_visible_in_watchlist(self, client):
+        """Rev 5: auto-enrolled, all toggles off, zero shares → visible, in watchlist."""
         c, fake = client
         fake.container.seed_config("HIST", extra={
             "_auto_enrolled": True,
@@ -497,8 +503,8 @@ class TestIsWatchlistMemberPredicate:
         })
         _add_buy(fake, "XNYS:HIST", quantity="10", doc_id="txn_hist_buy")
         _add_sell(fake, "XNYS:HIST", quantity="10", doc_id="txn_hist_sell")
-        assert not self._overview_has_symbol(c, fake, "HIST"), (
-            "Auto-enrolled with no toggles and zero shares must be hidden (not explicit member)"
+        assert self._overview_has_symbol(c, fake, "HIST"), (
+            "Rev 5: zero-share symbols are never hidden, regardless of explicit membership"
         )
 
 

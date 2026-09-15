@@ -636,10 +636,10 @@ describe("SF: Shared-filter behavior preserved after view-selector addition", ()
     );
   });
 
-  it("SF-3: hideZero toggle state is still present", () => {
+  it("SF-3: hideZero toggle removed (rev 5: historicals always visible, nothing hidden)", () => {
     assert.ok(
-      src.includes("hideZero") || src.includes("hide_zero"),
-      "SF-3 REGRESSION: hideZero toggle must remain in SymbolsTable"
+      !src.includes("hideZero") && !src.includes("hide_zero"),
+      "SF-3: Rev 5 removed the hideZero toggle entirely; historicals now always show in watchlist."
     );
   });
 

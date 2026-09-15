@@ -8,13 +8,10 @@ export const dynamic = "force-dynamic";
 
 async function getData(): Promise<SymbolsOverview> {
   try {
-    // Fetch the inclusive dataset once (auto-enrolled zero-share "historical"
-    // rows included) so the "Hide historical (0 shares)" toggle in
-    // SymbolsTable can reveal them entirely client-side, with no refetch.
-    // Without `include_zero_portfolio=true`, the backend hides those rows
-    // unconditionally and unchecking the toggle would have nothing to reveal.
-    // See livingston-unified-watchlist-api-contract.md.
-    return await apiFetch<SymbolsOverview>("/api/symbols/overview?include_zero_portfolio=true");
+    // Rev 5: backend always returns every symbol, classified into
+    // portfolio (shares > 0) or watchlist (everything else) — nothing is
+    // ever hidden, so no query param is needed here anymore.
+    return await apiFetch<SymbolsOverview>("/api/symbols/overview");
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Failed to load symbols" };
   }

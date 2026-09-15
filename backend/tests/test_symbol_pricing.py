@@ -1372,7 +1372,7 @@ class TestCurrentValueComputation:
             "correction_status": "ACTIVE",
             "cost_basis_status": "COMPLETE",
         }
-        resp = c.get("/api/symbols/overview?include_zero_portfolio=true")
+        resp = c.get("/api/symbols/overview")
         rows = resp.json().get("rows", [])
         row = next((r for r in rows if r.get("symbol") == "ABBV"), None)
         if row is None:

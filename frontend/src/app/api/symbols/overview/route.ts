@@ -7,10 +7,9 @@ import type { SymbolsOverview } from "@/types/symbols";
  * Mirrors the backend's GET /api/symbols/overview endpoint (lightweight rows
  * used by the TopNav symbol search autocomplete and the Symbols list page).
  *
- * Forwards the incoming query string as-is (e.g. `include_zero_portfolio=true`)
- * so callers that need the inclusive auto-enrolled/zero-share dataset can
- * request it without this proxy silently dropping the parameter. See
- * livingston-unified-watchlist-api-contract.md.
+ * Forwards the incoming query string as-is. Rev 5: the backend always
+ * returns every symbol (portfolio = shares > 0, everything else =
+ * watchlist) — nothing is ever hidden, so no special query param is needed.
  */
 export async function GET(request: Request) {
   try {
