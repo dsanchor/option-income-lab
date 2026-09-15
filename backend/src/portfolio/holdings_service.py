@@ -135,10 +135,27 @@ class HoldingsService:
 
         # Per-security FIFO state and accumulators
         per_security: Dict[str, Dict[str, Any]] = {}
+        # Every security_id seen in any movement (equity or option-only),
+        # used below for the read-repair enrollment pass so option-only
+        # tickers still get a symbol_config even though they never enter
+        # `per_security` / the holdings response.
+        all_security_ids_seen: Dict[str, str] = {}
 
         for m in movements:
             security_id = m.get("security_id", "")
             if not security_id:
+                continue
+            all_security_ids_seen.setdefault(security_id, security_id)
+            txn_type = m.get("txn_type", "")
+            # Option cashflows are inventory-neutral and must NOT, by
+            # themselves, create a holdings entry for a ticker. A ticker
+            # whose only movements are options (no equity BUY/SELL/DIVIDEND/
+            # TRANSFER) must remain absent from holdings entirely, so the
+            # Symbols Overview classifies it as "watchlist" (rev 6), not as
+            # a hidden "historical" portfolio row. If real equity movements
+            # for the same ticker exist elsewhere (any order), the entry is
+            # created below when that movement is processed.
+            if txn_type in OPTION_TXN_TYPES and security_id not in per_security:
                 continue
             if security_id not in per_security:
                 per_security[security_id] = {
@@ -169,7 +186,6 @@ class HoldingsService:
             net_eur = _d((m.get("net") or {}).get("eur_amount", "0"))
             commission_eur = _d((m.get("fees") or {}).get("total_eur", "0"))
             cost_basis_status = m.get("cost_basis_status", "COMPLETE")
-            txn_type = m.get("txn_type", "")
             movement_id = m.get("id", "")
             trade_date = m.get("trade_date") or ""
 
@@ -265,13 +281,16 @@ class HoldingsService:
             list(per_security.keys()), self.securities_svc
         )
 
-        # ── Read-repair: ensure symbol_config exists for every security in holdings ──
+        # ── Read-repair: ensure symbol_config exists for every security seen ──
         # This catches any enrollment failures from §2.1–2.3.  Only calls ensure
         # when the config is genuinely missing (pre-check to avoid unnecessary
         # Cosmos writes and to allow tests to verify the pre-check is honoured).
+        # Iterates over ALL security_ids seen in movements (not just
+        # `per_security`) so option-only tickers — which intentionally never
+        # get a holdings entry — still get their symbol_config created here.
         try:
             symbols_container = self.securities_svc.container
-            for security_id in per_security:
+            for security_id in all_security_ids_seen:
                 parts = security_id.split(":", 1)
                 ticker = parts[1].upper() if len(parts) == 2 else security_id.upper()
                 config_id = f"config_{ticker}"

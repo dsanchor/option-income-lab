@@ -217,6 +217,28 @@ def _add_sell(fake_cosmos, security_id: str, account_id: str = "_unassigned", qu
     fake_cosmos.portfolio_container._store[doc_id] = doc
 
 
+def _add_option(fake_cosmos, security_id: str, txn_type: str, account_id: str = "ibkr",
+                 doc_id: str = None):
+    ticker = security_id.split(":")[-1]
+    did = doc_id or f"txn_{ticker}_{txn_type}_{account_id}"
+    doc = {
+        "id": did,
+        "account_id": account_id,
+        "doc_type": "ledger_txn",
+        "txn_type": txn_type,
+        "security_id": security_id,
+        "ticker": ticker,
+        "trade_date": "2026-01-01",
+        "quantity": "0",
+        "gross": {"amount": "150.00", "currency": "EUR", "eur_amount": "150.00"},
+        "fees": {"total": "5.00", "currency": "EUR", "total_eur": "5.00"},
+        "net_eur": "145.00",
+        "correction_status": "ACTIVE",
+        "cost_basis_status": "COMPLETE",
+    }
+    fake_cosmos.portfolio_container._store[did] = doc
+
+
 # ---------------------------------------------------------------------------
 # §5.4 — Two-section partition
 # ---------------------------------------------------------------------------
@@ -359,6 +381,29 @@ class TestHistoricalAndZeroShare:
         watchlist_symbols = [r["symbol"] for r in data.get("watchlist_rows", [])]
         assert "AAPL" in watchlist_symbols
         assert "AAPL" not in portfolio_symbols
+
+    def test_option_only_symbol_goes_to_watchlist_not_hidden_portfolio(self, client):
+        """A symbol that has NEVER had a real equity trade — only option
+        movements (e.g. CALL_SELL/PUT_SELL) — must appear in watchlist_rows,
+        not as a hidden "historical" portfolio row. Regression test for the
+        bug where compute_holdings created a spurious zero-share holdings
+        entry from option-only cashflows alone."""
+        c, fake = client
+        fake.container.seed_config("NKE")
+        _add_option(fake, "XNAS:NKE", "PUT_SELL", doc_id="txn_nke_put_sell")
+        _add_option(fake, "XNAS:NKE", "CALL_SELL", doc_id="txn_nke_call_sell")
+
+        resp = c.get("/api/symbols/overview")
+        data = resp.json()
+        portfolio_symbols = [r["symbol"] for r in data.get("portfolio_rows", [])]
+        watchlist_symbols = [r["symbol"] for r in data.get("watchlist_rows", [])]
+        assert "NKE" in watchlist_symbols, (
+            "option-only symbol (no equity trade history) must be in watchlist_rows"
+        )
+        assert "NKE" not in portfolio_symbols
+        nke_row = next(r for r in data["watchlist_rows"] if r["symbol"] == "NKE")
+        assert nke_row["row_source"] == "watchlist"
+        assert nke_row["portfolio_shares"] is None
 
 
 # ---------------------------------------------------------------------------

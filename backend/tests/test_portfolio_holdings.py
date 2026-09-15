@@ -258,6 +258,50 @@ class TestCostBasis:
         assert Decimal(h["total_sale_proceeds_eur"]) == Decimal("0.00")
         assert Decimal(h["total_dividends_eur"]) == Decimal("0.00")
 
+    def test_option_only_symbol_produces_no_holding_entry(self):
+        """A ticker with ONLY option movements (never any equity trade) must
+        not appear in holdings at all — it must stay classified as
+        "watchlist" in the Symbols Overview (rev 6), not as a hidden
+        "historical" portfolio row. See danny-portfolio-watchlist-rev6.
+        """
+        movements = [
+            _make_movement(
+                "t1", "XNAS:NKE", "PUT_SELL", "0", "150.00",
+                commission_eur="5.00", net_eur="145.00",
+            ),
+            _make_movement(
+                "t2", "XNAS:NKE", "CALL_BUY", "0", "50.00",
+                commission_eur="2.00", net_eur="52.00",
+            ),
+        ]
+        portfolio_svc, securities_svc = _make_services(movements)
+        svc = HoldingsService(portfolio_svc, securities_svc)
+        result = svc.compute_holdings()
+        assert result["holdings"] == []
+
+    def test_option_movements_before_first_equity_buy_still_no_leak(self):
+        """Options recorded chronologically BEFORE the first equity BUY for
+        the same ticker must not create a spurious holding either; once the
+        BUY is processed the entry must be created and reflect only the
+        equity activity.
+        """
+        movements = [
+            _make_movement(
+                "t1", "XNAS:NKE", "PUT_SELL", "0", "150.00",
+                commission_eur="5.00", net_eur="145.00", trade_date="2024-01-01",
+            ),
+            _make_movement(
+                "t2", "XNAS:NKE", "BUY", "10", "1000.00", trade_date="2024-01-15",
+            ),
+        ]
+        portfolio_svc, securities_svc = _make_services(movements)
+        svc = HoldingsService(portfolio_svc, securities_svc)
+        result = svc.compute_holdings()
+        assert len(result["holdings"]) == 1
+        h = result["holdings"][0]
+        assert Decimal(h["total_shares"]) == Decimal("10")
+        assert Decimal(h["total_sale_proceeds_eur"]) == Decimal("0.00")
+
 
 class TestMultipleAccounts:
     def test_each_account_tracked(self):

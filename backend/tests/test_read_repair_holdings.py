@@ -240,6 +240,46 @@ class TestReadRepairMissingConfig:
         assert "XNYS:AAPL" in called
         assert "XMAD:TEF" in called
 
+    def test_read_repair_covers_option_only_tickers(self):
+        """A ticker with ONLY option movements never enters `per_security` /
+        the holdings response (rev 6), but it must still be enrolled in
+        symbol_config via read-repair — otherwise it would silently drop out
+        of the Symbols Overview entirely instead of appearing in Watchlist.
+        """
+        symbols_ctr = FakeSymbolsContainer()
+        symbols_ctr.seed_security("XNAS:NKE", "Nike Inc.")
+        option_doc = {
+            "id": "txn_nke_put_sell",
+            "account_id": "ibkr",
+            "doc_type": "ledger_txn",
+            "txn_type": "PUT_SELL",
+            "security_id": "XNAS:NKE",
+            "ticker": "NKE",
+            "trade_date": "2026-01-01",
+            "quantity": "0",
+            "gross": {"amount": "150.00", "currency": "EUR", "eur_amount": "150.00"},
+            "fees": {"total": "5.00", "currency": "EUR", "total_eur": "5.00"},
+            "net_eur": "145.00",
+            "correction_status": "ACTIVE",
+            "cost_basis_status": "COMPLETE",
+        }
+
+        holdings_svc, _, _ = _make_services(
+            portfolio_docs=[option_doc],
+            symbols_ctr=symbols_ctr,
+        )
+
+        called = []
+        with patch("src.portfolio.holdings_service.ensure_symbol_config",
+                   side_effect=lambda c, sid, source: called.append(sid)):
+            result = holdings_svc.compute_holdings()
+
+        assert result["holdings"] == []
+        assert "XNAS:NKE" in called, (
+            "option-only ticker must still be enrolled via read-repair even "
+            "though it never enters the holdings response"
+        )
+
     def test_read_repair_skips_existing_configs(self):
         """Contract §2.5: ensure_symbol_config must only be triggered for securities
         missing a config.  The implementation pre-reads config_{ticker} and skips
