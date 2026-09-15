@@ -307,8 +307,10 @@ class TestPortfolioPrecedence:
 
 
 class TestHistoricalAndZeroShare:
-    def test_zero_share_historical_in_watchlist_rows(self, client):
-        """Rev 5: symbol with full sell-out (0 shares) is watchlist, not portfolio."""
+    def test_zero_share_historical_in_portfolio_rows(self, client):
+        """Rev 6: symbol with full sell-out (net 0 shares) stays in portfolio_rows —
+        the active holdings snapshot still has an entry for it (real equity trade
+        history), so it's a "historical" portfolio row, not watchlist."""
         c, fake = client
         fake.container.seed_config("AAPL")
         _add_buy(fake, "XNYS:AAPL", quantity="100", doc_id="txn_aapl_buy_hist")
@@ -318,16 +320,20 @@ class TestHistoricalAndZeroShare:
         data = resp.json()
         portfolio_symbols = [r["symbol"] for r in data.get("portfolio_rows", [])]
         watchlist_symbols = [r["symbol"] for r in data.get("watchlist_rows", [])]
-        assert "AAPL" in watchlist_symbols, (
-            "Rev 5: only shares > 0 counts as portfolio; zero-share historical → watchlist"
+        assert "AAPL" in portfolio_symbols, (
+            "Rev 6: a fully-sold symbol still has a holdings entry (shares=0) -> portfolio, "
+            "marked is_historical for the frontend's default-on 'Hide historical' filter"
         )
-        assert "AAPL" not in portfolio_symbols
+        assert "AAPL" not in watchlist_symbols
+        aapl_row = next(r for r in data["portfolio_rows"] if r["symbol"] == "AAPL")
+        assert aapl_row["is_historical"] is True
 
     def test_soft_deleted_movement_does_not_confer_portfolio_membership(self, client):
-        """Rev 5: a soft-deleted movement (no active shares) is watchlist, not portfolio."""
+        """Rev 6: an entirely soft-deleted movement never enters the active holdings
+        snapshot, so the symbol has no holdings entry at all -> watchlist."""
         c, fake = client
         fake.container.seed_config("AAPL")
-        # Deleted movement → does not contribute to active shares
+        # Deleted movement → excluded from the active holdings snapshot entirely
         _add_buy(fake, "XNYS:AAPL", doc_id="txn_aapl_deleted", deleted=True)
 
         resp = c.get("/api/symbols/overview")
@@ -335,12 +341,13 @@ class TestHistoricalAndZeroShare:
         portfolio_symbols = [r["symbol"] for r in data.get("portfolio_rows", [])]
         watchlist_symbols = [r["symbol"] for r in data.get("watchlist_rows", [])]
         assert "AAPL" in watchlist_symbols, (
-            "Rev 5: soft-deleted movements don't contribute shares — no shares means watchlist"
+            "Rev 6: soft-deleted-only movements produce no holdings entry -> watchlist"
         )
         assert "AAPL" not in portfolio_symbols
 
     def test_superseded_movement_does_not_confer_portfolio_membership(self, client):
-        """Rev 5: a SUPERSEDED movement (no active shares) is watchlist, not portfolio."""
+        """Rev 6: an entirely SUPERSEDED movement never enters the active holdings
+        snapshot, so the symbol has no holdings entry at all -> watchlist."""
         c, fake = client
         fake.container.seed_config("AAPL")
         _add_buy(fake, "XNYS:AAPL", doc_id="txn_aapl_superseded",

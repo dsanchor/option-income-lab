@@ -32,6 +32,10 @@ export interface SymbolRow {
   portfolio_realized_eur?: string | null;
   row_source?: "portfolio" | "watchlist" | "both";
   is_auto_enrolled?: boolean;
+  // Rev 6: true when the row is a fully-sold/negative-inventory holding
+  // (portfolio row with shares <= 0). Hidden by default via the "Hide
+  // historical" toggle in SymbolsTable, but never excluded by the API.
+  is_historical?: boolean;
   us_options_eligible?: boolean;
   screener_eligible?: boolean;
   // Pricing cache fields (Phase 4 — danny-symbol-pricing-cache-contract.md)

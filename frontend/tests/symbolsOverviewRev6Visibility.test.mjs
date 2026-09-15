@@ -1,23 +1,27 @@
 /**
- * Regression tests — Rev 5 portfolio/watchlist classification.
+ * Regression tests — Rev 6 portfolio/watchlist classification.
  *
  * Supersedes symbolsOverviewIncludeZeroPortfolio.test.mjs (deleted). That
  * file guarded the OLD contract: the backend hid auto-enrolled zero-share
  * ("historical") rows unless the caller sent `include_zero_portfolio=true`.
  *
- * Rev 5 changed the rule (user request): Portfolio = shares > 0 only.
- * Everything else (zero shares, negative shares, soft-deleted/superseded-only
- * history) is classified as Watchlist. Nothing is ever hidden — the
- * `include_zero_portfolio` toggle and its query param were removed entirely.
+ * Rev 6 rule (current): "portfolio" = the active holdings snapshot has an
+ * entry for the ticker at all (real equity trade history), regardless of
+ * current share count. Zero/negative-share portfolio rows are marked
+ * `is_historical` and hidden by default in the UI via a "Hide historical"
+ * toggle scoped to the Portfolio section (see SymbolsTable.tsx), but the
+ * API itself never hides them and never sends/needs `include_zero_portfolio`.
+ * "watchlist" = no holdings entry at all (option-only symbols, or symbols
+ * whose only equity movements were soft-deleted/SUPERSEDED/VOIDED).
  *
  * These tests confirm:
  *   1. `src/app/symbols/page.tsx` no longer requests the now-removed
  *      `include_zero_portfolio=true` query param (a stale caller would be
  *      silently ignored by the backend rather than erroring loudly).
  *   2. `src/app/api/symbols/overview/route.ts` still forwards query strings
- *      generically (harmless — no special-casing needed for a rev-5 world).
+ *      generically (harmless — no special-casing needed for this rule).
  *
- * Run with: node --test frontend/tests/symbolsOverviewRev5Visibility.test.mjs
+ * Run with: node --test frontend/tests/symbolsOverviewRev6Visibility.test.mjs
  */
 
 import { test, describe } from "node:test";
@@ -122,10 +126,10 @@ describe("Symbols page no longer requests the removed include_zero_portfolio fla
     "utf8",
   );
 
-  test("PG-1: getData() no longer includes include_zero_portfolio=true (rev 5: always inclusive)", () => {
+  test("PG-1: getData() no longer includes include_zero_portfolio=true (rev 6: never hidden)", () => {
     assert.ok(
       !pageSrc.includes("include_zero_portfolio"),
-      "Rev 5 removed the include_zero_portfolio param entirely — backend always returns every symbol.",
+      "Rev 6 removed the include_zero_portfolio param entirely — backend always returns every symbol.",
     );
   });
 

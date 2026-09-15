@@ -8,9 +8,12 @@ export const dynamic = "force-dynamic";
 
 async function getData(): Promise<SymbolsOverview> {
   try {
-    // Rev 5: backend always returns every symbol, classified into
-    // portfolio (shares > 0) or watchlist (everything else) — nothing is
-    // ever hidden, so no query param is needed here anymore.
+    // Rev 6: backend always returns every symbol, classified into
+    // portfolio (has an active-holdings entry, i.e. real equity trade
+    // history — even at zero/negative shares) or watchlist (no holdings
+    // entry at all, e.g. option-only symbols). Nothing is ever hidden by
+    // the API; the "Hide historical" toggle in SymbolsTable filters
+    // zero/negative-share portfolio rows client-side only.
     return await apiFetch<SymbolsOverview>("/api/symbols/overview");
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Failed to load symbols" };

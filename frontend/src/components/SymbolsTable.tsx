@@ -53,7 +53,10 @@ function Pill({ text, className }: { text: string; className: string }) {
   return <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${className}`}>{text}</span>;
 }
 
-/** Returns true for rows that originate from the portfolio (shares > 0). */
+/** Returns true for rows classified as "portfolio" by the backend (has an
+ * active-holdings entry — real equity trade history, regardless of current
+ * share count). Historical (zero/negative-share) portfolio rows are still
+ * true here; see `is_historical` / the "Hide historical" toggle for that. */
 function isPortfolioRow(r: SymbolRow): boolean {
   if (r.row_source != null) return r.row_source !== "watchlist";
   // Fallback for legacy responses: if portfolio_shares is present, treat as portfolio row
@@ -148,6 +151,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
   const [sort, setSort] = useState<SortKey>("symbol");
   const [dir, setDir] = useState<"asc" | "desc">("asc");
   const [suitabilityFilter, setSuitabilityFilter] = useState<SymbolSuitabilityFilter>("all");
+  const [hideHistorical, setHideHistorical] = useState(true);
   const [modalSymbol, setModalSymbol] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("portfolio");
 
@@ -296,6 +300,13 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
 
   const portfolioFiltered = filtered.filter(isPortfolioRow);
   const watchlistFiltered = filtered.filter((r) => !isPortfolioRow(r));
+  // "Hide historical" (default ON): fully-sold/negative-inventory portfolio
+  // rows are hidden from the Portfolio section by default; the toggle
+  // reveals them. Never affects Watchlist rows or the API response.
+  const portfolioHistoricalCount = portfolioFiltered.filter((r) => r.is_historical).length;
+  const portfolioVisible = hideHistorical
+    ? portfolioFiltered.filter((r) => !r.is_historical)
+    : portfolioFiltered;
 
   // Row renderer closes over all component state — no prop threading needed
   function renderRow(r: SymbolRow) {
@@ -506,8 +517,17 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
             </button>
           ))}
         </div>
+        <label className="flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
+          <input
+            type="checkbox"
+            checked={hideHistorical}
+            onChange={(e) => setHideHistorical(e.target.checked)}
+            aria-label="Hide historical zero-share symbols"
+          />
+          Hide historical{portfolioHistoricalCount > 0 ? ` (${portfolioHistoricalCount})` : ""}
+        </label>
         <span className="ml-auto shrink-0 text-xs text-text-muted">
-          {portfolioFiltered.length} portfolio · {watchlistFiltered.length} watchlist
+          {portfolioVisible.length} portfolio · {watchlistFiltered.length} watchlist
         </span>
         </div>
       </div>
@@ -543,14 +563,14 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
             </tr>
           </thead>
           <tbody>
-            {portfolioFiltered.length === 0 && watchlistFiltered.length === 0 && (
+            {portfolioVisible.length === 0 && watchlistFiltered.length === 0 && (
               <tr>
                 <td colSpan={cols.length + 1} className="px-4 py-8 text-center text-text-muted">
                   No symbols match.
                 </td>
               </tr>
             )}
-            {portfolioFiltered.length > 0 && (
+            {portfolioVisible.length > 0 && (
               <tr>
                 <td
                   colSpan={cols.length + 1}
@@ -560,7 +580,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
                 </td>
               </tr>
             )}
-            {portfolioFiltered.map(renderRow)}
+            {portfolioVisible.map(renderRow)}
             {watchlistFiltered.length > 0 && (
               <tr>
                 <td

@@ -1235,16 +1235,25 @@ from src.calendar_visibility import (  # noqa: E402
 
 
 def _compute_symbols_overview(cosmos, portfolio_container=None):
-    """View-model for the Symbols list page — Unified Watchlist (rev 5).
+    """View-model for the Symbols list page — Unified Watchlist (rev 6).
 
     Returns a single flat ``rows`` array merging portfolio holdings and
     watchlist symbols, plus ``portfolio_summary`` KPI totals.
 
-    Classification rule (rev 5 — supersedes §1.1 danny-unified-watchlist-contract.md):
-    - portfolio_shares > 0 → "portfolio" row
-    - everything else (zero, negative, or no shares at all — including
-      symbols whose only history is closed option positions) → "watchlist"
-      row. Nothing is ever hidden.
+    Classification rule (rev 6 — supersedes rev 5 and §1.1
+    danny-unified-watchlist-contract.md):
+    - "portfolio" row = the active holdings snapshot (HoldingsService,
+      active/non-superseded/non-deleted movements only) has an entry for
+      this ticker at all — i.e. the symbol has real equity trade history,
+      regardless of current share count (positive, zero, or negative).
+    - "watchlist" row = no holdings entry exists (e.g. a symbol whose only
+      history is option positions, or whose only equity movements were
+      soft-deleted/SUPERSEDED/VOIDED and therefore never entered the active
+      holdings snapshot).
+    - Within "portfolio", ``is_historical`` marks rows with shares <= 0 (a
+      fully-sold or negative-inventory-anomaly position). The frontend
+      hides these by default via a "Hide historical" toggle, but they are
+      never excluded from the API response — nothing is ever hidden here.
 
     Legacy fields (``portfolio_rows``, ``watchlist_rows``, ``portfolio_count``,
     ``watchlist_count``) are preserved for backward-compatible rollout.
@@ -1334,11 +1343,15 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
         else:
             shares_val = None  # type: ignore[assignment]
 
-        # Classification rule (rev 5): only strictly-positive share counts are
-        # "portfolio". Zero, negative, or no shares at all (e.g. a symbol with
-        # only closed option positions or fully-sold stock) → "watchlist".
-        # Nothing is ever hidden.
-        is_portfolio = shares_val is not None and shares_val > 0
+        # Classification rule (rev 6): "portfolio" = the active holdings
+        # snapshot has an entry for this ticker at all (real equity trade
+        # history), regardless of current share count. "watchlist" = no
+        # holdings entry (option-only symbols, or symbols whose only equity
+        # movements were soft-deleted/SUPERSEDED/VOIDED). Nothing is ever
+        # hidden by the API — the frontend applies its own default-on
+        # "Hide historical" filter using is_historical.
+        is_portfolio = holding is not None
+        is_historical = shares_val is not None and shares_val <= 0
 
         # Determine row_source
         if is_portfolio and explicit_watchlist:
@@ -1358,6 +1371,7 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
             "list_section": list_section,          # legacy compat
             "row_source": row_source,
             "is_auto_enrolled": is_auto_enrolled,
+            "is_historical": is_historical,
             "category": enr.get("category", "") or "",
             "dgi_score": enr.get("quality_score"),
             "tech_timing": technicals.get("score"),

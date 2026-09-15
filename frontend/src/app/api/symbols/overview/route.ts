@@ -7,9 +7,10 @@ import type { SymbolsOverview } from "@/types/symbols";
  * Mirrors the backend's GET /api/symbols/overview endpoint (lightweight rows
  * used by the TopNav symbol search autocomplete and the Symbols list page).
  *
- * Forwards the incoming query string as-is. Rev 5: the backend always
- * returns every symbol (portfolio = shares > 0, everything else =
- * watchlist) — nothing is ever hidden, so no special query param is needed.
+ * Forwards the incoming query string as-is. Rev 6: the backend always
+ * returns every symbol (portfolio = has an active-holdings entry;
+ * watchlist = no holdings entry, e.g. option-only symbols) — nothing is
+ * ever hidden by the API, so no special query param is needed.
  */
 export async function GET(request: Request) {
   try {
