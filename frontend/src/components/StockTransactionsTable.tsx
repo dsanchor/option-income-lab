@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { Link2 } from "lucide-react";
 import { getMovements, listAccounts } from "@/lib/portfolio-api";
 import { subCalendarMonths, toLocalDateString } from "@/lib/dateHelpers";
-import type { LedgerMovement, BrokerAccount } from "@/types/portfolio";
+import type { LedgerMovement, BrokerAccount, TxnType } from "@/types/portfolio";
 import { SALES_TYPE_LABELS } from "@/types/portfolio";
 import MovementDetailDialog from "./MovementDetailDialog";
 import ReassignmentDialog from "./ReassignmentDialog";
@@ -12,10 +12,16 @@ import { getAccountName } from "@/lib/accountDisplay";
 
 const PAGE_SIZE = 20;
 
-const TXN_BADGE: Record<string, string> = {
+const TXN_BADGE: Record<TxnType, string> = {
   BUY: "bg-accent-green/15 text-accent-green",
   SELL: "bg-accent-red/15 text-accent-red",
   DIVIDEND: "bg-accent-blue/15 text-accent-blue",
+  TRANSFER_OUT: "bg-accent-orange/15 text-accent-orange",
+  TRANSFER_IN: "bg-accent-orange/15 text-accent-orange",
+  CALL_SELL: "bg-accent-purple/15 text-accent-purple",
+  CALL_BUY: "bg-accent-cyan/15 text-accent-cyan",
+  PUT_SELL: "bg-accent-purple/15 text-accent-purple",
+  PUT_BUY: "bg-accent-cyan/15 text-accent-cyan",
 };
 
 type TypeFilter = "ALL" | "BUY" | "SELL" | "DIVIDEND";
@@ -225,7 +231,7 @@ export default function StockTransactionsTable({ securityId }: Props) {
                             TXN_BADGE[m.txn_type] ?? "bg-bg-hover text-text-muted"
                           }`}
                         >
-                          {m.txn_type === "BUY" ? "Buy" : m.txn_type === "SELL" ? "Sell" : "Dividend"}
+                          {m.txn_type}
                         </span>
                         {m.txn_type === "SELL" && m.sales_type && (
                           <span className="text-xs text-text-muted">
