@@ -2719,7 +2719,7 @@ async def api_delete_symbol(request: Request, symbol: str):
 
 @app.get("/api/symbols/{symbol}/positions/linkable")
 async def api_symbol_linkable_positions(request: Request, symbol: str, txn_type: str = ""):
-    """List this symbol's option positions eligible to link to a given option movement.
+    """List this symbol's option positions eligible to link to a movement.
 
     Eligibility rules (see .squad/designs/option-movements-design.md):
     - `CALL_SELL` / `PUT_SELL`: same option type (call/put), and the position does
@@ -2727,6 +2727,8 @@ async def api_symbol_linkable_positions(request: Request, symbol: str, txn_type:
     - `CALL_BUY` / `PUT_BUY`: same option type, the position was closed via a
       buyback (`status == "rolled"` or `close_reason == "manual"`), and it does
       NOT already have a linked closing-buy movement.
+    - `BUY`: assigned puts without an active linked stock buy.
+    - `SELL`: assigned calls without an active linked stock sell.
 
     Returns positions regardless of open/closed status — a closed legacy
     position with no linked movement is still a valid candidate.
@@ -2734,9 +2736,10 @@ async def api_symbol_linkable_positions(request: Request, symbol: str, txn_type:
     from src.portfolio.models import OPTION_TXN_TYPES
 
     normalized_txn_type = (txn_type or "").strip().upper()
-    if normalized_txn_type not in OPTION_TXN_TYPES:
+    linkable_txn_types = set(OPTION_TXN_TYPES) | {"BUY", "SELL"}
+    if normalized_txn_type not in linkable_txn_types:
         return JSONResponse(
-            {"error": f"txn_type must be one of {sorted(OPTION_TXN_TYPES)}"},
+            {"error": f"txn_type must be one of {sorted(linkable_txn_types)}"},
             status_code=400,
         )
 
@@ -2770,11 +2773,16 @@ async def api_symbol_linkable_positions(request: Request, symbol: str, txn_type:
         logger.warning("api_symbol_linkable_positions linkage failed for %s: %s", symbol, e)
         return JSONResponse({"error": "Failed to compute position linkage"}, status_code=500)
 
-    position_type = "call" if normalized_txn_type.startswith("CALL") else "put"
-    is_opening = normalized_txn_type.endswith("_SELL")
+    is_assignment = normalized_txn_type in {"BUY", "SELL"}
+    if is_assignment:
+        position_type = "put" if normalized_txn_type == "BUY" else "call"
+    else:
+        position_type = "call" if normalized_txn_type.startswith("CALL") else "put"
+    is_opening = not is_assignment and normalized_txn_type.endswith("_SELL")
     expected_open_txn = "CALL_SELL" if position_type == "call" else "PUT_SELL"
     expected_close_txn = "CALL_BUY" if position_type == "call" else "PUT_BUY"
     option_moves_by_position_id = linkage.get("option_moves_by_position_id", {})
+    assignment_stock_by_position_id = linkage.get("assignment_stock_by_position_id", {})
 
     results: List[Dict[str, Any]] = []
     for row in linkage.get("positions", []):
@@ -2784,7 +2792,14 @@ async def api_symbol_linkable_positions(request: Request, symbol: str, txn_type:
         has_opening_sell = any(m.get("txn_type") == expected_open_txn for m in moves)
         has_closing_buy = any(m.get("txn_type") == expected_close_txn for m in moves)
 
-        if is_opening:
+        if is_assignment:
+            assignment_moves = assignment_stock_by_position_id.get(row.get("position_id"), [])
+            has_assignment_stock = any(
+                m.get("txn_type") == normalized_txn_type for m in assignment_moves
+            )
+            if row.get("close_reason") != "assigned" or has_assignment_stock:
+                continue
+        elif is_opening:
             if has_opening_sell:
                 continue
         else:

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { getLinkablePositions } from "@/lib/portfolio-api";
-import type { LinkablePosition, OptionTxnType } from "@/types/portfolio";
+import type { LinkablePosition, LinkablePositionTxnType } from "@/types/portfolio";
 
 const inputCls =
   "w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent-blue focus:outline-none";
@@ -23,9 +23,9 @@ function formatPositionLabel(p: LinkablePosition): string {
 interface OptionPositionLinkPickerProps {
   /** Bare ticker symbol (not MIC:TICKER security_id). Picker is disabled until this is set. */
   symbol: string | null;
-  txnType: OptionTxnType;
+  txnType: LinkablePositionTxnType;
   value: string;
-  onChange: (positionId: string) => void;
+  onChange: (positionId: string, position?: LinkablePosition) => void;
 }
 
 /**
@@ -35,6 +35,7 @@ interface OptionPositionLinkPickerProps {
  * - *_SELL: positions of matching type without an already-linked opening-sell movement.
  * - *_BUY: positions of matching type that require a closing buy (rolled/manual close)
  *   without an already-linked closing-buy movement.
+ * - BUY/SELL: assigned puts/calls without their linked assignment stock movement.
  * A free-text fallback input remains available for edge cases the picker can't cover.
  */
 export default function OptionPositionLinkPicker({ symbol, txnType, value, onChange }: OptionPositionLinkPickerProps) {
@@ -67,7 +68,10 @@ export default function OptionPositionLinkPicker({ symbol, txnType, value, onCha
       <div className="flex gap-2">
         <select
           value={positions?.some((p) => p.position_id === value) ? value : ""}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => {
+            const positionId = e.target.value;
+            onChange(positionId, positions?.find((p) => p.position_id === positionId));
+          }}
           className={inputCls}
           disabled={!positions || positions.length === 0}
         >

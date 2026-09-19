@@ -26,3 +26,8 @@
 
 ### 2026-09-07 — Release-gate discipline
 - Maintained the expectation that final release gates target zero unexpected skips/xfails inside the scoped authored suites and explicitly document any pre-existing unrelated failures.
+
+### 2026-09-19 — Assigned option-to-stock correction linkage
+- Approved the assigned-put/stock-BUY and assigned-call/stock-SELL linkage change after verifying the picker reuses the warning engine's active-link index, so deleted, voided, and superseded movements do not suppress candidates.
+- Focused validation passed: 77 backend tests, 4 frontend contract tests, TypeScript type-check, and ESLint on the changed frontend files.
+- Confirmed correction replacement semantics make the saved active stock link suppress the candidate and clear `OPTION_ASSIGNMENT_STOCK_MISSING`, while wrong-direction links do neither.

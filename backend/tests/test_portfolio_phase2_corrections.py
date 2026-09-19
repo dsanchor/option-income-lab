@@ -240,6 +240,37 @@ class TestCorrectionInvariants:
         assert resp.status_code == 200
         assert resp.json()["replacement"]["option_position_id"] == "pos_call_777"
 
+    @pytest.mark.parametrize(
+        ("txn_type", "position_id", "option_type"),
+        [
+            ("BUY", "assigned_put_777", "put"),
+            ("SELL", "assigned_call_777", "call"),
+        ],
+    )
+    def test_stock_correction_persists_assignment_link(
+        self, client, txn_type, position_id, option_type
+    ):
+        c, fake = client
+        movement_id = f"mvt_{txn_type.lower()}_assignment"
+        _seed(fake, movement_id, txn_type=txn_type)
+
+        resp = _correct(
+            c,
+            movement_id,
+            note="link assigned option",
+            extra={
+                "option_position_id": position_id,
+                "option_link_kind": "ASSIGNMENT_STOCK",
+                "option_type": option_type,
+            },
+        )
+
+        assert resp.status_code == 200
+        replacement = resp.json()["replacement"]
+        assert replacement["option_position_id"] == position_id
+        assert replacement["option_link_kind"] == "ASSIGNMENT_STOCK"
+        assert replacement["option_type"] == option_type
+
     def test_option_correction_can_add_option_close_date(self, client):
         c, fake = client
         fake.portfolio_container._store["mvt_opt_corr_002"] = {

@@ -8,6 +8,8 @@ import type {
   CostBasisStatus,
   FxRateSource,
   LedgerMovement,
+  LinkablePosition,
+  LinkablePositionTxnType,
   MovementCorrectionRequest,
   OptionContractType,
   OptionLinkKind,
@@ -39,6 +41,10 @@ const OPTION_TYPE_BY_TXN_TYPE: Record<OptionTxnType, OptionContractType> = {
 };
 
 type WithholdingDestState = "not_captured" | "zero" | "value";
+
+function isOptionTxnType(txnType: LedgerMovement["txn_type"]): txnType is OptionTxnType {
+  return OPTION_TXN_TYPES.some((optionTxnType) => optionTxnType === txnType);
+}
 
 function initDestState(m: LedgerMovement): WithholdingDestState {
   if (!m.withholding?.destination) return "not_captured";
@@ -267,9 +273,11 @@ export default function MovementCorrectionDialog({
   onCorrected,
 }: MovementCorrectionDialogProps) {
   const isTransfer = m.txn_type === "TRANSFER_OUT" || m.txn_type === "TRANSFER_IN";
-  const isOptionTxn = OPTION_TXN_TYPES.includes(m.txn_type as OptionTxnType);
-  const supportsOptionMetadata = isOptionTxn || m.txn_type === "BUY" || m.txn_type === "SELL";
-  const optionTxnType = isOptionTxn ? (m.txn_type as OptionTxnType) : null;
+  const optionTxnType: OptionTxnType | null = isOptionTxnType(m.txn_type) ? m.txn_type : null;
+  const isOptionTxn = optionTxnType !== null;
+  const linkableTxnType: LinkablePositionTxnType | null =
+    optionTxnType ?? (m.txn_type === "BUY" || m.txn_type === "SELL" ? m.txn_type : null);
+  const supportsOptionMetadata = linkableTxnType !== null;
   const hasWithholding = m.txn_type === "DIVIDEND" || m.txn_type === "SELL";
   const originalGross = m.gross;
   const originalFees = m.fees;
@@ -322,6 +330,14 @@ export default function MovementCorrectionDialog({
   const [optionExpiration, setOptionExpiration] = useState(m.option_expiration ?? "");
   const [optionSymbol, setOptionSymbol] = useState(m.option_symbol ?? "");
   const [optionCloseDate, setOptionCloseDate] = useState(m.option_close_date ?? "");
+
+  function handleOptionPositionChange(positionId: string, position?: LinkablePosition) {
+    setOptionPositionId(positionId);
+    if (position && (m.txn_type === "BUY" || m.txn_type === "SELL")) {
+      setOptionLinkKind("ASSIGNMENT_STOCK");
+      setOptionType(position.type);
+    }
+  }
 
   // ── Withholding source ─────────────────────────────────────────────────────
   const [whtSrcCountry, setWhtSrcCountry] = useState(originalWithholding?.source?.country ?? "");
@@ -988,16 +1004,16 @@ export default function MovementCorrectionDialog({
                 </div>
               )}
 
-              {supportsOptionMetadata && (
+              {linkableTxnType && (
                 <div className="rounded-[var(--radius)] border border-border bg-bg-card/30 px-4 py-3 space-y-4">
                   <div className={sectionHeadCls}>Option linkage</div>
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="sm:col-span-2">
                       <OptionPositionLinkPicker
                         symbol={m.ticker ?? null}
-                        txnType={m.txn_type as OptionTxnType}
+                        txnType={linkableTxnType}
                         value={optionPositionId}
-                        onChange={setOptionPositionId}
+                        onChange={handleOptionPositionChange}
                       />
                     </div>
                     <div>

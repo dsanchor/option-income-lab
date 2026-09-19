@@ -8,6 +8,8 @@ position" dropdown (see .squad/designs/option-movements-design.md addendum):
 - `CALL_BUY` / `PUT_BUY`: same option type, position was closed via a buyback
   (`status == "rolled"` or `close_reason == "manual"`), no existing linked
   closing-buy movement yet.
+- `BUY`: assigned puts without an active linked stock buy.
+- `SELL`: assigned calls without an active linked stock sell.
 """
 
 import pytest
@@ -73,6 +75,49 @@ def _symbol_doc():
                 "status": "closed",
                 "close_reason": "assigned",
             },
+            {
+                "position_id": "call-assigned-no-sale",
+                "type": "call",
+                "strike": 165,
+                "expiration": "2026-02-04",
+                "opened_at": "2026-01-07T00:00:00Z",
+                "closed_at": "2026-01-31T00:00:00Z",
+                "status": "closed",
+                "close_reason": "assigned",
+            },
+            {
+                "position_id": "put-assigned-linked",
+                "type": "put",
+                "strike": 85,
+                "expiration": "2026-02-04",
+                "opened_at": "2026-01-08T00:00:00Z",
+                "closed_at": "2026-02-01T00:00:00Z",
+                "status": "closed",
+                "close_reason": "assigned",
+            },
+            {
+                "position_id": "call-assigned-linked",
+                "type": "call",
+                "strike": 170,
+                "expiration": "2026-02-04",
+                "opened_at": "2026-01-09T00:00:00Z",
+                "closed_at": "2026-02-02T00:00:00Z",
+                "status": "closed",
+                "close_reason": "assigned",
+            },
+            *[
+                {
+                    "position_id": f"put-assigned-{state}",
+                    "type": "put",
+                    "strike": 80,
+                    "expiration": "2026-02-04",
+                    "opened_at": "2026-01-10T00:00:00Z",
+                    "closed_at": "2026-02-03T00:00:00Z",
+                    "status": "closed",
+                    "close_reason": "assigned",
+                }
+                for state in ("deleted", "voided", "superseded")
+            ],
         ],
     }
 
@@ -143,6 +188,43 @@ def linkable_client():
     fake.portfolio_container._store["put-sell-for-assigned"] = _option_movement(
         id_="put-sell-for-assigned", txn_type="PUT_SELL", position_id="put-assigned-no-buyback",
     )
+    for position_id, txn_type in (
+        ("call-assigned-no-sale", "CALL_SELL"),
+        ("put-assigned-linked", "PUT_SELL"),
+        ("call-assigned-linked", "CALL_SELL"),
+        ("put-assigned-deleted", "PUT_SELL"),
+        ("put-assigned-voided", "PUT_SELL"),
+        ("put-assigned-superseded", "PUT_SELL"),
+    ):
+        fake.portfolio_container._store[f"open-{position_id}"] = _option_movement(
+            id_=f"open-{position_id}", txn_type=txn_type, position_id=position_id,
+        )
+    fake.portfolio_container._store["stock-buy-linked"] = _option_movement(
+        id_="stock-buy-linked", txn_type="BUY", position_id="put-assigned-linked",
+    )
+    fake.portfolio_container._store["stock-sell-linked"] = _option_movement(
+        id_="stock-sell-linked", txn_type="SELL", position_id="call-assigned-linked",
+    )
+    fake.portfolio_container._store["stock-sell-wrong-direction"] = _option_movement(
+        id_="stock-sell-wrong-direction",
+        txn_type="SELL",
+        position_id="put-assigned-no-buyback",
+    )
+    deleted = _option_movement(
+        id_="stock-buy-deleted", txn_type="BUY", position_id="put-assigned-deleted",
+    )
+    deleted["deleted_at"] = "2026-02-05T00:00:00Z"
+    fake.portfolio_container._store[deleted["id"]] = deleted
+    voided = _option_movement(
+        id_="stock-buy-voided", txn_type="BUY", position_id="put-assigned-voided",
+    )
+    voided["correction_status"] = "VOIDED"
+    fake.portfolio_container._store[voided["id"]] = voided
+    superseded = _option_movement(
+        id_="stock-buy-superseded", txn_type="BUY", position_id="put-assigned-superseded",
+    )
+    superseded["correction_status"] = "SUPERSEDED"
+    fake.portfolio_container._store[superseded["id"]] = superseded
 
     try:
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -187,6 +269,25 @@ def test_put_sell_returns_unlinked_put_positions(linkable_client):
     # put-rolled-needs-buy and put-assigned-no-buyback both already have a
     # linked PUT_SELL in the fixture, so neither is eligible here.
     assert position_ids == set()
+
+
+def test_buy_returns_only_assigned_puts_without_active_buy_link(linkable_client):
+    response = linkable_client.get("/api/symbols/AAPL/positions/linkable", params={"txn_type": "BUY"})
+    assert response.status_code == 200
+    position_ids = {p["position_id"] for p in response.json()["positions"]}
+    assert position_ids == {
+        "put-assigned-no-buyback",
+        "put-assigned-deleted",
+        "put-assigned-voided",
+        "put-assigned-superseded",
+    }
+
+
+def test_sell_returns_only_assigned_calls_without_active_sell_link(linkable_client):
+    response = linkable_client.get("/api/symbols/AAPL/positions/linkable", params={"txn_type": "SELL"})
+    assert response.status_code == 200
+    position_ids = {p["position_id"] for p in response.json()["positions"]}
+    assert position_ids == {"call-assigned-no-sale"}
 
 
 def test_unknown_symbol_returns_empty_list(linkable_client):

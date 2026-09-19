@@ -26,3 +26,14 @@
 
 ### 2026-09-08 — Share-consolidation and portfolio contract review
 - Reinforced the pattern that reviewer feedback should resolve ambiguity at the model/contract layer before more UI or backend code is added.
+
+### 2026-09-19 — Assigned option stock-link picker contract
+- Found a read/write contract mismatch: stock `BUY`/`SELL` corrections support
+  `ASSIGNMENT_STOCK`, but the shared linkable-position endpoint and frontend picker
+  accept only option transaction types.
+- Decided to extend the existing picker endpoint: `BUY` lists assigned puts missing a
+  linked stock buy; `SELL` lists assigned calls missing a linked stock sell.
+- Assignment eligibility must reuse the linkage service's active movement index so the
+  picker and `OPTION_ASSIGNMENT_STOCK_MISSING` warning cannot drift.
+- Stock dropdown selection should synchronize position ID, `ASSIGNMENT_STOCK`, and the
+  candidate option type; no auto-matching or auto-creation.

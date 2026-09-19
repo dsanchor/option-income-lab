@@ -19,3 +19,4 @@
 - **2026-09-07:** Re-established backend-authored `us_options_eligible` and `screener_eligible` booleans so the frontend no longer re-implements screener universe logic.
 - **2026-09-06:** Locked portfolio summary cost basis to true CMP residual cost rather than `purchases - sales` arithmetic.
 - **2026-09-03:** Continued the six-state Buy Tracker direction: deterministic evidence, explicit hard gates, and signed-score semantics.
+- **2026-09-19:** Frontend linkable-position contexts now use a dedicated `LinkablePositionTxnType` so stock `BUY`/`SELL` can query assigned puts/calls without widening `OptionTxnType`; picker selections pass the full candidate so stock corrections synchronize `ASSIGNMENT_STOCK` and candidate option type while manual ID entry remains unchanged.

@@ -3,6 +3,7 @@
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
 export type OptionTxnType = "CALL_SELL" | "CALL_BUY" | "PUT_SELL" | "PUT_BUY";
+export type LinkablePositionTxnType = OptionTxnType | "BUY" | "SELL";
 export type TxnType =
   | "BUY"
   | "SELL"
@@ -39,7 +40,7 @@ export const OPTION_TXN_TYPES: readonly OptionTxnType[] = [
   "PUT_BUY",
 ];
 
-/** A symbol's option position eligible to link to a given option movement
+/** A symbol's option position eligible to link to a given option or assignment stock movement
  * (see GET /api/symbols/{symbol}/positions/linkable). */
 export interface LinkablePosition {
   position_id: string;

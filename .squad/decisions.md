@@ -8282,3 +8282,152 @@ Added `backend/tests/test_cosmos_roll.py` with:
 - `test_roll_position_does_not_introduce_is_paper_for_real_positions`
 
 These cover the rejected case directly at the shared helper used by both roll entry points in `backend/web/app.py`.
+
+---
+
+### 2025 Portfolio/Watchlist classification — rev 6 (supersedes rev 5)
+
+**By:** Copilot (CLI)
+**What:** Corrected the Portfolio vs Watchlist symbol classification rule after
+user feedback that rev 5 was wrong.
+
+- Rev 5 (superseded, was briefly live in production): `is_portfolio = shares > 0`.
+  Any symbol at zero or negative shares — including symbols with real historical
+  equity trade history that had been fully sold — was pushed into Watchlist.
+  The user explicitly rejected this: historical positions must never appear in
+  Watchlist.
+
+- Rev 6 (current): `is_portfolio = holding is not None`, where `holding` comes
+  from the active-holdings snapshot (`HoldingsService.compute_holdings()`).
+  This is true for ANY ticker with at least one active (non-deleted,
+  non-SUPERSEDED/VOIDED) equity ledger movement, regardless of current share
+  sign (positive, zero, or negative). A new `is_historical` field
+  (`shares_val is not None and shares_val <= 0`) marks zero/negative-share
+  portfolio rows.
+  - Watchlist = no active holdings entry at all: option-only symbols, or
+    symbols whose only equity movements were soft-deleted or superseded.
+  - The backend API (`_compute_symbols_overview` in `backend/web/app.py`)
+    never hides `is_historical` rows — they're always returned.
+  - The frontend (`SymbolsTable.tsx`) hides `is_historical` rows from the
+    Portfolio section by default via a "Hide historical" checkbox
+    (`aria-label="Hide historical zero-share symbols"`), checked ON by
+    default. Unchecking reveals them. This toggle is scoped only to the
+    Portfolio section — it never affects Watchlist rows or the shared
+    search/suitability filters.
+  - `screener_eligible` remains fully decoupled from this classification
+    (computed via `_compute_screener_universe`, based on MIC eligibility +
+    explicit watchlist membership).
+
+**Why:** User request — corrected via direct feedback after rev 5 was
+deployed: "dije explicitamente que las acciones historicas no deben ir al
+watchlist. En su defecto, deben ir a portfolio, pero en el listado, hay un
+chec en la cabecera... hide historical."
+
+### Follow-up bug: option-only symbols were leaking into hidden "historical" portfolio rows
+
+**What:** `HoldingsService.compute_holdings()` created a `per_security`
+aggregate entry for ANY ticker with at least one movement — including
+option-only cashflows (CALL_SELL/PUT_SELL/etc.) — even though the
+`OPTION_TXN_TYPES` branch was a no-op (`pass`). This meant a symbol with
+zero equity trades but active option positions got `total_shares=0` and a
+non-null holdings entry, so `is_portfolio = holding is not None` was `True`
+and it was classified as a "historical" (zero-share) portfolio row —
+hidden by default via "Hide historical" — instead of appearing in
+Watchlist as the user expected.
+
+**Fix:** `compute_holdings()` now skips creating the `per_security` entry
+for a security_id when the first movement seen for it is option-only and
+no entry exists yet; the entry is only created once a real equity
+BUY/SELL/DIVIDEND/TRANSFER_IN/TRANSFER_OUT movement is processed (order
+doesn't matter — mixed tickers still get an entry from their equity leg).
+The read-repair `ensure_symbol_config` pass was updated to iterate over
+ALL security_ids seen in movements (not just `per_security`), so
+option-only tickers still get their `symbol_config` document created and
+don't silently disappear from `list_symbols()`/the Symbols Overview.
+
+**Why:** User request — "no veo en el watchlist la lista de symbols que no
+tienen acciones pero si están ahora mismo con movimientos de venta de
+calls y puts, como decia estas tienen que ir al watchlist".
+
+---
+
+# Design Review — Assigned Put → Stock BUY Linkage
+
+**Date:** 2026-09-19
+**Facilitator:** Danny (Lead)
+**Decision:** Approved and implemented.
+
+## User-visible defect and root cause
+
+An assigned short put correctly raised `OPTION_ASSIGNMENT_STOCK_MISSING`, and a
+manually entered stock `BUY` could persist the assignment linkage, but the
+correction dialog could not discover the assigned put. The write contract
+already supported `ASSIGNMENT_STOCK`; the shared linkable-position endpoint and
+frontend picker accepted only option transaction types.
+
+## Contract decision
+
+Extend the existing linkable-positions endpoint rather than adding another
+endpoint. Accepted picker contexts are:
+
+- `CALL_SELL`: call positions without a linked opening `CALL_SELL`
+- `PUT_SELL`: put positions without a linked opening `PUT_SELL`
+- `CALL_BUY`: rolled/manually closed calls without a linked closing `CALL_BUY`
+- `PUT_BUY`: rolled/manually closed puts without a linked closing `PUT_BUY`
+- `BUY`: assigned puts without a linked stock `BUY`
+- `SELL`: assigned calls without a linked stock `SELL`
+
+Assignment eligibility reuses `assignment_stock_by_position_id` from
+`build_option_position_linkage()` so picker eligibility and
+`OPTION_ASSIGNMENT_STOCK_MISSING` share active/non-deleted/non-superseded
+movement semantics.
+
+The frontend uses `LinkablePositionTxnType = OptionTxnType | "BUY" | "SELL"`
+without widening `OptionTxnType`. Selecting a stock candidate synchronizes:
+
+- `option_position_id`
+- `option_link_kind = ASSIGNMENT_STOCK`
+- candidate `option_type` (`put` for `BUY`, `call` for `SELL`)
+
+Manual position-ID entry remains supported. No automatic matching or position
+creation is introduced.
+
+## Verification
+
+- Rusty implemented backend endpoint semantics and regressions.
+- Linus implemented frontend types, picker behavior, and correction metadata
+  synchronization.
+- Basher approved after independently validating 77 backend tests, 4 frontend
+  regressions, TypeScript type-check, and ESLint.
+
+---
+
+# Livingston — Paper position simplification
+
+## Status
+- Accepted implementation note.
+- Supersedes the movement-linkage portions of the earlier
+  `danny-paper-positions-design` direction, per direct user instruction on
+  2026-09-11.
+
+## Decision
+- `is_paper` is a property of the position document only.
+- Ledger movements must not store or depend on `is_paper`.
+- Users can toggle paper status on any existing position through a dedicated
+  position action/API.
+
+## What changed
+- Reverted movement-side `is_paper` handling from manual movement creation,
+  correction, and duplicate-detection branching.
+- Kept paper support on `symbol_config.positions[]` creation/roll flows.
+- Added `PATCH /api/symbols/{symbol}/positions/{position_id}/paper` to toggle
+  the flag on existing positions.
+- Updated option-linkage classification so paper positions produce no warnings
+  and receive `coverage_status = "paper"`, removing them from the unlinked
+  bucket while preserving exclusion from real-economics totals.
+
+## Consequences
+- Existing paper positions remain excluded from reportable economics totals.
+- Manual option movement entry returns to pre-paper behavior.
+- Legacy movement-level `is_paper` flags are ignored and stripped on correction
+  rewrites.

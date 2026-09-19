@@ -16,6 +16,11 @@
 
 ## Recent Learnings
 
+### 2026-09-19 — Assigned-option stock linkage
+- Extended the linkable-position backend contract with stock `BUY`/`SELL` contexts while preserving all option contexts and response fields.
+- Assignment candidate eligibility should consume `assignment_stock_by_position_id` from `build_option_position_linkage()` and check the expected direction, keeping picker behavior aligned with warning semantics for active, deleted, voided, and superseded movements.
+- Confirmed the existing correction path persists `ASSIGNMENT_STOCK` metadata for assigned-put buys and assigned-call sells without a persistence redesign.
+
 ### 2026-09-09 — Economics frontend tabs, overview, and dividends detail
 - Implemented the canonical routed Economics structure: `/economics`, `/economics/options`, and `/economics/dividends`.
 - Used a shared `layout.tsx` tab strip and a second dividends fetch for all-history comparison sections so YoY and snowball views stay truthful while the main page still respects scoped filters.

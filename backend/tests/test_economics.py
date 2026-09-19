@@ -427,6 +427,38 @@ def test_build_economics_report_emits_row_warnings_and_linkage_fields(option_rep
     assert positions["nflx-put-unlinked"]["warnings"] == []
 
 
+@pytest.mark.parametrize(
+    ("stock_txn_type", "expected_warning"),
+    [
+        ("BUY", []),
+        ("SELL", ["OPTION_ASSIGNMENT_STOCK_MISSING"]),
+    ],
+)
+def test_assigned_put_warning_requires_linked_stock_buy(stock_txn_type, expected_warning):
+    movements = _sample_option_movements() + [
+        _movement(
+            "m-assignment-stock",
+            stock_txn_type,
+            "XNYS:IBM",
+            "ibm-put-assigned",
+            "2026-01-30",
+            ACCOUNT_1,
+            "18000",
+            "5",
+            "18005",
+        )
+    ]
+    report = _build_economics_report(
+        _sample_option_symbol_docs(),
+        now=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        movements=movements,
+        securities=_sample_securities(),
+    )
+    positions = {position["position_id"]: position for position in report["positions"]}
+
+    assert positions["ibm-put-assigned"]["warnings"] == expected_warning
+
+
 def test_build_economics_report_applies_filters_and_account_scope():
     report = _build_economics_report(
         _sample_option_symbol_docs(),
