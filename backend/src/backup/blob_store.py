@@ -29,6 +29,51 @@ class BlobCasError(RuntimeError):
     pass
 
 
+class BlobOperationError(RuntimeError):
+    def __init__(self, operation: str, path: str, cause: Exception) -> None:
+        super().__init__(operation)
+        self.operation = operation
+        self.category = self._category(path)
+        self.status_code = getattr(cause, "status_code", None)
+        self.error_code = getattr(cause, "error_code", None)
+        self.request_id = getattr(cause, "request_id", None)
+        response = getattr(cause, "response", None)
+        headers = (
+            getattr(response, "headers", {}) if response is not None else {}
+        ) or {}
+        self.error_code = self.error_code or headers.get("x-ms-error-code")
+        self.request_id = self.request_id or headers.get("x-ms-request-id")
+
+    @staticmethod
+    def _category(path: str) -> str:
+        parts = path.strip("/").split("/")
+        if len(parts) >= 3 and parts[:3] == ["v1", "control", "lock"]:
+            return "control-lock"
+        if len(parts) >= 2 and parts[0] == "v1":
+            return parts[1]
+        return "other"
+
+    @staticmethod
+    def _safe_token(value: Any) -> str:
+        text = str(value or "unknown")
+        return "".join(
+            character
+            for character in text
+            if character.isalnum() or character in "._-"
+        )[:128] or "unknown"
+
+    def safe_detail(self) -> str:
+        parts = [
+            f"BlobError: operation={self._safe_token(self.operation)}",
+            f"category={self._safe_token(self.category)}",
+            f"status={self._safe_token(self.status_code)}",
+            f"code={self._safe_token(self.error_code)}",
+        ]
+        if self.request_id:
+            parts.append(f"request_id={self._safe_token(self.request_id)}")
+        return " ".join(parts)
+
+
 @dataclass
 class BlobDocument:
     value: dict[str, Any]
@@ -68,7 +113,7 @@ class BlobStore:
             client.upload_blob(b"", overwrite=False)
         except Exception as exc:
             if not self._is_conflict(exc):
-                raise
+                raise BlobOperationError("lock_create", path, exc) from exc
 
     @contextmanager
     def lease(self, path: str = "v1/control/lock", duration: int = 60) -> Iterator[Any]:
@@ -79,7 +124,7 @@ class BlobStore:
         except Exception as exc:
             if self._is_conflict(exc):
                 raise BlobLeaseBusyError("Backup lease is already held") from exc
-            raise
+            raise BlobOperationError("lease_acquire", path, exc) from exc
         stop = threading.Event()
         renewer = None
         if hasattr(lease, "renew"):
@@ -113,12 +158,15 @@ class BlobStore:
         client = self._client(path)
         try:
             data = client.download_blob().readall()
-            props = client.get_blob_properties()
-            return BlobDocument(json.loads(data), getattr(props, "etag", None))
         except Exception as exc:
             if self._is_not_found(exc):
                 return None
-            raise
+            raise BlobOperationError("json_download", path, exc) from exc
+        try:
+            props = client.get_blob_properties()
+        except Exception as exc:
+            raise BlobOperationError("json_properties", path, exc) from exc
+        return BlobDocument(json.loads(data), getattr(props, "etag", None))
 
     def write_json(
         self, path: str, value: dict[str, Any], *,
@@ -143,7 +191,7 @@ class BlobStore:
                 if create_only:
                     raise BlobAlreadyExistsError(path) from exc
                 raise BlobCasError(path) from exc
-            raise
+            raise BlobOperationError("json_upload", path, exc) from exc
 
     def upload_immutable(
         self, path: str, payload: bytes, metadata: dict[str, str] | None = None,
@@ -156,18 +204,29 @@ class BlobStore:
             )
         except Exception as exc:
             if self._is_conflict(exc):
-                existing = client.download_blob().readall()
+                try:
+                    existing = client.download_blob().readall()
+                except Exception as download_exc:
+                    raise BlobOperationError(
+                        "immutable_conflict_download", path, download_exc
+                    ) from download_exc
                 if existing == payload:
                     return
                 raise BlobAlreadyExistsError(path) from exc
-            raise
+            raise BlobOperationError("immutable_upload", path, exc) from exc
 
     def verify_archive(
         self, path: str, archive_sha256: str, expected_size: int,
     ) -> dict[str, Any]:
         client = self._client(path)
-        payload = client.download_blob().readall()
-        props = client.get_blob_properties()
+        try:
+            payload = client.download_blob().readall()
+        except Exception as exc:
+            raise BlobOperationError("archive_download", path, exc) from exc
+        try:
+            props = client.get_blob_properties()
+        except Exception as exc:
+            raise BlobOperationError("archive_properties", path, exc) from exc
         size = getattr(props, "size", getattr(props, "content_length", len(payload)))
         if len(payload) != expected_size or size != expected_size:
             raise RuntimeError("Committed Blob length verification failed")
@@ -179,16 +238,25 @@ class BlobStore:
         return parsed.manifest
 
     def list_paths(self, prefix: str) -> list[str]:
-        return sorted(
-            str(getattr(item, "name", item))
-            for item in self.container.list_blobs(name_starts_with=prefix)
-        )
+        try:
+            return sorted(
+                str(getattr(item, "name", item))
+                for item in self.container.list_blobs(name_starts_with=prefix)
+            )
+        except Exception as exc:
+            raise BlobOperationError("list", prefix, exc) from exc
 
     def set_tags(self, path: str, tags: dict[str, str]) -> None:
-        self._client(path).set_blob_tags(tags)
+        try:
+            self._client(path).set_blob_tags(tags)
+        except Exception as exc:
+            raise BlobOperationError("set_tags", path, exc) from exc
 
     def delete(self, path: str) -> None:
-        self._client(path).delete_blob()
+        try:
+            self._client(path).delete_blob()
+        except Exception as exc:
+            raise BlobOperationError("delete", path, exc) from exc
 
     def _verified_candidate(self, value: dict[str, Any]) -> dict[str, Any] | None:
         path = value.get("blob_path")

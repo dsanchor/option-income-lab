@@ -25,20 +25,30 @@ Azure Blob container by a separate scheduled Azure Container Apps Job. The Job
 reuses the immutable backend image but not the API process or its in-process
 scheduler. A dedicated user-assigned managed identity authenticates through
 `DefaultAzureCredential`; `AZURE_CLIENT_ID` explicitly selects that identity.
-It receives `Storage Blob Data Contributor` only at the backup-container scope.
+It receives `Storage Blob Data Contributor` at the backup-container scope plus
+a deterministic deployment-specific custom role containing exactly the
+`Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write`
+DataAction and no control-plane permissions or exclusions. Custom-role
+`AssignableScopes` is the resource group because Azure does not support a Blob
+container there; this only permits assignment and grants no access. The role
+assignment itself is verified at the exact backup-container scope and against
+the exact deterministic role definition ID.
 Storage has public Blob access disabled, versioning enabled, and 14-day
 Blob/container soft delete.
 
-The platform invokes the Job every 15 minutes UTC. Application code gates the
-run to `00:15 Europe/Madrid`, applies DST-safe once-per-local-date idempotency,
-holds a Blob lease, and uploads only changed canonical content. Immutable daily
-archives, append-only run records, monthly anchors, health state, and a
-CAS-updated `latest.json` pointer are stored under versioned prefixes. The
-pointer is recoverable convenience, not the restore authority. Retention keeps
-changed daily backups for 35 days, monthly anchors for 12 months, run records
-for 90 days, and staging for one day. Daily archives are uploaded with
-`retentionClass=daily`; the runtime changes the tag to `monthly` while any live
-monthly anchor references the archive, excluding it from age-based deletion.
+The platform invokes the Job once daily with cron `15 23 * * *` (23:15 UTC).
+That is 00:15 in `Europe/Madrid` during standard time and 01:15 during
+daylight-saving time. Application code retains its local-date, due-time, and
+once-per-local-date idempotency gate as a safety guard for retries or manual
+invocations, not as a polling mechanism. It holds a Blob lease and uploads only
+changed canonical content. Immutable daily archives, append-only run records,
+monthly anchors, health state, and a CAS-updated `latest.json` pointer are
+stored under versioned prefixes. The pointer is recoverable convenience, not
+the restore authority. Retention keeps changed daily backups for 35 days,
+monthly anchors for 12 months, run records for 90 days, and staging for one
+day. Daily archives are uploaded with `retentionClass=daily`; the runtime
+changes the tag to `monthly` while any live monthly anchor references the
+archive, excluding it from age-based deletion.
 
 ## How It Works
 

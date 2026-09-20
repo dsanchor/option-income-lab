@@ -160,12 +160,15 @@ separate from the API scheduler. The Job uses the same immutable backend image
 deployed to the API. GitHub Actions only updates that image reference when the
 optional Job exists; it is not the scheduler.
 
-The Azure cron is configured by `backend/scripts/configure-backup.sh` and
-triggers every 15 minutes in UTC. The backup process reads its effective
-enabled flag, timezone, and local due time only from the Job environment
-(`BACKUP_ENABLED`, `BACKUP_TIMEZONE`, and `BACKUP_LOCAL_TIME`) and applies DST
-handling, same-day catch-up, locking, changed-content detection, and upload
-rules.
+The Azure cron is configured by `backend/scripts/configure-backup.sh` as
+`15 23 * * *`, so the platform triggers the Job once daily at 23:15 UTC. That
+is 00:15 in `Europe/Madrid` during standard time and 01:15 during daylight-
+saving time. The backup process reads its effective enabled flag, timezone,
+and local due time only from the Job environment (`BACKUP_ENABLED`,
+`BACKUP_TIMEZONE`, and `BACKUP_LOCAL_TIME`). Its local-date, due-time, and
+idempotency checks remain safety guards for retries or manual invocations, not
+a polling mechanism; locking, changed-content detection, and upload rules are
+unchanged.
 
 ### Provision Storage, Identity, RBAC, and Job
 
@@ -174,7 +177,9 @@ Prerequisites:
 - Azure CLI logged into the intended subscription.
 - An existing resource group and Container Apps environment.
 - Permission to create Storage accounts, managed identities, Container Apps
-  Jobs, and role assignments.
+  Jobs, custom role definitions
+  (`Microsoft.Authorization/roleDefinitions/write`), and role assignments
+  (`Microsoft.Authorization/roleAssignments/write`).
 - The immutable backend image already published (`:sha-<commit>` or digest).
 - The API Container App contains the Cosmos secret named `cosmosdb-key`, or
   `COSMOSDB_KEY` is set only in the invoking shell.
@@ -202,9 +207,23 @@ Apply the same command without `--dry-run`. The script is idempotent and:
    backups, 12-month anchor documents, 90-day run records, and 14-day old
    versions while preserving unrelated account rules;
 6. creates a dedicated user-assigned managed identity;
-7. grants `Storage Blob Data Contributor` at the container scope only; and
-8. creates or updates the scheduled Job with one completion, parallelism 1,
-   bounded retries, and a 30-minute timeout.
+7. grants `Storage Blob Data Contributor` at the container scope only;
+8. creates a deterministic deployment-specific custom role whose only
+   DataAction is
+   `Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write`,
+   with empty Actions, NotActions, and NotDataActions. Its `AssignableScopes`
+   is the resource group (the narrowest Azure-supported custom-role definition
+   scope), which grants no access; the assignment is verified at the exact
+   Blob container scope and exact role definition ID. A rerun rejects, without
+   modifying, any same-name collision or stale/broader definition; and
+9. creates or updates the scheduled Job with cron `15 23 * * *` (23:15 UTC
+   daily), one completion, parallelism 1, bounded retries, and a 30-minute
+   timeout.
+
+If the script reports a conflicting or stale custom role, an Azure RBAC
+administrator must review its assignments and remove or rename that definition
+before rerunning. The script deliberately does not overwrite
+administrator-managed permissions.
 
 Monthly-anchor safety is cooperative: the backup service must tag any daily
 Blob `retentionClass=daily` on upload and change it to

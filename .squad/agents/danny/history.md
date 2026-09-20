@@ -99,3 +99,14 @@
 - Automatic backup configuration and monitoring now live exclusively in the
   Job environment plus Container Apps/Blob/Portal/CLI operational surfaces;
   manual export/import Settings remain unchanged.
+
+### 2026-09-20 — Blob tag-write custom-role revision
+- Azure custom-role `AssignableScopes` cannot be narrowed to a Blob container;
+  the resource group is the narrowest valid definition scope, while the actual
+  assignment remains at the exact container.
+- A deployment-derived UUIDv5 plus UUID-bearing display name prevents unrelated
+  same-name roles from being silently accepted.
+- Safe reruns normalize and compare the existing role's single permission
+  block and assignable scope, fail closed on drift, never overwrite an
+  administrator-managed definition, and verify the assignment by exact role ID
+  and exact container scope.

@@ -670,12 +670,12 @@ Motivos:
 - evita introducir un segundo stack de hosting como Functions;
 - GitHub Actions no es un scheduler operativo con identidad y red de runtime.
 
-Los schedules de Container Apps Jobs se evalúan en UTC. Para admitir una zona
-IANA configurable con DST sin editar el cron dos veces al año, el trigger de
-infraestructura será periódico (`*/15 * * * *`) y barato: el proceso convierte
-el instante UTC a la zona configurada y solo adquiere el lock/exporta cuando la
-fecha local todavía no tiene ejecución y ha alcanzado las 00:15. El resto
-termina correctamente como `NOT_DUE`.
+Los schedules de Container Apps Jobs se evalúan en UTC. El trigger de
+infraestructura será diario, con cron `15 23 * * *`: Azure inicia el Job a las
+23:15 UTC, que corresponde a las 00:15 de `Europe/Madrid` en horario estándar
+y a las 01:15 durante el horario de verano. La comprobación interna de fecha
+local, hora debida e idempotencia se conserva como barrera de seguridad para
+reintentos o ejecuciones manuales, no como mecanismo de polling.
 
 Configuración de producción: `backend/scripts/configure-backup.sh` define el
 cron de Azure y las variables del entorno del Job. Ese entorno es la única
@@ -691,11 +691,12 @@ Portal o CLI; Settings conserva únicamente exportación e importación manual.
 `timezone` debe ser un nombre IANA, nunca una abreviatura ni un offset fijo.
 El valor por defecto es `Europe/Madrid`; todos los timestamps persistidos se
 guardan además en UTC. La identidad lógica de una ejecución programada es
-`(schedule_name, fecha_local)`. Si una transición de zona hace inexistente
-00:15, se ejecuta en el primer tick válido posterior de ese día; si la hora se
-repite, se ejecuta una sola vez. Si el job estuvo caído a las 00:15, el primer
-tick posterior del mismo día hace catch-up. No se recuperan automáticamente
-días anteriores.
+`(schedule_name, fecha_local)`. El cron diario fijo evita editar la
+infraestructura dos veces al año: se ejecuta a las 00:15 locales en horario
+estándar y a las 01:15 en horario de verano. La barrera interna permite una
+sola ejecución por fecha local, incluso ante reintentos o disparos manuales.
+Una ejecución diaria omitida no se recupera mediante polling y no se recuperan
+automáticamente días anteriores.
 
 La definición del Job debe usar una sola réplica/completion, paralelismo 1, un
 timeout explícito superior al máximo de exportación esperado y pocos
@@ -807,9 +808,18 @@ ejecución manual nunca permite que un run programado antiguo haga retroceder
 - Autenticación de Blob mediante identidad administrada del Container Apps
   Job y `DefaultAzureCredential`; no connection string, account key ni SAS
   persistente.
-- RBAC mínimo a nivel de contenedor, normalmente
-  `Storage Blob Data Contributor`. La identidad de despliegue no se reutiliza
-  como identidad de runtime.
+- RBAC mínimo a nivel de contenedor: `Storage Blob Data Contributor` y un rol
+  custom determinista cuya única DataAction es
+  `Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write`;
+  Actions, NotActions y NotDataActions están vacíos. `AssignableScopes` debe ser
+  el resource group, el scope válido más estrecho para una definición custom
+  de Azure; ser asignable no concede acceso y la asignación efectiva se valida
+  en el contenedor exacto y contra el ID determinista del rol. Cada reejecución
+  normaliza y compara la definición; cualquier rol homónimo, obsoleto o más
+  amplio falla cerrado y no se sobrescribe. El principal de despliegue necesita
+  `Microsoft.Authorization/roleDefinitions/write` y
+  `Microsoft.Authorization/roleAssignments/write`. La identidad de despliegue
+  no se reutiliza como identidad de runtime.
 - Contenedor y cuenta sin acceso anónimo; `allowBlobPublicAccess=false`,
   HTTPS-only, TLS moderno y, cuando la red de Container Apps esté integrada,
   firewall/private endpoint de Storage.
@@ -870,7 +880,7 @@ de run y blobs válidos sin modificar datos de usuario.
 | Falta backup previo pero hay blobs | Recuperar el más reciente válido; no asumir “sin cambios”. |
 | No existe ninguna copia previa | Subir baseline aunque el dataset esté vacío, con counts explícitos. |
 | Ejecución duplicada | Lease impide concurrencia; el segundo run termina `ALREADY_RUNNING` o reconoce el mismo resultado. |
-| Job/deploy omitió 00:15 | Primer tick posterior del mismo día hace catch-up una sola vez. |
+| Job/deploy omitió el trigger diario | No hay polling ni catch-up automático; alertar y ejecutar manualmente si procede, usando la misma barrera de idempotencia. |
 | Ejecución manual | Mismo pipeline y lock; upload explícito por defecto, sin retroceder `latest`. |
 | Puntero falla tras upload | El ZIP queda válido pero no publicado; el reintento lo adopta y repara el puntero por CAS. |
 
@@ -925,7 +935,7 @@ counts, nunca payloads, símbolos, cuentas ni secretos.
 
 - Lease, objetos inmutables, subida condicionada, catálogo, `latest` por CAS y
   reintentos idempotentes.
-- Activar “solo si cambió”, baseline, no-change, catch-up y trigger manual.
+- Activar “solo si cambió”, baseline, no-change, barrera de idempotencia y trigger manual.
 - Versioning, soft delete, lifecycle, anchors mensuales y alertas.
 - Simulacros de puntero stale, upload parcial, duplicados, pérdida de red y
   restauración desde Blob.

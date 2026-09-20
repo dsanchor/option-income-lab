@@ -5,6 +5,16 @@ from hashlib import sha1
 from types import SimpleNamespace
 
 
+class FakeAzureHttpResponseError(RuntimeError):
+    def __init__(
+        self, *, status_code: int, error_code: str, request_id: str
+    ) -> None:
+        super().__init__("Azure Blob request failed")
+        self.status_code = status_code
+        self.error_code = error_code
+        self.request_id = request_id
+
+
 class FakeContainer:
     def __init__(self, partition_field: str):
         self.partition_field = partition_field
@@ -132,10 +142,16 @@ class FakeDownloader:
 
 
 class FakeBlobClient:
-    def __init__(self, blobs, path):
-        self.blobs, self.path = blobs, path
+    def __init__(self, container, path):
+        self.container, self.blobs, self.path = container, container.blobs, path
 
     def upload_blob(self, data, overwrite=False, metadata=None, tags=None, **kwargs):
+        if tags and self.container.reject_tagged_upload:
+            raise FakeAzureHttpResponseError(
+                status_code=403,
+                error_code="AuthorizationPermissionMismatch",
+                request_id="safe-request-id",
+            )
         if self.path in self.blobs and not overwrite:
             raise RuntimeError("409 Conflict")
         self.blobs[self.path] = {
@@ -179,11 +195,12 @@ class FakeBlobClient:
 
 
 class FakeBlobContainer:
-    def __init__(self):
+    def __init__(self, *, reject_tagged_upload=False):
         self.blobs = {}
+        self.reject_tagged_upload = reject_tagged_upload
 
     def get_blob_client(self, path):
-        return FakeBlobClient(self.blobs, path)
+        return FakeBlobClient(self, path)
 
     def list_blobs(self, name_starts_with=""):
         return [

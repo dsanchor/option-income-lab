@@ -1,12 +1,23 @@
+from src.backup.archive import BackupArchive
 from src.backup.collectors import CosmosBackupCollector
 from src.backup.dependency_closure import (
     close_dependencies,
     validate_dependency_closure,
 )
 from src.backup.export_service import ExportService
+from src.backup.import_service import ImportService
 from src.backup.models import ExportRequest
 
-from .user_backup_fakes import populated_cosmos
+from .user_backup_fakes import FakeCosmos, populated_cosmos
+
+
+def _cosmos_with_account_reference(account_id):
+    cosmos = populated_cosmos()
+    cosmos.portfolio_container.store.pop(("acct_demo", "acct_demo"))
+    movement = cosmos.portfolio_container.store.pop(("acct_demo", "mvt_1"))
+    movement["account_id"] = account_id
+    cosmos.portfolio_container.create_item(body=movement)
+    return cosmos
 
 
 def test_movement_closure_adds_account_security_config_and_position():
@@ -19,6 +30,64 @@ def test_movement_closure_adds_account_security_config_and_position():
     assert len(closed["option_positions"]) == 1
     assert warnings == []
     assert additions["accounts"] == 1
+
+
+def test_unassigned_movement_exports_and_imports_without_synthetic_account():
+    service = ExportService(
+        CosmosBackupCollector(_cosmos_with_account_reference("_unassigned"))
+    )
+    request = ExportRequest()
+    preview = service.preview(request)
+
+    assert not any(
+        warning.startswith("BROKEN_ACCOUNT_REFERENCE:")
+        for warning in preview.warnings
+    )
+
+    request.preview_fingerprint = preview.selection_fingerprint
+    artifact = service.export(request)
+    parsed = BackupArchive().read(artifact.archive)
+    assert parsed.sections["accounts"] == []
+    assert parsed.sections["ledger_movements"][0]["account_id"] == "_unassigned"
+
+    importer = ImportService(FakeCosmos())
+    validation = importer.validate(artifact.archive)
+    plan = importer.dry_run(artifact.archive)
+    assert validation.valid
+    assert validation.dependency_errors == []
+    assert plan.valid
+    assert not any("missing_account" in error for error in plan.errors)
+
+    result = importer.apply(
+        artifact.archive,
+        dry_run_fingerprint=plan.dry_run_fingerprint,
+        confirm=True,
+    )
+    assert result.status == "COMPLETED"
+
+
+def test_unknown_account_still_warns_and_blocks_import():
+    service = ExportService(
+        CosmosBackupCollector(_cosmos_with_account_reference("missing-account"))
+    )
+    request = ExportRequest()
+    preview = service.preview(request)
+
+    assert any(
+        warning.endswith(":missing-account")
+        and warning.startswith("BROKEN_ACCOUNT_REFERENCE:")
+        for warning in preview.warnings
+    )
+
+    request.preview_fingerprint = preview.selection_fingerprint
+    artifact = service.export(request)
+    importer = ImportService(FakeCosmos())
+    validation = importer.validate(artifact.archive)
+    plan = importer.dry_run(artifact.archive)
+    assert not validation.valid
+    assert any("missing_account" in error for error in validation.dependency_errors)
+    assert not plan.valid
+    assert any("missing_account" in error for error in plan.errors)
 
 
 def test_closure_follows_replacement_groups_and_reverse_correction_descendants():

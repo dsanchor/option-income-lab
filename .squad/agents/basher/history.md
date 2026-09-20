@@ -102,3 +102,18 @@
 - Confirmed the legitimate security migration and ledger fields remain, `pricing_cache` remains stripped, diagnostics remain value-free, production-shaped export remains viable, and the separately approved Symbol Details P&L/tab changes are untouched.
 - Validation passed: 69 focused backup/infrastructure tests, 218 migration/security/pricing persistence regressions (4 pre-existing warnings), 71 Symbol Details backend regressions (3 pre-existing warnings), 78 frontend contracts, independent secret-rule probes, Python compile, and `git diff --check`.
 - Final verdict: APPROVE. Safe to commit. Production requires building and deploying a new image containing this revision before retrying the read-only export; the currently deployed image remains unfixed.
+
+### 2026-09-20 — Blob tag RBAC and daily cron gate rejected
+- Approved the daily `15 23 * * *` UTC schedule and its 00:15 Madrid standard-time / 01:15 daylight-saving-time documentation; the internal due/local-date/idempotency gate remains retry/manual safety only, and no stale backup `*/15` claim remains.
+- Confirmed Blob diagnostics expose operation, fixed path category, status, error code, and request ID without object names or payloads. Immutable create, lease, archive verification, CAS pointers, and retention tagging remain intact.
+- Rejected the production Blob provisioning change because an existing same-name custom role is accepted without validating or repairing its actions and scopes. The new role is also assignable at the whole resource group rather than the intended backup-container scope, so its least-privilege boundary is broader than required.
+- Deployment documentation still says the identity receives only `Storage Blob Data Contributor`, omitting the required tag-write role.
+- Validation passed: 70 focused backup/infrastructure tests, shell syntax/help/authenticated dry-run, Python compile, documentation/stale-cron searches, and `git diff --check`.
+- Livingston is locked out from the next Blob RBAC revision. Danny, Linus, or Rusty are eligible independent revision authors. Verdict: REJECT; the combined dirty change is unsafe to commit. Rusty's cron artifact is independently approved.
+
+### 2026-09-20 — Danny Blob tag-role revision rejected
+- Confirmed the deterministic UUIDv5 role ID/name, exact sole `blobs/tags/write` DataAction, empty Actions/NotActions/NotDataActions, fail-closed role-definition comparison, exact-ID role creation/assignment, prerequisite documentation, daily cron, sanitized diagnostics, and Blob guarantees.
+- Rejected because the role still uses resource-group `AssignableScopes` while current Microsoft RBAC documentation permits resource-instance assignable scopes; the storage account is at minimum a narrower valid parent boundary, so the documentation's claim that the resource group is narrowest is false.
+- An adversarial assignment probe supplied both the exact container assignment and an inherited resource-group assignment for the same principal and deterministic role. The validator returned success, so broader effective access is not failed closed and the script does not establish an exact-only assignment.
+- Validation passed: 73 focused backup/infrastructure tests, shell syntax/help/authenticated dry-run, Python compile, docs/YAML/stale-cron searches, and `git diff --check`.
+- Livingston and Danny are locked out from the next Blob RBAC revision. Linus or Rusty are eligible; Linus is preferred. Verdict: REJECT; unsafe to commit. The daily cron and Blob diagnostic/runtime portions remain approved.

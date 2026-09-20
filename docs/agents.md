@@ -11,18 +11,25 @@ agent and not a GitHub Actions schedule. It runs the backend image with:
 python scripts/run_automatic_backup.py scheduled
 ```
 
-`backend/scripts/configure-backup.sh` configures Azure to trigger it every 15
-minutes in UTC and sets the Job environment. The application reads effective
-enabled/timezone/local-time values only from that environment and checks
-whether the configured `00:15 Europe/Madrid` run is due, including DST and same-day
-catch-up, and guarantees at most one scheduled result per local date. The Job
-uses the same export, secret-redaction, canonical hashing, Blob lease, upload,
-and retention pipeline as operator-triggered automatic backups; infrastructure
-scripts do not duplicate those rules.
+`backend/scripts/configure-backup.sh` configures Azure with cron
+`15 23 * * *`, triggering once daily at 23:15 UTC, and sets the Job
+environment. This is 00:15 `Europe/Madrid` in standard time and 01:15 during
+daylight-saving time. The application reads effective
+enabled/timezone/local-time values only from that environment; its local-date,
+due-time, and idempotency gate remains a safety guard for retries or manual
+invocations, not a polling mechanism. The Job uses the same export,
+secret-redaction, canonical hashing, Blob lease, upload, and retention pipeline
+as operator-triggered automatic backups; infrastructure scripts do not
+duplicate those rules.
 
 Runtime access is isolated through a dedicated user-assigned managed identity
 with `Storage Blob Data Contributor` on the private
-`user-data-backups` container only. `AZURE_CLIENT_ID` makes
+`user-data-backups` container only, plus a deployment-specific custom role
+whose sole permission is the
+`Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write`
+DataAction. Azure custom-role `AssignableScopes` uses the resource group (the
+narrowest supported definition scope); assignability grants no access, and the
+actual assignment remains at the exact Blob container. `AZURE_CLIENT_ID` makes
 `DefaultAzureCredential` select that identity explicitly. Daily archives use
 the `retentionClass=daily|monthly` tag contract so live monthly anchors protect
 their referenced archives from lifecycle deletion. Cosmos currently uses the

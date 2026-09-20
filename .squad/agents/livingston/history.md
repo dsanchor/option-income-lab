@@ -27,6 +27,18 @@
 
 ## Learnings
 
+### 2026-09-20 — Legacy `_unassigned` backup round-trip (2026-09-20T16:32:21Z implementation)
+- Backup dependency closure must treat `_unassigned` as a virtual account partition, not as a missing account document: exports must omit synthetic account creation and imports must accept the reference.
+- The exemption belongs in the shared dependency validator used by validate, dry-run, apply preflight/recheck, and postflight; every other account ID remains subject to strict existence checks.
+- **Implementation:** Added `LEGACY_ACCOUNT_SENTINEL` constant and `_is_supported_account_reference()` helper to `backend/src/backup/dependency_closure.py`; updated `close_dependencies()` and `validate_dependency_closure()` to accept `_unassigned` without requiring account document existence.
+- **Validation:** 47 focused dependency closure tests passed; 64 broader backup/infrastructure tests passed; 3 unrelated deprecation warnings; diff hygiene clean.
+
+### 2026-09-20 — Production Blob tag authorization incident
+- `Storage Blob Data Contributor` permits Blob read/write/delete/lease operations but does not include the distinct Blob index-tag `tags/write` data action.
+- Azure SDK `upload_blob(..., tags=...)` sends tags with the immutable `PutBlob`; production therefore returned `403 AuthorizationPermissionMismatch` even though lock creation, lease, reads, listing, and untagged writes succeeded.
+- Preserve tagged retention without broad roles by assigning a custom tag-write-only data role at the exact container scope alongside Blob Data Contributor.
+- Sanitized Blob failures should identify the storage operation, path category, HTTP status, Azure error code, and request ID while omitting payloads and full object names.
+
 ### 2026-09-20 — Production backup schema alignment
 - The first production backup image failed because strict backup projections lagged known persisted shapes: security migration provenance, imported ledger `company_name`/`warnings`, and the runtime `pricing_cache` field.
 - Option-position provenance `source.activity_id` was also an unsafe opaque-token false positive; identifier exemptions must be narrow and key-specific rather than weakening recursive secret scanning.

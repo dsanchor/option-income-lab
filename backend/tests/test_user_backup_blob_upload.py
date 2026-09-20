@@ -40,6 +40,27 @@ def test_manual_only_if_changed_records_no_change_without_new_zip():
     assert len([path for path in container.blobs if path.endswith(".zip")]) == 1
 
 
+def test_sdk_shaped_tag_authorization_failure_identifies_safe_blob_operation():
+    container = FakeBlobContainer(reject_tagged_upload=True)
+    service = AutomaticBackupService(
+        ExportService(CosmosBackupCollector(populated_cosmos())),
+        BlobStore(container),
+    )
+
+    failure = service.run(
+        trigger="manual",
+        now_utc=datetime(2026, 9, 20, 1, 0, tzinfo=timezone.utc),
+    )
+
+    assert failure.state == "FAILED"
+    assert failure.detail == (
+        "BlobError: operation=immutable_upload category=daily status=403 "
+        "code=AuthorizationPermissionMismatch request_id=safe-request-id"
+    )
+    assert "diagnostic" not in failure.detail
+    assert not any(path.endswith(".zip") for path in container.blobs)
+
+
 def test_lease_blocks_concurrent_holder():
     import pytest
 

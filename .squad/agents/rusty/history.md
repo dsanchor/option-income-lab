@@ -16,6 +16,10 @@
 
 ## Recent Learnings
 
+### 2026-09-20 — Daily Azure backup cron
+- The Container Apps Job uses `15 23 * * *`: once daily at 23:15 UTC, which is 00:15 Europe/Madrid in standard time and 01:15 during daylight-saving time.
+- The application's local-date, due-time, and idempotency checks remain retry/manual-run safety guards; they are not an infrastructure polling mechanism.
+
 ### 2026-09-20 — Secret exceptions must be structural and value-specific
 - Production option-position provenance can contain an opaque-looking identifier at projected path `$.source.activity_id`; exempt that exact path only from opaque-token heuristics.
 - Do not exempt `activity_id` or `source_activity_id` globally, and do not exempt JWTs, explicit credential patterns, adjacent source fields, or the same names in settings/ledger/arbitrary structures.

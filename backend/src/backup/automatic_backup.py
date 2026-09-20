@@ -7,7 +7,7 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .blob_store import BlobLeaseBusyError, BlobStore
+from .blob_store import BlobLeaseBusyError, BlobOperationError, BlobStore
 from .export_service import ExportService
 from .models import AutomaticRunStatus, ExportRequest
 from .section_schemas import SchemaError
@@ -194,7 +194,7 @@ class AutomaticBackupService:
         except Exception as exc:
             detail = (
                 exc.safe_detail()
-                if isinstance(exc, SchemaError)
+                if isinstance(exc, (SchemaError, BlobOperationError))
                 else f"{type(exc).__name__}: backup operation failed"
             )
             failure = self._status(

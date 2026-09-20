@@ -15,6 +15,11 @@ CA_GROUP_LINK_FIELDS = (
     "replacement_group_id", "replaces_ca_group_id",
     "replaced_by_ca_group_id", "superseded_by_ca_group_id",
 )
+LEGACY_ACCOUNT_SENTINEL = "_unassigned"
+
+
+def _is_supported_account_reference(account_id: Any, accounts: set[Any]) -> bool:
+    return account_id == LEGACY_ACCOUNT_SENTINEL or account_id in accounts
 
 
 def _linked_movement_ids(movement: dict[str, Any]) -> set[str]:
@@ -175,7 +180,7 @@ def close_dependencies(
         if account_id in accounts:
             item = accounts[account_id]
             chosen["accounts"][logical_key("accounts", item)] = item
-        else:
+        elif account_id != LEGACY_ACCOUNT_SENTINEL:
             warnings.append(f"BROKEN_ACCOUNT_REFERENCE:{marker}:{account_id}")
         if security_id in securities:
             item = securities[security_id]
@@ -272,7 +277,7 @@ def validate_dependency_closure(records: dict[str, list[dict[str, Any]]]) -> lis
                     transfer_groups[(field, str(movement[field]))].append(movement)
     for movement in movements:
         key = logical_key("ledger_movements", movement)
-        if movement.get("account_id") not in accounts:
+        if not _is_supported_account_reference(movement.get("account_id"), accounts):
             errors.append(f"{key}:missing_account")
         if movement.get("security_id") not in securities:
             errors.append(f"{key}:missing_security")
@@ -338,8 +343,8 @@ def validate_dependency_closure(records: dict[str, list[dict[str, Any]]]) -> lis
             or out_destination != in_destination
             or transfer_out.get("account_id") != out_source
             or transfer_in.get("account_id") != out_destination
-            or out_source not in accounts
-            or out_destination not in accounts
+            or not _is_supported_account_reference(out_source, accounts)
+            or not _is_supported_account_reference(out_destination, accounts)
         ):
             errors.append(f"{group_key}:invalid_account_relationship")
         if transfer_out.get("security_id") != transfer_in.get("security_id"):

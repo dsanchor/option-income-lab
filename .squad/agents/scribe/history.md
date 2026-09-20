@@ -214,3 +214,18 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 - Merged and deduplicated both decision inbox records, then removed them.
 - Preserved the deployment boundary: a new image is required because deployed
   image `sha-1d368a4` does not contain the approved fix. No commit was created.
+
+### 2026-09-20 — Backup export/import dependency closure (2026-09-20T16:32:21Z)
+- Recorded Livingston's fix for supporting the `_unassigned` legacy account sentinel
+  in backup export/import workflows.
+- Added `LEGACY_ACCOUNT_SENTINEL` constant and `_is_supported_account_reference()` helper
+  to the shared dependency validator (`backend/src/backup/dependency_closure.py`).
+- Updated `close_dependencies()` and `validate_dependency_closure()` to exempt the sentinel
+  from account document existence checks while preserving strict validation for all other
+  account IDs.
+- Applied the exemption to all phases: validate, dry-run, apply preflight/recheck, postflight.
+- Updated test coverage in `backend/tests/test_user_backup_dependency_closure.py`.
+- Validation: 47 focused backup tests passed; 64 broader backup/infrastructure tests passed;
+  3 unrelated deprecation warnings; diff hygiene clean.
+- Updated Livingston history with implementation details and validation evidence.
+- No decision inbox entries needed; work recorded via orchestration/session logs.

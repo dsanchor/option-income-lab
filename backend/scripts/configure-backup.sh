@@ -7,7 +7,9 @@ readonly DEFAULT_JOB_NAME="ca-stock-options-manager-backup"
 readonly DEFAULT_IDENTITY="stock-options-manager-backup-mi"
 readonly DEFAULT_SOURCE_APP="ca-stock-options-manager-api"
 readonly DEFAULT_COSMOS_SECRET="cosmosdb-key"
-readonly BACKUP_CRON="*/15 * * * *"
+readonly BLOB_TAG_ROLE_PREFIX="Option Income Lab Backup Blob Tags"
+readonly BLOB_TAG_DATA_ACTION="Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"
+readonly BACKUP_CRON="15 23 * * *"
 readonly BACKUP_TIMEZONE="Europe/Madrid"
 readonly BACKUP_LOCAL_TIME="00:15"
 readonly BACKUP_SCHEDULE_NAME="daily-user-data"
@@ -71,7 +73,13 @@ Secret handling:
 Managed identity:
   The Job receives both the user-assigned identity resource and its client ID
   as AZURE_CLIENT_ID. DefaultAzureCredential uses that client ID to select the
-  dedicated identity when multiple identities are available.
+  dedicated identity when multiple identities are available. Blob Data
+  Contributor does not include Blob index-tag writes, so the same identity also
+  receives a deployment-specific custom role containing only the Blob tags/write
+  DataAction. Its AssignableScopes is the resource group (the narrowest scope
+  Azure permits for a custom role); its assignment remains the exact container.
+  The deploying principal needs Microsoft.Authorization/roleDefinitions/write
+  and Microsoft.Authorization/roleAssignments/write.
 
 Retention:
   Backup archives must be tagged retentionClass=daily when uploaded and changed
@@ -81,8 +89,11 @@ Retention:
 Configuration authority:
   Production enabled/timezone/local-time values come only from the Job
   environment set by this script. The application config.yaml and Settings UI
-  do not configure automatic backups. Rerun this script after changing the
-  constants above, or update the Job cron/environment directly.
+  do not configure automatic backups. Azure triggers once daily at 23:15 UTC,
+  which is 00:15 Europe/Madrid in standard time and 01:15 during daylight-
+  saving time. The local-date/due/idempotency gate is a safety guard, not a
+  polling mechanism. Rerun this script after changing the constants above, or
+  update the Job cron/environment directly.
 EOF
 }
 
@@ -149,16 +160,23 @@ Managed identity: $IDENTITY
 Container Apps environment: ${CONTAINER_APP_ENVIRONMENT:-<auto-discover-single-environment>}
 Container Apps Job: $JOB_NAME
 Image: $IMAGE
-Schedule: $BACKUP_CRON UTC; due $BACKUP_LOCAL_TIME $BACKUP_TIMEZONE
+Schedule: $BACKUP_CRON UTC (00:15 Europe/Madrid standard time; 01:15 daylight-saving time)
+Application gate: due/local-date/idempotency safety guard; not a polling mechanism
 Retention: $DAILY_RETENTION_DAYS days daily; $MONTHLY_RETENTION_MONTHS monthly anchors
 Authentication: dedicated UAMI selected through AZURE_CLIENT_ID
+RBAC: Storage Blob Data Contributor plus an exact tag-write-only custom role;
+  custom-role assignability is resource-group scoped, but access is assigned
+  only at the exact Blob container. The deployer needs roleDefinitions/write
+  and roleAssignments/write.
 
 Planned idempotent operations:
   1. Verify the resource group and Container Apps environment.
   2. Create or harden a GPv2 Storage account (HTTPS/TLS 1.2, no public Blob access).
   3. Enable Blob versioning and 14-day Blob/container soft delete.
   4. Create the private '$CONTAINER' container and merge lifecycle retention.
-  5. Create the dedicated user-assigned identity and container-scoped Blob RBAC.
+  5. Create the dedicated user-assigned identity and container-scoped Blob RBAC:
+     Storage Blob Data Contributor and an exact tag-write-only custom role.
+     Existing custom-role definitions are verified and rejected if stale/broader.
   6. Create/update the scheduled Job, explicitly selecting that identity by client ID.
   7. Preserve the Cosmos key only as a Job secret reference; no secret value is printed.
 
@@ -291,6 +309,20 @@ STORAGE_ID="$(az storage account show \
   --resource-group "$RESOURCE_GROUP" \
   --query id -o tsv --only-show-errors)"
 CONTAINER_SCOPE="${STORAGE_ID}/blobServices/default/containers/${CONTAINER}"
+RESOURCE_GROUP_ID="$(az group show \
+  --name "$RESOURCE_GROUP" \
+  --query id -o tsv --only-show-errors)"
+TAG_ROLE_DEFINITION_ID="$(python3 - "$ACCOUNT_ID" "$RESOURCE_GROUP" "$STORAGE_ACCOUNT" "$CONTAINER" <<'PY'
+import sys
+import uuid
+
+seed = "option-income-lab:backup-blob-tag-role:" + "|".join(
+    value.strip().lower() for value in sys.argv[1:]
+)
+print(uuid.uuid5(uuid.NAMESPACE_URL, seed))
+PY
+)"
+BLOB_TAG_ROLE_NAME="${BLOB_TAG_ROLE_PREFIX} ${TAG_ROLE_DEFINITION_ID:0:12}"
 
 if ! az role assignment list \
   --assignee-object-id "$IDENTITY_PRINCIPAL_ID" \
@@ -303,6 +335,163 @@ if ! az role assignment list \
     --role "Storage Blob Data Contributor" \
     --scope "$CONTAINER_SCOPE" \
     --only-show-errors -o none
+fi
+
+ROLE_BY_ID="$(az role definition list \
+  --name "$TAG_ROLE_DEFINITION_ID" \
+  --custom-role-only true \
+  -o json --only-show-errors)"
+ROLE_BY_NAME="$(az role definition list \
+  --name "$BLOB_TAG_ROLE_NAME" \
+  --custom-role-only true \
+  -o json --only-show-errors)"
+
+if [[ "$(python3 - "$ROLE_BY_ID" <<'PY'
+import json
+import sys
+print(len(json.loads(sys.argv[1] or "[]")))
+PY
+)" == "0" ]]; then
+  if [[ "$(python3 - "$ROLE_BY_NAME" <<'PY'
+import json
+import sys
+print(len(json.loads(sys.argv[1] or "[]")))
+PY
+)" != "0" ]]; then
+    die "Custom role name '$BLOB_TAG_ROLE_NAME' already belongs to another role ID. Remove or rename that conflicting administrator-managed role, then rerun."
+  fi
+  TAG_ROLE_DEFINITION="$(cat <<EOF
+{
+  "Name": "$BLOB_TAG_ROLE_NAME",
+  "Id": "$TAG_ROLE_DEFINITION_ID",
+  "IsCustom": true,
+  "Description": "Write Blob index tags for Option Income Lab backup retention.",
+  "Actions": [],
+  "NotActions": [],
+  "DataActions": [
+    "$BLOB_TAG_DATA_ACTION"
+  ],
+  "NotDataActions": [],
+  "AssignableScopes": ["$RESOURCE_GROUP_ID"]
+}
+EOF
+)"
+  az role definition create \
+    --role-definition "$TAG_ROLE_DEFINITION" \
+    --only-show-errors -o none
+fi
+
+ROLE_BY_ID="$(az role definition list \
+  --name "$TAG_ROLE_DEFINITION_ID" \
+  --custom-role-only true \
+  -o json --only-show-errors)"
+if ! python3 - "$ROLE_BY_ID" "$TAG_ROLE_DEFINITION_ID" "$BLOB_TAG_ROLE_NAME" "$RESOURCE_GROUP_ID" "$BLOB_TAG_DATA_ACTION" <<'PY'
+import json
+import sys
+
+definitions = json.loads(sys.argv[1] or "[]")
+expected_id, expected_name, expected_scope, expected_action = sys.argv[2:]
+
+def norm_id(value):
+    return str(value or "").rstrip("/").rsplit("/", 1)[-1].lower()
+
+def norm_scope(value):
+    return str(value or "").rstrip("/").lower()
+
+errors = []
+if len(definitions) != 1:
+    errors.append(f"expected one definition by deterministic ID, found {len(definitions)}")
+else:
+    role = definitions[0]
+    if norm_id(role.get("name") or role.get("id")) != expected_id.lower():
+        errors.append("definition ID differs")
+    if role.get("roleName") != expected_name:
+        errors.append("role name differs")
+    if role.get("roleType") != "CustomRole":
+        errors.append("role type is not CustomRole")
+    permissions = role.get("permissions") or []
+    if len(permissions) != 1:
+        errors.append(f"expected exactly one permission block, found {len(permissions)}")
+    else:
+        permission = permissions[0]
+        expected = {
+            "actions": [],
+            "notActions": [],
+            "dataActions": [expected_action],
+            "notDataActions": [],
+        }
+        for key, values in expected.items():
+            actual = sorted(set(permission.get(key) or []))
+            if actual != sorted(values):
+                errors.append(f"{key}={actual!r}, expected {sorted(values)!r}")
+    scopes = sorted({norm_scope(scope) for scope in role.get("assignableScopes") or []})
+    if scopes != [norm_scope(expected_scope)]:
+        errors.append(f"assignableScopes={scopes!r}, expected {[norm_scope(expected_scope)]!r}")
+
+if errors:
+    print("; ".join(errors), file=sys.stderr)
+    raise SystemExit(1)
+PY
+then
+  die "Custom role '$BLOB_TAG_ROLE_NAME' ($TAG_ROLE_DEFINITION_ID) is stale or broader than required. It was not changed or assigned. An Azure RBAC administrator must remove the conflicting definition (after reviewing its assignments) so this script can recreate the exact tag-write-only role."
+fi
+
+TAG_ASSIGNMENTS="$(az role assignment list \
+  --assignee-object-id "$IDENTITY_PRINCIPAL_ID" \
+  --scope "$CONTAINER_SCOPE" \
+  --include-inherited \
+  -o json --only-show-errors)"
+TAG_ASSIGNMENT_ID="$(python3 - "$TAG_ASSIGNMENTS" "$TAG_ROLE_DEFINITION_ID" "$CONTAINER_SCOPE" "$IDENTITY_PRINCIPAL_ID" <<'PY'
+import json
+import sys
+
+assignments = json.loads(sys.argv[1] or "[]")
+expected_role = sys.argv[2].lower()
+expected_scope = sys.argv[3].rstrip("/").lower()
+expected_principal = sys.argv[4].lower()
+matches = [
+    item for item in assignments
+    if str(item.get("roleDefinitionId") or "").rstrip("/").rsplit("/", 1)[-1].lower() == expected_role
+    and str(item.get("scope") or "").rstrip("/").lower() == expected_scope
+    and str(item.get("principalId") or "").lower() == expected_principal
+]
+print(matches[0].get("id", "") if len(matches) == 1 else "")
+PY
+)"
+if [[ -z "$TAG_ASSIGNMENT_ID" ]]; then
+  az role assignment create \
+    --assignee-object-id "$IDENTITY_PRINCIPAL_ID" \
+    --assignee-principal-type ServicePrincipal \
+    --role "$TAG_ROLE_DEFINITION_ID" \
+    --scope "$CONTAINER_SCOPE" \
+    --only-show-errors -o none
+fi
+
+TAG_ASSIGNMENTS="$(az role assignment list \
+  --assignee-object-id "$IDENTITY_PRINCIPAL_ID" \
+  --scope "$CONTAINER_SCOPE" \
+  --include-inherited \
+  -o json --only-show-errors)"
+if ! python3 - "$TAG_ASSIGNMENTS" "$TAG_ROLE_DEFINITION_ID" "$CONTAINER_SCOPE" "$IDENTITY_PRINCIPAL_ID" <<'PY'
+import json
+import sys
+
+assignments = json.loads(sys.argv[1] or "[]")
+expected_role = sys.argv[2].lower()
+expected_scope = sys.argv[3].rstrip("/").lower()
+expected_principal = sys.argv[4].lower()
+matches = [
+    item for item in assignments
+    if str(item.get("roleDefinitionId") or "").rstrip("/").rsplit("/", 1)[-1].lower() == expected_role
+    and str(item.get("scope") or "").rstrip("/").lower() == expected_scope
+    and str(item.get("principalId") or "").lower() == expected_principal
+]
+if len(matches) != 1:
+    print(f"expected one exact assignment, found {len(matches)}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+then
+  die "Tag-write role assignment verification failed: expected role definition $TAG_ROLE_DEFINITION_ID assigned exactly at $CONTAINER_SCOPE"
 fi
 
 [[ -n "$COSMOS_ENDPOINT" ]] ||
@@ -440,10 +629,14 @@ Managed identity: $IDENTITY
   Resource ID: $IDENTITY_ID
   Principal ID: $IDENTITY_PRINCIPAL_ID
   Client ID: $IDENTITY_CLIENT_ID
-RBAC: Storage Blob Data Contributor at container scope
+RBAC: Storage Blob Data Contributor plus tag-write-only custom role at container scope
+  Custom role: $BLOB_TAG_ROLE_NAME ($TAG_ROLE_DEFINITION_ID)
+  Assignable scope: $RESOURCE_GROUP_ID (does not grant access)
+  Assignment scope: $CONTAINER_SCOPE
 Container Apps Job: $JOB_NAME ($JOB_ID)
 Image: $IMAGE
-Schedule: $BACKUP_CRON UTC; due $BACKUP_LOCAL_TIME $BACKUP_TIMEZONE
+Schedule: $BACKUP_CRON UTC (00:15 Europe/Madrid standard time; 01:15 daylight-saving time)
+Application gate: due/local-date/idempotency safety guard; not a polling mechanism
 Protection: private container, public Blob access disabled, versioning enabled,
   Blob/container soft delete 14 days, tagged daily retention $DAILY_RETENTION_DAYS days,
   monthly anchors $MONTHLY_RETENTION_MONTHS months, run records $RUN_RETENTION_DAYS days,
