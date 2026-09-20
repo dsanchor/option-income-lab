@@ -20,6 +20,26 @@ Both sell-side agents use the Microsoft Agent Framework (`agent-framework`) with
 
 **Storage backend:** Azure CosmosDB with five containers: `symbols` (watchlists, positions, activities, alerts, reports), `telemetry` (runtime performance stats with 30-day TTL), `settings` (application configuration persistence), `dgi_screener` (DGI screening results and daily snapshots), and `calendar` (cached earnings and ex-dividend dates from Yahoo Finance). Each symbol is a partition key in the symbols container containing four document types: `symbol_config` (watchlist flags + positions), `activity` (full audit trail), `alert` (actionable alerts), and `report` (generated symbol reports). The telemetry container tracks data fetch durations and agent run times, displayed on the Settings page. The settings container persists application configuration with partition key `/id`. The dgi_screener container stores current Top 20 entries and daily snapshots for historical tracking, partitioned by `/symbol`. The calendar container stores event data partitioned by `/symbol`. See the [Provisioning CosmosDB](deployment.md#3-provision-cosmosdb) section for details.
 
+**User-data backup storage:** Authoritative user data is exported to a private
+Azure Blob container by a separate scheduled Azure Container Apps Job. The Job
+reuses the immutable backend image but not the API process or its in-process
+scheduler. A dedicated user-assigned managed identity authenticates through
+`DefaultAzureCredential`; `AZURE_CLIENT_ID` explicitly selects that identity.
+It receives `Storage Blob Data Contributor` only at the backup-container scope.
+Storage has public Blob access disabled, versioning enabled, and 14-day
+Blob/container soft delete.
+
+The platform invokes the Job every 15 minutes UTC. Application code gates the
+run to `00:15 Europe/Madrid`, applies DST-safe once-per-local-date idempotency,
+holds a Blob lease, and uploads only changed canonical content. Immutable daily
+archives, append-only run records, monthly anchors, health state, and a
+CAS-updated `latest.json` pointer are stored under versioned prefixes. The
+pointer is recoverable convenience, not the restore authority. Retention keeps
+changed daily backups for 35 days, monthly anchors for 12 months, run records
+for 90 days, and staging for one day. Daily archives are uploaded with
+`retentionClass=daily`; the runtime changes the tag to `monthly` while any live
+monthly anchor references the archive, excluding it from age-based deletion.
+
 ## How It Works
 
 End-to-end flow for each scheduled run:
@@ -169,6 +189,19 @@ Monorepo with two deployable components — `backend/` (Python FastAPI JSON API 
 in-process scheduler) and `frontend/` (Next.js App Router web app acting as a BFF).
 Each has its own `Dockerfile` and env vars; both deploy to the same Azure Container
 Apps environment and share the same CosmosDB.
+
+A third runtime resource, the scheduled backup Job, uses the backend image with
+`python scripts/run_automatic_backup.py scheduled`. Its schedule, retries,
+identity, Storage RBAC, and environment are provisioned by
+`backend/scripts/configure-backup.sh`. GitHub Actions updates the Job to the
+same immutable backend image as the API when the optional Job exists, but does
+not trigger daily backups. The Azure cron is owned by that script; effective
+enabled/timezone/local-time configuration is read only from the Job
+environment by `AutomaticBackupConfig.from_environment()`. General application
+YAML and application Settings are not configuration or monitoring surfaces.
+Because the API Container App has no Azure control-plane access, automatic
+backup configuration and operational state are inspected through the Container
+Apps Job and Blob artifacts with Azure Portal or CLI.
 
 ```
 stock-options-manager/

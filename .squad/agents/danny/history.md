@@ -37,3 +37,65 @@
   picker and `OPTION_ASSIGNMENT_STOCK_MISSING` warning cannot drift.
 - Stock dropdown selection should synchronize position ID, `ASSIGNMENT_STOCK`, and the
   candidate option type; no auto-matching or auto-creation.
+
+### 2026-09-19 — User-data backup and restore contract
+- Chose a logical, versioned ZIP archive rather than a raw Cosmos dump.
+- Full backup covers accounts, Security Master, curated symbol/watchlist settings,
+  embedded manual/paper option positions, the complete ledger/audit graph, action
+  plans, and non-secret functional settings.
+- Stock holdings are derived and must be rebuilt from `ledger_txn`; embedded option
+  positions remain authoritative because their lifecycle and notes are not fully
+  reconstructible from optionally linked movements.
+- Mixed documents must be projected field-by-field: generated enrichment/pricing
+  data and action-plan agent notes are excluded by default.
+- Import is dry-run first, dependency-closed and idempotent. Ledger conflicts block
+  rather than overwrite. Cosmos rollback is compensating, so full replace is deferred
+  until maintenance mode, journaling, ETag guards and post-flight verification exist.
+
+### 2026-09-19 — Backup implementation contract review
+- Focused review fixed the first release at manual selective export, validate,
+  zero-write dry-run, and create-only/skip-identical import; update-existing and
+  replacement remain deferred.
+- Option positions have one archive authority in a dedicated section rather than
+  being duplicated inside projected symbol configs.
+- Import apply must re-upload and re-plan against current destination state, create a
+  durable journal before writes, use create-if-absent/CAS, and report failed
+  compensation as `PARTIAL_REQUIRES_ATTENTION`.
+- Automatic backup is a separate Azure Container Apps Job triggered every 15 minutes
+  UTC and gated to 00:15 Europe/Madrid by local date; it never joins `TaskRegistry`.
+- Blob publication requires a renewable lease, immutable conditional create,
+  downloaded-byte verification, and CAS-protected `latest.json`; unchanged scheduled
+  content records `NO_CHANGE` without a ZIP.
+- Storage uses a dedicated managed identity and container-scoped Storage Blob Data
+  Contributor role. The idempotent setup authority is
+  `backend/scripts/configure-backup.sh`.
+
+### 2026-09-19 — Backup backend rejection revision
+- Under original-author lockout, independently revised the backend backup
+  implementation and closed Basher findings 1–6 except Azure lifecycle setup.
+- Durable create journals must persist the complete physical-write inventory
+  before user data changes. PREPARED entries are treated as ambiguous after a
+  crash, probed by canonical hash, compensated, and verified absent before a
+  run may report ROLLED_BACK.
+- Archive closure must traverse relationship graphs bidirectionally and include
+  CA replacement-group edges, not merely direct movement references.
+- Deterministic restore controls are most reliable when they reuse production
+  FIFO holdings and dividend economics code, augmented with exact audit, link,
+  option, FX, and withholding controls; import must recompute them from actual
+  destination reads.
+- `latest.json` is recoverable state, not authority: write the verified
+  append-only run record before pointer publication, then reconstruct stale or
+  missing pointers from run records plus immutable verified blobs.
+- Monthly retention must preserve anchors beyond shorter run-record retention;
+  reconciliation therefore merges valid existing anchors with recent runs,
+  keeps twelve, deletes expired anchors, and retags only currently referenced
+  immutable blobs as monthly.
+
+### 2026-09-20 — Automatic backup configuration-source revision
+- A separate API Container App cannot truthfully expose Container Apps Job
+  environment values without Azure control-plane access.
+- Removed the automatic-backup API/UI status surface rather than duplicating
+  configuration or presenting API-process defaults as effective Job state.
+- Automatic backup configuration and monitoring now live exclusively in the
+  Job environment plus Container Apps/Blob/Portal/CLI operational surfaces;
+  manual export/import Settings remain unchanged.

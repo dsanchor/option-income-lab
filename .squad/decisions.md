@@ -8431,3 +8431,468 @@ creation is introduced.
 - Manual option movement entry returns to pre-paper behavior.
 - Legacy movement-level `is_paper` flags are ignored and stripped on correction
   rewrites.
+
+---
+
+# 2026-09-19 — User-data backup and restore
+
+### User directive
+
+**By:** dsanchor (via Copilot)
+
+**Captured:** 2026-09-19T09:15:32+02:00
+
+Backup/export and import must focus on manually created or user-curated data.
+Execution-generated activities and logs are excluded, except source records
+that are authoritative inputs for positions.
+
+## Danny — Logical backup and restore contract
+
+**Status:** ACCEPTED
+**Scope:** Design only; no production implementation
+
+### Decisions
+
+1. The backup is a logical archive, not a Cosmos dump.
+2. The recommended preset includes accounts, Security Master, curated symbol
+   configuration and watchlist data, manual/paper option positions, the full
+   ledger, action plans, and non-secret functional settings.
+3. Stock holdings are rebuilt from `ledger_txn`; they are not exported as
+   snapshots.
+4. Option positions are exported because their lifecycle, notes, paper state,
+   stable IDs, and roll links are not fully reconstructible from the ledger.
+5. The complete persisted ledger is retained, including correction,
+   reassignment, transfer, corporate-action, FX, withholding, cost-basis, and
+   import-provenance chains, plus inactive or soft-deleted records that remain
+   stored.
+6. Activities, executed alerts, logs, traces, telemetry, import sessions,
+   caches, enrichment, forecasts, snapshots, reports, generated DGI data, and
+   downloaded calendar data are excluded.
+7. The format is a versioned ZIP with a manifest, per-section data files,
+   record counts, and SHA-256 checksums.
+8. Tokens, chat IDs, API keys, credentials, and sensitive endpoints are always
+   excluded through a settings allowlist and secret denylist.
+9. Custom exports apply mandatory dependency closure.
+10. Import always begins with validation/dry-run. Reimporting the same archive
+    under the same policy must be idempotent, and ledger records are never
+    silently overwritten.
+11. Full replacement is outside v1 because Cosmos has no global
+    multi-container/multi-partition transaction. It requires maintenance mode,
+    backup, durable journaling, ETag guards, compensation, and post-flight
+    verification.
+
+### Consequence
+
+Restore protects human-authored work without perpetuating obsolete derived or
+runtime state. Cosmos rollback remains compensating rather than globally
+atomic.
+
+### Open product decisions
+
+- Include paper positions by default: recommended yes.
+- Include generated action-plan notes: recommended outside v1.
+- Offer optional `source_row` redaction.
+- Add ZIP encryption in v1 or a later phase.
+- Authorize full replacement only after its safety prerequisites are proven.
+
+## Livingston — Persistence review
+
+**Verdict:** APPROVED with mandatory refinements before implementation
+
+### Required data coverage
+
+- Preserve account lifecycle fields, Security Master identity and provider
+  mappings, curated symbol configuration, all structural option-position
+  fields, action plans, the complete persisted ledger graph, and allowlisted
+  functional settings.
+- Explicitly include `app-config.calendar_sync` and
+  `app-config.agent_trace.enabled_types`; they are human preferences even
+  though downloaded calendar events and generated traces remain excluded.
+- Explicitly classify `options_chain_cache`, `yfinance`, `ai`, `web`, and
+  future settings paths. Include only intentional functional preferences;
+  exclude infrastructure, deployment values, credentials, and secrets.
+- Record logical controls in the manifest: counts by family/state, IDs and
+  references, rebuilt holding totals by account/security/currency, and
+  warnings for pre-existing broken references.
+- Hard-deleted entities cannot be restored and must be documented without
+  inventing tombstones.
+
+### Mandatory implementation refinements
+
+1. **Single authority for positions.** Store option positions exactly once in
+   the archive, either embedded in symbol configs or in a dedicated section.
+2. **Streaming-safe format.** Prefer ZIP + manifest + independent NDJSON
+   sections, canonical JSON records, per-section schemas, SHA-256 checksums,
+   decimal strings, UTC timestamps, and explicit size/record/depth limits.
+3. **Explicit partitions and identities.** Validate the physical partition
+   derivation for `symbols:/symbol`, `portfolio:/account_id`, and
+   `settings:/id`. Block ticker/security-ID or MIC collisions rather than
+   resolving them heuristically.
+4. **Durable journal.** Define its container/partition, retention, states, and
+   before-images. Recovery from `PARTIAL_REQUIRES_ATTENTION` must not depend on
+   the client ZIP or an ephemeral import session.
+5. **Quiescence for apply.** Pause schedulers and automatic writers for any
+   import that updates live data. Restore settings last and reactivate writers
+   only after post-flight succeeds.
+6. **CAS for every mutation.** Capture destination ETags during pre-flight and
+   use conditional update/delete/compensation. Creates require absence and
+   must never use upsert. Source ETags are not exported.
+7. **Immutable ledger restore.** Missing ID means create; matching canonical
+   hash means skip; existing ID with different payload is a blocking conflict.
+   Do not use the normal ledger writer/upsert because repair behavior could
+   purge VOIDED or SUPERSEDED history.
+8. **Complete bidirectional closure.** Include both transfer legs, entire
+   correction/reassignment chains, corporate-action groups and replacements,
+   and every referenced account, security, and position. Report broken source
+   references without synthesizing data.
+9. **Verifiable rollback.** Compensate in reverse order with CAS and verify
+   that each document is still owned by the import run. Any failed
+   compensation ends as `PARTIAL_REQUIRES_ATTENTION` with an exact inventory
+   and retained journal/before-images.
+10. **Global redaction.** Scan suspicious names and values in every section,
+    including `source_row`. Preserve `source_row` by default only with a
+    sensitivity warning and an explicit redaction option that declares reduced
+    fidelity.
+11. **Real round-trip tests.** Cover empty destination, idempotent reimport,
+    conflicting IDs, concurrent ETag changes, failures at every phase boundary,
+    rollback failure, broken chains, ticker/MIC ambiguity, secret canaries,
+    inactive ledger states, and reconstructed holdings/economics.
+
+### Safe v1 import policy
+
+1. Mandatory validation/dry-run.
+2. Create-only plus skip-identical.
+3. Empty destination recommended; any different record in a non-empty
+   destination is a blocking conflict.
+4. No deletes, upserts, last-write-wins, or regenerated IDs.
+5. Apply under an import lock with writer quiescence, a durable journal, and
+   CAS.
+6. Selected updates are deferred to a later phase with human-reviewed diffs
+   and field allowlists.
+7. Full replacement remains disabled.
+
+The authoritative design artifact remains
+`.squad/designs/user-data-backup-restore-design.md`.
+
+---
+
+### 2026-09-19T15:56:05+02:00: User directive
+
+**By:** dsanchor (via Copilot)
+
+**What:** Extend the user-data backup design with a daily backup at 00:15 that
+uploads to Azure Blob Storage only when authoritative backup content has
+changed since the previous backup.
+
+**Why:** User request — captured for team memory.
+
+## Livingston — Daily authoritative Azure Blob backup
+
+**Date:** 2026-09-19
+**Status:** ACCEPTED FOR PHASED IMPLEMENTATION — design only
+
+### Decisions
+
+1. Run the automatic backup as a separate Azure Container Apps Job, not in the
+   FastAPI scheduler or through GitHub Actions/Azure Functions.
+2. Configure local time `00:15` in an IANA zone, defaulting to
+   `Europe/Madrid`. Because Container Apps Jobs schedules in UTC, trigger every
+   15 minutes and use a durable local-date gate. On DST transitions, use the
+   first valid later instant for a missing time and execute only once for a
+   repeated time.
+3. Detect changes with SHA-256 over the canonical dataset before ZIP creation
+   or encryption. Exclude timestamps, run IDs, ordering, ZIP metadata,
+   compression, Blob metadata, ETags, and nonces; include all authoritative and
+   reference data plus schema and scope.
+4. If the hash matches the latest successful run, record `NO_CHANGE` and do
+   not upload another ZIP.
+5. Store changed ZIPs as immutable objects named by date, run, and hash using
+   `If-None-Match: *`. Maintain an append-only catalog and update `latest.json`
+   with ETag/CAS only after verifying the upload.
+6. Serialize concurrency with a renewable Blob lease. Retries, duplicate
+   executions, and manual triggers use the same idempotent pipeline.
+7. Use managed identity and least-privilege Blob data RBAC, a private
+   container, HTTPS, no persistent keys or SAS tokens, and no public access.
+   Storage encryption at rest is mandatory; client-side encryption with Key
+   Vault remains optional.
+8. Initial retention is 35 days of changed backups, 12 monthly anchors, 90
+   days of run records and health data, one day for staging, and 14 days for
+   versioning and soft delete. Do not enable WORM without an explicit
+   regulatory requirement.
+9. `latest` is not the sole authority and must be reconstructible from valid
+   runs and blobs. A retry adopts an uploaded object whose pointer update
+   previously failed.
+10. Observability records status, hashes, counts, and timings, but no financial
+    data or logs. Alert on failures, no success for more than 26 hours, stale
+    leases, integrity issues, RBAC or network errors, pointer failures, and
+    retention failures. `NO_CHANGE` is healthy.
+11. Manual runs share the lock, hash, and storage layout. By default, an
+    explicit manual request may create an identical backup marked
+    `same_content_as_latest`; optionally it may use changed-content-only mode.
+
+### Consequences
+
+- Add a Container Apps Job and a dedicated Blob container or approved storage
+  account, with low recurring costs for gate executions, storage, operations,
+  versioning, soft delete, and monitoring.
+- Correctness depends on exhaustive, versioned canonicalization.
+- Monthly retention must protect objects referenced by anchors; a purely
+  age-based lifecycle policy is insufficient.
+
+### Open decision
+
+Determine whether client-side encryption with a Key Vault key is mandatory
+before the first production upload or only before operational downloads are
+enabled.
+
+---
+
+# 2026-09-19 — User-data backup/restore implementation and release gates
+
+## Danny — Bounded implementation contract
+
+**Status:** ACCEPTED FOR IMPLEMENTATION
+
+- V1 is a logical, versioned `.oil-backup.zip` with canonical records,
+  checksums, bounded archive validation, mandatory dependency closure, manual
+  selective export, zero-write dry-run, and create-only/skip-identical import.
+- Updates, deletes, replacement restore, secret import, identity remapping,
+  client-side encryption, WORM, and generated/runtime data remain deferred.
+- Option positions have one archive authority. Ledger history, inactive
+  records, transfer/correction/reassignment/corporate-action relationships,
+  functional settings, and reconstruction controls are preserved.
+- Import replans against current destination state, journals before user-data
+  writes, uses create-if-absent/CAS, compensates in reverse order, and reports
+  unverifiable rollback as `PARTIAL_REQUIRES_ATTENTION`.
+- Automatic backup runs in a separate Container Apps Job, gates a 15-minute UTC
+  schedule to 00:15 Europe/Madrid, uploads changed canonical content only, and
+  publishes immutable verified blobs before CAS-updating `latest.json`.
+- Managed Identity, container-scoped Blob RBAC, recovery, retention, status,
+  frontend export/import workflows, focused tests, and deployment guidance are
+  part of the implementation boundary.
+- Initial ownership: Livingston backend; Linus frontend; Rusty Azure
+  script/workflow/docs; Basher independent release gate.
+
+## Livingston, Linus, and Rusty — Initial implementation
+
+**Status:** IMPLEMENTED, THEN REJECTED AT FIRST GATE
+
+- Livingston implemented the logical backup/archive, dependency-aware
+  create-only restore, durable import status, Blob pipeline, scheduler, API,
+  and Job entrypoint. The unauthenticated FastAPI application deliberately
+  omitted the manual automatic-run POST; operators use the Job entrypoint.
+- Linus implemented typed frontend export/import/status surfaces, BFF routes,
+  ZIP/header forwarding, multipart upload, preview-fingerprint handling, and a
+  capability-gated Run now control.
+- Rusty implemented the Azure setup script, Container Apps Job, private Blob
+  storage/UAMI/RBAC/lifecycle wiring, image-only workflow alignment,
+  configuration, and operational documentation.
+
+## Basher — First release gate
+
+**Verdict:** REJECT
+**Safe to commit/deploy:** No
+
+The first independent gate found nine blockers: non-regular ZIP entries could
+be accepted; create inventory was not durable before writes; relationship
+closure/import validation was incomplete; secret scanning was not fail-closed;
+economic/audit round-trip controls were absent; Blob recovery and retention
+were incomplete; the Job did not explicitly select its UAMI; frontend status
+types disagreed with backend objects; and no live Azure acceptance evidence
+existed.
+
+Revision lockout assigned backend recovery/security work to Danny, frontend
+status work to Livingston, and Azure infrastructure work to Linus.
+
+## Danny — First backend revision
+
+**Status:** IMPLEMENTED UNDER REVIEWER LOCKOUT
+
+- Rejected every non-regular ZIP entry and made recursive secret scanning
+  fail closed for malformed serialized content and credential-like values.
+- Persisted complete `PREPARED` create inventory before writes, probed
+  ambiguous create windows, and made incomplete compensation explicit.
+- Expanded bidirectional dependency/replacement closure and deterministic
+  holdings, economics, relationship, FX/withholding, and audit controls.
+- Made stale/missing `latest.json` recoverable from verified immutable blobs
+  and append-only run records, and implemented daily/monthly retention tags
+  and anchor reconciliation.
+
+## Livingston — Frontend status revision
+
+**Status:** IMPLEMENTED AND LOCALLY APPROVED
+
+Automatic status now models run/archive objects faithfully, renders selected
+scalar values only, handles missing/partial/failed responses safely, and keeps
+Run now behind the existing capability check. Focused response-shaped tests
+cover populated, empty, partial, and unhealthy states.
+
+## Linus — Azure infrastructure revision
+
+**Status:** IMPLEMENTED AND LOCALLY APPROVED
+
+The Job now explicitly receives its dedicated UAMI client ID through
+`AZURE_CLIENT_ID`; lifecycle rules distinguish daily and monthly objects;
+provisioning merges existing policies/resources safely; image-only deployment
+guards identity/environment configuration; and local static tests/documentation
+do not claim a live Azure smoke.
+
+## Basher — Second release gate
+
+**Verdict:** REJECT
+**Safe to commit/deploy:** No
+
+The first nine findings were materially closed except for the external Azure
+smoke. Independent probes still accepted a malformed two-`TRANSFER_IN`
+transfer and an incomplete `DIVIDEND_WITH_SCRIP` group. A failed scheduled run
+also erased the prior `last_scheduled_success`. Danny was locked out; Linus was
+assigned the next backend repair.
+
+## Linus — Second backend revision
+
+**Status:** IMPLEMENTED UNDER REVIEWER LOCKOUT
+
+Transfer groups became strict reciprocal two-leg aggregates with direction,
+peer, account, security, and group-ID checks. Corporate actions reuse
+production `_CA_REQUIRED_LEGS` and `_CA_LEG_TXN_TYPE` invariants. Scheduled
+failure updates merge durable health state so prior success/archive facts are
+preserved.
+
+## Basher — Third narrow release gate
+
+**Verdict:** REJECT
+**Safe to commit/deploy:** No
+
+The new generic transfer rule incorrectly rejected valid production
+`SHARE_CONSOLIDATION` corporate-action legs whose transaction types are
+`TRANSFER_OUT`/`TRANSFER_IN` but which are linked by `ca_group_id`, not ordinary
+transfer metadata. Linus was locked out; Rusty was assigned the narrow repair.
+
+## Rusty — Final dependency-validation revision
+
+**Status:** IMPLEMENTED UNDER REVIEWER LOCKOUT
+
+Ordinary transfer validation now excludes identified corporate-action legs.
+Corporate-action groups remain governed by authoritative required-leg and
+leg-to-transaction mappings, while ordinary transfers retain reciprocal
+direction, peer, account, and security checks.
+
+## Basher — Final release gate
+
+**Verdict:** APPROVE
+**Safe to commit:** Yes
+
+Independent probes confirmed valid production-shaped `SHARE_CONSOLIDATION`
+groups and valid ordinary transfers are accepted, while missing/mismatched
+corporate-action legs and malformed ordinary transfers remain rejected. The
+combined implementation is code-ready and safe to commit.
+
+Coordinator validation passed: **55 integrated backend backup/infrastructure
+tests**, **16 frontend contract tests**, TypeScript, Python compile, shell
+syntax/help, executable mode, and `git diff --check`.
+
+Live Azure deployment acceptance remains external and unverified; no gate
+claimed baseline upload/download, unchanged `NO_CHANGE`, real lease exclusion,
+pointer-failure adoption, or restore validation against downloaded Blob bytes.
+
+---
+
+# 2026-09-20 — Automatic-backup authority cleanup and Economics average line
+
+## User directives
+
+1. **Preserve existing networking.** Do not add private endpoints, VNet
+   integration, or other network privatization for the backup feature.
+2. **Use one configuration authority.** The Azure Container Apps Job
+   environment is the sole source of truth for automatic-backup enabled,
+   timezone, local-time, and schedule-name settings. Remove duplicated
+   configuration and status surfaces that have no runtime authority.
+
+## Rusty — Initial configuration-source simplification
+
+**Status:** IMPLEMENTED, THEN REJECTED
+
+- Kept `configure-backup.sh` and the Container Apps Job environment as the
+  production configuration path.
+- Removed automatic-backup configuration from general application YAML and
+  documented `.env.example` values as local CLI inputs only.
+- Retained the read-only frontend automatic-status surface.
+
+## Linus — Economics monthly-average chart line
+
+**Status:** APPROVED
+
+- The Options Economics KPI card and Monthly Net Cash Flow chart now consume
+  one shared last-12-month, non-zero-month average.
+- The horizontal reference line is omitted when the shared value is absent and
+  preserves valid negative and exact-zero values.
+- Existing series, axes, tooltip, responsiveness, and formatting remain
+  unchanged.
+
+## Basher — Combined configuration/Economics gate
+
+**Verdict:** REJECT
+**Safe to commit:** No
+
+The Economics change was approved. The backup change was rejected because the
+API Container App reconstructed automatic configuration from its own process
+environment while the authoritative values existed only on the separate Job.
+The frontend could therefore display stale/default API values as effective Job
+configuration. Rusty was locked out; Danny received the revision.
+
+Validation passed: 58 backup/infrastructure tests, 104 economics/portfolio
+regressions, 20 frontend contracts, TypeScript, changed-file ESLint, production
+build, Python compile, shell syntax/help, and diff hygiene.
+
+## Danny — Public automatic-status removal
+
+**Status:** IMPLEMENTED, THEN REJECTED
+
+- Removed `GET /api/backups/automatic`, its frontend BFF route,
+  `AutomaticBackupCard`, status formatting helpers/types/tests, and automatic
+  status loading from Settings.
+- Preserved manual export/import, Job execution, Blob health/run records,
+  retention, archive/import behavior, and provisioning.
+- Directed configuration and monitoring to the Container Apps Job, Blob,
+  Azure Portal, CLI, and `configure-backup.sh`.
+
+## Basher — Revision re-review
+
+**Verdict:** REJECT
+**Safe to commit:** No
+
+The public API/frontend surfaces were gone, but
+`AutomaticBackupService.get_status()` and dedicated scheduler assertions still
+preserved the obsolete presentation model without a production caller. Danny
+was locked out; Livingston received the narrow cleanup.
+
+Validation passed: 59 backup/infrastructure tests, 230 economics/portfolio
+regressions, 16 frontend contracts, TypeScript, changed-file ESLint, production
+build, Python compile, shell syntax/help, and diff hygiene.
+
+## Livingston — Dangling status cleanup
+
+**Status:** IMPLEMENTED
+
+Removed `AutomaticBackupService.get_status()` and its obsolete assertions.
+Runtime tests continue to cover environment loading, DST/due gating, scheduled
+upload and no-change behavior, failure preservation, manual runs, latest
+recovery, and durable Blob health/run records.
+
+## Basher — Final gate
+
+**Verdict:** APPROVE
+**Safe to commit:** Yes
+
+The Container Apps Job environment is now the sole automatic-backup
+configuration authority. No automatic API, BFF, Settings card, frontend type,
+helper, internal status presenter, or dangling test remains. Manual
+export/import and the complete scheduled backup runtime remain intact. The
+approved Economics shared monthly-average line is unchanged.
+
+Final validation passed: **58 backend backup/infrastructure tests**, **11
+frontend backup contract tests**, repository surface checks, Python compile,
+`configure-backup.sh` syntax/help, YAML/config authority checks, documentation
+checks, and `git diff --check`.
+
+Live Azure execution remains a separate deployment acceptance check.

@@ -175,6 +175,87 @@ jobs:
             exit 1
           fi
 
+      - name: Update backup Job image when configured
+        run: |
+          set -euo pipefail
+          JOB_NAME="ca-stock-options-manager-backup"
+          RESOURCE_GROUP="stock-options-manager-rg"
+          IMAGE="ghcr.io/dsanchor/option-income-lab-api:${{ steps.tag.outputs.tag }}"
+          if ! az containerapp job show \
+            --name "$JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --only-show-errors \
+            -o none 2>/dev/null; then
+            echo "::notice::Optional backup Job '$JOB_NAME' is not configured; skipping its image update."
+            exit 0
+          fi
+          BEFORE=$(az containerapp job show \
+            --name "$JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --only-show-errors \
+            -o json)
+          CONFIGURED_CLIENT_ID=$(jq -r \
+            '[.properties.template.containers[].env[]? | select(.name == "AZURE_CLIENT_ID") | .value][0] // ""' \
+            <<<"$BEFORE")
+          mapfile -t IDENTITY_RESOURCE_IDS < <(
+            jq -r '.identity.userAssignedIdentities // {} | keys[]' <<<"$BEFORE"
+          )
+          if [ "${#IDENTITY_RESOURCE_IDS[@]}" -eq 0 ] || [ -z "$CONFIGURED_CLIENT_ID" ]; then
+            echo "❌ Backup Job must have a user-assigned identity and AZURE_CLIENT_ID."
+            echo "Run backend/scripts/configure-backup.sh before enabling workflow image updates."
+            exit 1
+          fi
+          IDENTITY_MATCHED=false
+          for IDENTITY_RESOURCE_ID in "${IDENTITY_RESOURCE_IDS[@]}"; do
+            ACTUAL_CLIENT_ID=$(az identity show \
+              --ids "$IDENTITY_RESOURCE_ID" \
+              --query clientId \
+              --only-show-errors \
+              -o tsv)
+            if [ "$CONFIGURED_CLIENT_ID" = "$ACTUAL_CLIENT_ID" ]; then
+              IDENTITY_MATCHED=true
+              break
+            fi
+          done
+          if [ "$IDENTITY_MATCHED" != true ]; then
+            echo "❌ Backup Job AZURE_CLIENT_ID does not select its assigned identity."
+            exit 1
+          fi
+          ENV_BEFORE_HASH=$(jq -cS \
+            '[.properties.template.containers[].env[]?] | sort_by(.name)' \
+            <<<"$BEFORE" | sha256sum | cut -d' ' -f1)
+          IDENTITIES_BEFORE_HASH=$(jq -cS \
+            '.identity.userAssignedIdentities' \
+            <<<"$BEFORE" | sha256sum | cut -d' ' -f1)
+          az containerapp job update \
+            --name "$JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$IMAGE" \
+            --only-show-errors \
+            -o none
+          AFTER=$(az containerapp job show \
+            --name "$JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --only-show-errors \
+            -o json)
+          DEPLOYED_IMAGE=$(jq -r '.properties.template.containers[0].image' <<<"$AFTER")
+          if [ "$DEPLOYED_IMAGE" != "$IMAGE" ]; then
+            echo "❌ Backup Job image verification failed"
+            exit 1
+          fi
+          ENV_AFTER_HASH=$(jq -cS \
+            '[.properties.template.containers[].env[]?] | sort_by(.name)' \
+            <<<"$AFTER" | sha256sum | cut -d' ' -f1)
+          IDENTITIES_AFTER_HASH=$(jq -cS \
+            '.identity.userAssignedIdentities' \
+            <<<"$AFTER" | sha256sum | cut -d' ' -f1)
+          if [ "$ENV_BEFORE_HASH" != "$ENV_AFTER_HASH" ] ||
+             [ "$IDENTITIES_BEFORE_HASH" != "$IDENTITIES_AFTER_HASH" ]; then
+            echo "❌ Backup Job image update changed runtime environment or identity configuration"
+            exit 1
+          fi
+          echo "✅ Backup Job uses the deployed immutable backend image"
+
       - name: Azure Logout
         if: always()
         run: az logout || true

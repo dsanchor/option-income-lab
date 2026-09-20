@@ -1061,7 +1061,9 @@ def _format_time(dt: datetime) -> str:
 app = FastAPI(title="Option Income Lab")
 
 from web.portfolio_routes import router as portfolio_router
+from web.backup_routes import router as backup_router
 app.include_router(portfolio_router)
+app.include_router(backup_router)
 
 
 @app.get("/healthz", include_in_schema=False)

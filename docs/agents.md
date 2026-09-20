@@ -2,6 +2,41 @@
 
 [← Back to README](../README.md)
 
+## Automatic User-Data Backup Job
+
+The automatic backup worker is an Azure Container Apps Job, not an in-process
+agent and not a GitHub Actions schedule. It runs the backend image with:
+
+```text
+python scripts/run_automatic_backup.py scheduled
+```
+
+`backend/scripts/configure-backup.sh` configures Azure to trigger it every 15
+minutes in UTC and sets the Job environment. The application reads effective
+enabled/timezone/local-time values only from that environment and checks
+whether the configured `00:15 Europe/Madrid` run is due, including DST and same-day
+catch-up, and guarantees at most one scheduled result per local date. The Job
+uses the same export, secret-redaction, canonical hashing, Blob lease, upload,
+and retention pipeline as operator-triggered automatic backups; infrastructure
+scripts do not duplicate those rules.
+
+Runtime access is isolated through a dedicated user-assigned managed identity
+with `Storage Blob Data Contributor` on the private
+`user-data-backups` container only. `AZURE_CLIENT_ID` makes
+`DefaultAzureCredential` select that identity explicitly. Daily archives use
+the `retentionClass=daily|monthly` tag contract so live monthly anchors protect
+their referenced archives from lifecycle deletion. Cosmos currently uses the
+existing Container Apps secret reference. See
+[Automatic User-Data Backup](deployment.md#automatic-user-data-backup) for
+provisioning, configuration, verification, restore safety, and
+troubleshooting.
+
+There is no automatic-backup API or Settings status card. Configure and monitor
+the feature through the Container Apps Job and its Blob artifacts using Azure
+Portal or CLI. To change production, rerun `configure-backup.sh` with approved
+values or update the Job cron/environment directly; application YAML and
+Settings do not configure it.
+
 ## Summarization Agent
 
 An optional daily summary agent that sends a Telegram notification with a digest of your portfolio activities. Useful for staying informed without checking the dashboard daily.

@@ -27,6 +27,36 @@
 
 ## Learnings
 
+### 2026-09-20 — Automatic-backup single-source cleanup
+- A removed public status surface must also be removed from internal services and tests; leaving an unreachable presenter creates a misleading second authority even without production callers.
+- Scheduler tests should assert durable Blob health/run/latest records and actual scheduled/manual outcomes directly, rather than reconstructing those records through a presentation method.
+
+### 2026-09-19 — Frontend automatic-backup status contract revision
+- `last_scheduled_success` is a run-record object and `latest_changed_archive` is an archive-pointer object; frontend status types must preserve those shapes rather than coercing them to strings.
+- Backup status UI now formats selected scalar fields defensively, exposes failed last-attempt detail, and uses explicit placeholders for absent or partial state without ever rendering raw objects.
+- Response-shaped tests should execute the production formatters against populated, empty, partial, and failure payloads, not merely search component source for field names.
+
+### 2026-09-19 — Implementación de backup lógico y restore create-only
+- El ZIP v1 usa un conjunto fijo de nueve entradas, JSON canónico, checksums ordenados y validación previa de traversal, duplicados, colisiones de mayúsculas, symlinks, profundidad, expansión, tamaños y secretos recursivos.
+- Las posiciones de opciones se exportan como autoridad separada, pero durante restore se materializan dentro del `symbol_config` creado; añadir posiciones a un config ya existente queda bloqueado porque create-only no permite `replace`.
+- El import persiste el journal antes del primer write de usuario, usa `create_item`, verifica el estado final y compensa en orden inverso; cualquier compensación incompleta termina en `PARTIAL_REQUIRES_ATTENTION`.
+- La publicación Blob usa `DefaultAzureCredential` mediante import lazy, lease renovable, objeto inmutable, descarga/verificación antes de `latest`, CAS y gate por fecha local/DST.
+- No existe guard operator/admin en FastAPI; por seguridad se omitió `POST /api/backups/automatic/run` y se dejó el run manual en el entrypoint del Container Apps Job.
+
+### 2026-09-19 — Backup diario condicionado en Azure Blob
+- El runtime productivo combina API y scheduler en una única Container App y depende de una sola réplica; para backups durables se eligió un Container Apps Job separado, con lease Blob y estado idempotente.
+- Container Apps Jobs evalúa cron en UTC. Para respetar `00:15` en una zona IANA (`Europe/Madrid` por defecto) con DST, el Job se activa periódicamente y un gate durable ejecuta una sola vez por fecha local, con catch-up el mismo día.
+- El cambio se detecta por hash del dataset lógico canónico antes de ZIP/cifrado; timestamps de export, run IDs, orden, metadata ZIP y nonce quedan fuera. Comparar ZIPs produciría falsos cambios.
+- Los ZIP cambiados son objetos inmutables; `latest` se actualiza por ETag/CAS solo tras verificar el upload y puede reconstruirse desde catálogo/blobs.
+- Defaults acordados: 35 días de copias cambiadas, 12 anchors mensuales, soft delete/versioning 14 días, staging 1 día y WORM solo por obligación regulatoria.
+
+### 2026-09-19 — Revisión del contrato de backup/import de usuario
+- Aprobado con refinamientos el enfoque de backup lógico: holdings bursátiles se reconstruyen desde el ledger completo, mientras que `symbol_config.positions` debe exportarse porque conserva lifecycle, notas, paper state e IDs no derivables.
+- Detectada configuración manual persistida que debe clasificarse expresamente en la allowlist: `app-config.calendar_sync` y `app-config.agent_trace.enabled_types`.
+- Un archivo de backup no debe representar posiciones dos veces (`symbol-configs` y `option-positions`); debe existir una sola autoridad por registro dentro del ZIP.
+- El import seguro por defecto es dry-run + create-only/skip-identical, sin upsert. El writer actual del ledger no es apto para restore porque su auto-reparación puede purgar tombstones/cadenas VOIDED o SUPERSEDED.
+- Cualquier apply sobre un destino vivo requiere quiescencia de schedulers/escritores, journal durable, CAS por documento y rollback compensatorio verificable; ETags por sí solos no impiden inserciones concurrentes entre fases.
+
 ### 2026-09-11 — Paper positions simplified to a position-only toggle
 - Reverted movement-side `is_paper` plumbing from manual creation/correction/duplicate detection so paper status lives only on the symbol position document, per direct user direction.
 - Added a dedicated toggle endpoint in `backend/web/app.py:3300` (`PATCH /api/symbols/{symbol}/positions/{position_id}/paper`) backed by `backend/src/cosmos_db.py:703`, instead of faking/linking paper movements.

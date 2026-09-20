@@ -180,3 +180,21 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 - Decision: `.squad/decisions.md` → Section 12 (Portfolio Movement Workflows — Release Directives)
 - Archive: `.squad/decisions/archive/inbox-2026-09-06/` (3 directive files + 6 prior portfolio files)
 - Identity: `.squad/identity/now.md` (updated)
+
+### 2026-09-19 — User-data backup implementation record
+- Consolidated the bounded contract, initial backend/frontend/Azure work,
+  three Basher rejection gates, lockout-safe revisions, and final approval
+  into `.squad/decisions.md`.
+- Preserved verdict chronology: REJECT → REJECT → REJECT → APPROVE.
+- Recorded coordinator validation of 55 integrated backend
+  backup/infrastructure tests, 16 frontend contracts, TypeScript, Python
+  compile, shell syntax/help, executable mode, and diff hygiene.
+- Kept live Azure smoke explicitly external and unverified.
+
+### 2026-09-20 — Backup authority and Economics finalization
+- Merged both user directives and the full automatic-backup review chronology:
+  Rusty rejection, Danny revision rejection, Livingston cleanup, and Basher
+  approval.
+- Recorded Linus's independently approved shared Avg Monthly Net chart line.
+- Removed all merged inbox items after consolidating them into the canonical
+  decision log; no production, test, or product documentation files changed.

@@ -16,6 +16,19 @@
 
 ## Recent Learnings
 
+### 2026-09-20 — Automatic backup configuration authority
+- The Azure Container Apps Job environment is the only production runtime source for automatic-backup enabled/timezone/local-time/schedule-name values; `AutomaticBackupConfig.from_environment()` is the reader.
+- `configure-backup.sh` owns the Azure cron and Job environment. General application YAML, API/BFF routes, and frontend Settings must not expose a second automatic configuration/status authority; `.env.example` is local documentation only.
+
+### 2026-09-19 — Transfer validation must distinguish CA legs
+- `SHARE_CONSOLIDATION` intentionally maps `CONSOLIDATION_OUT`/`CONSOLIDATION_IN` to `TRANSFER_OUT`/`TRANSFER_IN` while using `ca_group_id`, not ordinary transfer-group metadata.
+- Dependency validation must exclude identified corporate-action legs from ordinary transfer-pair rules while still enforcing `_CA_REQUIRED_LEGS` and `_CA_LEG_TXN_TYPE`.
+
+### 2026-09-19 — Automatic backup Azure infrastructure
+- Provision the automatic user-data backup as a scheduled Container Apps Job using the immutable backend image; GitHub Actions only aligns its image and is never the scheduler.
+- Keep Blob authorization on a dedicated user-assigned identity with `Storage Blob Data Contributor` scoped to the private backup container; Cosmos temporarily remains an existing Container Apps secret reference.
+- Lifecycle deletion for daily archives must require `retentionClass=daily`, allowing application-managed monthly anchors to promote referenced objects and avoid unsafe age-only deletion.
+
 ### 2026-09-19 — Assigned-option stock linkage
 - Extended the linkable-position backend contract with stock `BUY`/`SELL` contexts while preserving all option contexts and response fields.
 - Assignment candidate eligibility should consume `assignment_stock_by_position_id` from `build_option_position_linkage()` and check the expected direction, keeping picker behavior aligned with warning semantics for active, deleted, voided, and superseded movements.

@@ -153,6 +153,191 @@ Use a PAT with `read:packages` scope. After reconfiguring, re-run the workflow.
 
 ---
 
+## Automatic User-Data Backup
+
+Automatic user-data backups run in a **scheduled Azure Container Apps Job**,
+separate from the API scheduler. The Job uses the same immutable backend image
+deployed to the API. GitHub Actions only updates that image reference when the
+optional Job exists; it is not the scheduler.
+
+The Azure cron is configured by `backend/scripts/configure-backup.sh` and
+triggers every 15 minutes in UTC. The backup process reads its effective
+enabled flag, timezone, and local due time only from the Job environment
+(`BACKUP_ENABLED`, `BACKUP_TIMEZONE`, and `BACKUP_LOCAL_TIME`) and applies DST
+handling, same-day catch-up, locking, changed-content detection, and upload
+rules.
+
+### Provision Storage, Identity, RBAC, and Job
+
+Prerequisites:
+
+- Azure CLI logged into the intended subscription.
+- An existing resource group and Container Apps environment.
+- Permission to create Storage accounts, managed identities, Container Apps
+  Jobs, and role assignments.
+- The immutable backend image already published (`:sha-<commit>` or digest).
+- The API Container App contains the Cosmos secret named `cosmosdb-key`, or
+  `COSMOSDB_KEY` is set only in the invoking shell.
+- For a private GHCR package when creating the Job, set `GHCR_USERNAME` and
+  `GHCR_PAT` in the invoking shell. Do not put either value in source or output.
+
+Preview the plan:
+
+```bash
+backend/scripts/configure-backup.sh --dry-run \
+  --resource-group stock-options-manager-rg \
+  --location westeurope \
+  --storage-account <globally-unique-storage-name> \
+  --container-app-environment <existing-environment> \
+  --image ghcr.io/dsanchor/option-income-lab-api:sha-<commit>
+```
+
+Apply the same command without `--dry-run`. The script is idempotent and:
+
+1. creates or verifies a general-purpose v2 Storage account;
+2. enforces HTTPS, TLS 1.2, and disabled public Blob access;
+3. enables Blob versioning and 14-day Blob/container soft delete;
+4. creates the private `user-data-backups` container;
+5. installs lifecycle rules for one-day staging, 35-day unanchored daily
+   backups, 12-month anchor documents, 90-day run records, and 14-day old
+   versions while preserving unrelated account rules;
+6. creates a dedicated user-assigned managed identity;
+7. grants `Storage Blob Data Contributor` at the container scope only; and
+8. creates or updates the scheduled Job with one completion, parallelism 1,
+   bounded retries, and a 30-minute timeout.
+
+Monthly-anchor safety is cooperative: the backup service must tag any daily
+Blob `retentionClass=daily` on upload and change it to
+`retentionClass=monthly` while referenced by a live monthly anchor.
+Lifecycle deletion applies only to daily-path objects tagged
+`retentionClass=daily`, so it cannot delete an archive protected by an anchor.
+The application retention reconciler expires anchors after 12 months and only
+returns an archive to `daily` after its final live reference is gone. A
+370-day lifecycle rule removes expired anchor documents as a fail-safe. Do not
+replace this contract with an unconditional age-based archive delete rule.
+
+The Job invokes the frozen application entrypoint inside the backend image:
+
+```text
+python scripts/run_automatic_backup.py scheduled
+```
+
+This is the container-relative form of
+`python backend/scripts/run_automatic_backup.py scheduled`; no backup business
+rules are implemented in provisioning scripts or workflow YAML.
+
+### Runtime Configuration
+
+The **Azure Container Apps Job environment is the single production runtime
+source of truth**. `AutomaticBackupConfig.from_environment()` reads these
+values; `backend/config.yaml` has no automatic-backup section. The provisioning
+script sets both the Azure cron and all Job variables listed below. The API
+Container App does not have Azure control-plane access and therefore does not
+expose automatic-backup configuration or status. Application Settings contains
+only the manual export and import workflows.
+
+| Variable | Required | Purpose |
+|---|---:|---|
+| `AZURE_CLIENT_ID` | Yes | Client ID of the dedicated user-assigned managed identity |
+| `AZURE_STORAGE_ACCOUNT_NAME` | Yes | GPv2 account used by `DefaultAzureCredential` |
+| `BACKUP_ENABLED` | Yes | Enables the automatic backup gate; default `true` |
+| `BACKUP_BLOB_CONTAINER` | Yes | Private container; default `user-data-backups` |
+| `BACKUP_TIMEZONE` | Yes | IANA zone; default `Europe/Madrid` |
+| `BACKUP_LOCAL_TIME` | Yes | Daily due time; default `00:15` |
+| `BACKUP_SCHEDULE_NAME` | Yes | Idempotency namespace; default `daily-user-data` |
+| `BACKUP_BUILD_COMMIT` | Recommended | Immutable image commit/digest identifier |
+| `BACKUP_MAX_ARCHIVE_BYTES` | Yes | Maximum compressed archive bytes |
+| `BACKUP_MAX_UNCOMPRESSED_BYTES` | Yes | Maximum total extracted bytes |
+| `BACKUP_MAX_ENTRY_BYTES` | Yes | Maximum single ZIP entry bytes |
+| `BACKUP_MAX_ZIP_FILES` | Yes | Maximum ZIP member count |
+| `BACKUP_MAX_RECORDS` | Yes | Maximum archive record count |
+| `BACKUP_MAX_JSON_DEPTH` | Yes | Maximum JSON nesting depth |
+| `BACKUP_MAX_EXPANSION_RATIO` | Yes | Maximum compressed-to-expanded ratio |
+| `COSMOSDB_ENDPOINT` | Yes | Existing Cosmos account endpoint |
+| `COSMOSDB_KEY` | Yes, secret ref | Existing Container Apps secret; never plain output |
+
+Blob authentication uses the Job's dedicated managed identity and
+`DefaultAzureCredential`. The provisioning script assigns that identity to the
+Job and sets `AZURE_CLIENT_ID` to its client ID; this makes
+`ManagedIdentityCredential` select the intended UAMI even if other identities
+are available. Do not configure a Storage account key, connection string, or
+persistent SAS. Cosmos key authentication is temporary technical debt; moving
+Cosmos data-plane access to managed identity is a follow-up.
+
+To change the production trigger or effective backup settings, change the
+approved values in `configure-backup.sh` and rerun it, or update the Azure Job
+cron/environment directly. Editing application Settings, `config.yaml`, or
+`.env.example` does not change production. `.env.example` is documentation for
+local CLI execution only. Monitor the automatic backup through Container Apps
+Job executions and the private Blob run records, health document, immutable
+archives, and monthly anchors using Azure Portal or CLI.
+
+### Verify and Operate
+
+```bash
+az containerapp job show \
+  --name ca-stock-options-manager-backup \
+  --resource-group stock-options-manager-rg \
+  -o yaml
+
+az containerapp job start \
+  --name ca-stock-options-manager-backup \
+  --resource-group stock-options-manager-rg
+
+az containerapp job execution list \
+  --name ca-stock-options-manager-backup \
+  --resource-group stock-options-manager-rg \
+  -o table
+
+az containerapp job logs show \
+  --name ca-stock-options-manager-backup \
+  --resource-group stock-options-manager-rg \
+  --follow
+```
+
+Expected scheduled outcomes include `UPLOADED` after a changed upload and
+`NO_CHANGE` when authoritative content is unchanged. `NO_CHANGE` is healthy.
+Alert on failed runs, no scheduled success for more than 26 hours, stale
+leases, integrity/pointer failures, and repeated RBAC or network errors.
+
+Local syntax/static tests verify provisioning and runtime wiring but cannot
+replace an Azure acceptance run. With existing test resources and credentials,
+start the Job and verify: the first run uploads and byte-verifies a baseline;
+an unchanged retry records `NO_CHANGE` without another ZIP; a concurrent start
+is lease-excluded; a verified orphan upload is adopted after simulated pointer
+failure; and downloaded bytes pass archive hash, manifest, and checksum
+validation. Never run these destructive/failure-injection checks against the
+sole production backup container.
+
+### Restore Safety
+
+Downloading a Blob is not a restore. Select an immutable archive from the run
+catalog/monthly anchors (not only `latest.json`), verify its archive hash,
+manifest, and per-file checksums, then use the application import flow:
+validate, run the mandatory zero-write dry-run, review dependency/conflict
+reports, and explicitly apply create-only/skip-identical import. V1 never
+updates or deletes existing user records.
+
+### Troubleshooting
+
+- **403 from Blob:** confirm the Job identity has `Storage Blob Data
+  Contributor` on the exact container resource ID, `AZURE_CLIENT_ID` equals
+  that UAMI's client ID, and allow for RBAC propagation.
+- **Image pull failure:** configure the Job's GHCR credentials or make the
+  package readable. The deploy workflow intentionally does not create secrets.
+- **Cosmos authentication failure:** verify the Job has the configured
+  `cosmosdb-key` secret and `COSMOSDB_KEY=secretref:cosmosdb-key`.
+- **Job runs but no archive appears:** inspect the sanitized run status.
+  `NO_CHANGE`, an already-completed local date, or a not-yet-due gate is
+  expected and must not be treated as upload failure.
+- **Storage networking failure:** when Storage public network access is later
+  disabled, integrate the Container Apps environment with the VNet, configure
+  a Blob private endpoint/private DNS, and rerun verification.
+- **Stale/missing `latest.json`:** recover from verified immutable Blobs and run
+  records; never treat the mutable pointer as the sole authority.
+
+---
+
 ### Prerequisites
 
 - [Azure CLI](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli) installed and logged in (`az login`)

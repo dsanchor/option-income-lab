@@ -162,8 +162,7 @@ function readInitialOptionFilters() {
   };
 }
 
-function SummaryRow({ summary, monthly }: { summary: EconomicsSummary; monthly: EconomicsMonthlyRow[] }) {
-  const avgLast12 = averageLastNExcludingZero(monthly.map((row) => row.net_income_eur), 12);
+function SummaryRow({ summary, avgLast12 }: { summary: EconomicsSummary; avgLast12: number | null }) {
   const cards = [
     {
       label: "Premium Sold (USD)",
@@ -289,7 +288,7 @@ function ChartTooltip({
   );
 }
 
-function MonthlyNetChart({ rows }: { rows: EconomicsMonthlyRow[] }) {
+function MonthlyNetChart({ rows, avgLast12 }: { rows: EconomicsMonthlyRow[]; avgLast12: number | null }) {
   if (!rows.length) return <p className="text-sm text-text-muted">No data.</p>;
 
   const chartData = rows.map((row) => ({
@@ -322,6 +321,19 @@ function MonthlyNetChart({ rows }: { rows: EconomicsMonthlyRow[] }) {
             width={72}
           />
           <ReferenceLine y={0} stroke="rgba(148,163,184,0.35)" />
+          {avgLast12 !== null && (
+            <ReferenceLine
+              y={avgLast12}
+              stroke="var(--accent-blue)"
+              strokeDasharray="4 4"
+              label={{
+                value: `12mo avg ${eur(avgLast12)}`,
+                position: "insideTopRight",
+                fill: "var(--color-text-muted)",
+                fontSize: 10,
+              }}
+            />
+          )}
           <Tooltip cursor={{ fill: "rgba(148,163,184,0.08)" }} content={<ChartTooltip />} />
           <Legend wrapperStyle={{ fontSize: 11, color: "#8d969e" }} iconType="circle" iconSize={8} />
           <Bar dataKey="calls_net_income_eur" name="Calls Net" fill={CALLS_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
@@ -959,6 +971,10 @@ export default function EconomicsView({
   const symbolOptions = (data?.filters.symbols ?? []).map((symbol) => ({ value: symbol, label: symbol }));
   const accountOptions = useMemo(() => buildAccountOptions(accounts, accountIds), [accountIds, accounts]);
   const coverage = data?.summary.coverage;
+  const avgLast12 = useMemo(
+    () => averageLastNExcludingZero(data?.monthly.map((row) => row.net_income_eur) ?? [], 12),
+    [data?.monthly],
+  );
 
   return (
     <div className="space-y-8">
@@ -975,7 +991,7 @@ export default function EconomicsView({
         </div>
       )}
 
-      {data && <SummaryRow summary={data.summary} monthly={data.monthly} />}
+      {data && <SummaryRow summary={data.summary} avgLast12={avgLast12} />}
 
       {coverage && <CoverageBanner coverage={coverage} hasAccountFilter={accountIds.length > 0} />}
 
@@ -1041,7 +1057,7 @@ export default function EconomicsView({
             <div className="grid gap-6 lg:grid-cols-2">
               <div>
                 <h3 className="mb-2 text-sm font-medium text-text-muted">Monthly Net Cash Flow (EUR)</h3>
-                <MonthlyNetChart rows={data.monthly} />
+                <MonthlyNetChart rows={data.monthly} avgLast12={avgLast12} />
               </div>
               <div>
                 <h3 className="mb-2 text-sm font-medium text-text-muted">Calls vs Puts Net Cash Flow (EUR)</h3>
