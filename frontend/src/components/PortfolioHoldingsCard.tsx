@@ -1,5 +1,6 @@
 import type { PortfolioSection, SymbolState, HoldingsByAccount } from "@/types/symbol-detail";
 import { getAccountBadgeClass, UNASSIGNED_LABEL } from "@/lib/accountDisplay";
+import { formatHoldingPnl, type HoldingPnlTone } from "@/lib/holdingPnl";
 
 interface Props {
   portfolio: PortfolioSection;
@@ -26,6 +27,12 @@ function acctLabel(acct: HoldingsByAccount): string {
   return acct.account_name ?? acct.account_id;
 }
 
+const PNL_TONE_CLASS: Record<HoldingPnlTone, string> = {
+  positive: "text-accent-green",
+  negative: "text-accent-red",
+  neutral: "text-text-muted",
+};
+
 export default function PortfolioHoldingsCard({ portfolio, symbolState }: Props) {
   const isHistorical =
     symbolState === "portfolio_historical" ||
@@ -35,6 +42,11 @@ export default function PortfolioHoldingsCard({ portfolio, symbolState }: Props)
     portfolio.holdings_by_account && portfolio.holdings_by_account.length > 0;
 
   const showDividends = !!portfolio.total_dividends_eur;
+  const pnl = formatHoldingPnl({
+    currentShares: portfolio.current_shares,
+    unrealizedPnlEur: portfolio.unrealized_pnl_eur,
+    unrealizedPnlPct: portfolio.unrealized_pnl_pct,
+  });
 
   return (
     <div className="space-y-2">
@@ -65,6 +77,9 @@ export default function PortfolioHoldingsCard({ portfolio, symbolState }: Props)
               <th scope="col" className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-text-muted">
                 Invested (€)
               </th>
+              <th scope="col" className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-text-muted">
+                Unrealized P/L
+              </th>
               {showDividends && (
                 <th scope="col" className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-text-muted">
                   Dividends (€)
@@ -92,6 +107,12 @@ export default function PortfolioHoldingsCard({ portfolio, symbolState }: Props)
                   <td className="px-4 py-2.5 text-right font-mono text-text">
                     {eur(acct.current_invested_eur)}
                   </td>
+                  <td
+                    className="px-4 py-2.5 text-right font-mono text-text-muted"
+                    aria-label="Unrealized P/L unavailable by account"
+                  >
+                    —
+                  </td>
                   {showDividends && (
                     <td className="px-4 py-2.5 text-right font-mono text-accent-green">
                       {eur(acct.total_dividends_eur)}
@@ -113,6 +134,15 @@ export default function PortfolioHoldingsCard({ portfolio, symbolState }: Props)
               </td>
               <td className="px-4 py-2.5 text-right font-mono text-text">
                 {eur(portfolio.current_invested_eur)}
+              </td>
+              <td
+                className={`px-4 py-2.5 text-right font-mono ${PNL_TONE_CLASS[pnl.tone]}`}
+                aria-label={pnl.ariaLabel}
+              >
+                <span>{pnl.absolute}</span>
+                {pnl.available && (
+                  <span className="ml-1 text-xs">({pnl.percentage})</span>
+                )}
               </td>
               {showDividends && (
                 <td className="px-4 py-2.5 text-right font-mono text-accent-green">

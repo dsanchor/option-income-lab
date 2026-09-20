@@ -27,6 +27,16 @@
 
 ## Learnings
 
+### 2026-09-20 — Production backup schema alignment
+- The first production backup image failed because strict backup projections lagged known persisted shapes: security migration provenance, imported ledger `company_name`/`warnings`, and the runtime `pricing_cache` field.
+- Option-position provenance `source.activity_id` was also an unsafe opaque-token false positive; identifier exemptions must be narrow and key-specific rather than weakening recursive secret scanning.
+- Production validation should reuse Container Apps Job secret references through a read-only execution override and report only section, hashed logical identity, issue category, field names, counts, and archive size.
+
+### 2026-09-20 — Symbol Details holding unrealized P&L
+- Added nullable `current_value_eur`, `unrealized_pnl_eur`, and `unrealized_pnl_pct` to the Symbol Details `portfolio` response.
+- Symbol Details and Symbols Overview now share one valuation helper backed by cached `pricing_cache.price_eur`; no quote or FX provider calls were added.
+- Unrealized P&L uses the FIFO residual `remaining_cost_basis_eur`; zero-cost holdings retain numeric absolute P&L while percentage remains null, and closed/unpriced holdings remain null-valued.
+
 ### 2026-09-20 — Automatic-backup single-source cleanup
 - A removed public status surface must also be removed from internal services and tests; leaving an unreachable presenter creates a misleading second authority even without production callers.
 - Scheduler tests should assert durable Blob health/run/latest records and actual scheduled/manual outcomes directly, rather than reconstructing those records through a presentation method.

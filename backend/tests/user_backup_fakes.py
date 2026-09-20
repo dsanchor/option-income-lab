@@ -78,14 +78,18 @@ def populated_cosmos() -> FakeCosmos:
         "security_id": "XNAS:AAPL", "ticker": "AAPL", "company_name": "Apple",
         "exchange_mic": "XNAS", "listing_currency": "USD", "status": "ACTIVE",
         "aliases": [], "provider_symbols": {"yfinance": "AAPL"},
+        "created_by_migration": True, "migrated_from": "LEGACY:AAPL",
+        "migration_note": "Canonical identity migration",
     })
     cosmos.container.create_item(body={
         "id": "config_AAPL", "symbol": "AAPL", "doc_type": "symbol_config",
         "security_id": "XNAS:AAPL", "watchlist": {"enabled": True},
+        "pricing_cache": {"status": "ok", "price_eur": "180.00"},
         "positions": [{
             "position_id": "pos_1", "type": "call", "strike": 200,
             "expiration": "2027-01-15", "status": "active",
             "opened_at": "2026-09-01T00:00:00Z", "notes": "covered", "is_paper": True,
+            "source": {"activity_id": "aB3dE5fG7hJ9kL2mN4pQ6rS8tU1vW3xY"},
         }],
     })
     cosmos.container.create_item(body={
@@ -105,7 +109,8 @@ def populated_cosmos() -> FakeCosmos:
         "option_position_id": "pos_1", "option_link_kind": "OPEN_SELL",
         "option_type": "call", "option_strike": "200",
         "option_expiration": "2027-01-15", "correction_status": "ACTIVE",
-        "import_source": "manual",
+        "import_source": "manual", "company_name": "Apple",
+        "warnings": [{"type": "PROBABLE_DUPLICATE", "message": "Reviewed"}],
     })
     cosmos.settings_container.create_item(body={
         "id": "app-config",

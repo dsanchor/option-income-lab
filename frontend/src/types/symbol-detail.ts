@@ -159,6 +159,9 @@ export interface PortfolioSection {
   current_shares: string;
   average_cost_eur?: string | null;
   current_invested_eur?: string | null;
+  current_value_eur?: string | null;
+  unrealized_pnl_eur?: string | null;
+  unrealized_pnl_pct?: string | null;
   total_dividends_eur?: string | null;
   holdings_by_account?: HoldingsByAccount[];
   recent_movements?: RecentMovement[];

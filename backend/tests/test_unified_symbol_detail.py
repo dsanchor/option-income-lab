@@ -215,6 +215,7 @@ def _add_ledger_buy(fake_cosmos, security_id: str, account_id: str = "_unassigne
         "quantity": quantity,
         "gross": {"amount": gross_eur, "currency": "EUR", "eur_amount": gross_eur},
         "fees": {"total": "0", "currency": "EUR", "total_eur": "0"},
+        "net": {"amount": gross_eur, "currency": "EUR", "eur_amount": gross_eur},
         "net_eur": gross_eur,
         "correction_status": "ACTIVE",
     }
@@ -242,6 +243,19 @@ def _add_ledger_sell(fake_cosmos, security_id: str, account_id: str = "_unassign
         "correction_status": "ACTIVE",
     }
     fake_cosmos.portfolio_container._store[doc["id"]] = doc
+
+
+def _pricing_cache(price_eur: str | None, *, status: str = "ok") -> dict:
+    return {
+        "raw_price": "120.00",
+        "quote_currency": "USD",
+        "price_major": "120.00",
+        "price_currency": "USD",
+        "fx_rate": "0.833333333",
+        "price_eur": price_eur,
+        "fetched_at": "2026-09-20T08:00:00Z",
+        "status": status,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -375,11 +389,108 @@ class TestWatchlistAndPortfolioState:
         portfolio = data.get("portfolio", {})
         # Required top-level portfolio fields per final contract
         for field in ("current_shares", "average_cost_eur", "current_invested_eur",
+                      "current_value_eur", "unrealized_pnl_eur", "unrealized_pnl_pct",
                       "total_dividends_eur", "holdings_by_account",
                       "recent_movements", "movement_count"):
             assert field in portfolio, (
                 f"portfolio section missing '{field}' — final contract requires this field"
             )
+
+    @pytest.mark.parametrize(
+        ("cost_basis", "expected_pnl", "expected_pct"),
+        [
+            ("800", "200.00", "25.00"),
+            ("1200", "-200.00", "-16.67"),
+            ("1000", "0.00", "0.00"),
+        ],
+    )
+    def test_portfolio_unrealized_pnl_positive_negative_and_zero(
+        self, client, cost_basis, expected_pnl, expected_pct
+    ):
+        c, fake = client
+        fake.container.seed_security("XNYS:AAPL", "Apple Inc.")
+        fake.container.seed_config(
+            "AAPL",
+            {
+                "security_id": "XNYS:AAPL",
+                "pricing_cache": _pricing_cache("100.00"),
+            },
+        )
+        _add_ledger_buy(
+            fake,
+            "XNYS:AAPL",
+            quantity="10",
+            gross_eur=cost_basis,
+        )
+
+        portfolio = c.get("/api/symbols/XNYS:AAPL/detail").json()["portfolio"]
+
+        assert portfolio["current_value_eur"] == "1000.00"
+        assert portfolio["unrealized_pnl_eur"] == expected_pnl
+        assert portfolio["unrealized_pnl_pct"] == expected_pct
+
+    def test_portfolio_valuation_uses_cached_eur_price_not_quote_price(self, client):
+        c, fake = client
+        fake.container.seed_security("XNYS:AAPL", "Apple Inc.")
+        fake.container.seed_config(
+            "AAPL",
+            {
+                "security_id": "XNYS:AAPL",
+                "pricing_cache": _pricing_cache("100.00"),
+            },
+        )
+        _add_ledger_buy(fake, "XNYS:AAPL", quantity="10", gross_eur="900")
+
+        portfolio = c.get("/api/symbols/XNYS:AAPL/detail").json()["portfolio"]
+
+        assert portfolio["current_value_eur"] == "1000.00"
+        assert portfolio["unrealized_pnl_eur"] == "100.00"
+        assert portfolio["unrealized_pnl_pct"] == "11.11"
+
+    @pytest.mark.parametrize(
+        "pricing_cache",
+        [
+            _pricing_cache(None),
+            _pricing_cache("100.00", status="error"),
+        ],
+    )
+    def test_portfolio_valuation_is_null_when_authoritative_price_unavailable(
+        self, client, pricing_cache
+    ):
+        c, fake = client
+        fake.container.seed_security("XSWX:NESN", "Nestlé")
+        fake.container.seed_config(
+            "NESN",
+            {
+                "security_id": "XSWX:NESN",
+                "pricing_cache": pricing_cache,
+            },
+        )
+        _add_ledger_buy(fake, "XSWX:NESN", quantity="10", gross_eur="900")
+
+        portfolio = c.get("/api/symbols/XSWX:NESN/detail").json()["portfolio"]
+
+        assert portfolio["current_value_eur"] is None
+        assert portfolio["unrealized_pnl_eur"] is None
+        assert portfolio["unrealized_pnl_pct"] is None
+
+    def test_zero_cost_basis_keeps_absolute_pnl_but_nulls_percentage(self, client):
+        c, fake = client
+        fake.container.seed_security("XNYS:FREE", "Zero Cost Holding")
+        fake.container.seed_config(
+            "FREE",
+            {
+                "security_id": "XNYS:FREE",
+                "pricing_cache": _pricing_cache("100.00"),
+            },
+        )
+        _add_ledger_buy(fake, "XNYS:FREE", quantity="10", gross_eur="0")
+
+        portfolio = c.get("/api/symbols/XNYS:FREE/detail").json()["portfolio"]
+
+        assert portfolio["current_value_eur"] == "1000.00"
+        assert portfolio["unrealized_pnl_eur"] == "1000.00"
+        assert portfolio["unrealized_pnl_pct"] is None
 
     def test_holdings_by_account_populated(self, client):
         """holdings_by_account must list each brokerage account with required fields.
@@ -501,6 +612,9 @@ class TestPortfolioHistoricalState:
         assert Decimal(portfolio["current_shares"]) == Decimal("0"), (
             "portfolio_historical symbol must have current_shares = 0"
         )
+        assert portfolio["current_value_eur"] is None
+        assert portfolio["unrealized_pnl_eur"] is None
+        assert portfolio["unrealized_pnl_pct"] is None
 
 
 # ---------------------------------------------------------------------------

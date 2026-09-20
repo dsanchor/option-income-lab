@@ -198,3 +198,19 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 - Recorded Linus's independently approved shared Avg Monthly Net chart line.
 - Removed all merged inbox items after consolidating them into the canonical
   decision log; no production, test, or product documentation files changed.
+
+### 2026-09-20 — Symbol Details holding P&L consolidation
+- Consolidated the Stocks-first navigation decision, authoritative cached-EUR
+  valuation/FIFO P&L contract, frontend display semantics, and Basher approval.
+- Removed the three merged inbox records after deduplication and preserved the
+  useful implementation notes already recorded in contributor histories.
+- Recorded 276 backend tests, 382 frontend tests, 4 edge probes, and all static,
+  build, compile, and diff checks as passing; no commit was created.
+
+### 2026-09-20 — Production backup schema incident consolidation
+- Recorded the production `SchemaError`, Livingston's read-only diagnosis,
+  Basher's rejection of the global identifier exemption, Rusty's exact-path
+  revision, and Basher's final approval.
+- Merged and deduplicated both decision inbox records, then removed them.
+- Preserved the deployment boundary: a new image is required because deployed
+  image `sha-1d368a4` does not contain the approved fix. No commit was created.

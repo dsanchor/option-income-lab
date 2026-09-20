@@ -7,8 +7,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 type TabId = "options" | "stocks" | "action-plans";
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: "options", label: "Options" },
   { id: "stocks", label: "Stocks" },
+  { id: "options", label: "Options" },
   { id: "action-plans", label: "Action Plans" },
 ];
 
@@ -43,7 +43,7 @@ interface Props {
  * (ArrowLeft / ArrowRight / Home / End).
  *
  * Hash behavior:
- * - On mount, reads window.location.hash and resolves to a tab
+ * - On mount and browser navigation, reads window.location.hash and resolves to a tab
  *   if the hash matches #options, #stocks, or #action-plans.
  * - On tab change, replaces the current history entry with the
  *   matching hash so bookmarks and browser back/forward work.
@@ -54,14 +54,23 @@ export default function SymbolDetailTabs({
   plansPanel,
   actions,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<TabId>("options");
+  const [activeTab, setActiveTab] = useState<TabId>("stocks");
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
-  // Resolve initial tab from URL hash on client mount (SSR-safe — hash is
-  // unavailable server-side, so we initialize to "options" and correct here).
+  // Resolve explicit deep links on mount and keep the selected panel aligned
+  // with browser back/forward navigation. Unknown or absent hashes use Stocks.
   useEffect(() => {
-    const resolved = HASH_TO_TAB[window.location.hash];
-    if (resolved && resolved !== "options") setActiveTab(resolved);
+    const syncTabFromLocation = () => {
+      setActiveTab(HASH_TO_TAB[window.location.hash] ?? "stocks");
+    };
+
+    syncTabFromLocation();
+    window.addEventListener("hashchange", syncTabFromLocation);
+    window.addEventListener("popstate", syncTabFromLocation);
+    return () => {
+      window.removeEventListener("hashchange", syncTabFromLocation);
+      window.removeEventListener("popstate", syncTabFromLocation);
+    };
   }, []);
 
   const handleTabChange = useCallback((id: TabId) => {

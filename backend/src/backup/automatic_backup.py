@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .blob_store import BlobLeaseBusyError, BlobStore
 from .export_service import ExportService
 from .models import AutomaticRunStatus, ExportRequest
+from .section_schemas import SchemaError
 
 
 @dataclass(frozen=True)
@@ -191,9 +192,14 @@ class AutomaticBackupService:
         except BlobLeaseBusyError:
             return self._status("ALREADY_RUNNING", run_id=run_id, local_date=local_date)
         except Exception as exc:
+            detail = (
+                exc.safe_detail()
+                if isinstance(exc, SchemaError)
+                else f"{type(exc).__name__}: backup operation failed"
+            )
             failure = self._status(
                 "FAILED", run_id=run_id, local_date=local_date,
-                detail=f"{type(exc).__name__}: backup operation failed",
+                detail=detail,
             )
             try:
                 previous_health = self.blobs.read_json("v1/control/health.json")

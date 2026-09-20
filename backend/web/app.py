@@ -850,6 +850,52 @@ def _round_decimal2(value: Decimal) -> float:
     return float(value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
+def _portfolio_valuation_fields(
+    holding: Optional[Dict[str, Any]],
+    pricing_cache: Optional[Dict[str, Any]],
+) -> Dict[str, Optional[str]]:
+    """Calculate authoritative EUR market value and unrealized P&L."""
+    result: Dict[str, Optional[str]] = {
+        "current_value_eur": None,
+        "unrealized_pnl_eur": None,
+        "unrealized_pnl_pct": None,
+    }
+    if not holding or not pricing_cache:
+        return result
+    if pricing_cache.get("status") not in ("ok", "stale"):
+        return result
+
+    shares = _decimal_or_none(holding.get("total_shares"))
+    price_eur = _decimal_or_none(pricing_cache.get("price_eur"))
+    if (
+        shares is None
+        or price_eur is None
+        or not shares.is_finite()
+        or not price_eur.is_finite()
+        or shares <= 0
+    ):
+        return result
+
+    current_value = (shares * price_eur).quantize(Decimal("0.01"))
+    result["current_value_eur"] = str(current_value)
+
+    remaining_cost = _decimal_or_none(
+        holding.get("remaining_cost_basis_eur", holding.get("current_invested_eur"))
+    )
+    if remaining_cost is None or not remaining_cost.is_finite():
+        return result
+
+    unrealized_pnl = (current_value - remaining_cost).quantize(Decimal("0.01"))
+    result["unrealized_pnl_eur"] = str(unrealized_pnl)
+    if remaining_cost > 0:
+        result["unrealized_pnl_pct"] = str(
+            ((unrealized_pnl / remaining_cost) * Decimal("100")).quantize(
+                Decimal("0.01")
+            )
+        )
+    return result
+
+
 def _build_holdings_snapshot_by_ticker(
     holdings_svc: Any,
     account_filter: Optional[List[str]] = None,
@@ -1436,19 +1482,10 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
         row["pricing_fetched_at"] = pc.get("fetched_at") if pc else None
         row["pricing_status"] = pc_status  # "ok" | "stale" | "error" | null
 
-        # current_value_eur: shares × price_eur (portfolio rows with shares > 0 only)
-        row["current_value_eur"] = None
-        if portfolio_shares_str is not None and row.get("price_eur") is not None:
-            try:
-                from decimal import Decimal as _D2
-                shares_d = _D2(str(portfolio_shares_str))
-                eur_d = _D2(str(row["price_eur"]))
-                if shares_d > 0:
-                    row["current_value_eur"] = str(
-                        (shares_d * eur_d).quantize(_D2("0.01"))
-                    )
-            except Exception:
-                pass
+        row["current_value_eur"] = _portfolio_valuation_fields(
+            holding,
+            pc,
+        )["current_value_eur"]
         # ──────────────────────────────────────────────────────────────────
 
         all_rows.append(row)
@@ -1915,10 +1952,12 @@ def _compute_symbol_detail(
                 except Exception:
                     pass
                 if holding:
+                    valuation = _portfolio_valuation_fields(holding, None)
                     portfolio_field = {
                         "current_shares": holding.get("total_shares"),
                         "average_cost_eur": holding.get("avg_cost_basis_eur"),
                         "current_invested_eur": holding.get("current_invested_eur"),
+                        **valuation,
                         "total_dividends_eur": holding.get("total_dividends_eur"),
                         "holdings_by_account": _holdings_by_account(
                             holdings_svc, security_id, holding
@@ -1931,6 +1970,9 @@ def _compute_symbol_detail(
                         "current_shares": "0",
                         "average_cost_eur": None,
                         "current_invested_eur": None,
+                        "current_value_eur": None,
+                        "unrealized_pnl_eur": None,
+                        "unrealized_pnl_pct": None,
                         "total_dividends_eur": None,
                         "holdings_by_account": [],
                         "recent_movements": recent_movs,
@@ -2146,10 +2188,15 @@ def _compute_symbol_detail(
                     pass
 
             if holding:
+                valuation = _portfolio_valuation_fields(
+                    holding,
+                    clean.get("pricing_cache"),
+                )
                 portfolio_field = {
                     "current_shares": holding.get("total_shares"),
                     "average_cost_eur": holding.get("avg_cost_basis_eur"),
                     "current_invested_eur": holding.get("current_invested_eur"),
+                    **valuation,
                     "total_dividends_eur": holding.get("total_dividends_eur"),
                     "holdings_by_account": _holdings_by_account(
                         holdings_svc, security_id_from_config, holding
@@ -2164,6 +2211,9 @@ def _compute_symbol_detail(
                     "current_shares": "0",
                     "average_cost_eur": None,
                     "current_invested_eur": None,
+                    "current_value_eur": None,
+                    "unrealized_pnl_eur": None,
+                    "unrealized_pnl_pct": None,
                     "total_dividends_eur": None,
                     "holdings_by_account": [],
                     "recent_movements": recent_movements,

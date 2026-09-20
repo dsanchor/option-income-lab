@@ -4,6 +4,7 @@ import json
 import re
 from collections.abc import Callable
 from copy import deepcopy
+from hashlib import sha256
 from typing import Any
 
 from .canonical import COSMOS_SYSTEM_KEYS, normalize
@@ -28,12 +29,13 @@ IDENTIFIER_KEYS = frozenset({
     "corrects_movement_id", "superseded_by", "paired_movement_id",
     "option_position_id", "isin", "cusip", "sedol", "idempotency_hash",
 })
+OPTION_POSITION_OPAQUE_IDENTIFIER_PATHS = frozenset({"$.source.activity_id"})
 
 RUNTIME_FIELDS = COSMOS_SYSTEM_KEYS | {
     "_active_positions", "_auto_enrolled", "_auto_enrolled_at",
     "_auto_enrolled_source",
     "last_run", "last_runs", "enrichment", "price", "pricing",
-    "total_shares", "portfolio_shares", "computed", "cache",
+    "pricing_cache", "total_shares", "portfolio_shares", "computed", "cache",
 }
 
 ACCOUNT_FIELDS = frozenset({
@@ -46,6 +48,7 @@ SECURITY_FIELDS = frozenset({
     "company_name", "display_name", "name", "exchange_mic", "mic",
     "asset_class", "listing_currency", "currency", "status", "aliases",
     "isin", "cusip", "sedol", "broker_ids", "provider_symbols",
+    "created_by_migration", "migrated_from", "migration_note",
     "created_at", "updated_at", "deleted_at",
 })
 SYMBOL_CONFIG_FIELDS = frozenset({
@@ -87,6 +90,7 @@ LEDGER_FIELDS = frozenset({
     "transfer_cost_basis_overridden", "transfer_fee", "transfer_peer_id",
     "source_derechos_amount", "sales_type_raw", "is_rights_sale",
     "correction_note", "void_reason", "superseded_by_ca_group_id",
+    "company_name", "warnings",
     "_repair_buy_fields_v1", "_repair_buy_fields_v2",
 })
 APP_SETTING_PATHS = frozenset({
@@ -113,20 +117,71 @@ FIELDS = {
 
 
 class SchemaError(ValueError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        section: str | None = None,
+        logical_identity: str | None = None,
+        issue: str | None = None,
+        fields: list[str] | set[str] | tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.section = section
+        self.identity_hash = (
+            sha256(str(logical_identity).encode("utf-8")).hexdigest()[:12]
+            if logical_identity is not None else None
+        )
+        self.issue = issue
+        self.fields = tuple(sorted({_sanitize_field_name(field) for field in fields}))
+
+    def safe_detail(self) -> str:
+        parts = []
+        if self.section:
+            parts.append(f"section={self.section}")
+        if self.identity_hash:
+            parts.append(f"identity_hash={self.identity_hash}")
+        if self.issue:
+            parts.append(f"issue={self.issue}")
+        if self.fields:
+            parts.append(f"fields={list(self.fields)!r}")
+        return (
+            f"SchemaError: {' '.join(parts)}"
+            if parts else "SchemaError: backup operation failed"
+        )
 
 
-def scan_for_secrets(value: Any, path: str = "$") -> list[str]:
+def _sanitize_field_name(field: str) -> str:
+    value = str(field)
+    if len(value) <= 100 and re.fullmatch(r"[A-Za-z0-9_$.\[\]<>-]+", value):
+        return value
+    return f"<field-hash:{sha256(value.encode('utf-8')).hexdigest()[:12]}>"
+
+
+def scan_for_secrets(
+    value: Any,
+    path: str = "$",
+    *,
+    allowed_opaque_identifier_paths: frozenset[str] = frozenset(),
+) -> list[str]:
     findings: list[str] = []
     if isinstance(value, dict):
         for key, item in value.items():
             child = f"{path}.{key}"
             if SECRET_KEY_RE.search(str(key)):
                 findings.append(child)
-            findings.extend(scan_for_secrets(item, child))
+            findings.extend(scan_for_secrets(
+                item,
+                child,
+                allowed_opaque_identifier_paths=allowed_opaque_identifier_paths,
+            ))
     elif isinstance(value, list):
         for index, item in enumerate(value):
-            findings.extend(scan_for_secrets(item, f"{path}[{index}]"))
+            findings.extend(scan_for_secrets(
+                item,
+                f"{path}[{index}]",
+                allowed_opaque_identifier_paths=allowed_opaque_identifier_paths,
+            ))
     elif isinstance(value, str):
         if SECRET_VALUE_RE.search(value):
             findings.append(path)
@@ -136,56 +191,122 @@ def scan_for_secrets(value: Any, path: str = "$") -> list[str]:
                 findings.append(f"{path}<unscannable-json>")
             else:
                 try:
-                    findings.extend(scan_for_secrets(json.loads(stripped), f"{path}<json>"))
+                    findings.extend(scan_for_secrets(
+                        json.loads(stripped),
+                        f"{path}<json>",
+                        allowed_opaque_identifier_paths=allowed_opaque_identifier_paths,
+                    ))
                 except (json.JSONDecodeError, TypeError):
                     findings.append(f"{path}<malformed-json>")
         leaf = re.split(r"[.\[]", path.rstrip("]"))[-1].casefold()
+        is_jwt = JWT_RE.fullmatch(stripped)
+        is_opaque = (
+            OPAQUE_RE.fullmatch(stripped)
+            and any(char.islower() for char in stripped)
+            and any(char.isupper() for char in stripped)
+            and any(char.isdigit() for char in stripped)
+        )
         if leaf not in IDENTIFIER_KEYS and (
-            JWT_RE.fullmatch(stripped)
+            is_jwt
             or (
-                OPAQUE_RE.fullmatch(stripped)
-                and any(char.islower() for char in stripped)
-                and any(char.isupper() for char in stripped)
-                and any(char.isdigit() for char in stripped)
+                is_opaque
+                and path not in allowed_opaque_identifier_paths
             )
         ):
             findings.append(f"{path}<opaque-token>")
     return findings
 
 
-def _project(doc: dict[str, Any], allowed: frozenset[str], *, section: str) -> dict[str, Any]:
+def _allowed_opaque_identifier_paths(section: str) -> frozenset[str]:
+    if section == "option_positions":
+        return OPTION_POSITION_OPAQUE_IDENTIFIER_PATHS
+    return frozenset()
+
+
+def _project(
+    doc: dict[str, Any],
+    allowed: frozenset[str],
+    *,
+    section: str,
+    logical_identity: str | None = None,
+) -> dict[str, Any]:
     unknown = set(doc) - allowed - RUNTIME_FIELDS
     if unknown:
-        raise SchemaError(f"{section} contains unknown fields: {sorted(unknown)}")
+        raise SchemaError(
+            f"{section} contains unknown fields: {sorted(unknown)}",
+            section=section,
+            logical_identity=logical_identity,
+            issue="unknown_fields",
+            fields=unknown,
+        )
     projected = {key: deepcopy(value) for key, value in doc.items() if key in allowed}
-    findings = scan_for_secrets(projected)
+    findings = scan_for_secrets(
+        projected,
+        allowed_opaque_identifier_paths=_allowed_opaque_identifier_paths(section),
+    )
     if findings:
-        raise SchemaError(f"{section} contains secret-like data at {findings[:5]}")
+        raise SchemaError(
+            f"{section} contains secret-like data at {findings[:5]}",
+            section=section,
+            logical_identity=logical_identity,
+            issue="secret_like_data",
+            fields=findings[:5],
+        )
     return normalize(projected)
 
 
 def project_account(doc: dict[str, Any]) -> dict[str, Any]:
-    result = _project(doc, ACCOUNT_FIELDS, section="accounts")
+    identity = doc.get("account_id") or doc.get("id")
+    result = _project(
+        doc, ACCOUNT_FIELDS, section="accounts", logical_identity=identity
+    )
     if result.get("doc_type") != "account" or not result.get("account_id"):
-        raise SchemaError("Invalid account identity")
+        raise SchemaError(
+            "Invalid account identity",
+            section="accounts",
+            logical_identity=identity,
+            issue="invalid_identity",
+            fields=("doc_type", "account_id"),
+        )
     return result
 
 
 def project_security(doc: dict[str, Any]) -> dict[str, Any]:
-    result = _project(doc, SECURITY_FIELDS, section="securities")
+    identity = doc.get("security_id") or doc.get("id")
+    result = _project(
+        doc, SECURITY_FIELDS, section="securities", logical_identity=identity
+    )
     if result.get("doc_type") != "security_master" or not result.get("security_id"):
-        raise SchemaError("Invalid security identity")
+        raise SchemaError(
+            "Invalid security identity",
+            section="securities",
+            logical_identity=identity,
+            issue="invalid_identity",
+            fields=("doc_type", "security_id"),
+        )
     return result
 
 
 def project_symbol_config(doc: dict[str, Any]) -> dict[str, Any]:
     source = dict(doc)
     source.pop("positions", None)
-    result = _project(source, SYMBOL_CONFIG_FIELDS, section="symbol_configs")
+    identity = doc.get("security_id") or doc.get("symbol") or doc.get("id")
+    result = _project(
+        source,
+        SYMBOL_CONFIG_FIELDS,
+        section="symbol_configs",
+        logical_identity=identity,
+    )
     if result.get("doc_type") != "symbol_config" or not (
         result.get("security_id") or result.get("symbol")
     ):
-        raise SchemaError("Invalid symbol config identity")
+        raise SchemaError(
+            "Invalid symbol config identity",
+            section="symbol_configs",
+            logical_identity=identity,
+            issue="invalid_identity",
+            fields=("doc_type", "security_id", "symbol"),
+        )
     return result
 
 
@@ -202,7 +323,16 @@ def project_positions(doc: dict[str, Any], include_paper: bool) -> list[dict[str
             "position_kind": "paper" if is_paper else "real",
         }
         projected.pop("is_paper", None)
-        records.append(_project(projected, POSITION_FIELDS, section="option_positions"))
+        identity = (
+            f"{doc.get('security_id') or doc.get('symbol')}|"
+            f"{position.get('position_id')}"
+        )
+        records.append(_project(
+            projected,
+            POSITION_FIELDS,
+            section="option_positions",
+            logical_identity=identity,
+        ))
     return records
 
 
@@ -210,18 +340,44 @@ def project_ledger(doc: dict[str, Any], include_source_row: bool) -> dict[str, A
     source = dict(doc)
     if not include_source_row:
         source.pop("source_row", None)
-    result = _project(source, LEDGER_FIELDS, section="ledger_movements")
+    identity = f"{doc.get('account_id')}|{doc.get('id')}"
+    result = _project(
+        source,
+        LEDGER_FIELDS,
+        section="ledger_movements",
+        logical_identity=identity,
+    )
     if result.get("doc_type") != "ledger_txn" or not result.get("account_id") or not result.get("id"):
-        raise SchemaError("Invalid ledger identity")
+        raise SchemaError(
+            "Invalid ledger identity",
+            section="ledger_movements",
+            logical_identity=identity,
+            issue="invalid_identity",
+            fields=("doc_type", "account_id", "id"),
+        )
     return result
 
 
 def project_action_plan(doc: dict[str, Any]) -> dict[str, Any]:
     source = dict(doc)
     source.pop("agent_notes", None)
-    result = _project(source, ACTION_PLAN_FIELDS, section="action_plans")
+    identity = (
+        f"{doc.get('security_id') or doc.get('symbol')}|{doc.get('id')}"
+    )
+    result = _project(
+        source,
+        ACTION_PLAN_FIELDS,
+        section="action_plans",
+        logical_identity=identity,
+    )
     if result.get("doc_type") != "action_plan" or not result.get("id"):
-        raise SchemaError("Invalid action plan identity")
+        raise SchemaError(
+            "Invalid action plan identity",
+            section="action_plans",
+            logical_identity=identity,
+            issue="invalid_identity",
+            fields=("doc_type", "id"),
+        )
     return result
 
 
@@ -234,11 +390,23 @@ def project_settings(settings: dict[str, Any]) -> list[dict[str, Any]]:
         nested = APP_SETTING_NESTED_ALLOW.get(path)
         if nested is not None:
             if not isinstance(value, dict):
-                raise SchemaError(f"Setting {path} must be an object")
+                raise SchemaError(
+                    f"Setting {path} must be an object",
+                    section="app_settings",
+                    logical_identity=path,
+                    issue="invalid_shape",
+                    fields=(path,),
+                )
             value = {key: value[key] for key in nested if key in value}
         findings = scan_for_secrets(value, f"$.{path}")
         if findings:
-            raise SchemaError(f"Setting {path} contains secret-like data at {findings[:5]}")
+            raise SchemaError(
+                f"Setting {path} contains secret-like data at {findings[:5]}",
+                section="app_settings",
+                logical_identity=path,
+                issue="secret_like_data",
+                fields=findings[:5],
+            )
         records.append({"path": path, "value": normalize(value)})
     return records
 
@@ -287,6 +455,9 @@ def validate_record(section: str, record: dict[str, Any]) -> None:
     if unknown:
         raise SchemaError(f"{section} contains unknown fields: {sorted(unknown)}")
     logical_key(section, record)
-    findings = scan_for_secrets(record)
+    findings = scan_for_secrets(
+        record,
+        allowed_opaque_identifier_paths=_allowed_opaque_identifier_paths(section),
+    )
     if findings:
         raise SchemaError(f"{section} contains secret-like data at {findings[:5]}")

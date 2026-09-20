@@ -81,3 +81,24 @@
 - Confirmed environment-only automatic configuration, DST/due gating, scheduled upload/no-change/failure behavior, manual execution, latest recovery, Blob health/run persistence, archive/import paths, CLI wiring, and documentation remain intact.
 - Validation passed: 58 backup/infrastructure tests, 11 frontend backup contracts, Python compile, shell syntax/help, YAML/config authority checks, documentation searches, and `git diff --check`.
 - Final verdict: APPROVE. The combined backup configuration revision is safe to commit; live Azure acceptance remains a deployment check.
+
+### 2026-09-20 — Symbol Details holding P&L approved
+- Approved the additive nullable Symbol Details EUR valuation/P&L contract and Stocks-first tab revision.
+- Confirmed the backend reuses the cached Symbols Overview EUR price and the existing holdings snapshot/FIFO residual basis without provider calls or per-row queries; unavailable/non-finite valuation, closed holdings, and zero/non-positive denominators remain null rather than producing misleading values.
+- Confirmed the holdings UI consumes backend P&L fields directly, formats signed positive/negative and neutral zero values, and exposes non-color ARIA gain/loss/unavailable semantics.
+- Confirmed Stocks → Options → Action Plans ordering/default while explicit hashes, query strings, and browser hash/history synchronization remain intact.
+- Validation passed: 276 backend regressions, 382 frontend contracts, 4 independent valuation probes, TypeScript, changed-file ESLint, production build, Python compile, and `git diff --check`.
+- Final verdict: APPROVE. No blockers; safe to commit.
+
+### 2026-09-20 — Production backup schema alignment rejected
+- Confirmed the added security migration fields and ledger company/warning fields are persisted authoritative/reference data, `pricing_cache` is omitted from exported symbol configs, unknown fields remain fail-closed, and automatic schema diagnostics expose only section, hashed logical identity, issue, and sanitized field paths.
+- Rejected because adding `activity_id` and `source_activity_id` to the global leaf-name identifier allowlist suppresses JWT/opaque-token detection at any nested path with either name. An independent probe showed `metadata.activity_id=<JWT>` and top-level `source_activity_id=<JWT>` both pass, exceeding the required narrow exception for position provenance `source.activity_id`.
+- Validation passed: 59 focused backup/infrastructure tests, 110 migration/security/pricing persistence regressions (3 pre-existing warnings), Python compile, and `git diff --check`. Independent secret-scanner probes reproduced the scope defect.
+- Livingston is locked out from the next repair. Rusty is assigned as the different revision author. Verdict: REJECT; unsafe to commit or deploy until the exception is path-scoped and regression tests prove token/JWT/credential detection remains active everywhere else.
+
+### 2026-09-20 — Rusty production backup schema revision approved
+- Approved the narrow secret-scanner repair: no global `activity_id` or `source_activity_id` exemption remains, and only opaque non-JWT provenance at the exact option-position path `$.source.activity_id` is permitted.
+- Confirmed JWTs, bearer/account-key values, credential keys, adjacent source fields, settings, ledger warnings, and arbitrary structures remain rejected; projection and archive validation use the same section-scoped rule.
+- Confirmed the legitimate security migration and ledger fields remain, `pricing_cache` remains stripped, diagnostics remain value-free, production-shaped export remains viable, and the separately approved Symbol Details P&L/tab changes are untouched.
+- Validation passed: 69 focused backup/infrastructure tests, 218 migration/security/pricing persistence regressions (4 pre-existing warnings), 71 Symbol Details backend regressions (3 pre-existing warnings), 78 frontend contracts, independent secret-rule probes, Python compile, and `git diff --check`.
+- Final verdict: APPROVE. Safe to commit. Production requires building and deploying a new image containing this revision before retrying the read-only export; the currently deployed image remains unfixed.

@@ -2,8 +2,8 @@
  * symbolDetailTabsContract.test.mjs — Three-tab Symbol Details redesign.
  *
  * Requirements (2026-09-07 directive):
- *   TB — Tablist: exactly 3 tabs in order (Options, Stocks, Action Plans);
- *        Options default; correct tab IDs and labels.
+ *   TB — Tablist: exactly 3 tabs in order (Stocks, Options, Action Plans);
+ *        Stocks default; correct tab IDs and labels.
  *   TA — ARIA/tablist/tab/tabpanel semantics; aria-selected, aria-controls,
  *        aria-labelledby; tabIndex roving; type="button".
  *   KB — Keyboard: ArrowRight/Left cycle; Home/End jump; preventDefault.
@@ -73,16 +73,16 @@ describe("TB: Tab definitions — three tabs in correct order", () => {
       "Required: Options, Stocks, Action Plans.");
   });
 
-  it("TB-2: First tab is Options (id='options')", () => {
+  it("TB-2: First tab is Stocks (id='stocks')", () => {
     const first = tabsSrc.match(/\{\s*id:\s*["']([^"']+)["']/)?.[1];
-    assert.equal(first, "options",
-      `TB-2 DEFECT: First tab id must be 'options'; found '${first}'.`);
+    assert.equal(first, "stocks",
+      `TB-2 DEFECT: First tab id must be 'stocks'; found '${first}'.`);
   });
 
-  it("TB-3: Second tab is Stocks (id='stocks')", () => {
+  it("TB-3: Second tab is Options (id='options')", () => {
     const allIds = [...tabsSrc.matchAll(/\{\s*id:\s*["']([^"']+)["']/g)].map(m => m[1]);
-    assert.equal(allIds[1], "stocks",
-      `TB-3 DEFECT: Second tab id must be 'stocks'; found '${allIds[1]}'.`);
+    assert.equal(allIds[1], "options",
+      `TB-3 DEFECT: Second tab id must be 'options'; found '${allIds[1]}'.`);
   });
 
   it("TB-4: Third tab is Action Plans (id='action-plans')", () => {
@@ -91,19 +91,19 @@ describe("TB: Tab definitions — three tabs in correct order", () => {
       `TB-4 DEFECT: Third tab id must be 'action-plans'; found '${allIds[2]}'.`);
   });
 
-  it("TB-5: Tab labels are 'Options', 'Stocks', 'Action Plans' in that order", () => {
+  it("TB-5: Tab labels are 'Stocks', 'Options', 'Action Plans' in that order", () => {
     const labels = [...tabsSrc.matchAll(/label:\s*["']([^"']+)["']/g)].map(m => m[1]);
-    assert.deepEqual(labels, ["Options", "Stocks", "Action Plans"],
-      `TB-5 DEFECT: Tab labels must be ["Options","Stocks","Action Plans"]; found ${JSON.stringify(labels)}.`);
+    assert.deepEqual(labels, ["Stocks", "Options", "Action Plans"],
+      `TB-5 DEFECT: Tab labels must be ["Stocks","Options","Action Plans"]; found ${JSON.stringify(labels)}.`);
   });
 
-  it("TB-6: Default active tab is 'options' (useState initialised with 'options')", () => {
+  it("TB-6: Default active tab is 'stocks' (useState initialised with 'stocks')", () => {
     assert.ok(
-      tabsSrc.includes('useState<TabId>("options")') ||
-      tabsSrc.includes("useState('options')") ||
-      tabsSrc.includes('useState("options")'),
-      'TB-6 DEFECT: Default active tab must be "options". ' +
-      'Found no useState("options") initialiser — Options tab will not be selected by default.'
+      tabsSrc.includes('useState<TabId>("stocks")') ||
+      tabsSrc.includes("useState('stocks')") ||
+      tabsSrc.includes('useState("stocks")'),
+      'TB-6 DEFECT: Default active tab must be "stocks". ' +
+      'Found no useState("stocks") initialiser — Stocks tab will not be selected by default.'
     );
   });
 });
@@ -266,7 +266,7 @@ describe("HR: Hash deep-links — #options/#stocks/#action-plans", () => {
 
   it("HR-4: Unknown hash returns undefined (no crash, default tab stays)", () => {
     assert.equal(HASH_TO_TAB["#unknown"], undefined,
-      "HR-4: An unrecognised hash must not resolve to a tab — default 'options' is kept.");
+      "HR-4: An unrecognised hash must not resolve to a tab — default 'stocks' is kept.");
   });
 
   it("HR-5: Source reads window.location.hash in useEffect on mount", () => {
@@ -293,6 +293,25 @@ describe("HR: Hash deep-links — #options/#stocks/#action-plans", () => {
       tabsSrc.includes('"#action-plans"'),
       "HR-7 DEFECT: HASH_TO_TAB must map all three hashes; one or more are missing."
     );
+  });
+
+  it("HR-8: explicit Options and Action Plans hashes override the Stocks default", () => {
+    assert.equal(HASH_TO_TAB["#options"] ?? "stocks", "options");
+    assert.equal(HASH_TO_TAB["#action-plans"] ?? "stocks", "action-plans");
+  });
+
+  it("HR-9: browser hash and history navigation resynchronise the selected tab", () => {
+    assert.match(tabsSrc, /addEventListener\(["']hashchange["']/);
+    assert.match(tabsSrc, /addEventListener\(["']popstate["']/);
+    assert.match(tabsSrc, /removeEventListener\(["']hashchange["']/);
+    assert.match(tabsSrc, /removeEventListener\(["']popstate["']/);
+    assert.match(tabsSrc, /HASH_TO_TAB\[window\.location\.hash\]\s*\?\?\s*["']stocks["']/);
+  });
+
+  it("HR-10: changing tabs preserves the existing query string while replacing only the hash", () => {
+    assert.match(tabsSrc, /new URL\(window\.location\.href\)/);
+    assert.match(tabsSrc, /url\.hash = id/);
+    assert.match(tabsSrc, /window\.history\.replaceState\(null,\s*["']["'],\s*url\.toString\(\)\)/);
   });
 });
 

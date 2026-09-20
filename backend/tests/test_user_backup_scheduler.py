@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from hashlib import sha256
 
 from src.backup.automatic_backup import (
     AutomaticBackupConfig,
@@ -8,6 +9,7 @@ from src.backup.automatic_backup import (
 from src.backup.blob_store import BlobStore
 from src.backup.collectors import CosmosBackupCollector
 from src.backup.export_service import ExportService
+from src.backup.section_schemas import project_ledger
 
 from .user_backup_fakes import FakeBlobContainer, populated_cosmos
 
@@ -80,6 +82,36 @@ def test_scheduled_failure_preserves_prior_success_and_latest_archive():
     assert health["last_scheduled_success"] == before["last_scheduled_success"]
     assert health["latest_changed_archive"] == before["latest_changed_archive"]
     assert health["latest_changed_archive"]["run_id"] == success.run_id
+
+
+def test_schema_failure_reports_only_sanitized_context():
+    blobs = BlobStore(FakeBlobContainer())
+
+    class FailingExporter:
+        def preview(self, request):
+            project_ledger({
+                "id": "txn-sensitive",
+                "account_id": "acct-sensitive",
+                "doc_type": "ledger_txn",
+                "future_field": "must not reach automatic backup output",
+            }, include_source_row=False)
+
+    service = AutomaticBackupService(FailingExporter(), blobs, CFG)
+    failure = service.run(
+        trigger="manual",
+        now_utc=datetime(2026, 9, 20, 1, 0, tzinfo=timezone.utc),
+    )
+
+    expected_hash = sha256(
+        b"acct-sensitive|txn-sensitive"
+    ).hexdigest()[:12]
+    assert failure.detail == (
+        "SchemaError: section=ledger_movements "
+        f"identity_hash={expected_hash} issue=unknown_fields "
+        "fields=['future_field']"
+    )
+    assert "must not reach" not in failure.detail
+    assert "sensitive" not in failure.detail
 
 
 def test_scheduled_no_change_is_success_without_replacing_latest_archive():

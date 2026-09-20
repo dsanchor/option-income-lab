@@ -16,6 +16,11 @@
 
 ## Recent Learnings
 
+### 2026-09-20 — Secret exceptions must be structural and value-specific
+- Production option-position provenance can contain an opaque-looking identifier at projected path `$.source.activity_id`; exempt that exact path only from opaque-token heuristics.
+- Do not exempt `activity_id` or `source_activity_id` globally, and do not exempt JWTs, explicit credential patterns, adjacent source fields, or the same names in settings/ledger/arbitrary structures.
+- Apply the same scoped scanner policy during projection and archive validation so valid exports remain readable without opening a validation bypass.
+
 ### 2026-09-20 — Automatic backup configuration authority
 - The Azure Container Apps Job environment is the only production runtime source for automatic-backup enabled/timezone/local-time/schedule-name values; `AutomaticBackupConfig.from_environment()` is the reader.
 - `configure-backup.sh` owns the Azure cron and Job environment. General application YAML, API/BFF routes, and frontend Settings must not expose a second automatic configuration/status authority; `.env.example` is local documentation only.

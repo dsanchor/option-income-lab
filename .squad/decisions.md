@@ -8896,3 +8896,86 @@ frontend backup contract tests**, repository surface checks, Python compile,
 checks, and `git diff --check`.
 
 Live Azure execution remains a separate deployment acceptance check.
+## Symbol Details — Stocks-First Navigation and Authoritative Holding P&L
+
+**Date:** 2026-09-20
+**Status:** APPROVED
+**Requested by:** dsanchor
+
+### Decision
+
+- Symbol Details tabs are ordered **Stocks → Options → Action Plans**, with
+  Stocks as the default when no recognized hash is present.
+- Exact `#stocks`, `#options`, and `#action-plans` hashes override the default.
+  Hash/history synchronization preserves query parameters.
+- `GET /api/symbols/{symbol}/detail` exposes nullable decimal-string fields in
+  `portfolio`: `current_value_eur`, `unrealized_pnl_eur`, and
+  `unrealized_pnl_pct`.
+- Valuation reuses the authoritative Symbols Overview cached EUR price for
+  accepted `ok` or `stale` cache states and the existing positive FIFO holding
+  shares. Unrealized P&L subtracts `remaining_cost_basis_eur`.
+- Closed/non-positive-share or unavailable/non-finite valuations return all
+  three fields as `null`. A known zero/non-positive basis may retain numeric
+  current value and absolute P&L, but percentage remains `null`.
+- The frontend consumes the backend P&L fields directly; it must not derive EUR
+  P&L from quote-currency enrichment prices. Signed gain/loss/neutral display
+  includes non-color ARIA semantics.
+
+### Validation
+
+Basher approved the integrated change with no blockers: 276 backend tests, 382
+frontend tests, and 4 independent valuation edge probes passed, together with
+TypeScript, changed-file ESLint, production build, Python compile, and
+`git diff --check`. The build retained one existing generated-CSS parser
+warning.
+
+## Production Backup Schema Drift and Scoped Provenance Exception
+
+**Date:** 2026-09-20
+**Status:** APPROVED — NEW IMAGE REQUIRED
+**Requested by:** dsanchor
+
+### Incident and diagnosis
+
+The deployed backup image raised a production `SchemaError` because the
+fail-closed projector had not yet classified legitimate persisted fields:
+
+- security migration provenance: `created_by_migration`, `migrated_from`, and
+  `migration_note`;
+- ledger presentation/audit data: `company_name` and `warnings`;
+- runtime-only `symbol_config.pricing_cache`, which must be excluded.
+
+The option-position provenance field `$.source.activity_id` also triggered an
+opaque-token false positive. Livingston retained fail-closed unknown-field and
+secret handling, added value-free diagnostics, and proved a complete read-only
+production preview/archive build using the existing Container Apps Job secret
+references.
+
+### Rejection and revision
+
+Basher rejected the initial global exemption for leaf names `activity_id` and
+`source_activity_id`. Independent probes showed that unrelated
+`metadata.activity_id` and top-level `source_activity_id` JWT/opaque-token
+values could evade detection. Livingston was locked out from the repair.
+
+Rusty removed the global exemption. The only exception is now an opaque,
+non-JWT identifier at the exact projected option-position path
+`$.source.activity_id`. JWTs, bearer/account-key values, credential-shaped
+keys, adjacent source fields, settings, ledger warnings, and arbitrary paths
+remain blocked. Projection and archive validation share the same
+section-scoped rule, and diagnostics expose no rejected values.
+
+### Final gate and deployment
+
+Basher approved the revision after:
+
+- 69 focused backup/infrastructure tests;
+- 218 migration/security/pricing persistence regressions;
+- 71 Symbol Details backend regressions;
+- 78 Symbol Details frontend contracts;
+- independent projection/archive and adversarial secret probes;
+- Python compilation and `git diff --check`.
+
+The fix is safe to commit and deploy. Production must build, publish, and
+deploy a new application/job image before retrying the read-only export.
+The currently deployed `sha-1d368a4` image remains unfixed.
