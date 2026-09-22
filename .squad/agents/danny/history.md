@@ -110,3 +110,11 @@
   block and assignable scope, fail closed on drift, never overwrite an
   administrator-managed definition, and verify the assignment by exact role ID
   and exact container scope.
+
+### 2026-09-22 — Dashboard trigger slot concurrency revision
+- In-flight trigger slots use the dashboard run ID as an immutable ownership
+  token; completion removes a slot only when that run still owns the current
+  agent/symbol record, so an expired worker cannot release its replacement.
+- Trigger slots and run-status data now live in one eagerly initialized process
+  state object, with an atomic fallback initializer for isolated TestClient
+  state, eliminating split lazy-registry/lock initialization.

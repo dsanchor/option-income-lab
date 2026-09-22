@@ -27,6 +27,11 @@
 
 ## Learnings
 
+### 2026-09-22 — Scrip FMV authority boundary
+- Corporate-action create and group correction must share one fail-closed normalizer for `SHARE_ACQUISITION` FMV; client-provided `cost_basis_status` is advisory and must be replaced by the server-derived state.
+- Blank authoritative EUR FMV is `INCOMPLETE`, explicit zero is `ZERO_COST`, and a positive finite value is `COMPLETE`; negative, non-finite, and malformed supplied amounts are validation errors rather than zero.
+- For non-EUR share FMV, `gross.eur_amount` is the authority. A valid native amount without EUR conversion remains preserved but incomplete.
+
 ### 2026-09-20 — Legacy `_unassigned` backup round-trip (2026-09-20T16:32:21Z implementation)
 - Backup dependency closure must treat `_unassigned` as a virtual account partition, not as a missing account document: exports must omit synthetic account creation and imports must accept the reference.
 - The exemption belongs in the shared dependency validator used by validate, dry-run, apply preflight/recheck, and postflight; every other account ID remains subject to strict existence checks.
@@ -52,6 +57,12 @@
 ### 2026-09-20 — Automatic-backup single-source cleanup
 - A removed public status surface must also be removed from internal services and tests; leaving an unreachable presenter creates a misleading second authority even without production callers.
 - Scheduler tests should assert durable Blob health/run/latest records and actual scheduled/manual outcomes directly, rather than reconstructing those records through a presentation method.
+
+### 2026-09-22 — Dashboard run-state concurrency
+- Dashboard execution state must be keyed by a server run UUID, not only by agent: same-agent runs for different symbols can finish out of order without cross-contaminating symbol/error state.
+- All run creation, completion, snapshotting, and retention happen under one `threading.Lock`; completion is guarded by run ID and running state.
+- Per-agent status deterministically reflects the newest-started retained attempt, while `last_run` is separate sticky successful-completion state and survives later running/failed attempts.
+- Retain a bounded newest set of completed process-local runs while exempting active runs; clients poll their returned run ID and never equate accepted enqueue with success.
 
 ### 2026-09-19 — Frontend automatic-backup status contract revision
 - `last_scheduled_success` is a run-record object and `latest_changed_archive` is an archive-pointer object; frontend status types must preserve those shapes rather than coercing them to strings.

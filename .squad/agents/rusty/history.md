@@ -16,6 +16,15 @@
 
 ## Recent Learnings
 
+### 2026-09-22 — Dashboard trigger startup is transactional
+- Treat both `threading.Thread(...)` construction and `thread.start()` as fallible setup: a run is not truthfully `triggered` until `start()` returns successfully.
+- On startup failure, mark the exact run failed, release only its run-ID-owned trigger slot, and return an explicit retryable non-success response; the worker retains sole cleanup ownership after a successful start.
+
+### 2026-09-22 — Dashboard per-agent trigger observability
+- Agents HQ per-agent triggers bypass `TaskRegistry` intentionally, so their completion must be tracked separately rather than mutating the Settings `monitor_agents` task's `last_run`.
+- Background runner exceptions must escape the runner helper into the trigger wrapper; otherwise the API reports a trigger while failures are silently discarded and no status timestamp can advance.
+- `/api/dashboard/status` now merges scheduler-task timestamps with per-agent dashboard execution state, setting `last_run` only on successful completion and exposing failures explicitly.
+
 ### 2026-09-20 — Daily Azure backup cron
 - The Container Apps Job uses `15 23 * * *`: once daily at 23:15 UTC, which is 00:15 Europe/Madrid in standard time and 01:15 during daylight-saving time.
 - The application's local-date, due-time, and idempotency checks remain retry/manual-run safety guards; they are not an infrastructure polling mechanism.
