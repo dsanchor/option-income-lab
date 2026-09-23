@@ -16,6 +16,14 @@
 
 ## Recent Learnings
 
+### 2026-09-23 — Global Monitoring Agent member gates
+- Store per-member gates under `scheduler.agents`; only an explicit boolean `false` disables a member, so missing, legacy, or malformed values preserve enabled behavior.
+- Enforce the gate at both orchestration boundaries: the scheduler/full-analysis loops skip disabled members, while direct dashboard per-agent triggers return an explicit `409 disabled` response.
+- Settings saves update Cosmos, YAML compatibility state, and the live scheduler config so gates take effect without restart; dashboard status exposes the same effective gate map.
+- The main dashboard carries the effective backend gate on each agent table; disabled sections and their rows are visibly dimmed and expose `Deactivated globally` plus ARIA disabled/described-by semantics without changing symbol enrollment.
+- At scheduler startup, omit `scheduler.agents` from YAML defaults before merging Cosmos settings, then replacement-normalize from the effective persisted snapshot; this prevents stale local false values from being re-seeded when Cosmos omits or malforms the block.
+- In web-only mode, dashboard payload and status polling must resolve gates through the same scheduler-or-Cosmos-or-YAML authority so persisted gate changes alter the AutoRefresh signature without frontend-local state.
+
 ### 2026-09-22 — Dashboard trigger startup is transactional
 - Treat both `threading.Thread(...)` construction and `thread.start()` as fallible setup: a run is not truthfully `triggered` until `start()` returns successfully.
 - On startup failure, mark the exact run failed, release only its run-ID-owned trigger slot, and return an explicit retryable non-success response; the worker retains sole cleanup ownership after a successful start.

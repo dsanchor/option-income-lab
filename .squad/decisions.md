@@ -2,6 +2,44 @@
 
 ## Active Decisions
 
+### Global Monitoring Agent member gates
+
+**Date:** 2026-09-23
+**Status:** IMPLEMENTED AND APPROVED
+**Requested by:** Copilot
+
+#### Decision
+
+- The five Monitoring Agent member gates are persisted under `scheduler.agents`.
+- Global member configuration is authoritative over per-symbol enrollment. An explicit
+  global `false` prevents that member from running for every symbol without mutating
+  any symbol's enrollment.
+- Missing, malformed, or non-boolean member values default to enabled. Loading and
+  reloading are replacement operations, so stale disabled state cannot survive an
+  absent or invalid persisted block.
+- Scheduled runs, full/manual analysis, Settings Run Now, unified scheduler Run Now,
+  and direct dashboard triggers all enforce the same global gates. Direct disabled
+  triggers return HTTP 409 with `status: "disabled"` before allocating a trigger slot
+  or run record.
+- The master `scheduler.enabled` switch remains a separate authority for the whole
+  scheduled task.
+- Globally disabled agent sections, positions, and symbols are dimmed on the main
+  dashboard. Their Last run display is replaced by `Deactivated globally`, with
+  native/ARIA-disabled controls and a non-color accessibility signal.
+- Scheduler-backed and web-only dashboard status resolve the same effective
+  scheduler-to-Cosmos-to-YAML authority, ensuring persisted changes update polling
+  signatures without refresh loops.
+
+#### Approval evidence
+
+Basher rejected the first revision because live reload retained stale disabled state,
+then rejected the second revision because startup could re-seed stale YAML gates and
+web-only status omitted persisted gates. The third revision received **APPROVE** after
+74 focused backend tests, 6 frontend contracts, independent all-five-member probes,
+TypeScript, changed-file ESLint, Python compilation, changed-test Ruff, and
+`git diff --check` passed. The only noted app Ruff F821 finding reproduced unchanged
+against `HEAD`.
+
 ### Livingston — Dividends economics ambiguity note
 
 ## Date

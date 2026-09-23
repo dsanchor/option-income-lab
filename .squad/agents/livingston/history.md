@@ -27,6 +27,11 @@
 
 ## Learnings
 
+### 2026-09-23 — Monitoring gate replacement normalization
+- Persisted `scheduler.agents` is replacement state, not a partial patch: every effective load/reload rebuilds exactly the five member gates.
+- Only explicit booleans survive normalization; missing blocks, malformed blocks, missing members, and non-boolean members default to enabled, so a stale in-memory `false` cannot survive a replacement reload.
+- Settings saves replace only `scheduler.agents` while preserving unrelated scheduler fields, and dashboard controls must be natively/ARIA disabled with a distinct `Deactivated globally` 409 state.
+
 ### 2026-09-23 — Cross-account FIFO aggregation
 - Consolidated symbol holdings must preserve FIFO independently per account; a sale or transfer-out can consume only that account's lots.
 - Aggregate remaining shares and FIFO residual cost basis are sums of account residuals, and aggregate average cost is residual basis divided by aggregate remaining shares; never run FIFO over a pooled cross-account lot queue.
