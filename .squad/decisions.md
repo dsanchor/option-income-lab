@@ -8127,3 +8127,41 @@ cases, after which Basher approved the scrip gate.
   further RBAC correction was necessary and that this review must not block
   the remaining changes. The RBAC concerns therefore remain documented
   operational hardening, not a release blocker.
+
+## Account-Local FIFO Aggregation and Dividend-Derived Buy Labels
+
+**Date:** 2026-09-23
+**Status:** APPROVED
+**Owners:** Livingston (holdings), Linus (labels), Basher (review)
+
+### Account-local FIFO
+
+FIFO lot depletion is isolated by account. Consolidated symbol holdings are
+calculated by computing each account's residual shares and FIFO cost basis
+independently, summing those residuals, and dividing aggregate basis by aggregate
+shares for average cost. Activity in one account must never consume lots held in
+another account.
+
+Zero-cost scrip shares remain in the aggregate share denominator. Any remaining
+account component with incomplete basis keeps the consolidated basis explicitly
+incomplete. Cross-account transfer preservation passed an independent probe,
+but a committed regression test for that scenario remains a non-blocking gap.
+
+### Dividend-derived share-acquisition label
+
+User-facing movement labels combine the stored `txn_type` with authoritative
+corporate-action metadata. A `BUY` is displayed as `Dividend · Buy` only when
+`ca_leg_type` is `SHARE_ACQUISITION` and `ca_event_type` is `SCRIP_DIVIDEND` or
+`DIVIDEND_WITH_SCRIP`.
+
+This rule is presentation-only and shared across all six movement surfaces.
+Stored transaction types, persistence, APIs, filters, badge classification, and
+accounting remain unchanged. Rights acquisitions, ordinary buys, cash-dividend
+legs, and movements lacking the required metadata retain their base labels.
+
+### Review disposition
+
+Basher's final verdicts are **HOLDINGS APPROVE** and **LABELS APPROVE**. Focused
+validation covered account-isolated FIFO, aggregate residual cost, zero-cost and
+incomplete basis behavior, the Microsoft regression, label edge cases, shared
+surface adoption, TypeScript, changed-file lint, and diff hygiene.

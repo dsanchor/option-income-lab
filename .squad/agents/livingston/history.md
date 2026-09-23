@@ -27,6 +27,11 @@
 
 ## Learnings
 
+### 2026-09-23 — Cross-account FIFO aggregation
+- Consolidated symbol holdings must preserve FIFO independently per account; a sale or transfer-out can consume only that account's lots.
+- Aggregate remaining shares and FIFO residual cost basis are sums of account residuals, and aggregate average cost is residual basis divided by aggregate remaining shares; never run FIFO over a pooled cross-account lot queue.
+- Zero-cost scrip remains in the aggregate share denominator, while incomplete-cost holdings retain their explicit incomplete status.
+
 ### 2026-09-22 — Scrip FMV authority boundary
 - Corporate-action create and group correction must share one fail-closed normalizer for `SHARE_ACQUISITION` FMV; client-provided `cost_basis_status` is advisory and must be replaced by the server-derived state.
 - Blank authoritative EUR FMV is `INCOMPLETE`, explicit zero is `ZERO_COST`, and a positive finite value is `COMPLETE`; negative, non-finite, and malformed supplied amounts are validation errors rather than zero.

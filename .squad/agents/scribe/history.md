@@ -218,6 +218,7 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 ### 2026-09-20 — Backup export/import dependency closure (2026-09-20T16:32:21Z)
 - Recorded Livingston's fix for supporting the `_unassigned` legacy account sentinel
   in backup export/import workflows.
+
 - Added `LEGACY_ACCOUNT_SENTINEL` constant and `_is_supported_account_reference()` helper
   to the shared dependency validator (`backend/src/backup/dependency_closure.py`).
 - Updated `close_dependencies()` and `validate_dependency_closure()` to exempt the sentinel
@@ -229,3 +230,12 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
   3 unrelated deprecation warnings; diff hygiene clean.
 - Updated Livingston history with implementation details and validation evidence.
 - No decision inbox entries needed; work recorded via orchestration/session logs.
+
+### 2026-09-23 — Account-local FIFO and dividend-buy label consolidation
+- Merged the Livingston and Linus inbox decisions into the canonical decision
+  log and removed the processed inbox files.
+- Preserved Basher's final **HOLDINGS APPROVE** and **LABELS APPROVE** verdicts,
+  including the non-blocking absence of a committed cross-account-transfer
+  regression test despite a passing independent probe.
+- Added orchestration records for Linus, Livingston, and Basher plus one brief
+  session log; no implementation or test files were modified by Scribe.
