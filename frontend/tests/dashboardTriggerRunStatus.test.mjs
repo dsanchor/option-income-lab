@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const source = (path) => readFileSync(join(root, path), "utf8");
 const trigger = source("src/components/TriggerButton.tsx");
+const tables = source("src/components/DashboardAgentTables.tsx");
 const autoRefresh = source("src/components/AutoRefresh.tsx");
 const types = source("src/types/dashboard.ts");
 
@@ -27,13 +28,30 @@ describe("dashboard trigger run-status contract", () => {
   it("preserves 409 handling, double-click protection, timeout, and cleanup", () => {
     assert.match(trigger, /pendingRef\.current/);
     assert.match(trigger, /res\.status === 409/);
+    assert.match(trigger, /data\.status === "disabled"/);
+    assert.match(trigger, /finish\("deactivated", "Deactivated globally"\)/);
     assert.match(trigger, /RUN_TIMEOUT_MS/);
     assert.match(trigger, /abortRef\.current\?\.abort\(\)/);
     assert.match(trigger, /clearTimeout\(pollTimerRef\.current\)/);
   });
 
+  it("renders globally disabled controls as native and ARIA disabled", () => {
+    assert.match(trigger, /globallyDisabled\?: boolean/);
+    assert.match(trigger, /disabled=\{\s*globallyDisabled/);
+    assert.match(
+      trigger,
+      /aria-disabled=\{globallyDisabled \|\| status === "deactivated" \|\| undefined\}/,
+    );
+    assert.match(trigger, /Deactivated globally/);
+    assert.equal(
+      tables.match(/globallyDisabled=\{globallyDisabled\}/g)?.length,
+      2,
+    );
+  });
+
   it("includes aggregated execution state in the auto-refresh signature", () => {
     assert.match(autoRefresh, /s: data\.agent_statuses \?\? \{\}/);
+    assert.match(autoRefresh, /g: data\.monitor_agent_enabled \?\? \{\}/);
   });
 
   it("shares typed run and dashboard status payload contracts", () => {

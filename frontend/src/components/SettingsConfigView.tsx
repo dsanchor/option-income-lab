@@ -181,6 +181,11 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
     const payload = {
       monitoring_enabled: cfg.monitoring_enabled,
       cron_expr: cfg.cron_expr,
+      monitor_covered_call_enabled: cfg.monitor_covered_call_enabled,
+      monitor_cash_secured_put_enabled: cfg.monitor_cash_secured_put_enabled,
+      monitor_buy_tracker_enabled: cfg.monitor_buy_tracker_enabled,
+      monitor_open_call_enabled: cfg.monitor_open_call_enabled,
+      monitor_open_put_enabled: cfg.monitor_open_put_enabled,
       summary_enabled: cfg.summary_enabled,
       summary_cron: cfg.summary_cron,
       summary_activity_count: cfg.summary_activity_count,
@@ -265,6 +270,39 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
             label="Enable monitoring agent"
             hint="Periodically checks all active position monitors and strategy followers."
           />
+          <div className="mb-4 rounded-[var(--radius)] border border-border bg-bg-input/40 p-3">
+            <p className="mb-3 text-xs text-text-muted">
+              Global agent controls override symbol-level enrollment. Disabled agents do not run
+              from schedules, full analysis, or dashboard triggers.
+            </p>
+            <div className="grid gap-x-4 sm:grid-cols-2">
+              <Toggle
+                checked={cfg.monitor_covered_call_enabled}
+                onChange={(v) => set("monitor_covered_call_enabled", v)}
+                label="Covered Call"
+              />
+              <Toggle
+                checked={cfg.monitor_cash_secured_put_enabled}
+                onChange={(v) => set("monitor_cash_secured_put_enabled", v)}
+                label="Cash-Secured Put"
+              />
+              <Toggle
+                checked={cfg.monitor_buy_tracker_enabled}
+                onChange={(v) => set("monitor_buy_tracker_enabled", v)}
+                label="Buy Tracker"
+              />
+              <Toggle
+                checked={cfg.monitor_open_call_enabled}
+                onChange={(v) => set("monitor_open_call_enabled", v)}
+                label="Open Call Monitor"
+              />
+              <Toggle
+                checked={cfg.monitor_open_put_enabled}
+                onChange={(v) => set("monitor_open_put_enabled", v)}
+                label="Open Put Monitor"
+              />
+            </div>
+          </div>
           <label className={labelCls}>Cron Expression</label>
           <input
             className={inputCls}

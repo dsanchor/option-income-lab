@@ -25,6 +25,7 @@ from src.market_hours import is_us_market_open
 from fastapi.responses import JSONResponse
 
 from src.cosmos_db import is_watchlist_paused
+from src.config import is_monitor_agent_enabled, normalize_monitor_agent_gates
 from src.scheduler_registry import _MAX_TASK_DURATION_SECONDS
 from src.best_options import DEFAULT_DTE_MIN, DEFAULT_DTE_MAX
 from src.dividends_economics import (
@@ -56,6 +57,17 @@ AGENT_TYPES = {
     "cash_secured_put": {"label": "Following · Cash-Secured Put", "is_position_monitor": False},
     "buy_tracker": {"label": "Following · Buy Tracker", "is_position_monitor": False},
 }
+
+
+def _monitor_agent_enabled_map(config) -> Dict[str, bool]:
+    return normalize_monitor_agent_gates(config)
+
+
+def _effective_monitor_agent_config(scheduler, cosmos):
+    if scheduler is not None and scheduler.config is not None:
+        return scheduler.config
+    return _load_settings_from_cosmos(cosmos) or _load_config()
+
 
 _DASHBOARD_COMPLETED_RUN_RETENTION = 100
 _DASHBOARD_PROCESS_STATE_INIT_LOCK = threading.Lock()
@@ -3971,7 +3983,13 @@ def _is_complete_triplet(strike, expiration, premium) -> bool:
     return s > 0 and bool(expiration) and p > 0
 
 
-def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
+def _build_dashboard_tables(
+    cosmos,
+    all_symbols,
+    all_alerts,
+    all_activities,
+    monitor_agent_enabled: Optional[Dict[str, bool]] = None,
+):
     """Build per-agent table data for the dashboard from CosmosDB data."""
     agent_tables = []
     grand_totals = {"today": 0, "week": 0, "month": 0, "total": 0}
@@ -4236,6 +4254,11 @@ def _build_dashboard_tables(cosmos, all_symbols, all_alerts, all_activities):
             "totals": total_counts,
             "is_position_monitor": is_pm,
             "last_update_ts": agent_last_ts,
+            "enabled": (
+                monitor_agent_enabled.get(agent_key, True)
+                if isinstance(monitor_agent_enabled, dict)
+                else True
+            ),
         })
 
     return agent_tables, grand_totals
@@ -4253,7 +4276,11 @@ async def api_dashboard(request: Request):
         return JSONResponse(
             {"error": f"CosmosDB not available: {error_detail}"}, status_code=503)
     try:
-        data = _compute_dashboard_data(cosmos)
+        scheduler = getattr(request.app.state, "scheduler", None)
+        effective_config = _effective_monitor_agent_config(scheduler, cosmos)
+        data = _compute_dashboard_data(
+            cosmos, _monitor_agent_enabled_map(effective_config)
+        )
     except Exception as e:
         return JSONResponse(
             {"error": f"CosmosDB query failed: {e}"}, status_code=502)
@@ -4284,6 +4311,9 @@ async def api_dashboard_status(request: Request):
 
     latest_activity = None
     cosmos = getattr(request.app.state, "cosmos", None)
+    monitor_agent_enabled = _monitor_agent_enabled_map(
+        _effective_monitor_agent_config(scheduler, cosmos)
+    )
     if cosmos is not None:
         try:
             recent = cosmos.get_all_activities(limit=1)
@@ -4296,11 +4326,18 @@ async def api_dashboard_status(request: Request):
         "agents": agents,
         "agent_statuses": agent_statuses,
         "runs": dashboard_runs,
+        "monitor_agent_enabled": monitor_agent_enabled,
+        "disabled_monitor_agents": [
+            name for name, enabled in monitor_agent_enabled.items() if not enabled
+        ],
         "latest_activity": latest_activity,
     })
 
 
-def _compute_dashboard_data(cosmos) -> Dict[str, Any]:
+def _compute_dashboard_data(
+    cosmos,
+    monitor_agent_enabled: Optional[Dict[str, bool]] = None,
+) -> Dict[str, Any]:
     """Shared dashboard computation used by both the HTML page and the JSON API.
 
     Returns the data-only context (no `request`); callers add framing.
@@ -4353,7 +4390,12 @@ def _compute_dashboard_data(cosmos) -> Dict[str, Any]:
         )
 
     agent_tables, grand_totals = _build_dashboard_tables(
-        cosmos, all_symbols, all_alerts, all_activities)
+        cosmos,
+        all_symbols,
+        all_alerts,
+        all_activities,
+        monitor_agent_enabled,
+    )
 
     # Annualized RoC on currently-open positions (income currently working).
     # Reuses the economics engine for a consistent, capital-weighted figure.
@@ -6677,6 +6719,7 @@ def _build_settings_config_context(
     monitoring = tasks_by_name.get("monitor_agents", {})
     monitoring_enabled = monitoring.get("enabled", True)
     cron_expr = monitoring.get("cron", "30 9-16/4 * * 1-5")
+    monitor_agent_enabled = normalize_monitor_agent_gates(config)
     monitoring_last_run = resolve_last_run("monitor_agents", monitoring.get("last_run"))
     monitoring_next_run = fmt_time(monitoring.get("next_run"))
     monitoring_last_run_iso = resolve_last_run_iso("monitor_agents", monitoring.get("last_run"))
@@ -6766,6 +6809,11 @@ def _build_settings_config_context(
         "scheduler_tasks": scheduler_tasks,  # NEW: unified task list for template
         "monitoring_enabled": monitoring_enabled,
         "cron_expr": cron_expr,
+        "monitor_covered_call_enabled": monitor_agent_enabled["covered_call"],
+        "monitor_cash_secured_put_enabled": monitor_agent_enabled["cash_secured_put"],
+        "monitor_buy_tracker_enabled": monitor_agent_enabled["buy_tracker"],
+        "monitor_open_call_enabled": monitor_agent_enabled["open_call_monitor"],
+        "monitor_open_put_enabled": monitor_agent_enabled["open_put_monitor"],
         "telegram_enabled": telegram_enabled,
         "telegram_bot_token": telegram_bot_token,
         "telegram_chat_id": telegram_chat_id,
@@ -6850,6 +6898,13 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
 
     # Monitoring agent enabled toggle
     monitoring_enabled = form.get("monitoring_enabled") == "true"
+    monitor_agent_enabled = {
+        "covered_call": form.get("monitor_covered_call_enabled", "true") == "true",
+        "cash_secured_put": form.get("monitor_cash_secured_put_enabled", "true") == "true",
+        "buy_tracker": form.get("monitor_buy_tracker_enabled", "true") == "true",
+        "open_call_monitor": form.get("monitor_open_call_enabled", "true") == "true",
+        "open_put_monitor": form.get("monitor_open_put_enabled", "true") == "true",
+    }
 
     # Cron schedule
     new_cron = str(form.get("cron_expr", "")).strip()
@@ -6863,6 +6918,7 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
                 cosmos_settings.setdefault("scheduler", {})
                 cosmos_settings["scheduler"]["cron"] = new_cron
                 cosmos_settings["scheduler"]["enabled"] = monitoring_enabled
+                cosmos_settings["scheduler"]["agents"] = dict(monitor_agent_enabled)
                 _save_settings_to_cosmos(cosmos, cosmos_settings)
 
             # Also update config.yaml for backward compat
@@ -6870,12 +6926,19 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
             config.setdefault("scheduler", {})
             config["scheduler"]["cron"] = new_cron
             config["scheduler"]["enabled"] = monitoring_enabled
+            config["scheduler"]["agents"] = dict(monitor_agent_enabled)
             _write_config(config)
             saved.append("Cron schedule")
 
             scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
+                scheduler.config.config.setdefault("scheduler", {})["agents"] = (
+                    dict(monitor_agent_enabled)
+                )
                 scheduler.reschedule(new_cron)
+                scheduler.registry.update_task_enabled(
+                    "monitor_agents", monitoring_enabled, scheduler.config
+                )
         except (ValueError, KeyError):
             pass
 
@@ -8519,6 +8582,13 @@ async def trigger_agent(request: Request, agent_type: str):
             {"error": "Scheduler not running — cannot trigger agents"},
             status_code=503)
 
+    if not is_monitor_agent_enabled(scheduler.config, agent_type):
+        return JSONResponse({
+            "status": "disabled",
+            "agent_type": agent_type,
+            "error": f"{AGENT_TYPES[agent_type]['label']} is globally disabled",
+        }, status_code=409)
+
     body = {}
     if request.headers.get("content-type", "").startswith("application/json"):
         try:
@@ -8621,7 +8691,14 @@ _FULL_ANALYSIS_AGENT_ORDER = [
 
 
 def _default_full_analysis_status() -> dict:
-    return {"running": False, "current": None, "completed": [], "total": 5, "errors": []}
+    return {
+        "running": False,
+        "current": None,
+        "completed": [],
+        "skipped": [],
+        "total": 5,
+        "errors": [],
+    }
 
 
 def _run_all_agents_sequentially(scheduler, status: dict, run_trigger: str = "manual",
@@ -8651,9 +8728,12 @@ def _run_all_agents_sequentially(scheduler, status: dict, run_trigger: str = "ma
         "open_call_monitor": run_open_call_monitor,
         "open_put_monitor": run_open_put_monitor,
     }
-
     for agent_type in _FULL_ANALYSIS_AGENT_ORDER:
         status["current"] = agent_type
+        if not is_monitor_agent_enabled(scheduler.config, agent_type):
+            status["skipped"].append(agent_type)
+            status["completed"].append(agent_type)
+            continue
         try:
             asyncio.run(_call_agent_func(
                 funcs[agent_type], scheduler.config, scheduler.runner,

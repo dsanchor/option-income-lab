@@ -31,6 +31,7 @@ export default function AutoRefresh({ intervalMs = 30000 }: { intervalMs?: numbe
         const sig = JSON.stringify({
           a: data.agents ?? {},
           s: data.agent_statuses ?? {},
+          g: data.monitor_agent_enabled ?? {},
           l: data.latest_activity ?? null,
         });
         if (aborted) return;

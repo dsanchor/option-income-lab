@@ -9,6 +9,57 @@ from .ai_functions import AI_FUNCTIONS, SUPPORTED_AI_PROVIDERS
 from .llm import LlmConfig
 
 
+MONITOR_AGENT_NAMES = (
+    'covered_call',
+    'cash_secured_put',
+    'buy_tracker',
+    'open_call_monitor',
+    'open_put_monitor',
+)
+
+
+def normalize_monitor_agent_gates(config: Any) -> Dict[str, bool]:
+    """Build the complete effective member-gate map from one config snapshot."""
+    raw_config = getattr(config, 'config', config)
+    scheduler = (
+        raw_config.get('scheduler')
+        if isinstance(raw_config, dict)
+        else None
+    )
+    agents = scheduler.get('agents') if isinstance(scheduler, dict) else None
+    if not isinstance(agents, dict):
+        agents = {}
+    return {
+        agent_name: (
+            agents[agent_name]
+            if isinstance(agents.get(agent_name), bool)
+            else True
+        )
+        for agent_name in MONITOR_AGENT_NAMES
+    }
+
+
+def is_monitor_agent_enabled(config: Any, agent_name: str) -> bool:
+    """Return False only for an explicit boolean false global agent gate."""
+    return normalize_monitor_agent_gates(config).get(agent_name, True)
+
+
+def replace_monitor_agent_gates(config: Any, authority: Any) -> Dict[str, bool]:
+    """Replace member gates using one authoritative effective config snapshot."""
+    raw_config = getattr(config, 'config', config)
+    if not isinstance(raw_config, dict):
+        return normalize_monitor_agent_gates(authority)
+
+    scheduler = raw_config.get('scheduler')
+    if not isinstance(scheduler, dict):
+        scheduler = {}
+        raw_config['scheduler'] = scheduler
+
+    gates = normalize_monitor_agent_gates(authority)
+    scheduler['agents'] = gates
+    return gates
+
+
 class Config:
     """Configuration loader with environment variable substitution."""
 
@@ -23,6 +74,8 @@ class Config:
             raw_config = yaml.safe_load(f)
 
         self.config = self._substitute_env_vars(raw_config)
+        if isinstance(self.config, dict):
+            replace_monitor_agent_gates(self.config, self.config)
         self._validate()
 
     def _substitute_env_vars(self, obj: Any) -> Any:

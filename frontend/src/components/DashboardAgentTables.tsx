@@ -136,22 +136,47 @@ export default function DashboardAgentTables({ tables }: { tables: AgentTable[] 
       {tables.map((agent) => {
         const isPM = agent.is_position_monitor;
         const isBuy = agent.key === "buy_tracker";
+        const globallyDisabled = agent.enabled === false;
+        const deactivatedId = `agent-${agent.key}-deactivated`;
         return (
-          <section key={agent.key} className="surface overflow-hidden">
+          <section
+            key={agent.key}
+            aria-label={`${agent.label}${globallyDisabled ? " — deactivated globally" : ""}`}
+            data-deactivated={globallyDisabled || undefined}
+            className={`surface overflow-hidden ${
+              globallyDisabled ? "border-text-muted/40 bg-bg-input/30" : ""
+            }`}
+          >
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 px-4 py-3">
               <h2 className="flex items-center gap-2 text-base font-semibold">
                 {agent.label}
-                {agent.last_update_ts && (
+                {globallyDisabled ? (
+                  <span
+                    id={deactivatedId}
+                    role="status"
+                    aria-label={`${agent.label} deactivated globally`}
+                    className="rounded-[var(--radius-pill)] border border-text-muted/40 bg-bg-input px-2 py-0.5 text-xs font-medium text-text-muted"
+                  >
+                    Deactivated globally
+                  </span>
+                ) : agent.last_update_ts ? (
                   <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs font-normal text-text-muted">
                     last update {timeAgo(agent.last_update_ts)}
                   </span>
-                )}
+                ) : null}
               </h2>
-              <TriggerButton agent={agent.key} />
+              <TriggerButton agent={agent.key} globallyDisabled={globallyDisabled} />
             </div>
 
             {agent.rows.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-text-muted">No alerts recorded yet</p>
+              <p
+                aria-describedby={globallyDisabled ? deactivatedId : undefined}
+                className={`px-4 py-8 text-center text-sm text-text-muted ${
+                  globallyDisabled ? "opacity-60" : ""
+                }`}
+              >
+                No alerts recorded yet
+              </p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[640px] border-collapse">
@@ -191,13 +216,17 @@ export default function DashboardAgentTables({ tables }: { tables: AgentTable[] 
                       return (
                       <tr
                         key={row.key}
+                        aria-disabled={globallyDisabled}
+                        aria-describedby={globallyDisabled ? deactivatedId : undefined}
                         onClick={() =>
                           lastActivityId
                             ? router.push(`/activities/${lastActivityId}`)
                             : router.push(`/symbols/${row.symbol}`)
                         }
                         className={`cursor-pointer border-b border-border/40 transition-colors hover:bg-bg-hover ${
-                          row.paused ? "opacity-50" : ""
+                          row.paused || globallyDisabled ? "opacity-50" : ""
+                        } ${
+                          globallyDisabled ? "bg-bg-input/30" : ""
                         }`}
                       >
                         <td className={TD}>
@@ -284,7 +313,12 @@ export default function DashboardAgentTables({ tables }: { tables: AgentTable[] 
                           </>
                         )}
                         <td className={TD}>
-                          <TriggerButton agent={agent.key} symbol={row.symbol} compact />
+                          <TriggerButton
+                            agent={agent.key}
+                            symbol={row.symbol}
+                            compact
+                            globallyDisabled={globallyDisabled}
+                          />
                         </td>
                       </tr>
                       );

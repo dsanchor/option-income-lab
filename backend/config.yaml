@@ -33,6 +33,12 @@ context:
 scheduler:
   cron: "30 9-16/4 * * 1-5"  # Cron expression: every 4 hours starting at 9:30, market hours Mon-Fri
   timezone: "UTC"  # Timezone for scheduler (container default)
+  agents:
+    covered_call: true
+    cash_secured_put: true
+    buy_tracker: true
+    open_call_monitor: true
+    open_put_monitor: true
 
 web:
   host: "0.0.0.0"

@@ -25,6 +25,11 @@ export interface SettingsConfig {
 
   monitoring_enabled: boolean;
   cron_expr: string;
+  monitor_covered_call_enabled: boolean;
+  monitor_cash_secured_put_enabled: boolean;
+  monitor_buy_tracker_enabled: boolean;
+  monitor_open_call_enabled: boolean;
+  monitor_open_put_enabled: boolean;
   monitoring_last_run: string;
   monitoring_next_run: string;
   monitoring_last_run_iso: string;

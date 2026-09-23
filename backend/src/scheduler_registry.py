@@ -157,8 +157,9 @@ class TaskRegistry:
                     
                     # Re-read enabled state
                     if task.name == "monitor_agents":
-                        # monitor_agents doesn't have a separate enabled flag in config
-                        task.enabled = True
+                        task.enabled = self._config.config.get(
+                            task.config_key, {}
+                        ).get('enabled', True)
                     else:
                         task_config = self._config.config.get(task.config_key, {})
                         task.enabled = task_config.get('enabled', True)

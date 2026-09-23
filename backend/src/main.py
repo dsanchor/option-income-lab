@@ -25,7 +25,11 @@ def _patched_subprocess_del(self):
 asyncio.base_subprocess.BaseSubprocessTransport.__del__ = _patched_subprocess_del
 # ─────────────────────────────────────────────────────────────────────────────
 
-from .config import Config
+from .config import (
+    Config,
+    is_monitor_agent_enabled,
+    replace_monitor_agent_gates,
+)
 from .agent_runner import AgentRunner
 from .cosmos_db import CosmosDBService
 from .context import ContextProvider
@@ -143,6 +147,13 @@ class OptionsAgentScheduler:
             k: v for k, v in self.config.config.items()
             if k not in ('ai', 'azure', 'gemini', 'cosmosdb')
         }
+        scheduler_defaults = settings_defaults.get('scheduler')
+        if isinstance(scheduler_defaults, dict):
+            settings_defaults['scheduler'] = {
+                key: value
+                for key, value in scheduler_defaults.items()
+                if key != 'agents'
+            }
         merged_settings = self.cosmos.merge_defaults(settings_defaults)
 
         # Update Config object with merged settings from CosmosDB (CosmosDB takes precedence)
@@ -150,6 +161,7 @@ class OptionsAgentScheduler:
             for key, value in merged_settings.items():
                 if key not in ('ai', 'azure', 'gemini', 'cosmosdb'):
                     self.config.config[key] = value
+            replace_monitor_agent_gates(self.config, merged_settings)
 
         from .telegram_notifier import TelegramNotifier
         telegram_notifier = TelegramNotifier(cosmos=self.cosmos)
@@ -290,6 +302,9 @@ class OptionsAgentScheduler:
         ]
 
         for agent_name, agent_func in agents:
+            if not is_monitor_agent_enabled(config, agent_name):
+                print(f"⏭️  {agent_name} globally disabled")
+                continue
             try:
                 # Regression lock (danny-force-alpha-design.md §6): the
                 # cron path is always scheduled/due-only. `buy_tracker`
@@ -741,12 +756,16 @@ class OptionsAgentScheduler:
         """
         try:
             cosmos_settings = self.cosmos.get_settings()
-            if not cosmos_settings:
+            if not isinstance(cosmos_settings, dict):
                 return
 
             # Handle main monitor agents cron (special case, not in registry)
             scheduler_settings = cosmos_settings.get('scheduler', {})
+            if not isinstance(scheduler_settings, dict):
+                scheduler_settings = {}
             new_cron = scheduler_settings.get('cron')
+
+            replace_monitor_agent_gates(self.config, cosmos_settings)
 
             if new_cron and new_cron != self.config.cron_expression:
                 self.config.cron_expression = new_cron

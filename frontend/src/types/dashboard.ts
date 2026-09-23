@@ -50,6 +50,7 @@ export interface AgentTable {
   key: string;
   label: string;
   rows: AgentRow[];
+  enabled?: boolean;
   totals?: { today: number; week: number; month: number; total: number };
   is_position_monitor: boolean;
   last_update_ts?: string;
@@ -138,5 +139,7 @@ export interface DashboardStatusPayload {
   agents?: Record<string, string | null>;
   agent_statuses?: Record<string, DashboardRunStatus>;
   runs?: Record<string, DashboardRunStatus>;
+  monitor_agent_enabled?: Record<string, boolean>;
+  disabled_monitor_agents?: string[];
   latest_activity?: string | null;
 }

@@ -3,7 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { DashboardStatusPayload } from "@/types/dashboard";
 
-type Status = "idle" | "running" | "done" | "error" | "already_running";
+type Status =
+  | "idle"
+  | "running"
+  | "done"
+  | "error"
+  | "already_running"
+  | "deactivated";
 const POLL_INTERVAL_MS = 1000;
 const RUN_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -13,22 +19,23 @@ const RUN_TIMEOUT_MS = 30 * 60 * 1000;
  * Manual triggers always request `run_trigger: "manual"` + `force_alpha:
  * true` (force-alpha design, danny-force-alpha-design.md §6) -- a
  * human-initiated click gets a fresh Alpha Advisor review unconditionally.
- * A 409 (another run already in flight for this agent/symbol) renders a
- * distinct "already running" state rather than an error. Terminal states reset
- * after 3s. A synchronous ref guard (in addition to the server-side in-flight guard)
- * prevents a rapid double-click from firing a second request before React
- * has re-rendered the disabled button.
+ * Duplicate and globally-disabled 409 responses render distinct states.
+ * Terminal states reset after 3s. A synchronous ref guard (in addition to
+ * the server-side in-flight guard) prevents a rapid double-click from firing
+ * a second request before React has re-rendered the disabled button.
  */
 export default function TriggerButton({
   agent,
   symbol,
   compact = false,
   className = "",
+  globallyDisabled = false,
 }: {
   agent: string;
   symbol?: string;
   compact?: boolean;
   className?: string;
+  globallyDisabled?: boolean;
 }) {
   const [status, setStatus] = useState<Status>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -92,7 +99,7 @@ export default function TriggerButton({
 
   async function run(e: React.MouseEvent) {
     e.stopPropagation();
-    if (pendingRef.current) return;
+    if (globallyDisabled || pendingRef.current) return;
     pendingRef.current = true;
     setStatus("running");
     setErrorMessage(null);
@@ -102,11 +109,15 @@ export default function TriggerButton({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ symbol, run_trigger: "manual", force_alpha: true }),
       });
+      const data = await res.json().catch(() => ({}));
       if (res.status === 409) {
-        finish("already_running");
+        if (data.status === "disabled") {
+          finish("deactivated", "Deactivated globally");
+        } else {
+          finish("already_running");
+        }
         return;
       }
-      const data = await res.json().catch(() => ({}));
       if (!res.ok || data.status !== "triggered" || typeof data.run_id !== "string") {
         finish("error", typeof data.error === "string" ? data.error : "Trigger failed");
         return;
@@ -119,7 +130,9 @@ export default function TriggerButton({
 
   const idleLabel = compact ? "▶" : "▶ Run Analysis";
   const label =
-    status === "running"
+    globallyDisabled || status === "deactivated"
+      ? "Deactivated globally"
+      : status === "running"
       ? compact ? "⏳" : "⏳ Running…"
       : status === "already_running"
         ? compact ? "⏳" : "⏳ Already running…"
@@ -130,7 +143,9 @@ export default function TriggerButton({
             : idleLabel;
 
   const tone =
-    status === "done"
+    globallyDisabled || status === "deactivated"
+      ? "border-text-muted/40 text-text-muted"
+      : status === "done"
       ? "border-accent-green/40 text-accent-green"
       : status === "already_running"
         ? "border-accent-orange/40 text-accent-orange"
@@ -139,7 +154,9 @@ export default function TriggerButton({
           : "border-border text-text-muted hover:border-accent-blue/50 hover:text-accent-blue";
 
   const title =
-    status === "already_running"
+    globallyDisabled || status === "deactivated"
+      ? "Deactivated globally"
+      : status === "already_running"
       ? "Already running for this agent" + (symbol ? ` (${symbol})` : "") + " — please wait"
       : status === "error" && errorMessage
         ? errorMessage
@@ -151,7 +168,18 @@ export default function TriggerButton({
     <button
       type="button"
       onClick={run}
-      disabled={status === "running" || status === "already_running"}
+      disabled={
+        globallyDisabled ||
+        status === "running" ||
+        status === "already_running" ||
+        status === "deactivated"
+      }
+      aria-disabled={globallyDisabled || status === "deactivated" || undefined}
+      aria-label={
+        globallyDisabled || status === "deactivated"
+          ? `${agent}${symbol ? ` ${symbol}` : ""}: Deactivated globally`
+          : undefined
+      }
       title={title}
       className={`inline-flex items-center justify-center rounded-[var(--radius-pill)] border bg-bg-input font-medium transition-colors disabled:opacity-60 ${
         compact ? "h-7 w-7 text-xs" : "px-3 py-1.5 text-xs"
