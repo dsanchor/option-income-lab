@@ -120,3 +120,23 @@ export interface DashboardData {
   market_open?: boolean;
   error?: string;
 }
+
+export type DashboardRunState = "running" | "succeeded" | "failed";
+
+export interface DashboardRunStatus {
+  run_id: string | null;
+  agent_type: string;
+  symbol: string | null;
+  status: DashboardRunState | null;
+  started_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+  last_run?: string | null;
+}
+
+export interface DashboardStatusPayload {
+  agents?: Record<string, string | null>;
+  agent_statuses?: Record<string, DashboardRunStatus>;
+  runs?: Record<string, DashboardRunStatus>;
+  latest_activity?: string | null;
+}

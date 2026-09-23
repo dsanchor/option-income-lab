@@ -2,11 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-
-type StatusPayload = {
-  agents?: Record<string, string | null>;
-  latest_activity?: string | null;
-};
+import type { DashboardStatusPayload } from "@/types/dashboard";
 
 /**
  * Transparent background auto-refresh. Renders nothing and no UI.
@@ -31,9 +27,10 @@ export default function AutoRefresh({ intervalMs = 30000 }: { intervalMs?: numbe
       try {
         const res = await fetch("/api/dashboard/status", { cache: "no-store" });
         if (!res.ok) return;
-        const data = (await res.json()) as StatusPayload;
+        const data = (await res.json()) as DashboardStatusPayload;
         const sig = JSON.stringify({
           a: data.agents ?? {},
+          s: data.agent_statuses ?? {},
           l: data.latest_activity ?? null,
         });
         if (aborted) return;

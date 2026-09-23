@@ -15,6 +15,10 @@ import type {
 } from "@/types/portfolio";
 import type { SecurityMaster } from "@/types/portfolio";
 import { formatAccountName } from "@/lib/accountDisplay";
+import {
+  shareAcquisitionCostBasisStatus,
+  shareAcquisitionFmvValidationError,
+} from "@/lib/caWizardRequestShape";
 
 const inputCls =
   "w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text placeholder:text-text-muted focus:border-accent-blue focus:outline-none";
@@ -471,6 +475,20 @@ function makeGross(amount: string, currency: string, eurAmount: string) {
   return { amount: amount || "0", currency, eur_amount: eur || "0" };
 }
 
+function makeShareAcquisitionGross(
+  amount: string,
+  currency: string,
+  eurAmount: string,
+) {
+  const native = amount.trim();
+  const normalizedCurrency = currency.trim().toUpperCase();
+  return {
+    amount: native,
+    currency: normalizedCurrency,
+    eur_amount: normalizedCurrency === "EUR" ? native : eurAmount.trim(),
+  };
+}
+
 function makeFees(total: string, currency: string) {
   if (!total || parseFloat(total) === 0) return null;
   const eur = currency === "EUR" ? total : "0";
@@ -558,8 +576,16 @@ function buildLegs(form: CaFormState): CorporateActionLegRequest[] {
       leg_type: "SHARE_ACQUISITION",
       trade_date: form.payment_date,
       quantity: form.sa_quantity || undefined,
-      gross: makeGross(form.sa_gross || "0", form.currency, form.sa_gross_eur || "0"),
-      cost_basis_status: form.sa_cost_basis,
+      gross: makeShareAcquisitionGross(
+        form.sa_gross,
+        form.currency,
+        form.sa_gross_eur,
+      ),
+      cost_basis_status: shareAcquisitionCostBasisStatus(
+        form.sa_gross,
+        form.sa_gross_eur,
+        form.currency,
+      ),
       fx: makeFx(form.fx_rate, form.currency),
       notes: form.sa_notes || undefined,
     });
@@ -632,6 +658,12 @@ function validate(form: CaFormState): string | null {
   }
   if (ev === "DIVIDEND_WITH_SCRIP" || ev === "SCRIP_DIVIDEND" || ev === "RIGHTS_ISSUE") {
     if (!form.sa_quantity) return "Share acquisition quantity is required.";
+    const fmvError = shareAcquisitionFmvValidationError(
+      form.sa_gross,
+      form.sa_gross_eur,
+      form.currency,
+    );
+    if (fmvError) return fmvError;
   }
   if (ev === "SHARE_CONSOLIDATION") {
     if (!form.co_quantity || parseFloat(form.co_quantity) <= 0) {
@@ -763,7 +795,18 @@ export default function CorporateActionForm({
   caGroupId,
   initialState,
 }: CorporateActionFormProps) {
-  const [form, setForm] = useState<CaFormState>(() => ({ ...defaultState(), ...initialState }));
+  const [form, setForm] = useState<CaFormState>(() => {
+    const initial = { ...defaultState(), ...initialState };
+    if (initial.currency === "EUR") {
+      initial.sa_gross_eur = initial.sa_gross;
+    }
+    initial.sa_cost_basis = shareAcquisitionCostBasisStatus(
+      initial.sa_gross,
+      initial.sa_gross_eur,
+      initial.currency,
+    );
+    return initial;
+  });
   const [correctionNote, setCorrectionNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -945,7 +988,21 @@ export default function CorporateActionForm({
           <input
             type="text"
             value={form.currency}
-            onChange={(e) => set({ currency: e.target.value.toUpperCase() })}
+            onChange={(e) => {
+              const currency = e.target.value.toUpperCase();
+              const sa_gross_eur = currency === "EUR"
+                ? form.sa_gross
+                : form.sa_gross_eur;
+              set({
+                currency,
+                sa_gross_eur,
+                sa_cost_basis: shareAcquisitionCostBasisStatus(
+                  form.sa_gross,
+                  sa_gross_eur,
+                  currency,
+                ),
+              });
+            }}
             maxLength={3}
             placeholder="EUR"
             className={inputCls}
@@ -1106,13 +1163,14 @@ export default function CorporateActionForm({
                 />
               </div>
               <div>
-                <label className={labelCls}>Cost basis</label>
+                <label className={labelCls}>Cost basis (derived from FMV)</label>
                 <select
                   value={form.sa_cost_basis}
-                  onChange={(e) => set({ sa_cost_basis: e.target.value as CostBasisStatus })}
+                  disabled
                   className={inputCls}
                 >
                   <option value="INCOMPLETE">INCOMPLETE (scrip/rights — FMV pending)</option>
+                  <option value="ZERO_COST">ZERO_COST (pure scrip)</option>
                   <option value="COMPLETE">COMPLETE (known FMV)</option>
                 </select>
               </div>
@@ -1123,7 +1181,21 @@ export default function CorporateActionForm({
                   step="any"
                   min="0"
                   value={form.sa_gross}
-                  onChange={(e) => set({ sa_gross: e.target.value })}
+                  onChange={(e) => {
+                    const sa_gross = e.target.value;
+                    const sa_gross_eur = form.currency === "EUR"
+                      ? sa_gross
+                      : form.sa_gross_eur;
+                    set({
+                      sa_gross,
+                      sa_gross_eur,
+                      sa_cost_basis: shareAcquisitionCostBasisStatus(
+                        sa_gross,
+                        sa_gross_eur,
+                        form.currency,
+                      ),
+                    });
+                  }}
                   placeholder="0.00"
                   className={inputCls}
                 />
@@ -1136,7 +1208,17 @@ export default function CorporateActionForm({
                     step="any"
                     min="0"
                     value={form.sa_gross_eur}
-                    onChange={(e) => set({ sa_gross_eur: e.target.value })}
+                    onChange={(e) => {
+                      const sa_gross_eur = e.target.value;
+                      set({
+                        sa_gross_eur,
+                        sa_cost_basis: shareAcquisitionCostBasisStatus(
+                          form.sa_gross,
+                          sa_gross_eur,
+                          form.currency,
+                        ),
+                      });
+                    }}
                     placeholder="0.00"
                     className={inputCls}
                   />

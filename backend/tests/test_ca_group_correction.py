@@ -210,6 +210,139 @@ class TestGroupCorrectionCoreShape:
                 "correction_note must appear on every replacement leg"
             )
 
+    def test_positive_scrip_fmv_survives_group_correction(self, svc):
+        svc_obj, fake = svc
+        orig = svc_obj.create_corporate_action(_SCRIP_CREATE)
+        corrected = {
+            **_SCRIP_CORRECTION,
+            "legs": [
+                _SCRIP_CORRECTION["legs"][0],
+                {
+                    **_SCRIP_CORRECTION["legs"][1],
+                    "quantity": "1",
+                    "gross": {
+                        "amount": "5.3",
+                        "currency": "EUR",
+                        "eur_amount": "5.3",
+                    },
+                    "cost_basis_status": "INCOMPLETE",
+                },
+            ],
+        }
+
+        result = svc_obj.correct_corporate_action_group(
+            orig["ca_group_id"], corrected
+        )
+        share = next(
+            movement for movement in result["movements"]
+            if movement["ca_leg_type"] == "SHARE_ACQUISITION"
+        )
+
+        assert fake.portfolio_container._store[share["id"]]["gross"]["eur_amount"] == "5.3"
+        assert share["net"]["eur_amount"] == "5.300000"
+        assert share["cost_basis_status"] == "COMPLETE"
+
+    @pytest.mark.parametrize(
+        ("gross_value", "expected_status"),
+        [("", "INCOMPLETE"), ("0", "ZERO_COST")],
+    )
+    def test_group_correction_derives_blank_and_zero_scrip_status(
+        self, svc, gross_value, expected_status
+    ):
+        svc_obj, _ = svc
+        original = svc_obj.create_corporate_action(_SCRIP_CREATE)
+        corrected = {
+            **_SCRIP_CORRECTION,
+            "legs": [
+                _SCRIP_CORRECTION["legs"][0],
+                {
+                    **_SCRIP_CORRECTION["legs"][1],
+                    "gross": {
+                        "amount": gross_value,
+                        "currency": "EUR",
+                        "eur_amount": gross_value,
+                    },
+                    "cost_basis_status": "COMPLETE",
+                },
+            ],
+        }
+
+        result = svc_obj.correct_corporate_action_group(
+            original["ca_group_id"], corrected
+        )
+        share = next(
+            movement for movement in result["movements"]
+            if movement["ca_leg_type"] == "SHARE_ACQUISITION"
+        )
+
+        assert share["gross"]["eur_amount"] == gross_value
+        assert share["cost_basis_status"] == expected_status
+
+    @pytest.mark.parametrize("bad_value", ["-1", "NaN", "Infinity", "malformed"])
+    def test_group_correction_rejects_invalid_scrip_fmv(self, svc, bad_value):
+        svc_obj, fake = svc
+        original = svc_obj.create_corporate_action(_SCRIP_CREATE)
+        original_ids = {movement["id"] for movement in original["movements"]}
+        corrected = {
+            **_SCRIP_CORRECTION,
+            "legs": [
+                _SCRIP_CORRECTION["legs"][0],
+                {
+                    **_SCRIP_CORRECTION["legs"][1],
+                    "gross": {
+                        "amount": bad_value,
+                        "currency": "EUR",
+                        "eur_amount": bad_value,
+                    },
+                    "cost_basis_status": "ZERO_COST",
+                },
+            ],
+        }
+
+        with pytest.raises(ValueError, match="SHARE_ACQUISITION gross"):
+            svc_obj.correct_corporate_action_group(
+                original["ca_group_id"], corrected
+            )
+
+        for movement_id in original_ids:
+            assert fake.portfolio_container._store[movement_id][
+                "correction_status"
+            ] == "ACTIVE"
+
+    def test_non_eur_correction_without_eur_authority_stays_incomplete(self, svc):
+        svc_obj, _ = svc
+        original = svc_obj.create_corporate_action(_SCRIP_CREATE)
+        corrected = {
+            **_SCRIP_CORRECTION,
+            "legs": [
+                _SCRIP_CORRECTION["legs"][0],
+                {
+                    **_SCRIP_CORRECTION["legs"][1],
+                    "gross": {
+                        "amount": "4.50",
+                        "currency": "GBP",
+                        "eur_amount": "",
+                    },
+                    "cost_basis_status": "ZERO_COST",
+                },
+            ],
+        }
+
+        result = svc_obj.correct_corporate_action_group(
+            original["ca_group_id"], corrected
+        )
+        share = next(
+            movement for movement in result["movements"]
+            if movement["ca_leg_type"] == "SHARE_ACQUISITION"
+        )
+
+        assert share["gross"] == {
+            "amount": "4.50",
+            "currency": "GBP",
+            "eur_amount": "",
+        }
+        assert share["cost_basis_status"] == "INCOMPLETE"
+
     def test_gcs5_new_ca_group_id_in_return(self, svc):
         """GC-S5: return value has ca_group_id (the NEW group)."""
         svc_obj, _ = svc
@@ -552,6 +685,38 @@ class TestGroupCorrectionEndpoint:
         resp = c.post(f"/api/portfolio/corporate-actions/{ca_group_id}/correct", json=req)
         assert resp.status_code == 400
         assert resp.json()["error"] == "validation_error"
+
+    @pytest.mark.parametrize("bad_value", ["-1", "NaN", "Infinity", "bad"])
+    def test_invalid_scrip_fmv_returns_400_not_500(
+        self, client, monkeypatch, bad_value
+    ):
+        monkeypatch.setattr(
+            "src.portfolio.cosmos_portfolio.ensure_symbol_config",
+            lambda *a, **kw: None,
+        )
+        c, _, ca_group_id = self._create_group(client)
+        request = {
+            **_SCRIP_CORRECTION,
+            "legs": [
+                _SCRIP_CORRECTION["legs"][0],
+                {
+                    **_SCRIP_CORRECTION["legs"][1],
+                    "gross": {
+                        "amount": bad_value,
+                        "currency": "EUR",
+                        "eur_amount": bad_value,
+                    },
+                },
+            ],
+        }
+
+        response = c.post(
+            f"/api/portfolio/corporate-actions/{ca_group_id}/correct",
+            json=request,
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"] == "validation_error"
 
     def test_gce4_unknown_group_returns_404(self, client):
         """GC-E4: ca_group_id not found returns 404 not_found."""

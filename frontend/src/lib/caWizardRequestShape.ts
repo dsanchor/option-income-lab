@@ -15,7 +15,7 @@
  *   - amount_eur is the primary input; rate_pct will be derived server-side
  */
 
-import type { CaEventType, CaLegType } from "@/types/portfolio";
+import type { CaEventType, CaLegType, CostBasisStatus } from "@/types/portfolio";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -58,6 +58,54 @@ export function isValidCaEventType(v: string): v is CaEventType {
 
 export function isValidCaLegType(v: string): v is CaLegType {
   return (CA_LEG_TYPES as readonly string[]).includes(v);
+}
+
+/**
+ * Derive the share-acquisition basis state from the authoritative EUR FMV.
+ * Blank means unknown, explicit zero is a real zero-cost lot, and a positive
+ * value is a complete acquisition basis.
+ */
+export function shareAcquisitionCostBasisStatus(
+  grossAmount: string,
+  grossEurAmount: string,
+  currency: string,
+): CostBasisStatus {
+  const authoritativeAmount = currency.trim().toUpperCase() === "EUR"
+    ? grossAmount
+    : grossEurAmount;
+  if (authoritativeAmount.trim() === "") return "INCOMPLETE";
+
+  const value = Number(authoritativeAmount);
+  if (!Number.isFinite(value) || value < 0) return "INCOMPLETE";
+  return value === 0 ? "ZERO_COST" : "COMPLETE";
+}
+
+export function shareAcquisitionFmvValidationError(
+  grossAmount: string,
+  grossEurAmount: string,
+  currency: string,
+): string | null {
+  const fields = [
+    ["Share FMV", grossAmount],
+    ["Share FMV (€)", grossEurAmount],
+  ] as const;
+  for (const [label, raw] of fields) {
+    if (raw.trim() === "") continue;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < 0) {
+      return `${label} must be a finite non-negative number.`;
+    }
+  }
+
+  if (
+    currency.trim().toUpperCase() === "EUR"
+    && grossAmount.trim() !== ""
+    && grossEurAmount.trim() !== ""
+    && Number(grossAmount) !== Number(grossEurAmount)
+  ) {
+    return "Share FMV and Share FMV (€) must match for EUR.";
+  }
+  return null;
 }
 
 /**

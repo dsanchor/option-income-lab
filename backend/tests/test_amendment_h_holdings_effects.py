@@ -341,6 +341,33 @@ class TestShareAcquisitionCompleteHoldings:
             "total_shares must sum BUY + SHARE_ACQUISITION COMPLETE"
         )
 
+    def test_positive_scrip_fmv_enters_fifo_basis_not_dividend_income(self):
+        svc = _make_services([
+            _share_acquisition_leg(
+                quantity="1", gross_eur="5.3", cost_basis_status="COMPLETE"
+            ),
+        ])
+
+        h = svc.compute_holdings()["holdings"][0]
+
+        assert Decimal(h["remaining_cost_basis_eur"]) == Decimal("5.30")
+        assert Decimal(h["avg_cost_basis_eur"]) == Decimal("5.30")
+        assert Decimal(h["total_dividends_eur"]) == Decimal("0")
+
+    def test_explicit_zero_scrip_is_zero_cost_fifo_lot(self):
+        svc = _make_services([
+            _share_acquisition_leg(
+                quantity="1", gross_eur="0", cost_basis_status="ZERO_COST"
+            ),
+        ])
+
+        h = svc.compute_holdings()["holdings"][0]
+
+        assert Decimal(h["remaining_cost_basis_eur"]) == Decimal("0")
+        assert h["avg_cost_basis_eur"] == "0.00"
+        assert h["cost_basis_status"] == "COMPLETE"
+        assert Decimal(h["total_dividends_eur"]) == Decimal("0")
+
 
 # ---------------------------------------------------------------------------
 # H-T4: SHARE_ACQUISITION (INCOMPLETE) → +unpaid_shares, zero pool cost

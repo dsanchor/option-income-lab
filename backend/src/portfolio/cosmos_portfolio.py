@@ -19,7 +19,7 @@ import logging
 import re
 import unicodedata
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, DecimalException, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -289,6 +289,78 @@ _CA_REQUIRED_LEGS: Dict[str, set] = {
     "RIGHTS_ISSUE": {"SHARE_ACQUISITION"},
     "SHARE_CONSOLIDATION": {"CONSOLIDATION_OUT", "CONSOLIDATION_IN"},
 }
+
+
+def _optional_nonnegative_decimal(
+    value: Any, field_name: str
+) -> tuple[Optional[Decimal], str]:
+    """Parse an optional financial input without turning bad data into zero."""
+    if value is None:
+        return None, ""
+    raw = str(value).strip()
+    if not raw:
+        return None, ""
+    try:
+        amount = Decimal(raw)
+    except (DecimalException, ValueError):
+        raise ValueError(f"{field_name} must be a valid non-negative number")
+    if not amount.is_finite():
+        raise ValueError(f"{field_name} must be finite")
+    if amount < Decimal("0"):
+        raise ValueError(f"{field_name} must not be negative")
+    return amount, raw
+
+
+def _normalize_share_acquisition_fmv(
+    leg: Dict[str, Any],
+) -> tuple[Dict[str, str], Decimal, str]:
+    """Normalize authoritative share FMV and derive its cost-basis status."""
+    gross = leg.get("gross")
+    if gross is None:
+        gross = {}
+    if not isinstance(gross, dict):
+        raise ValueError("SHARE_ACQUISITION gross must be an object")
+
+    currency = str(gross.get("currency") or "EUR").strip().upper()
+    native, native_raw = _optional_nonnegative_decimal(
+        gross.get("amount"), "SHARE_ACQUISITION gross.amount"
+    )
+    eur, eur_raw = _optional_nonnegative_decimal(
+        gross.get("eur_amount"), "SHARE_ACQUISITION gross.eur_amount"
+    )
+
+    if currency == "EUR":
+        if native is not None and eur is not None and native != eur:
+            raise ValueError(
+                "SHARE_ACQUISITION EUR gross.amount and gross.eur_amount must match"
+            )
+        authoritative = eur if eur is not None else native
+        authoritative_raw = eur_raw if eur is not None else native_raw
+        if authoritative is not None:
+            native_raw = native_raw or authoritative_raw
+            eur_raw = eur_raw or authoritative_raw
+    else:
+        authoritative = eur
+
+    if authoritative is None:
+        status = "INCOMPLETE"
+        calculation_eur = Decimal("0")
+    elif authoritative == Decimal("0"):
+        status = "ZERO_COST"
+        calculation_eur = authoritative
+    else:
+        status = "COMPLETE"
+        calculation_eur = authoritative
+
+    return (
+        {
+            "amount": native_raw,
+            "currency": currency,
+            "eur_amount": eur_raw,
+        },
+        calculation_eur,
+        status,
+    )
 
 # Financial fields on a group leg that must not be patched individually.
 # Non-financial fields (trade_date, notes) remain individually correctable.
@@ -1225,7 +1297,12 @@ class CosmosPortfolioService:
             wht = leg.get("withholding")
             fx = leg.get("fx")
 
-            gross_eur = _d(gross.get("eur_amount", "0"))
+            if leg_type == "SHARE_ACQUISITION":
+                gross, gross_eur, cost_basis_status = (
+                    _normalize_share_acquisition_fmv(leg)
+                )
+            else:
+                gross_eur = _d(gross.get("eur_amount", "0"))
             fees_eur = _d(fees_data.get("total_eur", "0"))
             wht_s = Decimal("0")
             wht_d = Decimal("0")
@@ -1249,7 +1326,11 @@ class CosmosPortfolioService:
                 "gross": {
                     "amount": str(gross.get("amount", "0")),
                     "currency": currency,
-                    "eur_amount": str(gross_eur),
+                    "eur_amount": (
+                        gross["eur_amount"]
+                        if leg_type == "SHARE_ACQUISITION"
+                        else str(gross_eur)
+                    ),
                 },
                 "fees": {
                     "total": str(fees_data.get("total", "0")),
@@ -1504,7 +1585,12 @@ class CosmosPortfolioService:
             wht = leg.get("withholding")
             fx = leg.get("fx")
 
-            gross_eur = _d(gross.get("eur_amount", "0"))
+            if leg_type == "SHARE_ACQUISITION":
+                gross, gross_eur, cost_basis_status = (
+                    _normalize_share_acquisition_fmv(leg)
+                )
+            else:
+                gross_eur = _d(gross.get("eur_amount", "0"))
             fees_eur = _d(fees_data.get("total_eur", "0"))
             wht_s = Decimal("0")
             wht_d = Decimal("0")
@@ -1528,7 +1614,11 @@ class CosmosPortfolioService:
                 "gross": {
                     "amount": str(gross.get("amount", "0")),
                     "currency": currency,
-                    "eur_amount": str(gross_eur),
+                    "eur_amount": (
+                        gross["eur_amount"]
+                        if leg_type == "SHARE_ACQUISITION"
+                        else str(gross_eur)
+                    ),
                 },
                 "fees": {
                     "total": str(fees_data.get("total", "0")),

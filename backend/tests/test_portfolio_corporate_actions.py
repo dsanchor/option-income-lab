@@ -32,9 +32,17 @@ from tests.conftest_portfolio_p2 import FakeCosmos
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
     from web.app import app
-    return TestClient(app)
+    fake = FakeCosmos()
+    monkeypatch.setattr(
+        "src.portfolio.cosmos_portfolio.ensure_symbol_config",
+        lambda *a, **kw: None,
+    )
+    with TestClient(app) as c:
+        app.state.cosmos = fake
+        app.state.cosmos_error = None
+        yield c, fake
 
 
 @pytest.fixture
@@ -162,10 +170,133 @@ class TestCorporateActionCreate:
 
     def test_ht4_share_acquisition_incomplete(self, svc):
         """H-T4: SHARE_ACQUISITION(INCOMPLETE) → BUY, cost_basis_status=INCOMPLETE."""
-        result = svc.create_corporate_action(_CA_4_LEGS)
+        request = {
+            **_CA_4_LEGS,
+            "legs": [
+                _CA_4_LEGS["legs"][0],
+                {
+                    **_CA_4_LEGS["legs"][1],
+                    "gross": {"amount": "", "currency": "GBP", "eur_amount": ""},
+                },
+                *_CA_4_LEGS["legs"][2:],
+            ],
+        }
+        result = svc.create_corporate_action(request)
         acq = next(m for m in result["movements"] if m["ca_leg_type"] == "SHARE_ACQUISITION")
         assert acq["txn_type"] == "BUY"
         assert acq["cost_basis_status"] == "INCOMPLETE"
+        assert acq["gross"] == {"amount": "", "currency": "GBP", "eur_amount": ""}
+
+    @pytest.mark.parametrize(
+        ("gross", "requested_status", "expected_status"),
+        [
+            ("5.3", "INCOMPLETE", "COMPLETE"),
+            ("0", "ZERO_COST", "ZERO_COST"),
+        ],
+    )
+    def test_scrip_fmv_persists_with_canonical_basis_status(
+        self, svc, gross, requested_status, expected_status
+    ):
+        req = {
+            "event_type": "SCRIP_DIVIDEND",
+            "security_id": _SECURITY_ID,
+            "account_id": _ACCOUNT_ID,
+            "payment_date": "2024-03-28",
+            "legs": [{
+                "leg_type": "SHARE_ACQUISITION",
+                "trade_date": "2024-03-28",
+                "quantity": "1",
+                "gross": {"amount": gross, "currency": "EUR", "eur_amount": gross},
+                "cost_basis_status": requested_status,
+            }],
+        }
+
+        result = svc.create_corporate_action(req)
+        acq = result["movements"][0]
+
+        assert acq["gross"] == {
+            "amount": gross,
+            "currency": "EUR",
+            "eur_amount": gross,
+        }
+        assert acq["net"]["eur_amount"] == f"{Decimal(gross):.6f}"
+        assert acq["cost_basis_status"] == expected_status
+
+    @pytest.mark.parametrize("bad_value", ["-1", "NaN", "Infinity", "not-a-number"])
+    def test_scrip_rejects_invalid_authoritative_fmv(self, svc, bad_value):
+        request = {
+            "event_type": "SCRIP_DIVIDEND",
+            "security_id": _SECURITY_ID,
+            "account_id": _ACCOUNT_ID,
+            "payment_date": "2024-03-28",
+            "legs": [{
+                "leg_type": "SHARE_ACQUISITION",
+                "trade_date": "2024-03-28",
+                "quantity": "1",
+                "gross": {
+                    "amount": bad_value,
+                    "currency": "EUR",
+                    "eur_amount": bad_value,
+                },
+                "cost_basis_status": "ZERO_COST",
+            }],
+        }
+
+        with pytest.raises(ValueError, match="SHARE_ACQUISITION gross"):
+            svc.create_corporate_action(request)
+
+    def test_non_eur_scrip_without_eur_authority_stays_incomplete(self, svc):
+        request = {
+            "event_type": "SCRIP_DIVIDEND",
+            "security_id": _SECURITY_ID,
+            "account_id": _ACCOUNT_ID,
+            "payment_date": "2024-03-28",
+            "legs": [{
+                "leg_type": "SHARE_ACQUISITION",
+                "trade_date": "2024-03-28",
+                "quantity": "1",
+                "gross": {"amount": "4.50", "currency": "GBP", "eur_amount": ""},
+                "cost_basis_status": "COMPLETE",
+            }],
+        }
+
+        acq = svc.create_corporate_action(request)["movements"][0]
+
+        assert acq["gross"] == {
+            "amount": "4.50",
+            "currency": "GBP",
+            "eur_amount": "",
+        }
+        assert acq["cost_basis_status"] == "INCOMPLETE"
+        assert acq["net"]["eur_amount"] == "0.000000"
+
+    @pytest.mark.parametrize("bad_value", ["-1", "NaN", "Infinity", "broken"])
+    def test_create_endpoint_returns_validation_400_for_invalid_fmv(
+        self, client, bad_value
+    ):
+        c, _ = client
+        request = {
+            "event_type": "SCRIP_DIVIDEND",
+            "security_id": _SECURITY_ID,
+            "account_id": _ACCOUNT_ID,
+            "payment_date": "2024-03-28",
+            "legs": [{
+                "leg_type": "SHARE_ACQUISITION",
+                "trade_date": "2024-03-28",
+                "quantity": "1",
+                "gross": {
+                    "amount": bad_value,
+                    "currency": "EUR",
+                    "eur_amount": bad_value,
+                },
+                "cost_basis_status": "ZERO_COST",
+            }],
+        }
+
+        response = c.post("/api/portfolio/corporate-actions", json=request)
+
+        assert response.status_code == 400
+        assert response.json()["error"] == "validation_error"
 
     def test_ht5_rights_sold_derechos(self, svc):
         """H-T5: RIGHTS_SOLD → txn_type=SELL, sales_type=DERECHOS."""

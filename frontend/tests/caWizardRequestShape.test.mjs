@@ -407,9 +407,47 @@ describe("validateCaGroupCorrectionRequest", () => {
 // These are tested independently; update both here and the component together.
 // ---------------------------------------------------------------------------
 
-function makeGross(amount, currency, eurAmount) {
-  const eur = eurAmount || (currency === "EUR" ? amount : "0");
-  return { amount: amount || "0", currency, eur_amount: eur || "0" };
+function makeShareAcquisitionGross(amount, currency, eurAmount) {
+  const native = amount.trim();
+  const normalizedCurrency = currency.trim().toUpperCase();
+  return {
+    amount: native,
+    currency: normalizedCurrency,
+    eur_amount: normalizedCurrency === "EUR" ? native : eurAmount.trim(),
+  };
+}
+
+function shareAcquisitionCostBasisStatus(grossAmount, grossEurAmount, currency) {
+  const authoritativeAmount = currency.trim().toUpperCase() === "EUR"
+    ? grossAmount
+    : grossEurAmount;
+  if (authoritativeAmount.trim() === "") return "INCOMPLETE";
+  const value = Number(authoritativeAmount);
+  if (!Number.isFinite(value) || value < 0) return "INCOMPLETE";
+  return value === 0 ? "ZERO_COST" : "COMPLETE";
+}
+
+function shareAcquisitionFmvValidationError(grossAmount, grossEurAmount, currency) {
+  const fields = [
+    ["Share FMV", grossAmount],
+    ["Share FMV (€)", grossEurAmount],
+  ];
+  for (const [label, raw] of fields) {
+    if (raw.trim() === "") continue;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < 0) {
+      return `${label} must be a finite non-negative number.`;
+    }
+  }
+  if (
+    currency.trim().toUpperCase() === "EUR"
+    && grossAmount.trim() !== ""
+    && grossEurAmount.trim() !== ""
+    && Number(grossAmount) !== Number(grossEurAmount)
+  ) {
+    return "Share FMV and Share FMV (€) must match for EUR.";
+  }
+  return null;
 }
 
 function makeFees(total, currency) {
@@ -551,6 +589,65 @@ describe("makeFees", () => {
     const f = makeFees("5.00", "GBP");
     assert.equal(f.currency, "GBP");
     assert.equal(f.total_eur, "0");  // EUR not computed client-side
+  });
+});
+
+describe("share acquisition FMV and cost basis", () => {
+  it("preserves positive EUR FMV as the authoritative EUR amount", () => {
+    assert.deepEqual(makeShareAcquisitionGross("5.3", "EUR", ""), {
+      amount: "5.3",
+      currency: "EUR",
+      eur_amount: "5.3",
+    });
+    assert.equal(shareAcquisitionCostBasisStatus("5.3", "", "EUR"), "COMPLETE");
+  });
+
+  it("maps an explicit zero FMV to a real zero-cost lot", () => {
+    assert.deepEqual(makeShareAcquisitionGross("0", "EUR", ""), {
+      amount: "0",
+      currency: "EUR",
+      eur_amount: "0",
+    });
+    assert.equal(shareAcquisitionCostBasisStatus("0", "", "EUR"), "ZERO_COST");
+  });
+
+  it("keeps a blank FMV incomplete instead of treating it as explicit zero", () => {
+    assert.deepEqual(makeShareAcquisitionGross("", "EUR", ""), {
+      amount: "",
+      currency: "EUR",
+      eur_amount: "",
+    });
+    assert.equal(shareAcquisitionCostBasisStatus("", "", "EUR"), "INCOMPLETE");
+  });
+
+  it("uses Gross EUR as the basis authority for foreign-currency shares", () => {
+    assert.deepEqual(makeShareAcquisitionGross("5.3", "GBP", ""), {
+      amount: "5.3",
+      currency: "GBP",
+      eur_amount: "",
+    });
+    assert.equal(shareAcquisitionCostBasisStatus("5.3", "", "GBP"), "INCOMPLETE");
+    assert.equal(shareAcquisitionCostBasisStatus("5.3", "6.18", "GBP"), "COMPLETE");
+  });
+
+  for (const invalid of ["-1", "NaN", "Infinity", "malformed"]) {
+    it(`blocks invalid FMV ${invalid}`, () => {
+      assert.match(
+        shareAcquisitionFmvValidationError(invalid, invalid, "EUR"),
+        /finite non-negative/,
+      );
+      assert.equal(
+        shareAcquisitionCostBasisStatus(invalid, invalid, "EUR"),
+        "INCOMPLETE",
+      );
+    });
+  }
+
+  it("accepts blank, explicit zero, and positive finite FMV", () => {
+    assert.equal(shareAcquisitionFmvValidationError("", "", "EUR"), null);
+    assert.equal(shareAcquisitionFmvValidationError("0", "0", "EUR"), null);
+    assert.equal(shareAcquisitionFmvValidationError("5.3", "5.3", "EUR"), null);
+    assert.equal(shareAcquisitionFmvValidationError("5.3", "", "GBP"), null);
   });
 });
 

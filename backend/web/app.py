@@ -8,6 +8,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from calendar import month_abbr, monthrange
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -55,6 +56,32 @@ AGENT_TYPES = {
     "cash_secured_put": {"label": "Following · Cash-Secured Put", "is_position_monitor": False},
     "buy_tracker": {"label": "Following · Buy Tracker", "is_position_monitor": False},
 }
+
+_DASHBOARD_COMPLETED_RUN_RETENTION = 100
+_DASHBOARD_PROCESS_STATE_INIT_LOCK = threading.Lock()
+
+
+class _DashboardProcessState:
+    """Process-local synchronized state for dashboard-trigger execution."""
+
+    def __init__(self):
+        self.trigger_inflight: Dict[str, dict] = {}
+        self.trigger_lock = threading.Lock()
+        self.runs: Dict[str, dict] = {}
+        self.last_success: Dict[str, str] = {}
+        self.next_sequence = 0
+        self.runs_lock = threading.Lock()
+
+
+def _get_dashboard_process_state(app_state) -> _DashboardProcessState:
+    state = getattr(app_state, "_dashboard_process_state", None)
+    if state is None:
+        with _DASHBOARD_PROCESS_STATE_INIT_LOCK:
+            state = getattr(app_state, "_dashboard_process_state", None)
+            if state is None:
+                state = _DashboardProcessState()
+                app_state._dashboard_process_state = state
+    return state
 
 # ---------------------------------------------------------------------------
 # Config utilities
@@ -1105,6 +1132,7 @@ def _format_time(dt: datetime) -> str:
 # FastAPI app
 # ---------------------------------------------------------------------------
 app = FastAPI(title="Option Income Lab")
+app.state._dashboard_process_state = _DashboardProcessState()
 
 from web.portfolio_routes import router as portfolio_router
 from web.backup_routes import router as backup_router
@@ -4236,10 +4264,10 @@ async def api_dashboard(request: Request):
 async def api_dashboard_status(request: Request):
     """Lightweight change-signature for the dashboard (BFF polling).
 
-    Returns per-agent last_run timestamps plus the latest activity
-    timestamp. The frontend polls this cheap endpoint and only re-fetches
-    the full dashboard when the signature changes — avoiding constant heavy
-    reloads. Reads in-memory scheduler state + a single TOP 1 activity query.
+    Returns scheduler-task and dashboard per-agent last_run timestamps plus
+    dashboard execution states and the latest activity timestamp. The frontend
+    polls this cheap endpoint and only re-fetches the full dashboard when the
+    signature changes — avoiding constant heavy reloads.
     """
     agents: Dict[str, Any] = {}
     scheduler = getattr(request.app.state, "scheduler", None)
@@ -4249,6 +4277,10 @@ async def api_dashboard_status(request: Request):
                 agents[task["name"]] = task.get("last_run")
         except Exception:  # pragma: no cover - defensive
             pass
+
+    agent_statuses, dashboard_runs = _dashboard_run_status_snapshot(request.app.state)
+    for agent_type, status in agent_statuses.items():
+        agents[agent_type] = status.get("last_run")
 
     latest_activity = None
     cosmos = getattr(request.app.state, "cosmos", None)
@@ -4260,7 +4292,12 @@ async def api_dashboard_status(request: Request):
         except Exception:  # pragma: no cover - defensive
             pass
 
-    return JSONResponse({"agents": agents, "latest_activity": latest_activity})
+    return JSONResponse({
+        "agents": agents,
+        "agent_statuses": agent_statuses,
+        "runs": dashboard_runs,
+        "latest_activity": latest_activity,
+    })
 
 
 def _compute_dashboard_data(cosmos) -> Dict[str, Any]:
@@ -7966,7 +8003,7 @@ def _trigger_slot_key(agent_type: str, symbol: Optional[str]) -> str:
 
 
 def _acquire_trigger_slot(app_state, agent_type: str, symbol: Optional[str],
-                           force_alpha: bool) -> Optional[dict]:
+                           force_alpha: bool, owner_token: str) -> Optional[dict]:
     """Claim the in-flight slot for (agent_type, symbol-or-wildcard).
 
     Returns None if claimed (caller may proceed to start the run), or a
@@ -7974,44 +8011,36 @@ def _acquire_trigger_slot(app_state, agent_type: str, symbol: Optional[str],
     key is still active (caller should respond 409). A slot is considered
     stale — and reclaimable — after `_MAX_TASK_DURATION_SECONDS` (the same
     30-minute constant the scheduler's own worker uses to abandon a
-    runaway job; reused here rather than inventing a second timeout).
+    runaway job; reused here rather than inventing a second timeout). The
+    owner token is immutable for the life of the record and must be supplied
+    to release it.
     """
-    registry = getattr(app_state, "_trigger_inflight", None)
-    if registry is None:
-        registry = {}
-        app_state._trigger_inflight = registry
-    lock = getattr(app_state, "_trigger_inflight_lock", None)
-    if lock is None:
-        lock = threading.Lock()
-        app_state._trigger_inflight_lock = lock
-
+    process_state = _get_dashboard_process_state(app_state)
     key = _trigger_slot_key(agent_type, symbol)
     now = time.monotonic()
-    with lock:
-        existing = registry.get(key)
+    with process_state.trigger_lock:
+        existing = process_state.trigger_inflight.get(key)
         if existing is not None and (now - existing["_monotonic_started"]) < _MAX_TASK_DURATION_SECONDS:
             return dict(existing)
-        registry[key] = {
+        process_state.trigger_inflight[key] = {
             "agent_type": agent_type,
             "symbol": symbol,
             "started_at": datetime.now(timezone.utc).isoformat(),
             "force_alpha": force_alpha,
             "_monotonic_started": now,
+            "_owner_token": owner_token,
         }
         return None
 
 
-def _release_trigger_slot(app_state, agent_type: str, symbol: Optional[str]) -> None:
-    registry = getattr(app_state, "_trigger_inflight", None)
-    if not registry:
-        return
-    lock = getattr(app_state, "_trigger_inflight_lock", None)
+def _release_trigger_slot(app_state, agent_type: str, symbol: Optional[str],
+                          owner_token: str) -> None:
+    process_state = _get_dashboard_process_state(app_state)
     key = _trigger_slot_key(agent_type, symbol)
-    if lock is not None:
-        with lock:
-            registry.pop(key, None)
-    else:
-        registry.pop(key, None)
+    with process_state.trigger_lock:
+        existing = process_state.trigger_inflight.get(key)
+        if existing is not None and existing["_owner_token"] == owner_token:
+            process_state.trigger_inflight.pop(key)
 
 
 def _run_agent_in_background(agent_type: str, scheduler, symbol: str = None,
@@ -8031,14 +8060,115 @@ def _run_agent_in_background(agent_type: str, scheduler, symbol: str = None,
         "open_put_monitor": run_open_put_monitor,
     }
     func = funcs[agent_type]
-    try:
-        asyncio.run(_call_agent_func(
-            func, scheduler.config, scheduler.runner,
-            scheduler.cosmos, scheduler.context_provider,
-            symbol=symbol, run_trigger=run_trigger, force_alpha=force_alpha,
-        ))
-    except Exception as e:
-        print(f"ERROR running {agent_type} trigger: {e}")
+    asyncio.run(_call_agent_func(
+        func, scheduler.config, scheduler.runner,
+        scheduler.cosmos, scheduler.context_provider,
+        symbol=symbol, run_trigger=run_trigger, force_alpha=force_alpha,
+    ))
+
+
+def _dashboard_run_state(app_state) -> tuple[dict, threading.Lock]:
+    """Return the process-local run store and its lock."""
+    process_state = _get_dashboard_process_state(app_state)
+    state = {
+        "runs": process_state.runs,
+        "last_success": process_state.last_success,
+        "next_sequence": process_state.next_sequence,
+    }
+    return state, process_state.runs_lock
+
+
+def _prune_dashboard_runs_locked(state: dict) -> None:
+    """Retain the newest completed runs while never pruning active runs."""
+    runs = state["runs"]
+    completed = [
+        run for run in runs.values()
+        if run.get("status") in ("succeeded", "failed")
+    ]
+    excess = len(completed) - _DASHBOARD_COMPLETED_RUN_RETENTION
+    if excess <= 0:
+        return
+    for run in sorted(completed, key=lambda item: item["_sequence"])[:excess]:
+        runs.pop(run["run_id"], None)
+
+
+def _start_dashboard_run(app_state, agent_type: str, symbol: Optional[str],
+                         run_id: Optional[str] = None) -> dict:
+    """Create an independently addressable dashboard run."""
+    process_state = _get_dashboard_process_state(app_state)
+    with process_state.runs_lock:
+        process_state.next_sequence += 1
+        run = {
+            "run_id": run_id or str(uuid.uuid4()),
+            "agent_type": agent_type,
+            "symbol": symbol,
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": None,
+            "error": None,
+            "_sequence": process_state.next_sequence,
+        }
+        process_state.runs[run["run_id"]] = run
+        _prune_dashboard_runs_locked({
+            "runs": process_state.runs,
+        })
+        return {key: value for key, value in run.items() if not key.startswith("_")}
+
+
+def _complete_dashboard_run(app_state, run_id: str, error: Optional[str] = None) -> None:
+    """Complete exactly one run and preserve the latest successful timestamp."""
+    state, lock = _dashboard_run_state(app_state)
+    completed_at = datetime.now(timezone.utc).isoformat()
+    with lock:
+        run = state["runs"].get(run_id)
+        if run is None or run.get("status") != "running":
+            return
+        run.update({
+            "status": "failed" if error is not None else "succeeded",
+            "completed_at": completed_at,
+            "error": error,
+        })
+        if error is None:
+            previous = state["last_success"].get(run["agent_type"])
+            if previous is None or completed_at > previous:
+                state["last_success"][run["agent_type"]] = completed_at
+        _prune_dashboard_runs_locked(state)
+
+
+def _dashboard_run_status_snapshot(app_state) -> tuple[dict, dict]:
+    """Build deterministic per-agent aggregates and run-ID snapshots."""
+    state, lock = _dashboard_run_state(app_state)
+    with lock:
+        runs = [dict(run) for run in state["runs"].values()]
+        last_success = dict(state["last_success"])
+
+    aggregates: Dict[str, dict] = {}
+    for run in sorted(runs, key=lambda item: item["_sequence"]):
+        aggregates[run["agent_type"]] = {
+            key: value for key, value in run.items() if not key.startswith("_")
+        }
+    for agent_type in sorted(set(aggregates) | set(last_success)):
+        aggregate = aggregates.setdefault(agent_type, {
+            "run_id": None,
+            "agent_type": agent_type,
+            "symbol": None,
+            "status": None,
+            "started_at": None,
+            "completed_at": None,
+            "error": None,
+        })
+        aggregate["last_run"] = last_success.get(agent_type)
+
+    public_runs = {
+        run["run_id"]: {
+            key: value for key, value in run.items() if not key.startswith("_")
+        }
+        for run in sorted(runs, key=lambda item: item["_sequence"])
+    }
+    return (
+        {agent_type: aggregates[agent_type] for agent_type in sorted(aggregates)},
+        public_runs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -8413,7 +8543,10 @@ async def trigger_agent(request: Request, agent_type: str):
     # In-flight guard, keyed by (agent_type, symbol-or-"*"): a duplicate
     # click/request for the same key returns 409 instead of launching a
     # second concurrent (and, with force_alpha, potentially expensive) run.
-    existing = _acquire_trigger_slot(request.app.state, agent_type, symbol, force_alpha)
+    run_id = str(uuid.uuid4())
+    existing = _acquire_trigger_slot(
+        request.app.state, agent_type, symbol, force_alpha, run_id,
+    )
     if existing is not None:
         return JSONResponse(
             {
@@ -8426,21 +8559,55 @@ async def trigger_agent(request: Request, agent_type: str):
             status_code=409,
         )
 
+    try:
+        run = _start_dashboard_run(request.app.state, agent_type, symbol, run_id)
+    except Exception:
+        _release_trigger_slot(request.app.state, agent_type, symbol, run_id)
+        raise
+
     def _run_and_release():
         try:
             _run_agent_in_background(agent_type, scheduler, symbol,
                                       run_trigger=run_trigger, force_alpha=force_alpha)
+        except Exception as e:
+            logger.error("Dashboard trigger failed for %s: %s", agent_type, e, exc_info=True)
+            _complete_dashboard_run(request.app.state, run_id, error=str(e))
+        else:
+            _complete_dashboard_run(request.app.state, run_id)
         finally:
-            _release_trigger_slot(request.app.state, agent_type, symbol)
+            _release_trigger_slot(request.app.state, agent_type, symbol, run_id)
 
-    thread = threading.Thread(target=_run_and_release, daemon=True)
-    thread.start()
+    try:
+        thread = threading.Thread(target=_run_and_release, daemon=True)
+        thread.start()
+    except Exception as e:
+        error = str(e) or type(e).__name__
+        logger.error(
+            "Dashboard trigger could not start worker for %s: %s",
+            agent_type,
+            error,
+            exc_info=True,
+        )
+        _complete_dashboard_run(request.app.state, run_id, error=error)
+        _release_trigger_slot(request.app.state, agent_type, symbol, run_id)
+        return JSONResponse({
+            "status": "failed_to_start",
+            "agent_type": agent_type,
+            "symbol": symbol,
+            "run_trigger": run_trigger,
+            "force_alpha": force_alpha,
+            "run_id": run_id,
+            "started_at": run["started_at"],
+            "error": error,
+        }, status_code=503)
     return JSONResponse({
         "status": "triggered",
         "agent_type": agent_type,
         "symbol": symbol,
         "run_trigger": run_trigger,
         "force_alpha": force_alpha,
+        "run_id": run_id,
+        "started_at": run["started_at"],
     })
 
 
@@ -8544,28 +8711,19 @@ async def run_scheduler_task_now(request: Request, task_name: str):
             {"error": "Scheduler not running"},
             status_code=503)
 
-    # Run in background thread to avoid blocking
-    result = {"success": False, "message": "Starting task..."}
-
-    def _run_in_background():
-        nonlocal result
-        # Corrected trigger contract (copilot-force-alpha-semantics-superseded.md):
-        # ONLY the dashboard CC/CSP buttons (POST /api/trigger/{agent_type})
-        # force Alpha. Settings "Run Now" for any scheduled task -- like
-        # "Full analysis"/trigger-all -- must preserve due-only Alpha
-        # semantics, so force_alpha stays False here even though a human
-        # clicked the button (run_trigger="manual" still records that
-        # provenance accurately for the audit trail). This is inert for
-        # every task whose job_func doesn't declare run_trigger/force_alpha
-        # (see TaskRegistry._worker_loop's introspection guard).
-        result.update(scheduler.registry.trigger_task_now(
-            task_name, run_trigger="manual", force_alpha=False,
-        ))
-
-    thread = threading.Thread(target=_run_in_background, daemon=True)
-    thread.start()
-    thread.join(timeout=1.0)  # Wait up to 1s for quick feedback
-
+    # Corrected trigger contract (copilot-force-alpha-semantics-superseded.md):
+    # ONLY the dashboard CC/CSP buttons (POST /api/trigger/{agent_type})
+    # force Alpha. Settings "Run Now" for any scheduled task -- like
+    # "Full analysis"/trigger-all -- must preserve due-only Alpha semantics.
+    # trigger_task_now only enqueues work, so calling it directly is already
+    # non-blocking and lets this route accurately surface queue rejection.
+    result = scheduler.registry.trigger_task_now(
+        task_name, run_trigger="manual", force_alpha=False,
+    )
+    if not result.get("success"):
+        message = str(result.get("message", "Task could not be queued"))
+        status_code = 404 if "not found" in message.lower() else 409
+        return JSONResponse(result, status_code=status_code)
     return JSONResponse(result)
 
 

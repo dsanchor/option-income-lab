@@ -84,6 +84,21 @@ class TestSettingsRunNowNeverForces:
         assert kwargs["force_alpha"] is False
         assert kwargs["run_trigger"] == "manual"
 
+    def test_run_now_rejection_is_not_returned_as_success(self, client):
+        registry = FakeTaskRegistry()
+        registry.trigger_task_now = lambda name, **kwargs: {
+            "success": False,
+            "message": "Task 'Monitor Agents' is already running",
+        }
+        app.state.scheduler = FakeScheduler(registry=registry)
+        try:
+            resp = client.post("/api/scheduler/tasks/monitor_agents/run")
+        finally:
+            del app.state.scheduler
+
+        assert resp.status_code == 409
+        assert resp.json()["success"] is False
+
 
 class TestTriggerAllNeverForces:
     """POST /api/trigger-all ("Run Full"/"Full analysis") -- must stay

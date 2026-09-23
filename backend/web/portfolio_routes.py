@@ -1813,7 +1813,7 @@ async def correct_corporate_action_group(request: Request, ca_group_id: str):
             "fees": {"total": "...", "currency": "...", "total_eur": "..."},
             "withholding": {... or null},
             "fx": {... or null},
-            "cost_basis_status": "COMPLETE|INCOMPLETE|null",
+            "cost_basis_status": "COMPLETE|ZERO_COST|INCOMPLETE|null",
             "notes": "<str|null>"
           }
         ]
