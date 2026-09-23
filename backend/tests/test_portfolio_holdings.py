@@ -188,6 +188,129 @@ class TestShareCalculation:
         assert Decimal(h["total_dividends_eur"]) == Decimal("73.31")
 
 
+class TestCrossAccountAggregation:
+    def test_microsoft_like_residual_basis_is_sum_of_account_fifo_holdings(self):
+        """A sale in one account must not consume another account's cheaper lots.
+
+        Before the fix, global FIFO pooled both accounts and produced €15,000
+        invested / €136.36 average. Account-local FIFO leaves €13,000 invested
+        across 110 shares / €118.18 average.
+        """
+        movements = [
+            _make_movement(
+                "msft-a-buy", "XNAS:MSFT", "BUY", "100", "10000",
+                account_id="acct-a", trade_date="2024-01-01",
+            ),
+            _make_movement(
+                "msft-b-buy", "XNAS:MSFT", "BUY", "20", "6000",
+                account_id="acct-b", trade_date="2024-02-01",
+            ),
+            _make_movement(
+                "msft-b-sell", "XNAS:MSFT", "SELL", "10", "4000",
+                account_id="acct-b", trade_date="2024-03-01",
+            ),
+        ]
+        portfolio_svc, securities_svc = _make_services(movements)
+        svc = HoldingsService(portfolio_svc, securities_svc)
+
+        aggregate = svc.compute_holdings()["holdings"][0]
+        acct_a = svc.compute_holdings(account_id="acct-a")["holdings"][0]
+        acct_b = svc.compute_holdings(account_id="acct-b")["holdings"][0]
+
+        assert acct_a["total_shares"] == "100.000000"
+        assert acct_a["remaining_cost_basis_eur"] == "10000.00"
+        assert acct_a["avg_cost_basis_eur"] == "100.00"
+        assert acct_b["total_shares"] == "10.000000"
+        assert acct_b["remaining_cost_basis_eur"] == "3000.00"
+        assert acct_b["avg_cost_basis_eur"] == "300.00"
+
+        assert aggregate["total_shares"] == "110.000000"
+        assert aggregate["remaining_cost_basis_eur"] == "13000.00"
+        assert aggregate["avg_cost_basis_eur"] == "118.18"
+        assert (
+            Decimal(aggregate["remaining_cost_basis_eur"])
+            / Decimal(aggregate["total_shares"])
+        ).quantize(Decimal("0.01")) == Decimal(aggregate["avg_cost_basis_eur"])
+        assert Decimal(aggregate["remaining_cost_basis_eur"]) == (
+            Decimal(acct_a["remaining_cost_basis_eur"])
+            + Decimal(acct_b["remaining_cost_basis_eur"])
+        )
+
+    def test_zero_cost_scrip_counts_in_aggregate_average_denominator(self):
+        movements = [
+            _make_movement(
+                "msft-paid", "XNAS:MSFT", "BUY", "100", "10000",
+                account_id="acct-paid", trade_date="2024-01-01",
+            ),
+            _make_movement(
+                "msft-scrip", "XNAS:MSFT", "BUY", "20", "0",
+                account_id="acct-scrip", cost_basis_status="ZERO_COST",
+                trade_date="2024-02-01",
+            ),
+        ]
+        portfolio_svc, securities_svc = _make_services(movements)
+        aggregate = HoldingsService(
+            portfolio_svc, securities_svc
+        ).compute_holdings()["holdings"][0]
+
+        assert aggregate["total_shares"] == "120.000000"
+        assert aggregate["remaining_cost_basis_eur"] == "10000.00"
+        assert aggregate["avg_cost_basis_eur"] == "83.33"
+
+    def test_fully_sold_account_contributes_zero_residual_basis(self):
+        movements = [
+            _make_movement(
+                "msft-open", "XNAS:MSFT", "BUY", "50", "5000",
+                account_id="acct-open", trade_date="2024-01-01",
+            ),
+            _make_movement(
+                "msft-closed-buy", "XNAS:MSFT", "BUY", "10", "3000",
+                account_id="acct-closed", trade_date="2024-02-01",
+            ),
+            _make_movement(
+                "msft-closed-sell", "XNAS:MSFT", "SELL", "10", "3500",
+                account_id="acct-closed", trade_date="2024-03-01",
+            ),
+        ]
+        portfolio_svc, securities_svc = _make_services(movements)
+        svc = HoldingsService(portfolio_svc, securities_svc)
+
+        aggregate = svc.compute_holdings()["holdings"][0]
+        closed = svc.compute_holdings(account_id="acct-closed")["holdings"][0]
+
+        assert closed["total_shares"] == "0.000000"
+        assert closed["remaining_cost_basis_eur"] == "0.00"
+        assert closed["avg_cost_basis_eur"] is None
+        assert aggregate["total_shares"] == "50.000000"
+        assert aggregate["remaining_cost_basis_eur"] == "5000.00"
+        assert aggregate["avg_cost_basis_eur"] == "100.00"
+
+    def test_incomplete_account_keeps_aggregate_marked_incomplete(self):
+        movements = [
+            _make_movement(
+                "msft-known", "XNAS:MSFT", "BUY", "50", "5000",
+                account_id="acct-known", trade_date="2024-01-01",
+            ),
+            _make_movement(
+                "msft-unknown", "XNAS:MSFT", "BUY", "5", "0",
+                account_id="acct-unknown", cost_basis_status="INCOMPLETE",
+                trade_date="2024-02-01",
+            ),
+        ]
+        portfolio_svc, securities_svc = _make_services(movements)
+        aggregate = HoldingsService(
+            portfolio_svc, securities_svc
+        ).compute_holdings()["holdings"][0]
+
+        assert aggregate["total_shares"] == "55.000000"
+        assert aggregate["remaining_cost_basis_eur"] == "5000.00"
+        assert aggregate["avg_cost_basis_eur"] is None
+        assert aggregate["cost_basis_status"] == "INCOMPLETE"
+        assert any(
+            warning["type"] == "INCOMPLETE_COST_BASIS"
+            for warning in aggregate["warnings"]
+        )
+
 class TestCostBasis:
     def test_complete_cost_basis(self):
         movements = [

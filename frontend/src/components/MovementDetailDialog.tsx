@@ -11,6 +11,7 @@ import MovementCorrectionDialog from "./MovementCorrectionDialog";
 import ReassignmentDialog from "./ReassignmentDialog";
 import CorporateActionForm, { buildCaInitialState } from "./CorporateActionForm";
 import OptionPositionLinkPicker from "./OptionPositionLinkPicker";
+import { getMovementTypeLabel } from "@/lib/movementTypeLabel";
 
 const TXN_BADGE: Record<string, string> = {
   BUY: "bg-accent-green/15 text-accent-green",
@@ -293,7 +294,7 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
                 TXN_BADGE[m.txn_type] ?? "bg-bg-hover text-text-muted"
               }`}
             >
-              {m.txn_type}
+              {getMovementTypeLabel(m)}
             </span>
             {m.correction_status && m.correction_status !== "ACTIVE" && (
               <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${

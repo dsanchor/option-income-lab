@@ -161,8 +161,9 @@ class HoldingsService:
                 per_security[security_id] = {
                     "security_id": security_id,
                     "ticker": m.get("ticker", security_id.split(":")[-1]),
-                    # FIFO lot list (appended in chronological order; already sorted)
-                    "lots": [],
+                    # FIFO lots are isolated by account. A sale in one brokerage
+                    # account must never consume another account's acquisition lots.
+                    "lots_by_account": {},
                     # Share counter (all shares including INCOMPLETE)
                     "total_shares": _ZERO,
                     # Accumulators
@@ -179,7 +180,9 @@ class HoldingsService:
                     "movement_warnings": [],
                 }
             agg = per_security[security_id]
-            agg["accounts"].add(m.get("account_id", "_unassigned"))
+            movement_account = m.get("account_id", "_unassigned")
+            agg["accounts"].add(movement_account)
+            account_lots = agg["lots_by_account"].setdefault(movement_account, [])
 
             qty = _d(m.get("quantity", "0"))
             gross_eur = _d((m.get("gross") or {}).get("eur_amount", "0"))
@@ -204,7 +207,7 @@ class HoldingsService:
                         unit_cost_eur=None,
                         cost_basis_status="INCOMPLETE",
                     )
-                    agg["lots"].append(lot)
+                    account_lots.append(lot)
                 else:
                     # COMPLETE or ZERO_COST — enter pool.
                     # BUY cost = net.eur_amount (total cash outflow = gross + commission).
@@ -221,7 +224,7 @@ class HoldingsService:
                         unit_cost_eur=unit_cost,
                         cost_basis_status=cost_basis_status,
                     )
-                    agg["lots"].append(lot)
+                    account_lots.append(lot)
                     if cost_basis_status != "ZERO_COST":
                         agg["total_purchase_outflow_eur"] += lot_cost
                     else:
@@ -235,7 +238,7 @@ class HoldingsService:
 
                 if sale_type == "ACCIONES":
                     agg["total_shares"] -= qty
-                    cost_consumed, neg_inv = _consume_lots(agg["lots"], qty)
+                    cost_consumed, neg_inv = _consume_lots(account_lots, qty)
                     agg["cost_basis_sold_eur"] += cost_consumed
                     if neg_inv:
                         agg["has_negative_inventory"] = True
@@ -262,12 +265,12 @@ class HoldingsService:
                     unit_cost_eur=unit_cost,
                     cost_basis_status="COMPLETE" if carried_cost >= _ZERO else "INCOMPLETE",
                 )
-                agg["lots"].append(lot)
+                account_lots.append(lot)
 
             elif txn_type == "TRANSFER_OUT":
                 # Consumes lots in FIFO order; not counted in sale proceeds.
                 agg["total_shares"] -= qty
-                _consume_lots(agg["lots"], qty)
+                _consume_lots(account_lots, qty)
 
             elif txn_type in OPTION_TXN_TYPES:
                 # Inventory-neutral option cashflows are intentionally excluded
@@ -326,23 +329,34 @@ class HoldingsService:
         global_has_incomplete = False
 
         for security_id, agg in per_security.items():
-            lots: List[_Lot] = agg["lots"]
+            lots: List[_Lot] = [
+                lot
+                for account_lots in agg["lots_by_account"].values()
+                for lot in account_lots
+            ]
             total_shares = agg["total_shares"]
 
             # FIFO remaining cost = sum of (remaining_qty × unit_cost) for non-INCOMPLETE lots.
             # INCOMPLETE lots have None unit_cost and are excluded from pool cost.
             pool_shares = _ZERO
             remaining_cost = _ZERO
+            has_remaining_incomplete = False
             for lot in lots:
                 if lot.quantity <= _ZERO:
                     continue
                 if lot.unit_cost_eur is not None:
                     pool_shares += lot.quantity
                     remaining_cost += lot.quantity * lot.unit_cost_eur
+                else:
+                    has_remaining_incomplete = True
 
             # FIFO average: remaining_cost / pool_shares (null when pool is empty)
             avg_cost: Optional[Decimal] = None
-            if pool_shares > _ZERO:
+            if pool_shares > _ZERO and not (
+                account_id is None
+                and len(agg["accounts"]) > 1
+                and has_remaining_incomplete
+            ):
                 avg_cost = (remaining_cost / pool_shares).quantize(
                     _TWO_PLACES, rounding=ROUND_HALF_UP
                 )

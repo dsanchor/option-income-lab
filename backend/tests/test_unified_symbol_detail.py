@@ -552,6 +552,44 @@ class TestWatchlistAndPortfolioState:
         assert "current_invested_eur" in entry
         assert "total_dividends_eur" in entry
 
+    def test_microsoft_totals_sum_account_fifo_residuals(self, client):
+        c, fake = client
+        fake.container.seed_security("XNAS:MSFT", "Microsoft Corporation")
+        fake.container.seed_config("MSFT", {"security_id": "XNAS:MSFT"})
+        _add_ledger_buy(
+            fake, "XNAS:MSFT", account_id="acct-a", quantity="100",
+            gross_eur="10000", doc_id="msft-a-buy",
+        )
+        _add_ledger_buy(
+            fake, "XNAS:MSFT", account_id="acct-b", quantity="20",
+            gross_eur="6000", doc_id="msft-b-buy",
+        )
+        _add_ledger_sell(
+            fake, "XNAS:MSFT", account_id="acct-b", quantity="10",
+        )
+
+        portfolio = c.get("/api/symbols/XNAS:MSFT/detail").json()["portfolio"]
+        by_account = {row["account_id"]: row for row in portfolio["holdings_by_account"]}
+
+        assert by_account["acct-a"]["shares"] == "100.000000"
+        assert by_account["acct-a"]["current_invested_eur"] == "10000.00"
+        assert by_account["acct-a"]["avg_cost_eur"] == "100.00"
+        assert by_account["acct-b"]["shares"] == "10.000000"
+        assert by_account["acct-b"]["current_invested_eur"] == "3000.00"
+        assert by_account["acct-b"]["avg_cost_eur"] == "300.00"
+        assert portfolio["current_shares"] == "110.000000"
+        assert portfolio["current_invested_eur"] == "13000.00"
+        assert portfolio["average_cost_eur"] == "118.18"
+
+        overview = c.get("/api/symbols/overview").json()
+        row = next(
+            item for item in overview["portfolio_rows"]
+            if item["security_id"] == "XNAS:MSFT"
+        )
+        assert row["portfolio_shares"] == "110.000000"
+        assert row["portfolio_invested_eur"] == "13000.00"
+        assert row["portfolio_avg_cost_eur"] == "118.18"
+
     def test_recent_movements_in_portfolio_section(self, client):
         """recent_movements entries must carry final contract field names.
 

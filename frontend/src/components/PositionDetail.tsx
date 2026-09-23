@@ -22,6 +22,7 @@ import { renderMarkdown } from "@/lib/markdown";
 import { ROW_TINT_BG } from "@/lib/badges";
 import type { Position } from "@/types/symbol-detail";
 import type { BrokerAccount, LedgerMovement } from "@/types/portfolio";
+import { getMovementTypeLabel } from "@/lib/movementTypeLabel";
 
 // ── Snapshot chart ────────────────────────────────────────────────────────
 type Snapshot = Record<string, number | string | null | undefined>;
@@ -976,7 +977,7 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
                     className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1 text-left text-xs text-text transition hover:bg-bg-hover"
                   >
                     <span className="font-mono">{movement.trade_date ?? "—"}</span>
-                    <span>{movement.txn_type ?? "—"}</span>
+                    <span>{getMovementTypeLabel(movement)}</span>
                     <AccountBadge accountId={movement.account_id ?? ""} accounts={accounts} />
                   </button>
                 ))}

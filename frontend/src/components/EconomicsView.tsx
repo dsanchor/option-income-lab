@@ -30,6 +30,7 @@ import { averageLastNExcludingZero } from "@/lib/format";
 import { getMovements, listAccounts } from "@/lib/portfolio-api";
 import MovementDetailDialog from "@/components/MovementDetailDialog";
 import type { BrokerAccount, LedgerMovement } from "@/types/portfolio";
+import { getMovementTypeLabel } from "@/lib/movementTypeLabel";
 import type {
   EconomicsBySymbolRow,
   EconomicsCoverage,
@@ -541,7 +542,7 @@ function PositionMovementsDialog({
                       <td className="px-3 py-2 font-mono">{movement.trade_date}</td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span>{movement.txn_type}</span>
+                          <span>{getMovementTypeLabel(movement)}</span>
                         </div>
                       </td>
                       <td className={`px-3 py-2 text-right font-mono ${netColor(Number(movement.net?.eur_amount ?? 0))}`}>

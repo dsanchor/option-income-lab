@@ -17,6 +17,7 @@ import type {
   WithholdingLegInput,
 } from "@/types/portfolio";
 import { OPTION_TXN_TYPES, SALES_TYPE_LABELS } from "@/types/portfolio";
+import { getMovementTypeLabel } from "@/lib/movementTypeLabel";
 import { getAccountName } from "@/lib/accountDisplay";
 import OptionPositionLinkPicker from "./OptionPositionLinkPicker";
 
@@ -697,7 +698,7 @@ export default function MovementCorrectionDialog({
             </div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 sm:grid-cols-3">
               <span className="text-text-muted">Type:</span>
-              <span className="font-mono text-text">{m.txn_type}</span>
+              <span className="font-mono text-text">{getMovementTypeLabel(m)}</span>
               <span className="text-text-muted hidden sm:block">Account:</span>
               <span className="font-mono text-text col-span-2 sm:col-span-1 hidden sm:block truncate">{getAccountName(m.account_id, accounts)}</span>
               <span className="text-text-muted">Symbol:</span>

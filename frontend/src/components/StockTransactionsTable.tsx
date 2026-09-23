@@ -9,6 +9,7 @@ import { SALES_TYPE_LABELS } from "@/types/portfolio";
 import MovementDetailDialog from "./MovementDetailDialog";
 import ReassignmentDialog from "./ReassignmentDialog";
 import { getAccountName } from "@/lib/accountDisplay";
+import { getMovementTypeLabel } from "@/lib/movementTypeLabel";
 
 const PAGE_SIZE = 20;
 
@@ -231,7 +232,7 @@ export default function StockTransactionsTable({ securityId }: Props) {
                             TXN_BADGE[m.txn_type] ?? "bg-bg-hover text-text-muted"
                           }`}
                         >
-                          {m.txn_type}
+                          {getMovementTypeLabel(m)}
                         </span>
                         {m.txn_type === "SELL" && m.sales_type && (
                           <span className="text-xs text-text-muted">

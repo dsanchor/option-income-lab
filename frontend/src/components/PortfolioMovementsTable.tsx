@@ -13,6 +13,7 @@ import MovementDetailDialog from "./MovementDetailDialog";
 import AddMovementDialog from "./AddMovementDialog";
 import AccountBadge from "./AccountBadge";
 import { formatAccountName } from "@/lib/accountDisplay";
+import { getMovementTypeLabel } from "@/lib/movementTypeLabel";
 import NativeSelect from "./ui/NativeSelect";
 
 const TXN_BADGE: Record<TxnType, string> = {
@@ -587,7 +588,7 @@ function MovementRow({
               TXN_BADGE[m.txn_type] ?? "bg-bg-hover text-text-muted"
             }`}
           >
-            {m.txn_type}
+            {getMovementTypeLabel(m)}
           </span>
           {m.txn_type === "SELL" && m.sales_type === "DERECHOS" && (
             <span className="ml-1 rounded-full px-1.5 py-0.5 text-xs bg-accent-orange/15 text-accent-orange">
