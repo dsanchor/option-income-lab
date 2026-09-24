@@ -4279,6 +4279,20 @@ def _build_dashboard_tables(
                 row["position_id"] = position.get("position_id")
                 row["strike"] = position.get("strike")
                 row["expiration"] = position.get("expiration")
+                row["account_id"] = _dashboard_identity_value(
+                    position, "account",
+                    ("account_id", "brokerage_account_id", "account"),
+                )
+                row["contract_id"] = _dashboard_identity_value(
+                    position, "contract_id",
+                    ("contract_id", "option_contract_id", "contract_symbol",
+                     "occ_symbol", "osi_symbol"),
+                )
+                row["instrument_id"] = _dashboard_identity_value(
+                    position, "instrument_id",
+                    ("instrument_id", "instrument_identifier", "security_id"),
+                )
+                row["is_paper"] = position.get("is_paper") is True
                 row["dte"] = dec.get("dte_remaining")
                 row["moneyness"] = dec.get("moneyness")
                 row["assignment_risk"] = dec.get("assignment_risk")
@@ -8191,7 +8205,9 @@ AGENT_FUNCTIONS = {
 
 def _call_agent_func(func, config, runner, cosmos, context_provider, *,
                       symbol: str = None, run_trigger: str = "scheduled",
-                      force_alpha: bool = False):
+                      force_alpha: bool = False,
+                      position_id: Optional[str] = None,
+                      position_constraints: Optional[dict] = None):
     """Invoke an agent wrapper function, forwarding run_trigger/force_alpha
     only if its signature currently declares them.
 
@@ -8211,15 +8227,24 @@ def _call_agent_func(func, config, runner, cosmos, context_provider, *,
         kwargs["run_trigger"] = run_trigger
     if "force_alpha" in accepted:
         kwargs["force_alpha"] = force_alpha
+    if "position_id" in accepted:
+        kwargs["position_id"] = position_id
+    if "position_constraints" in accepted:
+        kwargs["position_constraints"] = position_constraints
     return func(config, runner, cosmos, context_provider, **kwargs)
 
 
-def _trigger_slot_key(agent_type: str, symbol: Optional[str]) -> str:
+def _trigger_slot_key(
+    agent_type: str, symbol: Optional[str], position_id: Optional[str] = None
+) -> str:
+    if position_id:
+        return f"{agent_type}:{symbol or '*'}:{position_id}"
     return f"{agent_type}:{symbol or '*'}"
 
 
 def _acquire_trigger_slot(app_state, agent_type: str, symbol: Optional[str],
-                           force_alpha: bool, owner_token: str) -> Optional[dict]:
+                           force_alpha: bool, owner_token: str,
+                           position_id: Optional[str] = None) -> Optional[dict]:
     """Claim the in-flight slot for (agent_type, symbol-or-wildcard).
 
     Returns None if claimed (caller may proceed to start the run), or a
@@ -8232,7 +8257,7 @@ def _acquire_trigger_slot(app_state, agent_type: str, symbol: Optional[str],
     to release it.
     """
     process_state = _get_dashboard_process_state(app_state)
-    key = _trigger_slot_key(agent_type, symbol)
+    key = _trigger_slot_key(agent_type, symbol, position_id)
     now = time.monotonic()
     with process_state.trigger_lock:
         existing = process_state.trigger_inflight.get(key)
@@ -8241,6 +8266,7 @@ def _acquire_trigger_slot(app_state, agent_type: str, symbol: Optional[str],
         process_state.trigger_inflight[key] = {
             "agent_type": agent_type,
             "symbol": symbol,
+            "position_id": position_id,
             "started_at": datetime.now(timezone.utc).isoformat(),
             "force_alpha": force_alpha,
             "_monotonic_started": now,
@@ -8250,9 +8276,10 @@ def _acquire_trigger_slot(app_state, agent_type: str, symbol: Optional[str],
 
 
 def _release_trigger_slot(app_state, agent_type: str, symbol: Optional[str],
-                          owner_token: str) -> None:
+                          owner_token: str,
+                          position_id: Optional[str] = None) -> None:
     process_state = _get_dashboard_process_state(app_state)
-    key = _trigger_slot_key(agent_type, symbol)
+    key = _trigger_slot_key(agent_type, symbol, position_id)
     with process_state.trigger_lock:
         existing = process_state.trigger_inflight.get(key)
         if existing is not None and existing["_owner_token"] == owner_token:
@@ -8260,7 +8287,9 @@ def _release_trigger_slot(app_state, agent_type: str, symbol: Optional[str],
 
 
 def _run_agent_in_background(agent_type: str, scheduler, symbol: str = None,
-                              run_trigger: str = "manual", force_alpha: bool = True):
+                              run_trigger: str = "manual", force_alpha: bool = True,
+                              position_id: Optional[str] = None,
+                              position_constraints: Optional[dict] = None):
     import asyncio
     from src.covered_call_agent import run_covered_call_analysis
     from src.cash_secured_put_agent import run_cash_secured_put_analysis
@@ -8280,6 +8309,7 @@ def _run_agent_in_background(agent_type: str, scheduler, symbol: str = None,
         func, scheduler.config, scheduler.runner,
         scheduler.cosmos, scheduler.context_provider,
         symbol=symbol, run_trigger=run_trigger, force_alpha=force_alpha,
+        position_id=position_id, position_constraints=position_constraints,
     ))
 
 
@@ -8309,7 +8339,8 @@ def _prune_dashboard_runs_locked(state: dict) -> None:
 
 
 def _start_dashboard_run(app_state, agent_type: str, symbol: Optional[str],
-                         run_id: Optional[str] = None) -> dict:
+                         run_id: Optional[str] = None,
+                         position_id: Optional[str] = None) -> dict:
     """Create an independently addressable dashboard run."""
     process_state = _get_dashboard_process_state(app_state)
     with process_state.runs_lock:
@@ -8318,6 +8349,7 @@ def _start_dashboard_run(app_state, agent_type: str, symbol: Optional[str],
             "run_id": run_id or str(uuid.uuid4()),
             "agent_type": agent_type,
             "symbol": symbol,
+            "position_id": position_id,
             "status": "running",
             "started_at": datetime.now(timezone.utc).isoformat(),
             "completed_at": None,
@@ -8780,7 +8812,64 @@ async def trigger_agent(request: Request, agent_type: str):
                 body = json.loads(raw)
         except (ValueError, json.JSONDecodeError):
             body = {}
-    symbol = body.get("symbol") if isinstance(body, dict) else None
+    body = body if isinstance(body, dict) else {}
+    symbol_supplied = "symbol" in body
+    position_id_supplied = "position_id" in body
+    symbol = body.get("symbol")
+    position_id = body.get("position_id")
+    position_constraints = None
+    if symbol_supplied and (not isinstance(symbol, str) or not symbol.strip()):
+        return JSONResponse({"error": "symbol must be a non-empty string"},
+                            status_code=400)
+    if position_id_supplied and (
+        not isinstance(position_id, str) or not position_id.strip()
+    ):
+        return JSONResponse({"error": "position_id must be a non-empty string"},
+                            status_code=400)
+    if agent_type in {"open_call_monitor", "open_put_monitor"}:
+        from src.position_monitor_selection import (
+            POSITION_CONSTRAINT_FIELDS,
+            PositionSelectionError,
+            position_identity,
+            resolve_active_monitor_position,
+        )
+        supplied_constraint_fields = [
+            field for field in POSITION_CONSTRAINT_FIELDS if field in body
+        ]
+        identity_supplied = position_id_supplied or bool(supplied_constraint_fields)
+        if identity_supplied and not symbol:
+            return JSONResponse(
+                {"error": "symbol is required when position identity is provided"},
+                status_code=400,
+            )
+        if supplied_constraint_fields and not position_id_supplied:
+            return JSONResponse(
+                {
+                    "error": (
+                        "position_id is required when position identity "
+                        "constraints are provided"
+                    )
+                },
+                status_code=400,
+            )
+    if agent_type in {"open_call_monitor", "open_put_monitor"} and symbol:
+        requested_constraints = {
+            field: body.get(field)
+            for field in supplied_constraint_fields
+        }
+        expected_type = "call" if agent_type == "open_call_monitor" else "put"
+        try:
+            selected_position = resolve_active_monitor_position(
+                scheduler.cosmos.get_symbol(symbol),
+                symbol=symbol,
+                option_type=expected_type,
+                position_id=position_id,
+                constraints=requested_constraints,
+            )
+        except PositionSelectionError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=exc.status_code)
+        position_id = position_identity(selected_position)["position_id"]
+        position_constraints = requested_constraints
 
     # Explicit trigger contract (danny-force-alpha-design.md §6). Manual
     # API/UI calls default force_alpha=True — a human clicked this, so it
@@ -8799,6 +8888,7 @@ async def trigger_agent(request: Request, agent_type: str):
     run_id = str(uuid.uuid4())
     existing = _acquire_trigger_slot(
         request.app.state, agent_type, symbol, force_alpha, run_id,
+        position_id,
     )
     if existing is not None:
         return JSONResponse(
@@ -8806,6 +8896,7 @@ async def trigger_agent(request: Request, agent_type: str):
                 "status": "already_running",
                 "agent_type": existing["agent_type"],
                 "symbol": existing["symbol"],
+                "position_id": existing.get("position_id"),
                 "started_at": existing["started_at"],
                 "force_alpha": existing["force_alpha"],
             },
@@ -8813,22 +8904,30 @@ async def trigger_agent(request: Request, agent_type: str):
         )
 
     try:
-        run = _start_dashboard_run(request.app.state, agent_type, symbol, run_id)
+        run = _start_dashboard_run(
+            request.app.state, agent_type, symbol, run_id, position_id
+        )
     except Exception:
-        _release_trigger_slot(request.app.state, agent_type, symbol, run_id)
+        _release_trigger_slot(
+            request.app.state, agent_type, symbol, run_id, position_id
+        )
         raise
 
     def _run_and_release():
         try:
             _run_agent_in_background(agent_type, scheduler, symbol,
-                                      run_trigger=run_trigger, force_alpha=force_alpha)
+                                      run_trigger=run_trigger, force_alpha=force_alpha,
+                                      position_id=position_id,
+                                      position_constraints=position_constraints)
         except Exception as e:
             logger.error("Dashboard trigger failed for %s: %s", agent_type, e, exc_info=True)
             _complete_dashboard_run(request.app.state, run_id, error=str(e))
         else:
             _complete_dashboard_run(request.app.state, run_id)
         finally:
-            _release_trigger_slot(request.app.state, agent_type, symbol, run_id)
+            _release_trigger_slot(
+                request.app.state, agent_type, symbol, run_id, position_id
+            )
 
     try:
         thread = threading.Thread(target=_run_and_release, daemon=True)
@@ -8842,11 +8941,14 @@ async def trigger_agent(request: Request, agent_type: str):
             exc_info=True,
         )
         _complete_dashboard_run(request.app.state, run_id, error=error)
-        _release_trigger_slot(request.app.state, agent_type, symbol, run_id)
+        _release_trigger_slot(
+            request.app.state, agent_type, symbol, run_id, position_id
+        )
         return JSONResponse({
             "status": "failed_to_start",
             "agent_type": agent_type,
             "symbol": symbol,
+            "position_id": position_id,
             "run_trigger": run_trigger,
             "force_alpha": force_alpha,
             "run_id": run_id,
@@ -8857,6 +8959,7 @@ async def trigger_agent(request: Request, agent_type: str):
         "status": "triggered",
         "agent_type": agent_type,
         "symbol": symbol,
+        "position_id": position_id,
         "run_trigger": run_trigger,
         "force_alpha": force_alpha,
         "run_id": run_id,

@@ -1,13 +1,19 @@
-from .agent_runner import AgentRunner
-from .cosmos_db import CosmosDBService
-from .context import ContextProvider
+from __future__ import annotations
+
 import random
+from typing import Any
+
+from .agent_runner import AgentRunner
+from .context import ContextProvider
+from .cosmos_db import CosmosDBService
 
 
 async def run_open_put_monitor(config, runner: AgentRunner,
                                 cosmos: CosmosDBService,
                                 context_provider: ContextProvider,
-                                symbol: str = None,
+                                symbol: str | None = None,
+                                position_id: str | None = None,
+                                position_constraints: dict[str, Any] | None = None,
                                 run_trigger: str = "scheduled",
                                 force_alpha: bool = False):
     """Run open cash-secured put position monitoring from CosmosDB.
@@ -30,21 +36,31 @@ async def run_open_put_monitor(config, runner: AgentRunner,
     roll_instructions = get_open_put_roll_instructions()
 
     print(f"\n{'='*60}")
-    print(f"Starting OpenPutMonitor monitoring" + (f" for {symbol}" if symbol else ""))
+    print("Starting OpenPutMonitor monitoring" + (f" for {symbol}" if symbol else ""))
     print(f"{'='*60}")
 
     if symbol:
+        from .position_monitor_selection import resolve_active_monitor_position
         sym_doc = cosmos.get_symbol(symbol)
-        if not sym_doc:
-            print(f"Symbol {symbol} not found — skipping OpenPutMonitor")
-            return
-        active_positions = [
-            p for p in sym_doc.get("positions", [])
-            if p["type"] == "put" and p["status"] == "active"
-        ]
-        if not active_positions:
-            print(f"No active put positions for {symbol} — skipping OpenPutMonitor")
-            return
+        if position_id or position_constraints:
+            active_positions = [resolve_active_monitor_position(
+                sym_doc,
+                symbol=symbol,
+                option_type="put",
+                position_id=position_id,
+                constraints=position_constraints,
+            )]
+        else:
+            active_positions = [
+                p for p in (sym_doc or {}).get("positions", [])
+                if p.get("type") == "put" and p.get("status") == "active"
+            ]
+            if not sym_doc:
+                print(f"Symbol {symbol} not found — skipping OpenPutMonitor")
+                return
+            if not active_positions:
+                print(f"No active put positions for {symbol} — skipping OpenPutMonitor")
+                return
         sym_doc["_active_positions"] = active_positions
         put_symbols = [sym_doc]
     else:
@@ -86,5 +102,5 @@ async def run_open_put_monitor(config, runner: AgentRunner,
             )
 
     print(f"\n{'='*60}")
-    print(f"Completed OpenPutMonitor monitoring")
+    print("Completed OpenPutMonitor monitoring")
     print(f"{'='*60}\n")

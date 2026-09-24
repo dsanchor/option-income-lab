@@ -2429,6 +2429,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
         model: str = None,
         health_metrics: str = "",
         extra_context: str = "",
+        position_identity: dict | None = None,
         cosmos=None,
         agent_type: str = None,
         run_trigger: str = "scheduled",
@@ -2458,6 +2459,9 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
 - Current strike: ${strike}
 - Current expiration: {expiration}
 - Exchange: {exchange}
+
+=== AUTHORITATIVE POSITION IDENTITY ===
+{json.dumps(position_identity or {}, indent=2, default=str)}
 
 === PRE-FETCHED MARKET DATA ===
 
@@ -2766,6 +2770,12 @@ Output your activity in the required JSON format. Use the timestamp above in you
         expiration = position["expiration"]
         position_id = position.get("position_id", "")
         position_type = position.get("type", "call")
+        if not str(position_id).strip():
+            raise ValueError(
+                f"Active {position_type} position for {symbol} has no position_id"
+            )
+        from .position_monitor_selection import position_identity
+        authoritative_identity = position_identity(position)
 
         print(f"\n--- Monitoring {symbol} ${strike} exp {expiration} (2-phase) ---")
         logger.info(
@@ -2894,12 +2904,19 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 model=assessment_model,
                 health_metrics=_health_metrics,
                 extra_context=self._build_position_context_section(symbol, cosmos, data),
+                position_identity=authoritative_identity,
                 cosmos=cosmos,
                 agent_type=agent_type,
                 run_trigger=run_trigger,
                 force_alpha=force_alpha,
                 run_id=run_id,
             )
+            for phase_payload in (activity_json, handoff_json):
+                if isinstance(phase_payload, dict):
+                    phase_payload["position_id"] = position_id
+                    for identity_field, identity_value in authoritative_identity.items():
+                        if identity_value is not None:
+                            phase_payload[identity_field] = identity_value
             # Tracks the trace id of whichever phase produced the FINAL
             # activity payload this cycle, for Supervisor/Alpha's
             # parent_trace_id -- reassigned to the roll phase's trace id
@@ -3170,6 +3187,13 @@ Output your activity in the required JSON format. Use the timestamp above in you
                     "timestamp": analysis_ts,
                 }
             activity_payload["position_id"] = position_id
+            for identity_field in (
+                "option_type", "strike", "expiration", "account_id",
+                "contract_id", "instrument_id", "is_paper", "quantity",
+            ):
+                identity_value = authoritative_identity.get(identity_field)
+                if identity_value is not None:
+                    activity_payload[identity_field] = identity_value
 
             # Normalize monitor-agent field names so templates/APIs
             # can use standard names (strike, expiration, activity)
@@ -3331,6 +3355,12 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         "buyback_cost": _re.get("buyback_cost") if isinstance(_re, dict) else None,
                         "new_premium": _re.get("new_premium") if isinstance(_re, dict) else None,
                         "net_credit_debit": _re.get("net_credit") if isinstance(_re, dict) else None,
+                        "position_id": position_id,
+                        **{
+                            field: value
+                            for field, value in authoritative_identity.items()
+                            if value is not None
+                        },
                     }
                     # Normalize for templates
                     alert_data["activity"] = alert_data["action"]
@@ -3492,6 +3522,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                     "exchange": exchange,
                     "current_strike": strike,
                     "current_expiration": expiration,
+                    **authoritative_identity,
                     "position_id": position_id,
                     "timestamp": analysis_ts,
                     "is_alert": False,

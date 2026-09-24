@@ -320,6 +320,20 @@ export default function DashboardAgentTables({ tables }: { tables: AgentTable[] 
                           <TriggerButton
                             agent={agent.key}
                             symbol={row.symbol}
+                            position={
+                              row.position_id
+                                ? {
+                                    position_id: row.position_id,
+                                    option_type: row.option_type,
+                                    strike: row.strike,
+                                    expiration: row.expiration,
+                                    account_id: row.account_id,
+                                    contract_id: row.contract_id,
+                                    instrument_id: row.instrument_id,
+                                    is_paper: row.is_paper,
+                                  }
+                                : undefined
+                            }
                             compact
                             globallyDisabled={globallyDisabled}
                           />

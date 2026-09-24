@@ -310,3 +310,31 @@
 - Validation passed: 200 focused backend tests, 133 focused frontend Node tests, TypeScript, changed-file ESLint, new-test Ruff, Python compilation, product diff whitespace checks, and the production frontend build. The broader frontend suite passed 1,338/1,340 tests; both failures are in untouched source-contract areas.
 - Non-blocking residuals: two trailing-whitespace lines in `.squad/routing.md`; baseline Ruff findings in the two modified legacy Python modules; one existing generated-CSS warning during the successful build; two unrelated frontend source-contract failures (`economicsParity` PP-6 and `movementDetailDefensiveGuards` optional-chaining expectation).
 - No commit, push, deployment, or production access occurred.
+
+### 2026-09-25 — Manual position-agent execution review rejected
+- **REJECT.** The row-to-run identity path correctly carries and reloads `position_id`, isolates reversed same-symbol/account/paper positions, scopes trigger locks by position, preserves scheduled all-position iteration, and persists authoritative identity.
+- Release blocker: explicit blank identity constraints are silently discarded. Independent endpoint probes returned HTTP 200 and launched the run for `account_id=""`, `contract_id=""`, `expiration=""`, and `option_type=""` with an explicit `position_id`; the accepted invariant requires every supplied identity constraint to agree or fail closed.
+- Quality blocker: the changed monitor wrappers add four Ruff `RUF013` violations for implicit optional `position_id` and `position_constraints` annotations.
+- Validation otherwise passed: 79 backend tests, 50 frontend Node tests, two adversarial probes, TypeScript, changed-file ESLint, Python compilation, new-file Ruff, diff whitespace, and production frontend build. No commit, push, deployment, or production access occurred.
+### 2026-09-25 — Manual position execution re-review remains rejected
+- Rusty's presence-model revision fixed the behavioral blockers: 176 focused
+  backend tests, 45 frontend tests, and 141 independent adversarial assertions
+  passed, including no-launch invalid requests and exact reverse-order
+  same-contract/account/paper-lane selection.
+- Final lint gate still fails: the revision adds four `RUF013` findings in
+  `backend/web/app.py` for the new `position_id`/`position_constraints`
+  parameters, increasing that file from 8 baseline findings to 12. The new
+  focused test also reports Ruff `I001`.
+- Verdict remains REJECT; no source/tests were modified.
+
+### 2026-09-25 — Manual position execution final lint gate approved
+- **APPROVE.** Danny's annotation-only revision removed all four new
+  `RUF013` findings, restoring `backend/web/app.py` to its exact baseline of
+  8, without Ruff suppressions or behavioral changes.
+- The focused test file passes full scoped Ruff and `I001`; 76/76 focused
+  manual-position tests passed, including invalid blank/null constraints,
+  exact same-symbol selection, position locks, and persistence.
+- Python compilation and diff whitespace checks passed. Residuals are 8
+  pre-existing app `RUF013` findings and 3 pre-existing/deprecation warnings.
+- No source/tests were modified; no commit, push, deployment, or production
+  access occurred.

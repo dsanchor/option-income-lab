@@ -19,6 +19,10 @@ export interface AgentRow {
   key: string;
   symbol: string;
   position_id?: string | null;
+  account_id?: string | null;
+  contract_id?: string | null;
+  instrument_id?: string | null;
+  is_paper?: boolean;
   display: string;
   underlying_price?: number | null;
   recent_activities?: RecentActivityRef[];

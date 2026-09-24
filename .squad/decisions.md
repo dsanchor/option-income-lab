@@ -2,6 +2,32 @@
 
 ## Active Decisions
 
+### Manual monitoring-agent execution is position scoped
+
+**Date:** 2026-09-25
+**Status:** IMPLEMENTED AND APPROVED
+**Requested by:** Copilot
+
+- A manual open-call/open-put monitor run carries the clicked row's stable
+  `position_id` through the frontend, trigger API, in-flight/run state, monitor
+  wrapper, runner prompt, persisted activity/alert/snapshot identity, and
+  dashboard refresh.
+- The backend reloads exactly that active position and validates every supplied
+  identity constraint: option type, strike, expiration, account, contract ID,
+  instrument ID, and paper lane. Explicit null, blank, malformed, stale, or
+  conflicting identity fails closed; it never falls back to another position.
+- Legacy symbol-only requests remain compatible only when exactly one active
+  position of the requested monitor type exists. Ambiguous requests return
+  HTTP 409.
+- Trigger locks and run results are position scoped, so different positions for
+  one symbol may run concurrently while duplicate runs for one position are
+  rejected. Scheduled monitoring remains an all-position path.
+- Basher approved the final revision after 176 focused backend tests, 45
+  frontend tests, 141 adversarial assertions, TypeScript, ESLint, Python
+  compilation, production build, Ruff baseline comparison, and diff hygiene.
+  Residuals are 8 pre-existing `RUF013` findings and 3
+  pre-existing/deprecation warnings.
+
 ### Dashboard monitor rows use position identity
 
 **Date:** 2026-09-24

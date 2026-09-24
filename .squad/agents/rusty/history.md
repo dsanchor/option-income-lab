@@ -93,3 +93,10 @@
 - A legacy monitor record without `position_id` is matched by intersecting every explicit identity field it carries with active positions; a failed strike, expiration, account, option type, paper lane, contract ID, or instrument ID may never be discarded in favor of symbol-only matching.
 - Legacy fallback is valid only when that complete predicate resolves exactly one active position. Zero or multiple matches remain unassigned while the record stays visible in the global Activities feed.
 - An explicit `position_id` remains authoritative, including stale rolled/closed IDs: failed ID lookup never falls back to contract or symbol identity.
+
+### 2026-09-25 — Manual monitor trigger identity presence is explicit
+- Trigger payload identity uses key presence, not truthiness: an absent field enables the intended legacy path, while a present null, blank, whitespace-only, or malformed field fails with HTTP 400.
+- Position constraints require an explicit valid `position_id`; endpoint route type remains an independent call/put constraint, and a supplied `option_type` must normalize and match rather than being replaced by the route default.
+- Exact-ID selection validates every supplied constraint before launch. Mismatches remain conflicts, and ambiguous symbol-only legacy requests remain HTTP 409.
+- Position-specific locking continues to permit different position IDs concurrently while rejecting a duplicate run for the same position.
+- Monitor wrapper annotations now use explicit `str | None` and `dict[str, Any] | None`, resolving the four changed-code RUF013 findings without ignores.

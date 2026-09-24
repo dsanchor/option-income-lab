@@ -9,6 +9,7 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 
 ## Recent Updates
 
+📌 2026-09-24T22:35:11Z: Consolidated the approved manual position-agent execution fix, cleared four inbox records, added orchestration/session logs, and prepared the position-scoped product/test diff for commit and push
 📌 2026-09-24T21:35:54Z: Consolidated final review/removal/monitor decisions, cleared 10 inbox records, added orchestration/session logs, aligned team routing/registry/Reuben charter, and removed the two routing whitespace findings; no product changes, commit, or push
 📌 2026-09-06T20:57:09Z: Consolidated portfolio movement workflow directives — orchestration log, session log, decision merge (3 new sections), inbox cleared (3 files archived), identity updated to deployed state, git commit and push
 📌 2026-09-06T00:37:00Z: Finalized portfolio unified implementation documentation — orchestration log, session log, decision merge, 80 KB inbox archived, agent history updates, no commits (as instructed)
@@ -261,3 +262,12 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
   decision log and cleared the inbox.
 - Added contributor orchestration records plus one concise session log. No
   product code, commit, push, deployment, or production access occurred.
+
+### 2026-09-24 — Manual position-agent execution release
+- Merged and deduplicated four inbox records into the canonical decision,
+  preserving the initial rejection, fail-closed revision, lint-only correction,
+  and final approval.
+- Recorded the full position-ID execution path, legacy ambiguity behavior,
+  position-scoped locking/results, and unchanged scheduled all-position path.
+- Added concise orchestration and session logs and prepared the approved
+  product, tests, and squad records for commit and push.

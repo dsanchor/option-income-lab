@@ -205,3 +205,12 @@
   Null, blank, malformed, unknown, or conflicting aliases fail closed.
 - Exact `position_id` assignment still requires every explicit option-type
   constraint to agree; mismatch never degrades to contract or symbol fallback.
+
+### 2026-09-25 — Manual position execution lint gate
+- Replaced the four newly introduced implicit optional annotations in the
+  dashboard wrapper path with explicit `Optional[str]` and `Optional[dict]`
+  while preserving `None` defaults and runtime behavior.
+- Ruff import fixing confirmed the focused manual-execution test import block
+  is already canonical. The focused file is fully Ruff-clean, and app
+  `RUF013` findings returned from 12 to the pre-existing baseline of 8.
+- All 76 focused manual position execution tests and Python compilation passed.

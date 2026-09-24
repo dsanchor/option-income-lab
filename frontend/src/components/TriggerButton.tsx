@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { DashboardStatusPayload } from "@/types/dashboard";
 
 type Status =
@@ -27,17 +28,29 @@ const RUN_TIMEOUT_MS = 30 * 60 * 1000;
 export default function TriggerButton({
   agent,
   symbol,
+  position,
   compact = false,
   className = "",
   globallyDisabled = false,
 }: {
   agent: string;
   symbol?: string;
+  position?: {
+    position_id: string;
+    option_type?: string;
+    strike?: number | string | null;
+    expiration?: string | null;
+    account_id?: string | null;
+    contract_id?: string | null;
+    instrument_id?: string | null;
+    is_paper?: boolean;
+  };
   compact?: boolean;
   className?: string;
   globallyDisabled?: boolean;
 }) {
   const [status, setStatus] = useState<Status>("idle");
+  const router = useRouter();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const pendingRef = useRef(false);
   const mountedRef = useRef(true);
@@ -79,6 +92,7 @@ export default function TriggerButton({
       const data = (await res.json()) as DashboardStatusPayload;
       const run = data.runs?.[runId];
       if (run?.status === "succeeded") {
+        router.refresh();
         finish("done");
         return;
       }
@@ -107,7 +121,12 @@ export default function TriggerButton({
       const res = await fetch(`/api/trigger/${agent}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol, run_trigger: "manual", force_alpha: true }),
+        body: JSON.stringify({
+          symbol,
+          ...position,
+          run_trigger: "manual",
+          force_alpha: true,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 409) {

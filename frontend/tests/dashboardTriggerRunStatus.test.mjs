@@ -23,6 +23,18 @@ describe("dashboard trigger run-status contract", () => {
     assert.match(trigger, /run\?\.status === "succeeded"/);
     assert.match(trigger, /run\?\.status === "failed"/);
     assert.match(trigger, /run\.error \?\? "Run failed"/);
+    assert.match(trigger, /router\.refresh\(\)/);
+  });
+
+  it("sends complete position identity from the clicked monitor row", () => {
+    assert.match(trigger, /\.\.\.position/);
+    assert.match(tables, /position_id: row\.position_id/);
+    assert.match(tables, /account_id: row\.account_id/);
+    assert.match(tables, /contract_id: row\.contract_id/);
+    assert.match(tables, /instrument_id: row\.instrument_id/);
+    assert.match(tables, /is_paper: row\.is_paper/);
+    assert.match(types, /account_id\?: string \| null/);
+    assert.match(types, /is_paper\?: boolean/);
   });
 
   it("preserves 409 handling, double-click protection, timeout, and cleanup", () => {

@@ -808,3 +808,61 @@ def test_main_run_all_agents_async_passes_explicit_force_alpha_false(monkeypatch
     for name in ("covered_call", "cash_secured_put", "open_call_monitor", "open_put_monitor"):
         assert by_name[name] == {"run_trigger": "scheduled", "force_alpha": False}, name
     assert by_name["buy_tracker"] == {}
+
+
+def test_position_monitor_persists_authoritative_position_identity_and_snapshot(
+    monkeypatch,
+):
+    runner, cosmos, _notifier, _state = _monitor_runner_fixture(monkeypatch)
+    snapshots = []
+    monkeypatch.setattr(
+        runner,
+        "_build_position_snapshot_data",
+        lambda *args, **kwargs: {"underlying_price": 410.0},
+    )
+    cosmos.write_position_snapshot = (
+        lambda symbol, position_id, data:
+        snapshots.append((symbol, position_id, copy.deepcopy(data)))
+    )
+
+    _run(
+        runner.run_position_monitor(
+            name="OpenCallMonitor",
+            symbol="MSFT",
+            exchange="NASDAQ",
+            position={
+                "position_id": "pos-account-b-paper",
+                "type": "call",
+                "strike": 420.0,
+                "expiration": EXPIRATION,
+                "quantity": 7,
+                "account_id": "acct-b",
+                "is_paper": True,
+                "source": {
+                    "premium": 3.20,
+                    "contract_id": "MSFT-identical-contract",
+                    "instrument_id": "instrument-msft",
+                },
+            },
+            agent_type="open_call_monitor",
+            cosmos=cosmos,
+            context_provider=_FakeContext(),
+            fetcher=_FakeFetcher(_market_data_for_monitor()),
+            assessment_instructions="test",
+            roll_instructions="test",
+        )
+    )
+
+    activity = cosmos.activities[0]
+    assert activity["position_id"] == "pos-account-b-paper"
+    assert activity["strike"] == 420.0
+    assert activity["expiration"] == EXPIRATION
+    assert activity["option_type"] == "call"
+    assert activity["quantity"] == 7
+    assert activity["account_id"] == "acct-b"
+    assert activity["is_paper"] is True
+    assert activity["contract_id"] == "MSFT-identical-contract"
+    assert activity["instrument_id"] == "instrument-msft"
+    assert snapshots == [
+        ("MSFT", "pos-account-b-paper", {"underlying_price": 410.0})
+    ]

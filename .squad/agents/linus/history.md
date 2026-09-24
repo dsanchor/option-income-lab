@@ -51,3 +51,10 @@
   malformed values are incompatible, and an exact `position_id` must still
   agree with all explicit identity constraints. Incompatible records remain
   unassigned in monitor rows while staying visible in global Activities.
+- **2026-09-24:** Manual position-monitor execution is now addressed by stable
+  `position_id` from the clicked dashboard row through the BFF, API trigger,
+  in-flight/run state, monitor wrapper, runner prompt, snapshots, activities,
+  alerts, and refresh. The backend reloads and validates the exact active
+  position (including account, contract, type, strike, expiry, and paper lane);
+  stale or mismatched IDs and ambiguous symbol-only requests fail closed.
+  Scheduled monitoring still iterates every active position independently.
