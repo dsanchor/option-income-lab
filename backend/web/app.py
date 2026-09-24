@@ -4310,6 +4310,7 @@ async def api_dashboard_status(request: Request):
         agents[agent_type] = status.get("last_run")
 
     latest_activity = None
+    banner_generated_at = None
     cosmos = getattr(request.app.state, "cosmos", None)
     monitor_agent_enabled = _monitor_agent_enabled_map(
         _effective_monitor_agent_config(scheduler, cosmos)
@@ -4319,6 +4320,12 @@ async def api_dashboard_status(request: Request):
             recent = cosmos.get_all_activities(limit=1)
             if recent:
                 latest_activity = recent[0].get("timestamp")
+        except Exception:  # pragma: no cover - defensive
+            pass
+        try:
+            banner = cosmos.get_banner()
+            if banner:
+                banner_generated_at = banner.get("generated_at")
         except Exception:  # pragma: no cover - defensive
             pass
 
@@ -4331,6 +4338,7 @@ async def api_dashboard_status(request: Request):
             name for name, enabled in monitor_agent_enabled.items() if not enabled
         ],
         "latest_activity": latest_activity,
+        "banner_generated_at": banner_generated_at,
     })
 
 
@@ -6760,9 +6768,11 @@ def _build_settings_config_context(
     banner = tasks_by_name.get("banner_agent", {})
     banner_enabled = banner.get("enabled", True)
     banner_cron = banner.get("cron", "0 5 * * *")
-    banner_last_run = resolve_last_run("banner_agent", banner.get("last_run"))
+    # Banner "Last run" is intentionally successful-generation time. Generic
+    # scheduler ``last_run`` remains the latest attempt for compatibility.
+    banner_last_run = resolve_last_run("banner_agent", banner.get("last_success"))
     banner_next_run = fmt_time(banner.get("next_run"))
-    banner_last_run_iso = resolve_last_run_iso("banner_agent", banner.get("last_run"))
+    banner_last_run_iso = resolve_last_run_iso("banner_agent", banner.get("last_success"))
     banner_next_run_iso = to_iso(banner.get("next_run"))
 
     calendar = tasks_by_name.get("calendar_sync", {})
@@ -8329,47 +8339,77 @@ async def trigger_summary_agent(request: Request):
     return JSONResponse({"status": "triggered", "agent_type": "summary_agent"})
 
 
-# ---------------------------------------------------------------------------
-# Banner Agent — manual trigger
-# ---------------------------------------------------------------------------
-
-def _run_banner_agent_in_background(scheduler, state_ref):
-    """Run the banner agent in a background thread."""
-    import asyncio
-    try:
-        asyncio.run(scheduler._run_banner_agent_async())
-    except Exception as e:
-        logger.error("Banner agent trigger error: %s", e, exc_info=True)
-    finally:
-        state_ref["running"] = False
-
-
 @app.post("/api/trigger/banner_agent")
 async def trigger_banner_agent(request: Request):
     scheduler = getattr(request.app.state, "scheduler", None)
-    if scheduler is None or scheduler.config is None:
+    if (
+        scheduler is None
+        or scheduler.config is None
+        or getattr(scheduler, "registry", None) is None
+    ):
         return JSONResponse(
             {"error": "Scheduler not running — cannot trigger banner agent"},
             status_code=503)
 
-    state_ref = getattr(request.app.state, "_banner_agent_status", None)
-    if state_ref is None:
-        state_ref = {"running": False}
-        request.app.state._banner_agent_status = state_ref
-
-    if state_ref.get("running"):
-        return JSONResponse(
-            {"error": "Banner agent already running"},
-            status_code=409)
-
-    state_ref["running"] = True
-    thread = threading.Thread(
-        target=_run_banner_agent_in_background,
-        args=(scheduler, state_ref),
-        daemon=True,
+    result = scheduler.registry.trigger_task_now(
+        "banner_agent",
+        retain_result=True,
     )
-    thread.start()
-    return JSONResponse({"status": "triggered", "agent_type": "banner_agent"})
+    if not result.get("success"):
+        message = str(result.get("message", "Banner agent could not be queued"))
+        status_code = 404 if "not found" in message.lower() else 409
+        return JSONResponse({"error": message}, status_code=status_code)
+
+    run_id = result.get("run_id")
+    if not run_id or not hasattr(scheduler.registry, "wait_for_run"):
+        return JSONResponse(
+            {"error": "Banner run completion tracking is unavailable"},
+            status_code=503,
+        )
+
+    run = await asyncio.to_thread(scheduler.registry.wait_for_run, run_id)
+    if not run.get("completed"):
+        return JSONResponse(
+            {"error": run.get("error", "Banner agent did not complete")},
+            status_code=504,
+        )
+    if not run.get("success"):
+        return JSONResponse(
+            {"error": run.get("error", "Dashboard banner generation failed")},
+            status_code=500,
+        )
+
+    persisted = run.get("result")
+    persisted_generated_at = (
+        persisted.get("generated_at")
+        if isinstance(persisted, dict)
+        else None
+    )
+    last_run_iso = ""
+    if persisted_generated_at:
+        try:
+            last_run_iso = datetime.fromisoformat(
+                str(persisted_generated_at).replace("Z", "+00:00")
+            ).astimezone(timezone.utc).isoformat()
+        except ValueError:
+            pass
+    if not last_run_iso:
+        last_run_iso = str(run.get("completed_at") or "")
+    last_run = ""
+    if last_run_iso:
+        try:
+            last_run = _format_time(datetime.fromisoformat(last_run_iso))
+        except ValueError:
+            last_run = last_run_iso
+
+    return JSONResponse({
+        "status": "completed",
+        "agent_type": "banner_agent",
+        "message": result.get("message"),
+        "run_id": run_id,
+        "banner_last_run": last_run,
+        "banner_last_run_iso": last_run_iso,
+    })
 
 
 # ---------------------------------------------------------------------------

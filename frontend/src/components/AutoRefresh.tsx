@@ -8,9 +8,10 @@ import type { DashboardStatusPayload } from "@/types/dashboard";
  * Transparent background auto-refresh. Renders nothing and no UI.
  *
  * Instead of blindly re-fetching the whole dashboard on a timer, it polls a
- * cheap `/api/dashboard/status` endpoint (per-agent last_run + latest activity
- * timestamp). Only when that signature changes does it call router.refresh(),
- * which re-runs the server component and pulls the new data in place.
+ * cheap `/api/dashboard/status` endpoint (per-agent last_run, latest activity,
+ * and banner generation timestamps). Only when that signature changes does it
+ * call router.refresh(), which re-runs the server component and pulls the new
+ * data in place.
  *
  * Pauses while the tab is hidden; re-checks immediately on re-focus.
  */
@@ -33,6 +34,7 @@ export default function AutoRefresh({ intervalMs = 30000 }: { intervalMs?: numbe
           s: data.agent_statuses ?? {},
           g: data.monitor_agent_enabled ?? {},
           l: data.latest_activity ?? null,
+          b: data.banner_generated_at ?? null,
         });
         if (aborted) return;
         // First poll: record the baseline without refreshing.

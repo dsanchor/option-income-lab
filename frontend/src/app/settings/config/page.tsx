@@ -10,7 +10,7 @@ export default async function SettingsConfigPage() {
   let error: string | null = null;
 
   try {
-    data = await apiFetch<SettingsConfig>("/api/settings/config");
+    data = await apiFetch<SettingsConfig>("/api/settings/config", { cache: "no-store" });
   } catch (err) {
     error = err instanceof Error ? err.message : "Failed to load configuration";
   }

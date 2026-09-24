@@ -4,7 +4,7 @@ import { apiFetch, API_BASE_URL } from "@/lib/api";
 /** BFF proxy: settings config context. Mirrors GET /api/settings/config. */
 export async function GET() {
   try {
-    const data = await apiFetch<unknown>("/api/settings/config");
+    const data = await apiFetch<unknown>("/api/settings/config", { cache: "no-store" });
     return NextResponse.json(data);
   } catch (err) {
     return NextResponse.json(

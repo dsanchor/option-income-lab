@@ -9,6 +9,9 @@ export interface SchedulerTask {
   enabled: boolean;
   cron: string;
   last_run?: string | null;
+  last_attempt?: string | null;
+  last_success?: string | null;
+  last_error?: string | null;
   next_run?: string | null;
   has_extra_config?: boolean;
 }

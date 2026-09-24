@@ -142,4 +142,5 @@ export interface DashboardStatusPayload {
   monitor_agent_enabled?: Record<string, boolean>;
   disabled_monitor_agents?: string[];
   latest_activity?: string | null;
+  banner_generated_at?: string | null;
 }

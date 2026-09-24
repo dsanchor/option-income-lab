@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 async function getData(): Promise<DashboardData> {
   try {
-    return await apiFetch<DashboardData>("/api/dashboard");
+    return await apiFetch<DashboardData>("/api/dashboard", { cache: "no-store" });
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Failed to load dashboard" };
   }

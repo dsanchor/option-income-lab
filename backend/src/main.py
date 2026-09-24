@@ -584,7 +584,8 @@ class OptionsAgentScheduler:
 
     def run_banner_agent_job(self):
         """Execute banner agent (bridges async to sync for scheduler)."""
-        _run_async(self._run_banner_agent_async())
+        return _run_async(self._run_banner_agent_async())
+
     async def _run_banner_agent_async(self):
         """Run dashboard banner agent if enabled in config."""
         banner_config = self.config.config.get('banner_agent', {})
@@ -597,12 +598,10 @@ class OptionsAgentScheduler:
         print(f"📰 Dashboard Banner Agent - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         print(f"{'*'*70}\n")
 
-        try:
-            result = await run_banner_agent(self.config, self.cosmos)
-            print(f"Banner agent complete: {len(result.get('items', []))} items from "
-                  f"{result.get('symbols_analyzed', 0)} symbols")
-        except Exception as e:
-            print(f"ERROR during dashboard banner generation: {e}")
+        result = await run_banner_agent(self.config, self.cosmos)
+        print(f"Banner agent complete: {len(result.get('items', []))} items from "
+              f"{result.get('symbols_analyzed', 0)} symbols")
+        return result
 
     def run_calendar_sync_job(self):
         """Execute calendar sync (bridges async to sync for scheduler)."""

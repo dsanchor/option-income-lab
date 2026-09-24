@@ -137,6 +137,13 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
       const res = await fetch(endpoint, { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
+        if (key === "banner" && data.banner_last_run_iso) {
+          setCfg((current) => ({
+            ...current,
+            banner_last_run: data.banner_last_run || current.banner_last_run,
+            banner_last_run_iso: data.banner_last_run_iso,
+          }));
+        }
         const msg = data.status || data.message || (data.saved ? "Done" : "Triggered ✓");
         setRunStates((s) => ({ ...s, [key]: { msg: `✅ ${msg}`, ok: true } }));
       } else {
@@ -241,7 +248,12 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
 
   const RunStatus = ({ id, endpoint }: { id: string; endpoint: string }) => (
     <>
-      <button type="button" className={runBtnCls} onClick={() => runNow(id, endpoint)}>
+      <button
+        type="button"
+        className={runBtnCls}
+        disabled={runStates[id]?.msg === "Running…"}
+        onClick={() => runNow(id, endpoint)}
+      >
         ▶ Run Now
       </button>
       {runStates[id] && (
