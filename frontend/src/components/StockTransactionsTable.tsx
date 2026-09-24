@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Link2 } from "lucide-react";
 import { getMovements, listAccounts } from "@/lib/portfolio-api";
 import { subCalendarMonths, toLocalDateString } from "@/lib/dateHelpers";
@@ -10,8 +10,19 @@ import MovementDetailDialog from "./MovementDetailDialog";
 import ReassignmentDialog from "./ReassignmentDialog";
 import { getAccountName } from "@/lib/accountDisplay";
 import { getMovementTypeLabel } from "@/lib/movementTypeLabel";
+import {
+  filterMovementsByType,
+  getServerMovementTypeFilter,
+} from "@/lib/filterMovementsByType";
+import {
+  dedupeMovementsById,
+  fetchAllMovementPages,
+  isAbortError,
+  LatestMovementRequest,
+} from "@/lib/movementPagination";
 
 const PAGE_SIZE = 20;
+const FILTER_BATCH_SIZE = 500;
 
 const TXN_BADGE: Record<TxnType, string> = {
   BUY: "bg-accent-green/15 text-accent-green",
@@ -84,32 +95,66 @@ export default function StockTransactionsTable({ securityId }: Props) {
   const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
   const [selected, setSelected] = useState<LedgerMovement | null>(null);
   const [showReassign, setShowReassign] = useState(false);
+  const requestRef = useRef(new LatestMovementRequest());
 
   const load = useCallback(async (pg: number, tf: TypeFilter, timef: TimeFilter) => {
+    const request = requestRef.current.begin();
     setLoading(true);
     setError(null);
     try {
       const date_from = timef !== "ALL"
         ? toLocalDateString(subCalendarMonths(new Date(), TIME_FILTER_MONTHS[timef]))
         : undefined;
-      const data = await getMovements({
-        security_id: securityId,
-        txn_type: tf !== "ALL" ? tf : undefined,
-        date_from,
-        limit: PAGE_SIZE,
-        offset: pg * PAGE_SIZE,
-      });
-      setMovements(data.movements);
-      setTotalCount(data.total_count);
-    } catch {
+      const serverTxnType = getServerMovementTypeFilter(tf);
+      if (tf === "DIVIDEND") {
+        const result = await fetchAllMovementPages({
+          pageSize: FILTER_BATCH_SIZE,
+          signal: request.signal,
+          fetchPage: (offset, limit, signal) =>
+            getMovements({
+              security_id: securityId,
+              txn_type: serverTxnType,
+              date_from,
+              limit,
+              offset,
+            }, { signal }),
+        });
+        if (!request.isCurrent()) return;
+        const filtered = filterMovementsByType(result.movements, tf);
+        setMovements(filtered.slice(pg * PAGE_SIZE, (pg + 1) * PAGE_SIZE));
+        setTotalCount(filtered.length);
+      } else {
+        const data = await getMovements({
+          security_id: securityId,
+          txn_type: serverTxnType,
+          date_from,
+          limit: PAGE_SIZE,
+          offset: pg * PAGE_SIZE,
+        }, { signal: request.signal });
+        if (!request.isCurrent()) return;
+        setMovements(dedupeMovementsById(data.movements));
+        setTotalCount(data.total_count);
+      }
+    } catch (err) {
+      if (!request.isCurrent() || isAbortError(err)) return;
       setError("Failed to load transactions.");
     } finally {
-      setLoading(false);
+      if (request.isCurrent()) setLoading(false);
     }
   }, [securityId]);
 
+  useEffect(() => () => {
+    requestRef.current.cancel();
+  }, []);
+
   useEffect(() => {
-    load(page, typeFilter, timeFilter);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load(page, typeFilter, timeFilter);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [load, page, typeFilter, timeFilter]);
 
   useEffect(() => {

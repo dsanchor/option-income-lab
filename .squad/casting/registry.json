@@ -38,5 +38,13 @@
     "created_at": "2026-08-18T07:54:51Z",
     "legacy_named": false,
     "status": "active"
+  },
+  {
+    "persistent_name": "Reuben",
+    "universe": "oceans-eleven",
+    "role": "Reliability & Migration Engineer",
+    "created_at": "2026-09-24T05:45:00Z",
+    "legacy_named": false,
+    "status": "active"
   }
 ]

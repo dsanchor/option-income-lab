@@ -14,6 +14,16 @@ import AddMovementDialog from "./AddMovementDialog";
 import AccountBadge from "./AccountBadge";
 import { formatAccountName } from "@/lib/accountDisplay";
 import { getMovementTypeLabel } from "@/lib/movementTypeLabel";
+import {
+  filterMovementsByType,
+  getServerMovementTypeFilter,
+} from "@/lib/filterMovementsByType";
+import {
+  dedupeMovementsById,
+  fetchAllMovementPages,
+  isAbortError,
+  LatestMovementRequest,
+} from "@/lib/movementPagination";
 import NativeSelect from "./ui/NativeSelect";
 
 const TXN_BADGE: Record<TxnType, string> = {
@@ -90,8 +100,8 @@ function Skeleton() {
 
 /** Client-side movements table with account filter, pagination, detail view, and manual entry. */
 export default function PortfolioMovementsTable() {
-  // When a symbol query is active: allRows holds the complete (unfiltered-by-symbol) fetch.
-  // When no symbol query: serverData holds the current server-paginated page.
+  // Client-filtered modes (symbol search or Dividend): allRows holds the complete fetch.
+  // Exact server-filtered modes: serverData holds the current server-paginated page.
   // Exactly one is non-null after a successful load.
   const [allRows, setAllRows] = useState<LedgerMovement[] | null>(null);
   const [serverData, setServerData] = useState<MovementsResponse | null>(null);
@@ -102,7 +112,7 @@ export default function PortfolioMovementsTable() {
   const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
   const [selectedMovement, setSelectedMovement] = useState<LedgerMovement | null>(null);
   const [showAddMovement, setShowAddMovement] = useState(false);
-  const loadGenRef = useRef(0);
+  const requestRef = useRef(new LatestMovementRequest());
   // Set when the batch loop exits with accumulated < total_count (defense-in-depth only).
   const [searchIncomplete, setSearchIncomplete] = useState(false);
 
@@ -123,87 +133,57 @@ export default function PortfolioMovementsTable() {
 
   /**
    * Load movements.
-   * - symbolQuery non-empty: batch-fetch ALL rows matching account/type/date filters
-   *   (no backend symbol filter) using SEARCH_BATCH_SIZE pages until total_count is
-   *   satisfied or a short page signals end-of-data; multi-field predicate and
+   * - symbolQuery non-empty or Dividend selected: batch-fetch ALL candidate rows
+   *   (no backend symbol filter) using SEARCH_BATCH_SIZE pages until a short page
+   *   signals authoritative exhaustion; multi-field predicate and
    *   client pagination are applied over the full accumulated dataset.
-   *   Generation checks before AND after every awaited fetch prevent stale writes.
-   * - symbolQuery empty: efficient server-side pagination using offset/PAGE_SIZE.
+   *   Abort and generation checks prevent stale writes.
+   * - Otherwise: efficient server-side pagination using offset/PAGE_SIZE.
    */
   const load = useCallback(async (off: number, filter: MovementsFilter, symbolQuery: string) => {
-    const gen = ++loadGenRef.current;
+    const request = requestRef.current.begin();
     setLoading(true);
     setError(null);
     setSearchIncomplete(false);
     const q = symbolQuery.trim();
     try {
-      if (q) {
-        // Batch-fetch all rows matching account/type/date filters.
-        // Client-side predicate handles substring/company-name match across the full set.
-        // accumulated: raw page-boundary count (including duplicates) used ONLY for
-        // loop termination and genuine short-page/exhaustion mismatch warning.
-        const accumulated: LedgerMovement[] = [];
-        // seenIds + dedupedRows: unique rows in first-seen server order, used for
-        // display, symbol matching, and local pagination.
-        const seenIds = new Set<string>();
-        const dedupedRows: LedgerMovement[] = [];
-        let batchOffset = 0;
-        let reportedTotal: number | null = null;
+      const requiresClientTypeFilter = filter.txn_type === "DIVIDEND";
+      const serverFilter = {
+        ...filter,
+        txn_type: getServerMovementTypeFilter(filter.txn_type),
+      };
 
-        while (reportedTotal === null || accumulated.length < reportedTotal) {
-          if (gen !== loadGenRef.current) return; // cancelled — newer query started
+      if (q || requiresClientTypeFilter) {
+        const result = await fetchAllMovementPages({
+          pageSize: SEARCH_BATCH_SIZE,
+          signal: request.signal,
+          fetchPage: (batchOffset, limit, signal) =>
+            getMovements({
+              ...serverFilter,
+              limit,
+              offset: batchOffset,
+            }, { signal }),
+        });
 
-          const page = await getMovements({
-            ...filter,
-            limit: SEARCH_BATCH_SIZE,
-            offset: batchOffset,
-          });
-
-          if (gen !== loadGenRef.current) return; // stale response — discard
-
-          // First page sets the authoritative total count for this filter set.
-          if (reportedTotal === null) {
-            reportedTotal = page.total_count;
-          }
-
-          accumulated.push(...page.movements);
-          for (const m of page.movements) {
-            if (m.id) {
-              if (!seenIds.has(m.id)) {
-                seenIds.add(m.id);
-                dedupedRows.push(m);
-              }
-              // else: page-boundary duplicate — skip, first-seen row is canonical
-            } else {
-              // id is required by schema; if absent, include without dedup to
-              // avoid silently collapsing unrelated rows.
-              dedupedRows.push(m);
-            }
-          }
-          batchOffset += SEARCH_BATCH_SIZE;
-
-          // Short page (including empty) signals end of data from the server.
-          if (page.movements.length < SEARCH_BATCH_SIZE) break;
-        }
-
-        if (gen !== loadGenRef.current) return; // final guard before any state commit
-
-        // Defense-in-depth: loop exited via short page but count < reported total —
-        // only fires on genuine data inconsistency, never merely from large result sets.
-        // Keyed on raw accumulated count so duplicate removal never triggers false warning.
-        const incomplete =
-          reportedTotal !== null && accumulated.length < reportedTotal;
-        setSearchIncomplete(incomplete);
-        setAllRows(dedupedRows);
+        if (!request.isCurrent()) return;
+        setSearchIncomplete(result.incomplete);
+        setAllRows(filterMovementsByType(result.movements, filter.txn_type));
         setServerData(null);
       } else {
-        const d = await getMovements({ ...filter, limit: PAGE_SIZE, offset: off });
-        if (gen !== loadGenRef.current) return;
+        const d = await getMovements({
+          ...serverFilter,
+          limit: PAGE_SIZE,
+          offset: off,
+        }, { signal: request.signal });
+        if (!request.isCurrent()) return;
         setAllRows(null);
-        setServerData(d);
+        setServerData({
+          ...d,
+          movements: dedupeMovementsById(d.movements),
+        });
       }
     } catch (err) {
-      if (gen !== loadGenRef.current) return;
+      if (!request.isCurrent() || isAbortError(err)) return;
       const e = err as { status?: number; data?: { error?: string; detail?: string } };
       if (e.status === 503) {
         setError("Portfolio storage is not yet configured.");
@@ -211,8 +191,12 @@ export default function PortfolioMovementsTable() {
         setError(e.data?.detail ?? (err instanceof Error ? err.message : "Failed to load movements"));
       }
     } finally {
-      if (gen === loadGenRef.current) setLoading(false);
+      if (request.isCurrent()) setLoading(false);
     }
+  }, []);
+
+  useEffect(() => () => {
+    requestRef.current.cancel();
   }, []);
 
   const loadAccounts = useCallback(async () => {

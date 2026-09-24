@@ -3983,6 +3983,151 @@ def _is_complete_triplet(strike, expiration, premium) -> bool:
     return s > 0 and bool(expiration) and p > 0
 
 
+_DASHBOARD_POSITION_IDENTITY_FIELDS = (
+    ("symbol", ("symbol",)),
+    ("account", ("account_id", "brokerage_account_id", "account")),
+    ("option_type", ("type", "current_option_type", "option_type", "right")),
+    ("strike", ("current_strike", "strike")),
+    ("expiration", ("current_expiration", "expiration")),
+    (
+        "contract_id",
+        ("contract_id", "option_contract_id", "contract_symbol",
+         "occ_symbol", "osi_symbol"),
+    ),
+    (
+        "instrument_id",
+        ("instrument_id", "instrument_identifier", "security_id"),
+    ),
+    ("is_paper", ("is_paper", "paper")),
+)
+
+_DASHBOARD_INVALID_IDENTITY = object()
+
+
+def _dashboard_normalize_identity(field: str, value):
+    if field == "is_paper":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized == "true":
+                return True
+            if normalized == "false":
+                return False
+        return _DASHBOARD_INVALID_IDENTITY
+    if field == "strike":
+        if isinstance(value, bool):
+            return _DASHBOARD_INVALID_IDENTITY
+        try:
+            normalized = float(value)
+        except (TypeError, ValueError):
+            return _DASHBOARD_INVALID_IDENTITY
+        return (
+            normalized
+            if math.isfinite(normalized)
+            else _DASHBOARD_INVALID_IDENTITY
+        )
+    if field == "position_id":
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or _DASHBOARD_INVALID_IDENTITY
+        return _DASHBOARD_INVALID_IDENTITY
+    if field == "option_type":
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"call", "put"}:
+                return normalized
+        return _DASHBOARD_INVALID_IDENTITY
+    if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+        normalized = str(value).strip().lower()
+        return normalized or _DASHBOARD_INVALID_IDENTITY
+    return _DASHBOARD_INVALID_IDENTITY
+
+
+def _dashboard_identity_value(
+    doc: dict,
+    field: str,
+    aliases: tuple[str, ...],
+):
+    nested_source = doc.get("source")
+    sources = (doc, nested_source if isinstance(nested_source, dict) else {})
+    normalized_values = []
+    for source in sources:
+        for alias in aliases:
+            if alias not in source:
+                continue
+            value = source[alias]
+            if value is None and field != "option_type":
+                continue
+            if value == "" and field != "option_type":
+                continue
+            normalized = _dashboard_normalize_identity(field, value)
+            if normalized is _DASHBOARD_INVALID_IDENTITY:
+                return _DASHBOARD_INVALID_IDENTITY
+            normalized_values.append(normalized)
+    if not normalized_values:
+        return None
+    first = normalized_values[0]
+    if any(value != first for value in normalized_values[1:]):
+        return _DASHBOARD_INVALID_IDENTITY
+    return first
+
+
+def _dashboard_legacy_position_compatible(
+    legacy_doc: dict,
+    position: dict,
+) -> bool:
+    for field, aliases in _DASHBOARD_POSITION_IDENTITY_FIELDS:
+        legacy_value = _dashboard_identity_value(legacy_doc, field, aliases)
+        if legacy_value is _DASHBOARD_INVALID_IDENTITY:
+            return False
+        if legacy_value is None:
+            continue
+
+        position_value = _dashboard_identity_value(
+            position, field, aliases
+        )
+        if position_value is _DASHBOARD_INVALID_IDENTITY:
+            return False
+        if field == "is_paper" and position_value is None:
+            position_value = False
+        if position_value is None:
+            return False
+        if legacy_value != position_value:
+            return False
+    return True
+
+
+def _dashboard_position_group_key(
+    doc: dict,
+    position_key_by_id: dict[str, str],
+    positions_by_key: dict[str, dict],
+) -> str | None:
+    """Resolve monitor data to one active position without borrowing."""
+    position_id = _dashboard_identity_value(
+        doc, "position_id", ("position_id",)
+    )
+    if position_id is _DASHBOARD_INVALID_IDENTITY:
+        return None
+    if position_id is not None:
+        key = position_key_by_id.get(position_id)
+        if key is None:
+            return None
+        position = positions_by_key.get(key)
+        if (
+            position is None
+            or not _dashboard_legacy_position_compatible(doc, position)
+        ):
+            return None
+        return key
+
+    compatible = [
+        key for key, position in positions_by_key.items()
+        if _dashboard_legacy_position_compatible(doc, position)
+    ]
+    return compatible[0] if len(compatible) == 1 else None
+
+
 def _build_dashboard_tables(
     cosmos,
     all_symbols,
@@ -4002,6 +4147,8 @@ def _build_dashboard_tables(
 
         groups: Dict[str, List[Dict]] = {}
         display_map: Dict[str, str] = {}
+        positions_by_key: dict[str, dict] = {}
+        position_key_by_id: dict[str, str] = {}
 
         # Seed rows from symbol configs so every watched symbol/position appears
         for sym_cfg in all_symbols:
@@ -4010,11 +4157,23 @@ def _build_dashboard_tables(
                 ptype = "call" if agent_key == "open_call_monitor" else "put"
                 for pos in sym_cfg.get("positions", []):
                     if pos.get("status") == "active" and pos["type"] == ptype:
-                        key = f"{sym}_{pos['strike']}_{pos['expiration']}"
+                        position_id = str(pos.get("position_id") or "")
+                        key = (
+                            f"{sym}::position::{position_id}"
+                            if position_id
+                            else (
+                                f"{sym}::legacy::{pos.get('type', '')}::"
+                                f"{pos.get('strike', '')}::{pos.get('expiration', '')}::"
+                                f"{pos.get('opened_at', '')}"
+                            )
+                        )
                         display_map[key] = (
                             f"{sym} ${pos['strike']} exp {pos['expiration']}"
                         )
                         groups.setdefault(key, [])
+                        positions_by_key[key] = {"symbol": sym, **pos}
+                        if position_id:
+                            position_key_by_id[position_id] = key
             else:
                 wl = sym_cfg.get("watchlist", {})
                 if ((agent_key == "covered_call" and wl.get("covered_call"))
@@ -4030,16 +4189,13 @@ def _build_dashboard_tables(
         for alert in agent_alerts:
             sym = alert.get("symbol", "")
             if is_pm:
-                strike = (alert.get("current_strike")
-                          or alert.get("strike", ""))
-                exp = (alert.get("current_expiration")
-                       or alert.get("expiration", ""))
-                key = f"{sym}_{strike}_{exp}" if strike and exp else sym
-                if key not in display_map:
-                    display_map[key] = (
-                        f"{sym} ${strike} exp {exp}" if strike and exp
-                        else sym
-                    )
+                key = _dashboard_position_group_key(
+                    alert,
+                    position_key_by_id,
+                    positions_by_key,
+                )
+                if key is None:
+                    continue
             else:
                 key = sym
                 if key not in groups:
@@ -4058,11 +4214,13 @@ def _build_dashboard_tables(
         for d in agent_acts:
             sym = d.get("symbol", "")
             if is_pm:
-                strike = (d.get("current_strike")
-                          or d.get("strike", ""))
-                exp = (d.get("current_expiration")
-                       or d.get("expiration", ""))
-                key = f"{sym}_{strike}_{exp}" if strike and exp else sym
+                key = _dashboard_position_group_key(
+                    d,
+                    position_key_by_id,
+                    positions_by_key,
+                )
+                if key is None:
+                    continue
             else:
                 key = sym
             prev = latest_by_key.get(key)
@@ -4085,8 +4243,14 @@ def _build_dashboard_tables(
 
         rows = []
         for key, group in groups.items():
-            # Extract the base symbol from the key for linking
-            base_symbol = key.split("_")[0] if "_" in key else key
+            position = positions_by_key.get(key, {})
+            base_symbol = (
+                str(position.get("symbol") or "")
+                if is_pm
+                else key
+            )
+            if is_pm and not base_symbol:
+                base_symbol = key.split("::", 1)[0]
             sym_cfg = sym_cfg_map.get(base_symbol, {})
             pause_doc = sym_cfg.get("watchlist_pause") or {}
             recent = [
@@ -4112,15 +4276,17 @@ def _build_dashboard_tables(
             }
             if is_pm:
                 dec = latest_by_key.get(key, {})
+                row["position_id"] = position.get("position_id")
+                row["strike"] = position.get("strike")
+                row["expiration"] = position.get("expiration")
                 row["dte"] = dec.get("dte_remaining")
                 row["moneyness"] = dec.get("moneyness")
                 row["assignment_risk"] = dec.get("assignment_risk")
                 row["delta"] = dec.get("delta")
                 # % Strike: percentage difference between underlying and strike
-                parts = key.split("_")
                 try:
-                    strike = float(parts[1]) if len(parts) > 1 else None
-                except (ValueError, IndexError):
+                    strike = float(position.get("strike"))
+                except (TypeError, ValueError):
                     strike = None
                 up = row.get("underlying_price")
                 if strike and up is not None:
@@ -4136,30 +4302,7 @@ def _build_dashboard_tables(
                 row["dps_delta_1d"] = None
                 row["pnl_pct"] = None
                 try:
-                    pos_id = None
-                    # Find position_id from sym_cfg
-                    ptype = "call" if agent_key == "open_call_monitor" else "put"
-                    sym_c = sym_cfg_map.get(base_symbol, {})
-                    key_strike_str = parts[1] if len(parts) > 1 else ""
-                    key_exp = parts[2] if len(parts) > 2 else ""
-                    try:
-                        key_strike_f = float(key_strike_str)
-                    except (ValueError, TypeError):
-                        key_strike_f = None
-                    for p in sym_c.get("positions", []):
-                        if p.get("status") != "active" or p["type"] != ptype:
-                            continue
-                        # Compare strikes as floats to avoid "48.5" != "48.50"
-                        try:
-                            p_strike_f = float(p.get("strike", ""))
-                        except (ValueError, TypeError):
-                            p_strike_f = None
-                        strike_match = (key_strike_f is not None
-                                        and p_strike_f is not None
-                                        and abs(key_strike_f - p_strike_f) < 0.001)
-                        if strike_match and p.get("expiration") == key_exp:
-                            pos_id = p.get("position_id")
-                            break
+                    pos_id = position.get("position_id")
                     if pos_id and cosmos:
                         snaps = cosmos.get_position_snapshots(base_symbol, pos_id, limit=200)
                         # P&L from most recent snapshot

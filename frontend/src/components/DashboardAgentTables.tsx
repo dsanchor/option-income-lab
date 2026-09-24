@@ -77,7 +77,10 @@ function RecentCell({
         </span>
       ) : (
         items.map((act, i) => (
-          <span key={i} className="inline-flex items-center gap-1">
+          <span
+            key={act.id || `${act.timestamp || "activity"}-${i}`}
+            className="inline-flex items-center gap-1"
+          >
             <Link
               href={`/activities/${act.id}`}
               onClick={(e) => e.stopPropagation()}
@@ -216,6 +219,7 @@ export default function DashboardAgentTables({ tables }: { tables: AgentTable[] 
                       return (
                       <tr
                         key={row.key}
+                        data-position-id={row.position_id || undefined}
                         aria-disabled={globallyDisabled}
                         aria-describedby={globallyDisabled ? deactivatedId : undefined}
                         onClick={() =>

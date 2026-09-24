@@ -9,6 +9,7 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 
 ## Recent Updates
 
+📌 2026-09-24T21:35:54Z: Consolidated final review/removal/monitor decisions, cleared 10 inbox records, added orchestration/session logs, aligned team routing/registry/Reuben charter, and removed the two routing whitespace findings; no product changes, commit, or push
 📌 2026-09-06T20:57:09Z: Consolidated portfolio movement workflow directives — orchestration log, session log, decision merge (3 new sections), inbox cleared (3 files archived), identity updated to deployed state, git commit and push
 📌 2026-09-06T00:37:00Z: Finalized portfolio unified implementation documentation — orchestration log, session log, decision merge, 80 KB inbox archived, agent history updates, no commits (as instructed)
 📌 2026-08-17T15:08:37Z: Logged Buy Tracker normalization and OpenCallMonitor zero-quote work; consolidated five Buy Tracker inbox decisions into the canonical shared log; removed merged inbox files; summarized oversized agent histories; committed `.squad/` state only.
@@ -239,3 +240,24 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
   regression test despite a passing independent probe.
 - Added orchestration records for Linus, Livingston, and Basher plus one brief
   session log; no implementation or test files were modified by Scribe.
+
+### 2026-09-24 — Recovered rights-migration session consolidation
+- Recorded the reconstructed historical-rights migration lifecycle from
+  Reuben's NUL recovery through Livingston and Danny revisions, Rusty's exact
+  terminal-intent repair, and Basher's final approval.
+- Merged the rights-migration directives/contracts/reviews plus movement
+  pagination and dividend-filter membership into the canonical decision log,
+  then cleared the merged inbox.
+- Added five contributor orchestration records and a concise session log.
+  Existing contributor histories already contained the implementation and
+  review evidence, so they were not duplicated.
+- No product code, commit, push, deployment, or production access occurred.
+
+### 2026-09-24 — Dashboard Banner last-run consolidation
+- Recorded the investigation and three revision gates from scheduler bypass and
+  false completion through bounded retained results and final compatible
+  attempt/success metadata.
+- Merged the five Dashboard Banner decision inbox records into the canonical
+  decision log and cleared the inbox.
+- Added contributor orchestration records plus one concise session log. No
+  product code, commit, push, deployment, or production access occurred.

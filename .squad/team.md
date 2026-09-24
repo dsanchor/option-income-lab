@@ -17,6 +17,7 @@
 | Linus | Quant Dev | .squad/agents/linus/charter.md | 📊 Quant Dev |
 | Basher | Tester | .squad/agents/basher/charter.md | 🧪 Tester |
 | Livingston | Persistence & Integration Engineer | .squad/agents/livingston/charter.md | 🔧 Integration |
+| Reuben | Reliability & Migration Engineer | .squad/agents/reuben/charter.md | 🔧 Reliability |
 | Scribe | Scribe | .squad/agents/scribe/charter.md | 📋 Scribe |
 | Ralph | Work Monitor | — | 🔄 Monitor |
 

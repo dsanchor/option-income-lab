@@ -16,6 +16,17 @@
 
 ## Recent Learnings
 
+### 2026-09-24 — Dashboard Banner last-run gate approved
+- Rejected successive revisions for false completion/global polling, unbounded
+  retained `TaskRun` state, and a global `last_run` compatibility regression.
+- Approved the final split semantics: all scheduler consumers retain
+  latest-attempt `last_run`; explicit `last_success` drives Dashboard Banner
+  presentation with persisted `generated_at` as restart fallback.
+- Final validation passed 76 focused backend tests, 69 banner/Azure-order tests,
+  5 focused frontend tests, concurrency/capacity probes, and type, lint,
+  compile, import, and diff checks. The isolated `azure.core` stub failure is
+  pre-existing and order-dependent.
+
 ### 2026-09-09 — Dividends economics validation scope
 - Added dedicated backend unit tests for dividends economics plus endpoint smoke coverage.
 - Kept frontend validation intentionally lightweight with a contract test around `frontend/src/types/economics.ts` and the consuming views, matching existing repo testing patterns.
@@ -111,6 +122,29 @@
 - Validation passed: 70 focused backup/infrastructure tests, shell syntax/help/authenticated dry-run, Python compile, documentation/stale-cron searches, and `git diff --check`.
 - Livingston is locked out from the next Blob RBAC revision. Danny, Linus, or Rusty are eligible independent revision authors. Verdict: REJECT; the combined dirty change is unsafe to commit. Rusty's cron artifact is independently approved.
 
+### 2026-09-24 — Dashboard Banner third revision approved
+- Approved Linus's restoration of global scheduler `last_run` attempt semantics and the banner-only successful-generation presentation boundary.
+- Confirmed success, failure, and timeout metadata consistency; restart fallback; prior-success preservation; first-failure `Never` plus explicit error; immediate manual completion handling; bounded waiter-safe retained runs; and one dashboard refresh per banner generation signature change.
+- Validation passed: 76 focused backend tests, 69 banner/Azure-order tests, 5 frontend contracts, capacity-16 retention across 40 runs, 24 concurrent waiters, status/manual-response probes, TypeScript, scoped ESLint, Python compilation, and diff checks.
+- The isolated `test_banner_agent.py` collection failure is an unchanged order-dependent test stub that shadows installed `azure.core`, not a missing package or product defect.
+- Final verdict: APPROVE. No source/test edits, commit, push, deployment, or production access.
+
+### 2026-09-24 — Dashboard position-monitor identity review rejected
+- Confirmed distinct persisted `position_id` values preserve separate same-contract,
+  cross-account, paper/real, call/put, expiry/strike, activity, alert, and snapshot
+  rows; React row keys are position-based and the complete Activities feed remains
+  intact.
+- Rejected because a legacy activity with no `position_id` but an explicit stale
+  contract first misses the contract lookup and then falls through to the
+  single-symbol fallback. After a roll, an old-contract activity is therefore
+  assigned to the sole new active position, borrowing its recent activity, risk,
+  and price instead of remaining blank.
+- Validation passed: 46 focused backend tests, 10 frontend tests, TypeScript,
+  scoped ESLint, Python compilation, scoped diff checks, and positive identity
+  probes. The independent stale-contract probe reproduced the blocker.
+- Final verdict: REJECT. No implementation/test edits, commit, push, deployment,
+  or production access.
+
 ### 2026-09-22 — Dashboard trigger run-state gate rejected
 - Focused dashboard-trigger, scheduler Run Now, force-alpha scoping, and registry tests passed 29/29.
 - Settings Run Now now correctly returns enqueue rejection as HTTP 409 and preserves `run_trigger="manual", force_alpha=False`; successful and first-run failed dashboard cases also pass.
@@ -177,3 +211,102 @@
 - Scheduler-backed and web-only dashboard rendering/status share the scheduler→Cosmos→YAML resolver. Persisted web-only gate changes alter the status signature, and AutoRefresh records the new signature before refreshing, avoiding a refresh loop. Disabled sections and controls are dimmed/native-disabled and expose accessible `Deactivated globally`.
 - Validation: 74 focused backend tests and 6 frontend contracts passed; independent all-five scheduled/full/direct/dashboard probes passed; TypeScript, changed-file ESLint, Python compile, changed-test Ruff, and `git diff --check` passed. The sole app Ruff F821 at `_refresh_tasks_lock` reproduces unchanged against `HEAD`.
 - Residual limitation: execution and dashboard run/slot state remain process-local, as previously documented; no blocker for the reviewed member-gate contract.
+
+### 2026-09-24 — Dividend filter review
+- **REJECT.** The shared authoritative-metadata predicate correctly gives `BUY` dividend share-acquisition legs dual Buy/Dividend membership and keeps ordinary, rights-issue, and metadata-free buys out of Dividend. Both claimed surfaces avoid the exact `txn_type=DIVIDEND` API filter and fetch account/security/date candidates before semantic filtering.
+- Release blocker: `StockTransactionsTable` has no request-generation or abort guard. A slow multi-page Dividend load can finish after a later Buy, Sell, or time-filter load and overwrite its rows/count, leaving results inconsistent with the selected filters.
+- Release blocker: Dividend batching is offset-based over backend ordering by `trade_date` only. Equal-date rows have no deterministic tie-breaker, so separate page requests can overlap or skip rows. Stock history does not dedupe; global Movements dedupes overlaps but can still terminate on raw count with a unique row missing. Complete pagination and no-duplicate/count guarantees are therefore not met.
+- Validation: 284 focused movement-filter/search/time tests passed, as did TypeScript, changed-file ESLint, and `git diff --check`. The new tests primarily validate the pure predicate and source wiring, not asynchronous component pagination/race behavior.
+
+### 2026-09-24 — Guided historical-rights migration release gate
+- **REJECT.** Concurrent operators are not serialized by a case-journal ETag/CAS. An adversarial two-apply race reproduced a superseded source with both deterministic replacements deleted: one operator treated the other operator's exact documents as compensatable, while journals diverged through `FAILED_ROLLED_BACK` and `ATTENTION_REQUIRED`.
+- Mixed outcome C cannot preserve a genuine cash dividend: its guided plan and builder emit only `SHARE_ACQUISITION` and `RIGHTS_SOLD`. Production holdings confirmed zero dividend income for the mixed preview.
+- Discovery drops same-account/security alternatives beyond 62 days instead of retaining them with an advisory distance warning.
+- Production targeting has no explicit endpoint argument; the factory silently selects `COSMOSDB_ENDPOINT`/`COSMOSDB_KEY` from process environment, so acknowledgement does not bind the endpoint and environment labels do not prevent test/production target confusion.
+- Migrated and superseded ledger shapes are incompatible with strict backup projection. Representative replacements fail on migration provenance, replacement links, FMV/top-up, and basis fields; supersession/rollback provenance fields are likewise absent from the ledger allowlist.
+- Saved-preview confirmation is not bound to the saved outer plan: outcome, operator, and rationale can disagree while the service preview remains valid. The service model also accepts cross-account/cross-security sources and replacements.
+- Positive controls passed: one-case CLI surface, TTY/literal gates, canonical preview content, PREPARED-before-ledger ordering, deterministic IDs, pre-supersession compensation, partial-supersession attention state, resume/rollback happy paths, actual A/B/C holdings behavior, Python compile, Ruff, CLI help, and diff hygiene.
+- Validation: 39 focused migration tests and 375 FIFO/corporate-action/correction/dividend/backup regressions passed (4 existing warnings). Independent probes reproduced every blocker; no Cosmos or production access was used.
+
+### 2026-09-24 — Dividend/Buy movement filter final gate
+- **APPROVE.** Abortable request generations and unmount invalidation guard every post-await rows, count, loading, and error commit in both movement consumers. Deterministic delayed-response probes confirmed an older Dividend request cannot overwrite a newer filter or commit after cancellation.
+- `get_movements()` applies one total `(trade_date DESC, id DESC)` order before slicing for every account, security, type, option-position, and date-filter combination. Ledger IDs are mandatory strings and are generated from account-qualified deterministic import IDs or UUID movement IDs.
+- Repeated adversarial pagination over 137 same-date rows with shuffled container iteration returned all 137 rows exactly once in identical order across five runs. Defensive batching stops only on a short raw page; overlap is ID-deduped without using reported or deduped counts as an early-stop condition, and displayed client-filter counts use the final unique membership set.
+- Shared membership preserves dividend-derived `BUY` share acquisitions in both Buy and Dividend while excluding ordinary, rights-issue, and metadata-free buys from Dividend. Global Movements supports account/type/date/symbol combinations; Stock Transactions supports All/Buy/Sell/Dividend with all time filters.
+- Validation passed: 137 focused backend tests, 325 focused frontend tests, TypeScript, changed-file ESLint, Python compile, changed-test Ruff, repeated equal-date/race/overlap probes, and `git diff --check`. The application file retains the same 187 pre-existing Ruff findings as `HEAD`; the reviewed change adds none.
+
+### 2026-09-24 — Historical rights migration final adversarial re-review
+- **REJECT.** Lease/fencing remains vulnerable to a check-then-write race. A stale apply holder passed `assert_operation`, a replacement holder claimed the expired case head, and the stale holder then performed the actual replacement ledger create before losing the journal CAS. There is no lease renewal, `assert_operation` does not reject an expired lease, and repository mutation methods do not receive or atomically enforce the fencing token.
+- Compensation is not fenced per mutation. `_compensate_before_supersession` checks ownership once before its delete loop; a synchronized takeover then allowed the stale compensator to delete the replacement while the new holder was resuming, leaving the new holder failed and the durable case stuck `APPLYING`.
+- Strict validation is incomplete. A directly reconstructed canonical `RightsMigrationPreview` accepted `quantity="-7"`, `gross.eur_amount="NaN"`, and `net.eur_amount="Infinity"`. The backup journal projector also accepted an unknown nested field inside `preview`, so journal schema evolution does not fail closed.
+- Unbounded discovery is quadratic and uncapped: 400 same-account/security rights rows generated 159,600 retained alternatives. Neither bounded nor unbounded mode caps inventory, cases, alternatives, memory, or work, so a large export can exhaust operator memory; alternatives remained advisory and never auto-linked.
+- Claimed fixes otherwise held in reviewed paths: mixed C emits at most one cash-dividend leg with exact dates and no duplicate migration invariant income; explicit endpoint/database/portfolio/journal target identity is preview-hashed and revalidated; no endpoint/default write target comes from environment; one-case/TTY/literal confirmation gates remain; outer journal and ledger unknown fields fail closed; secrets are scanned; migration journal/ledger closure is bidirectional.
+- Validation: 478 focused migration, backup, FIFO, corporate-action, correction, dividend, and holdings tests passed with 4 existing warnings. Authored migration Ruff, Python compile, CLI help, and `git diff --check` passed. Whole changed-file Ruff reported six findings that reproduce on the corresponding `HEAD` files.
+
+### 2026-09-24 — Historical rights migration third adversarial gate
+- **REJECT.** Ledger mutations are now genuinely account-partition transactional batches: the lease ETag replace and one create/replace/delete share `/account_id`, with two operations per batch. Stale ledger writers and stale compensation therefore lose atomically after takeover. The journal remains a separate-container gap, however: apply releases the account lease before appending `VERIFIED`. A deterministic takeover in `release_operation` left `new-owner` holding the higher fence while the stale operation successfully appended `VERIFIED`. Verification reads and journal transitions are not transactionally or freshly bound to the account lease.
+- Canonical numeric validation still accepts forbidden values. Direct preview reconstruction accepted replacement `quantity=None`, `quantity=""`, and `quantity="-0"` (persisted as `-0.000000`), plus `operator_plan.source_withholding_eur=None`. This contradicts the claimed rejection of null/blank/negative-zero financial leaves and allows hashes to bind representations with ambiguous persisted meaning.
+- Backup schema v1 is not recursively exact. `verification_results.invariants.future_metric` exported successfully because invariant maps are unrestricted. Conversely, a legitimate production-shaped source in `preview.operator_plan.before_documents` with `withholding={"source": null, "destination": null}` was rejected as `invalid_nested_schema`; the nested allowlist also omits production withholding fields such as derived `rate_pct`. Strictness therefore both misses unknown nested data and falsely rejects valid ledger shapes.
+- Discovery scaling held: 10,000 synthetic rows produced a deterministic unique 5,000-case hard-capped page in 0.433 seconds, at most 11 comparisons per case, with explicit truncation; a 5,001-case request failed closed.
+- Validation passed: 70 authoritative migration tests; 405 explicit FIFO/holdings/correction/CA/dividend/backup regressions with 4 existing warnings; 129 affected frontend movement tests; Python compilation; migration Ruff; CLI help; TypeScript; and `git diff --check`. A broader keyword run encountered the environment's missing async pytest plugin, so the explicit production-relevant file set was used instead. No Cosmos or production access was performed.
+
+### 2026-09-24 — Reconstructed historical-rights artifact gate
+- **REJECT.** The reconstructed module is NUL-free and imports/compiles, and all 109 focused migration/backup tests pass, but two substantive safety gaps remain.
+- `CosmosRightsMigrationRepository.append_terminal_revision()` checks the portfolio lease and then independently writes the journal container. A deterministic takeover inserted between those calls produced durable `VERIFIED` for stale fence 1 while `winner` held fence 2. The concurrency tests mask this cross-container gap by wrapping the in-memory terminal transition and lease acquisition in one `mutation_lock`, which Cosmos cannot share across containers.
+- Recursive financial validation omits production withholding leaves named `amount_eur` (and `rate_pct`). A reconstructed canonical preview with replacement `withholding.source.amount_eur="NaN"` was accepted and assigned a fresh document/preview hash, so strict numeric validation and backup fail-closed claims do not hold.
+- Validation: 109 focused tests passed; 8 scoped files were NUL-free; four migration modules compiled; CLI help passed. `git diff --check` failed only on unrelated `.squad/routing.md` trailing whitespace. Ruff's normal cache retained NUL-corrupt package metadata; `--no-cache` completed and reported nine migration-file findings.
+
+### 2026-09-24 — Livingston historical-rights revision re-review
+- **REJECT.** The lease CAS seal now closes the stale terminal-write race: takeover before the seal invalidates its ETag, and takeover after the seal is blocked. Recursive financial validation also rejects the reviewed nested NaN/Infinity/exponent/negative-zero/precision/overflow cases while preserving `country` and `rate_source` strings.
+- A crash or journal outage after `_seal_terminal_commit()` but before the terminal journal CAS permanently strands the case once the lease expires. An injected terminal journal failure left `terminal_commit` on the portfolio lease and journal state `APPLYING`; both a higher-fence acquirer and an owner retry were rejected as `pending terminal journal commit`, while the expired original owner could no longer seal or persist the terminal revision. `acquire_operation()` only clears a seal when the bound terminal journal revision already exists, so there is no takeover, resume, or recovery path for an unreflected seal.
+- Validation: 105 focused migration/CLI/backup tests passed; four migration modules compiled; CLI help passed; 8 artifact files were NUL-free; artifact-specific whitespace check passed. Whole-tree `git diff --check` remains red only for unrelated `.squad/routing.md` trailing whitespace. No production access occurred.
+
+### 2026-09-24 — Danny second revision final rights-migration gate
+- **REJECT.** Durable recovery now closes the prior seal-to-journal deadlock for both apply and rollback, but terminal-journal tamper detection is not exact.
+- `_terminal_revision_matches()` at `backend/src/portfolio/rights_migration.py:1218-1232` checks only that every sealed payload key has the expected value. It does not reject additional fields in the durable terminal journal revision. `recover_terminal_revision()` treats that subset match as authoritative at `:1170-1178`, clears the seal, and returns the altered revision.
+- A deterministic crash-after-journal-CAS probe added `unexpected_terminal_data="tampered"` to the durable `VERIFIED` journal document. Recovery accepted it and removed `terminal_commit`, permanently reconciling a journal revision that was not the exact sealed intent.
+- Validation: 122 focused migration/CLI/backup tests passed; four migration modules compiled/imported; top-level and apply CLI help passed; 8 artifact files were NUL-free; artifact-specific whitespace checks passed. No production access occurred.
+
+### 2026-09-24 — Rusty exact terminal-intent recovery final gate
+- **APPROVE.** The durable seal now binds the complete canonical terminal journal application document and hash. Reconciliation removes only the five enumerated top-level Cosmos-managed fields, then requires recursive equality; injected, missing, changed, and nested-tampered application data reject without clearing the seal.
+- Initial terminal persistence, exact owner retry, and crash recovery reuse the sealed document, preserving timestamp, history, payload, apply/rollback identity, target/hash binding, and operation/fence intent. Seal clearing occurs only after verified persistence; repeated recovery is idempotent.
+- Previously approved fencing, transactional ledger mutation, stale-writer/compensator rejection, bounded discovery, strict financial validation, confirmation, compensation, and backup round-trip behavior remain covered. Production code uses no shared-process lock and documentation makes no cross-container atomicity claim.
+- Validation: 126 focused migration, CLI, backup, and archive-format tests passed plus 4 independent exact-tamper probes. Four modules compiled/imported; top-level and apply CLI help passed; 8 artifacts were NUL-free; artifact-specific diff/whitespace checks passed. No production access occurred.
+
+### 2026-09-24 — Historical-rights migration removal review
+- **REJECT.** Product-scope searches found zero migration references and zero migration-named files. Shared backup/archive/collector/dependency/export/import/model/schema paths are byte-identical to `HEAD`; 111 targeted backup/import/archive/dependency/portfolio tests and the complete 75-test backup suite passed. Fourteen affected modules compiled and eight imported.
+- The unrelated deterministic movement pagination diff remains in `cosmos_portfolio.py`; duplicate-position work remains present; ten non-shared Dashboard Banner paths are unchanged from `5dcee274`. No broad reset was observed.
+- Release blocker: repository scope still contains 524 `.pyc` files across seven `__pycache__` directories, plus four pytest/Ruff cache directories. The explicit no-generated-cache-artifacts requirement is therefore unmet.
+- Residual hygiene: `git diff --check` still reports the two pre-existing trailing-space lines in `.squad/routing.md`; no migration product residual caused that result. No production access, commit, push, or deployment occurred.
+
+### 2026-09-24 — Dashboard banner Last Run review
+- **REJECT.** The manual banner endpoint now correctly queues `banner_agent` through `TaskRegistry`, persisted `dashboard_banner.generated_at` supplies restart continuity, settings/dashboard reads bypass fetch caching, and AutoRefresh includes the persisted banner revision.
+- Failed banner generation is still reported as a successful completion. `_run_banner_agent_async()` catches and suppresses generation exceptions, while `TaskRegistry` also catches task exceptions and unconditionally advances `task.last_run` after error or timeout. Settings prefers that runtime timestamp over the last persisted successful `generated_at`, and the frontend interprets any changed timestamp as `✅ Completed`.
+- The frontend refresh behavior was also applied to every scheduler Run Now control, not just the banner: all ten task keys now poll settings every two seconds for up to five minutes. This changes other agent controls and can add up to 150 requests per accepted run, contrary to the scoped requirement.
+- Validation passed: 17 focused backend tests, 4 frontend contract tests, TypeScript, changed-file ESLint, focused Python compilation, and focused `git diff --check`. Independent probes confirmed both swallowed banner failures and failed registry jobs receiving a new `last_run`. `azure.core` 1.39.0 and `azure.cosmos` 4.16.1 import successfully; both `pytest` and `python3 -m pytest` pass the focused suite, so the noted missing-dependency failure is not reproducible and is unrelated environment state, not this diff.
+
+### 2026-09-24 — Dashboard Banner last-run revision re-review
+- **REJECT.** Banner generation failures now propagate, failed attempts retain the prior successful `last_run`, successful manual runs complete through `TaskRegistry`, Settings consumes the single completion response, Agents HQ observes persisted `generated_at` on its existing bounded cadence, and restart fallback/`Never` semantics are correct.
+- Release blocker: the new completion tracking is applied to every `TaskRegistry.trigger_task_now()` call, but only the banner endpoint calls `wait_for_run()`, which is the sole cleanup path. Best Options startup/manual runs and the generic scheduler Run Now route therefore retain every completed `TaskRun` in `_runs` for the process lifetime. An independent 25-run non-banner probe left all 25 completed records resident. This changes other scheduler controls and creates unbounded memory growth, violating the scoped/unchanged-registry requirement.
+- Validation passed: 42 focused backend tests, 11 frontend contracts, TypeScript, scoped ESLint, Python compilation, and scoped `git diff --check`. The initial `python` command failure was independently reassessed as an environment alias issue; `python3` completed all backend validation.
+
+### 2026-09-24 — TaskRegistry lifecycle final gate
+- **REJECT.** Fire-and-forget triggers are allocation-free; retained results are bounded, lock-safe, waiter-safe, late-readable until capacity eviction, and preserve active/waited records. Banner failures propagate without advancing its prior success, successful manual runs update Settings from one response, Agents HQ observes persisted `generated_at`, and restart/`Never` behavior is correct.
+- Release blocker: the registry revision changes `last_run` from “execution attempt start, including failure/timeout” to “successful completion only” for every registered task. The unified scheduler API and all Settings task cards expose this shared field, while the new `last_attempt`/`last_error` fields are not rendered. An independent unrelated-task failure probe therefore left the public Last Run stale, unlike `HEAD`. This violates the required compatibility of unrelated scheduler controls/startup tasks; the semantic change must be banner-scoped or separately migrated.
+- Validation passed: 64 focused backend tests, 11 frontend contracts, 40-run/16-capacity and 24-waiter stress probes, TypeScript, scoped ESLint, Python compilation, and scoped diff checks. The standalone banner-agent suite hit its pre-existing incomplete `azure` test stub and was not used as a product failure.
+
+### 2026-09-24 — Historical-rights run-guided review
+- **REJECT.** The deterministic ordering, inclusive date matching, per-case prompts, service-journal crash recovery, atomic file replacement, target/filter/bundle binding, legacy commands, and focused regression suites are substantially present, but four safety gaps remain.
+- Guided state has no semantic transition validation. A canonically rehashed state with `status="applied"` and `phase="unstarted"` plus no outcome, preview, or artifact loads successfully; `run_guided()` then skips the case without review or confirmation. The public canonical checksum therefore does not prevent a changed state from causing case omission.
+- Explicit blank `--account` or `--symbol` values are silently discarded and become an unfiltered full-bundle run instead of failing closed.
+- Credential redaction compares exact leaf names only. Independent discovery probes persisted `COSMOSDB_KEY`, `api_key`, and `access_token` values into the discovery bundle, which can then be duplicated into guided preview artifacts.
+- Failed cases are counted as `completed` and not `pending`, so the summary can claim completion while unresolved failures remain.
+- Validation: 115 focused CLI/service tests and 139 comprehensive CLI/service/backup/archive tests passed. Four migration modules compiled/imported; root and `run-guided` help, seven-file NUL scan, and scoped diff checks passed. Independent probes reproduced state-forged omission, blank-filter broadening, credential persistence, impossible state acceptance, and failed/completed counter drift. Whole-tree diff remains red only for unrelated pre-existing `.squad/routing.md` trailing whitespace. No production access occurred.
+
+### 2026-09-24 — Final pending-diff integration gate
+- **APPROVE.** The combined Dashboard monitor identity and movement pagination/filter diff has no high-confidence functional blocker.
+- Backend pagination applies deterministic descending `trade_date`/`id` ordering before offset slicing. Frontend batch loading uses abortable latest-request ownership, short-page exhaustion, ID deduplication, complete client-side Dividend membership, and coherent symbol/account/type/date pagination behavior.
+- Duplicate-contract positions remain isolated by `position_id`; ambiguous, stale, or conflicting legacy activity is not borrowed by another position. Historical-rights migration references are absent outside append-only `.squad` history.
+- Validation passed: 200 focused backend tests, 133 focused frontend Node tests, TypeScript, changed-file ESLint, new-test Ruff, Python compilation, product diff whitespace checks, and the production frontend build. The broader frontend suite passed 1,338/1,340 tests; both failures are in untouched source-contract areas.
+- Non-blocking residuals: two trailing-whitespace lines in `.squad/routing.md`; baseline Ruff findings in the two modified legacy Python modules; one existing generated-CSS warning during the successful build; two unrelated frontend source-contract failures (`economicsParity` PP-6 and `movementDetailDefensiveGuards` optional-chaining expectation).
+- No commit, push, deployment, or production access occurred.

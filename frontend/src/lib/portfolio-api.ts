@@ -121,6 +121,7 @@ export interface MovementsFilter {
 
 export async function getMovements(
   filter: MovementsFilter = {},
+  init: Pick<RequestInit, "signal"> = {},
 ): Promise<MovementsResponse> {
   const params = new URLSearchParams();
   if (filter.account_id) params.set("account_id", filter.account_id);
@@ -133,7 +134,7 @@ export async function getMovements(
   if (filter.limit !== undefined) params.set("limit", String(filter.limit));
   if (filter.offset !== undefined) params.set("offset", String(filter.offset));
   const qs = params.toString() ? `?${params.toString()}` : "";
-  return fetchJSON<MovementsResponse>(`/api/portfolio/movements${qs}`);
+  return fetchJSON<MovementsResponse>(`/api/portfolio/movements${qs}`, init);
 }
 
 export async function deleteMovement(

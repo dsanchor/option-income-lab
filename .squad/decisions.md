@@ -2,6 +2,35 @@
 
 ## Active Decisions
 
+### Dashboard monitor rows use position identity
+
+**Date:** 2026-09-24
+**Status:** IMPLEMENTED AND APPROVED
+**Requested by:** Copilot
+
+- Position-monitor dashboard rows are keyed and joined by the persisted
+  `position_id`, never by symbol or option contract alone.
+- Contract-level or symbol-level fallback is allowed only for legacy activity
+  records without `position_id` when every explicit identity constraint
+  matches exactly one active position. Ambiguous, stale, malformed, or
+  conflicting legacy records remain in the general activity feed and must not
+  populate any position row.
+- Identity conflict checks cover top-level and nested `source` aliases for
+  symbol, account, paper lane, option type, strike, expiration, contract ID,
+  instrument ID, and duplicated position ID. Option type treats `type`,
+  `current_option_type`, `option_type`, and `right` as one alias set and accepts
+  only trimmed case-insensitive `call` or `put`.
+- An exact `position_id` remains subject to all other explicit identity
+  constraints. Unknown IDs and explicit mismatches never degrade to contract
+  or symbol fallback.
+- Missing or stale per-position monitoring data is rendered explicitly as
+  absent; data from another position sharing the symbol, expiry, strike, or
+  option type is never borrowed.
+- Basher approved the final revision after 132 focused backend tests, 67
+  dashboard regression tests, 4 frontend identity contracts, 29 adversarial
+  probes, TypeScript, scoped ESLint, Python compilation, changed-test Ruff,
+  production build, and scoped diff checks passed.
+
 ### Global Monitoring Agent member gates
 
 **Date:** 2026-09-23
@@ -39,6 +68,45 @@ web-only status omitted persisted gates. The third revision received **APPROVE**
 TypeScript, changed-file ESLint, Python compilation, changed-test Ruff, and
 `git diff --check` passed. The only noted app Ruff F821 finding reproduced unchanged
 against `HEAD`.
+
+### Dashboard Banner successful Last Run and scheduler compatibility
+
+**Date:** 2026-09-24
+**Status:** IMPLEMENTED AND APPROVED
+**Requested by:** Copilot
+
+#### Decision
+
+- Global scheduler compatibility is preserved: `last_run` and `last_attempt`
+  identify the latest attempt start, including failures and timeouts.
+  `last_success` identifies the latest successful completion, and `last_error`
+  records the latest failure/timeout until cleared by a later success.
+- Dashboard Banner is the presentation-level exception. Its Last run uses
+  runtime `last_success`, falling back after restart to persisted
+  `dashboard_banner.generated_at`. Failure preserves the prior success, and
+  `Never` is valid only when no successful banner exists.
+- Manual banner execution enters through `TaskRegistry`, opts into retained
+  completion state, waits for the terminal result, and returns success only
+  after generation and persistence complete. Errors propagate explicitly.
+- Retained `TaskRun` state is opt-in, waiter-safe, and capped at 64 completed
+  records. Fire-and-forget scheduler calls create no retained result.
+- Settings updates from the single completed POST response. Agents HQ observes
+  persisted `generated_at` through its existing status signature and performs
+  one refresh on change; no new global polling loop is introduced.
+
+#### Review chronology and evidence
+
+Rusty identified registry bypass, refetch, and persisted-revision gaps.
+Livingston corrected false success and polling behavior, but Basher rejected an
+unbounded `TaskRun` leak. Danny bounded retained results, but Basher rejected a
+global `last_run` semantic regression. Linus restored attempt semantics and
+added explicit success/error metadata. Basher then issued **APPROVE** after 76
+focused backend tests, 69 banner/Azure-order tests, 5 focused frontend tests,
+concurrency/capacity probes, and type, lint, compile, import, and diff checks.
+
+The only residual is a pre-existing order-dependent test stub that replaces the
+installed Azure namespace before `azure.core` is imported. No commit, push,
+deployment, or production access occurred.
 
 ### Livingston — Dividends economics ambiguity note
 
@@ -8203,3 +8271,179 @@ Basher's final verdicts are **HOLDINGS APPROVE** and **LABELS APPROVE**. Focused
 validation covered account-isolated FIFO, aggregate residual cost, zero-cost and
 incomplete basis behavior, the Microsoft regression, label edge cases, shared
 surface adoption, TypeScript, changed-file lint, and diff hygiene.
+
+## Dividend Movement Membership and Deterministic Pagination
+
+**Date:** 2026-09-24
+**Status:** IMPLEMENTED AND APPROVED
+**Owners:** Linus (membership), Danny (pagination), Basher (review)
+
+- A stored `BUY` belongs to both the Buy and Dividend user-facing filters only
+  when authoritative metadata identifies a `SHARE_ACQUISITION` under
+  `SCRIP_DIVIDEND` or `DIVIDEND_WITH_SCRIP`.
+- This is filter semantics only. Persistence, accounting, stored transaction
+  type, badge classification, and the `Dividend · Buy` label are unchanged.
+  Ordinary buys, rights acquisitions, missing metadata, and other transaction
+  types retain exact stored-type membership.
+- `GET /api/portfolio/movements` applies one deterministic descending order by
+  `trade_date`, then unique movement `id`, before offset/limit slicing.
+  Multi-page consumers stop on a short authoritative page and deduplicate by
+  movement ID only as overlap defense.
+- Basher initially rejected an asynchronous stale-response race and unstable
+  equal-date pagination. The corrected implementation was approved after
+  abort/generation probes, repeated 137-row equal-date pagination probes, 137
+  backend tests, 325 frontend tests, TypeScript, lint, compile, and diff checks.
+
+## Controlled Historical Rights Migration
+
+**Date:** 2026-09-24
+**Status:** APPROVED
+**Requested by:** Copilot
+**Contributors:** Rusty, Livingston, Linus, Reuben, Danny, Basher
+
+### User and accounting decisions
+
+- Rights are not retained as positions. Each historical case ends in a total
+  cash realization, conversion to shares, or partial conversion with sale of
+  the remainder.
+- Total sale records cash-dividend income plus a linked rights sale. Conversion
+  cost includes subscription top-up; when reliable share FMV is unavailable,
+  the operator must explicitly accept zero share cost.
+- Rights support is removed from new-movement entry and may be removed entirely
+  after the historical migration is completed.
+- Migration is never automatic. Discovery is advisory, and each execution
+  reviews, previews, applies, resumes, or rolls back exactly one manually
+  confirmed case through the guided CLI.
+
+### Durable service contract
+
+- Each case has one append-only journal head guarded by expected revision,
+  state, ETag, operation lease, and monotonic fencing token.
+- The canonical write target comprises the HTTPS endpoint, database, portfolio
+  container, and journal container. It is preview-hashed, explicitly
+  acknowledged, journaled, and rechecked; no production target or credential
+  has an implicit fallback.
+- Portfolio mutations are account-partition transactional batches that
+  conditionally replace the authoritative lease document with each ledger
+  create, replace, or delete. Stale writers and stale compensators fail closed.
+- Outcomes A/B/C enforce exact legs and equations. Mixed outcome C may include
+  one genuine cash-dividend leg together with share acquisition and leftover
+  rights sold.
+- Discovery never auto-links. It is deterministic, bounded, horizon- and
+  candidate-capped, exposes continuation/truncation, and treats date, quantity,
+  and text similarity as advisory evidence.
+- Canonical hashing recursively rejects malformed, boolean, blank, null,
+  negative, negative-zero, non-finite, exponent, over-precision, and
+  out-of-range financial values while leaving descriptive strings intact.
+- Backup/export preserves the migration journal, provenance, replacements,
+  FMV/top-up, supersession, verification, and rollback data with strict
+  bidirectional dependency closure.
+
+### Terminal intent and crash recovery
+
+- Before persisting `VERIFIED` or `ROLLED_BACK`, the lease is CAS-sealed with
+  the complete canonical terminal journal application document and its hash,
+  plus the expected journal head, state, operation, lease, fence, payload, and
+  verification hashes.
+- A pending unreflected seal survives release and expiry, blocks takeover, and
+  can be recovered without repeating ledger writes. Apply recovery remains
+  `APPLYING → VERIFIED`; rollback recovery remains
+  `ROLLING_BACK → ROLLED_BACK`.
+- Initial persistence, exact owner retry, and crash recovery write the same
+  sealed document. Reconciliation ignores only top-level Cosmos-managed
+  `_etag`, `_rid`, `_self`, `_attachments`, and `_ts`; every other added,
+  missing, changed, or nested-tampered field fails closed and preserves the
+  seal.
+- The seal clears only after exact verified persistence. Recovery is
+  idempotent, and a former owner cannot reseal, write, compensate, or release a
+  replacement fence.
+
+### Recovery and review chronology
+
+- Reuben reconstructed the NUL-corrupted core migration module and restored a
+  compiling/importable, NUL-free artifact with 109 focused tests passing.
+- Basher rejected that revision for a terminal fencing race and a nested
+  financial-validation gap.
+- Livingston added the terminal CAS seal and recursive numeric validation.
+  Basher confirmed those fixes but rejected the seal-to-journal crash deadlock.
+- Danny added durable terminal-intent recovery for apply and rollback. Basher
+  confirmed crash recovery but rejected subset-based reconciliation that could
+  bless extra tampered terminal data.
+- Rusty bound and compared the exact canonical terminal journal document.
+  Basher issued final **APPROVE**.
+
+### Guided session trust model
+
+- Reuben's `run-guided` contract processed a complete discovery bundle
+  sequentially in deterministic case-ID order, retained per-case preview,
+  confirmation, target, lease/fence, journal, recovery, and rollback
+  semantics, and stored only bound progress and preview references.
+- Livingston added strict state invariants, authoritative `VERIFIED` journal
+  reconciliation, blank-filter rejection, recursive credential handling,
+  balanced counters, and retryable failures. Basher rejected that revision
+  because persisted confirmation and forgeable no-write dispositions could
+  still bypass live operator acknowledgement.
+- Danny established the final minimal trust boundary: local state and public
+  checksums were navigation aids only; every non-VERIFIED write required a
+  fresh live-TTY `APPLY`, every resumed no-write disposition required exact
+  re-acknowledgement, and only an exact target/case/hash-bound durable
+  `VERIFIED` journal proved completion.
+- Basher approved the guided revision after 160 focused tests and 16
+  independent adversarial probes, plus compilation/import, CLI help, NUL, and
+  scoped diff checks.
+
+### Final validation
+
+- 126 focused migration, CLI, backup, and archive-format tests passed.
+- Four independent tamper probes rejected nested injection, nested
+  system-field injection, top-level application injection, and a missing
+  intended field while preserving the terminal seal.
+- Four migration modules compiled and imported; top-level and apply CLI help
+  passed; eight scoped artifacts contained no NUL bytes; scoped diff and
+  whitespace checks passed.
+- No production services or data were accessed. No commit, push, deployment,
+  or production operation occurred in this recovered session.
+
+## Historical Rights Migration Abandoned and Removed
+
+**Date:** 2026-09-24
+**Status:** SUPERSEDED — REMOVED
+**Requested by:** Copilot
+**Owner:** Reuben
+
+- The uncommitted controlled historical rights migration feature is explicitly
+  abandoned in full. Its CLI, guided workflow, domain/service/repository/factory
+  modules, tests, fixtures, documentation, backup/archive/schema/export/import
+  integration, dependency-closure rules, and portfolio hooks are removed.
+- The earlier Controlled Historical Rights Migration decision is retained as an
+  append-only historical record, but it no longer describes an active,
+  available, approved, or planned capability.
+- Unrelated Dashboard Banner, movement pagination/filter, and multiple-position
+  monitor work remains unchanged. No production service or data was accessed,
+  and no commit, push, or deployment was performed.
+- Basher independently confirmed zero product references or migration-named
+  files, zero shared backup/archive/dependency/schema integration diffs, zero
+  generated Python/cache artifacts, no tracked deletions, and no untracked
+  migration files. Prior targeted validation remained authoritative at 111
+  migration-adjacent plus 75 backup tests.
+
+## Final Pending Product Diff Approved
+
+**Date:** 2026-09-24
+**Status:** APPROVED FOR COMMIT-ALL AND PUSH
+**Requested by:** Copilot
+**Reviewer:** Basher
+
+- The remaining product diff covering deterministic movement ordering,
+  multi-page exhaustion/deduplication, Dividend dual-membership, stale-request
+  cancellation, filter/page behavior, and duplicate-position dashboard
+  identity has no release blocker.
+- Validation passed with 200 focused backend tests, 133 focused frontend tests,
+  TypeScript, changed-file ESLint, new-test Ruff, scoped Python compilation,
+  product-scope whitespace checks, and a production frontend build.
+- The broader frontend run passed 1,338 of 1,340 tests. The two failures are in
+  untouched source-contract areas: Economics PP-6 and movement-detail optional
+  chaining.
+- Historical-rights migration runtime, tests, and documentation remain removed
+  outside append-only `.squad` history. The successful build's generated-CSS
+  warning and legacy Ruff findings are non-blocking.

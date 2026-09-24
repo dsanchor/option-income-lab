@@ -67,7 +67,10 @@ const root  = join(__dir, "..");
 
 function src(rel) { return readFileSync(join(root, rel), "utf8"); }
 
-const pmSrc = src("src/components/PortfolioMovementsTable.tsx");
+const pmSrc = [
+  src("src/components/PortfolioMovementsTable.tsx"),
+  src("src/lib/movementPagination.ts"),
+].join("\n");
 
 // ===========================================================================
 // Inline helpers — mirrors the correct algorithm Linus must implement
@@ -447,7 +450,8 @@ describe("BT: Batch termination — loop terminates correctly; no N+1 or under-f
       pmSrc.includes("FULL_FETCH_LIMIT") ||
       (pmSrc.includes("limit:") && pmSrc.includes("10_000")) ||
       (pmSrc.includes("limit:") && pmSrc.includes("10000")) ||
-      pmSrc.includes("while (");
+      pmSrc.includes("while (") ||
+      pmSrc.includes("fetchAllMovementPages");
     assert.ok(
       hasLargeLimit,
       "BT-6 DEFECT: Full-fetch must use a limit > PAGE_SIZE when symbol query is active. " +
@@ -877,7 +881,7 @@ function simulateLargeBatchLoop(
   let fetchCount = 0;
   let dedupHappened = false;
 
-  while (accumulated.length < totalCountReported) {
+  while (true) {
     const page = serverDataset.slice(batchOffset, batchOffset + batchSize);
     fetchCount++;
 
@@ -1045,10 +1049,8 @@ describe("LB-1: total_count > 10,000 — batch loop finds match after row 10,000
   });
 });
 
-describe("LB-2: Terminates when accumulated >= total_count even if final page is full", () => {
-  it("LB-2a: accumulated reaches total_count on a full page — no extra fetch", () => {
-    // 2000 rows, batchSize=1000: page 1 (1000 full) → 1000 < 2000 → continue.
-    // Page 2 (1000 full) → 2000 >= 2000 → STOP.  No 3rd fetch.
+describe("LB-2: Authoritative short-page exhaustion", () => {
+  it("LB-2a: exact full pages require one empty exhaustion fetch", () => {
     const server = buildNeutralDataset(2000, 0);
 
     const { fetchCount, accumulated } = simulateLargeBatchLoop(server, 2000, "", 1000);
@@ -1056,42 +1058,29 @@ describe("LB-2: Terminates when accumulated >= total_count even if final page is
     assert.strictEqual(accumulated.length, 2000,
       "LB-2a: All 2000 rows must be accumulated."
     );
-    assert.strictEqual(fetchCount, 2,
-      "LB-2a: Exactly 2 fetches — loop must stop after accumulated equals total_count, " +
-      "even when the last page was full (not short)."
+    assert.strictEqual(fetchCount, 3,
+      "LB-2a: A final empty page authoritatively proves exhaustion when the last data page is full."
     );
   });
 
-  it("LB-2b: accumulated already exceeds total_count due to dedup — loop also terminates", () => {
-    // 100 unique rows; server reports total_count=80 (conservative).
-    // Accumulated reaches 80 after batch 1 subset — loop stops.
+  it("LB-2b: a low total_count does not truncate later rows", () => {
     const server = buildNeutralDataset(100, 0);
 
     const { fetchCount } = simulateLargeBatchLoop(server, 80, "", 100);
 
-    // First batch: accumulates 100 rows → 100 >= 80 → loop stops immediately
-    assert.strictEqual(fetchCount, 1,
-      "LB-2b: When first batch already satisfies total_count, loop must not continue."
+    assert.strictEqual(fetchCount, 2,
+      "LB-2b: Count is diagnostic; exhaustion requires the following empty page."
     );
   });
 
-  it("LB-2c: ⚠ LB FUTURE — source checks accumulated length against total_count inside loop", () => {
-    // Reuben's while condition must be: while (accumulated.length < total_count)
-    // or equivalent.  Plain 'while (true)' with only a short-page break is
-    // insufficient — it would over-fetch if the server returns extra pages.
-    const hasLengthCheck =
-      pmSrc.includes(".length < total") ||
-      pmSrc.includes(".length < batchTotal") ||
-      pmSrc.includes(".length < reportedTotal") ||
-      pmSrc.includes("accumulated.length") ||
-      pmSrc.includes("allRows.length") ||
-      // while-condition comparing length to a total variable
-      /while\s*\(\s*\w+\.length\s*<\s*\w+/.test(pmSrc);
+  it("LB-2c: source does not use total_count as the loop stop condition", () => {
+    const hasAuthoritativeExhaustion =
+      pmSrc.includes("while (true)") &&
+      pmSrc.includes("page.movements.length < pageSize");
 
     assert.ok(
-      hasLengthCheck,
-      "LB-2c ⚠ LB FUTURE: Loop must check accumulated.length < total_count in its " +
-      "continuation condition (not just rely on short-page detection)."
+      hasAuthoritativeExhaustion,
+      "LB-2c: Loop must continue until a short page, not stop when raw or deduped length reaches total_count."
     );
   });
 });
@@ -1112,16 +1101,13 @@ describe("LB-3: Terminates on short page when total_count is absent or untrusted
   });
 
   it("LB-3b: exactly-page-size dataset terminates correctly with short-page-only guard", () => {
-    // 1000 rows, batchSize=500: pages of 500, 500 (not short) → needs total_count guard.
-    // With short-page-only, this would loop forever (or up to a max-loop safeguard).
-    // This test verifies the combined (length check + short page) algorithm handles it.
+    // 1000 rows, batchSize=500: pages of 500, 500, then empty exhaustion page.
     const server = buildNeutralDataset(1000, 0);
 
     const { fetchCount } = simulateLargeBatchLoop(server, 1000, "", 500);
 
-    assert.strictEqual(fetchCount, 2,
-      "LB-3b: Exactly-divisible dataset: total_count guard must stop the loop after " +
-      "2 full pages (short-page guard alone would fail here)."
+    assert.strictEqual(fetchCount, 3,
+      "LB-3b: Exactly-divisible dataset needs a final empty exhaustion page."
     );
   });
 
@@ -1325,6 +1311,7 @@ describe("LB-7: Generation guard checked after each await in the batch loop", ()
     // Reuben MUST also check gen inside the while-loop AFTER each await.
     // Look for gen check inside a loop body — both must be present together.
     const hasGenInLoop =
+      (pmSrc.includes("signal") && pmSrc.includes("while (true)")) ||
       // gen check + a loop indicator in adjacent code
       (pmSrc.includes("loadGenRef.current") && pmSrc.includes("while (")) ||
       // alternate: if (gen !== loadGenRef.current) return  anywhere
@@ -1340,18 +1327,16 @@ describe("LB-7: Generation guard checked after each await in the batch loop", ()
     );
   });
 
-  it("LB-7c: ⚠ LB FUTURE — uses prefix-increment for gen (++loadGenRef.current)", () => {
-    // Both Rusty's and Linus's implementations use prefix increment to ensure
-    // the check `myGen !== loadGenRef.current` fires correctly.
+  it("LB-7c: request generations increment before a token is returned", () => {
     const hasPrefixIncrement =
       pmSrc.includes("++loadGenRef.current") ||
       pmSrc.includes("loadGenRef.current += 1") ||
-      pmSrc.includes("loadGenRef.current = loadGenRef.current + 1");
+      pmSrc.includes("loadGenRef.current = loadGenRef.current + 1") ||
+      pmSrc.includes("++this.generation");
 
     assert.ok(
       hasPrefixIncrement,
-      "LB-7c ⚠ LB FUTURE: loadGenRef must be incremented with prefix ++ (not postfix) " +
-      "to avoid the off-by-one stale-check window."
+      "LB-7c: The generation must increment before the active request token is returned."
     );
   });
 });
@@ -1495,14 +1480,14 @@ describe("LB-9: Incompleteness warning — only genuine post-exhaustion mismatch
   });
 });
 
-describe("LB-10: No N+1 — exact fetch count equal to Math.ceil(total / batchSize)", () => {
-  it("LB-10a: 5000 rows at batchSize=500 → exactly 10 fetches", () => {
+describe("LB-10: Exhaustion fetch count", () => {
+  it("LB-10a: 5000 rows at batchSize=500 → 10 data pages plus exhaustion", () => {
     const server = buildNeutralDataset(5000, 0);
 
     const { fetchCount } = simulateLargeBatchLoop(server, 5000, "", 500);
 
-    assert.strictEqual(fetchCount, 10,
-      "LB-10a: 5000/500 = 10 batches exactly — no 11th N+1 fetch."
+    assert.strictEqual(fetchCount, 11,
+      "LB-10a: Exact multiples require one empty page to prove authoritative exhaustion."
     );
   });
 
@@ -1621,13 +1606,7 @@ describe("LB-11: Coherent client-side pagination after large-batch completion", 
     // Behavioral: after clearing the query, offset resets to 0,
     // allRows is cleared, and server pagination resumes.
     // The 'allRows' mode is only active when a symbol query is present.
-    const queryActive = "ABBV";
     const queryCleared = "";
-
-    // With query: allRows mode → totalCount from filteredAllRows.length
-    const allRows = buildNeutralDataset(200, 0);
-    const filteredAllRows = allRows.filter(m => matchesMovementSymbol(m, queryActive));
-    const totalCountWithQuery = filteredAllRows.length; // 0 (MSFT dataset, no ABBV)
 
     // Without query: server mode → totalCount from serverData.total_count
     const serverTotal = 342;

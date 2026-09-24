@@ -1,14 +1,56 @@
+/** Shared movement-type membership rules for user-facing filters. */
+
+export interface MovementTypeFilterShape {
+  txn_type?: string | null;
+  ca_leg_type?: string | null;
+  ca_event_type?: string | null;
+}
+
+const DIVIDEND_SHARE_EVENTS = new Set([
+  "SCRIP_DIVIDEND",
+  "DIVIDEND_WITH_SCRIP",
+]);
+
+export function isDividendDerivedShareAcquisition(
+  movement: MovementTypeFilterShape,
+): boolean {
+  return (
+    movement.txn_type === "BUY" &&
+    movement.ca_leg_type === "SHARE_ACQUISITION" &&
+    movement.ca_event_type != null &&
+    DIVIDEND_SHARE_EVENTS.has(movement.ca_event_type)
+  );
+}
+
+export function matchesMovementTypeFilter(
+  movement: MovementTypeFilterShape,
+  filter: string | null | undefined,
+): boolean {
+  if (!filter || filter === "ALL") return true;
+  if (movement.txn_type === filter) return true;
+  return filter === "DIVIDEND" && isDividendDerivedShareAcquisition(movement);
+}
+
 /**
- * filterMovementsByType.ts — Pure helper for the Stocks tab.
- *
- * The Stocks tab requirement (Symbol Details, §6 contract) shows BUY, SELL,
- * and DIVIDEND movements for the current security. TRANSFER_IN / TRANSFER_OUT
- * movements appear in the backend payload today (get_movements() called without
- * txn_type filter). This helper provides client-side filtering until the backend
- * detail endpoint is tightened to pass txn_type constraints.
- *
- * Pattern: mirrors filterSecurities.ts and filterPortfolioRows.ts conventions.
+ * Dividend membership spans stored BUY and DIVIDEND rows, so it cannot be
+ * represented by the backend's exact txn_type query parameter.
  */
+export function getServerMovementTypeFilter(
+  filter: string | null | undefined,
+): string | undefined {
+  return !filter || filter === "ALL" || filter === "DIVIDEND"
+    ? undefined
+    : filter;
+}
+
+export function filterMovementsByType<T extends MovementTypeFilterShape>(
+  movements: T[],
+  filter: string | null | undefined,
+): T[] {
+  return movements.filter((movement) =>
+    matchesMovementTypeFilter(movement, filter),
+  );
+}
 
 export type StocksTabTxnType = "BUY" | "SELL" | "DIVIDEND";
 

@@ -27,6 +27,62 @@
 
 ## Learnings
 
+### 2026-09-24 — Position-identity dashboard monitor joins
+- Dashboard position-monitor rows must be seeded, joined, snapshotted, and
+  React-keyed by stable `position_id`; `(symbol, strike, expiration)` is a
+  contract description, not a position identity, and can legitimately repeat.
+- Legacy monitor records without position identity may be attached only when
+  one active position is unambiguously identified. Ambiguous symbol-level
+  records stay visible in the general activity feed but leave each position
+  row explicitly empty rather than cross-assigning data.
+
+### 2026-09-24 — Dashboard banner successful-run contract
+- The first revision made manual banner completion truthful: generation or
+  persistence failure propagates to the caller and cannot render as Completed.
+- Manual banner execution stays inside `TaskRegistry`, but its API waits on the
+  registry run token so persistence failures return an explicit error instead
+  of being presented as completed.
+- Settings uses the single completion response rather than global polling, and
+  Agents HQ refreshes once when persisted `dashboard_banner.generated_at`
+  changes.
+- Final compatibility semantics keep global `last_run` as latest attempt;
+  Dashboard Banner alone presents `last_success` or persisted `generated_at`.
+
+### 2026-09-24 — Controlled historical-rights migration persistence
+- Added a single-case migration service with canonical preview hashes, source
+  SHA/ETag checks, append-only durable revisions, deterministic replacement
+  IDs, conditional source supersession, exact write inventory, post-flight
+  accounting controls, idempotent crash recovery, and hash-confirmed rollback.
+- Cosmos cross-container atomicity is compensating: failures before any source
+  supersession delete exact created replacements; partial supersession,
+  dependency drift, failed compensation, or failed rollback always stops at
+  `ATTENTION_REQUIRED` and never reports `VERIFIED`.
+- Rollback is safe only from a fresh rollback preview, with no later
+  dependencies; created legs are audit-superseded and originals are reactivated
+  only when the migration still owns their supersession and CAS succeeds.
+- Revised terminal persistence after Basher review: a lease-side terminal
+  commit seal is now CAS-persisted before the cross-container journal CAS,
+  blocking takeover until the bound terminal revision is durable or the owner
+  releases. Recursive preview validation now recognizes nested withholding,
+  FX-rate, FMV, fee, quantity, amount, and top-up numeric leaves while leaving
+  non-financial strings untouched.
+
+### 2026-09-24 — Guided historical-rights trust-boundary revision
+- Replaced local-checksum authority with strict progress invariants plus
+  service-journal reconciliation: an `applied` local state is skippable only
+  when the durable journal is `VERIFIED` and its case, preview hash, validated
+  embedded preview, and target identity exactly match the guided artifact.
+- Kept no-write dispositions explicitly local and non-authoritative; they are
+  accepted only with complete case/outcome/hash-bound artifacts and can never
+  assert a ledger write.
+- Rejected blank repeatable filters, recursively redacted exported
+  credential-like keys, failed closed on secret-bearing guided inputs, and
+  corrected completed/failed/pending accounting while preserving failed-case
+  retry and crash recovery.
+- Added adversarial regression coverage; 156 comprehensive migration,
+  backup, and archive tests pass with compile/import/help, independent probes,
+  NUL, and scoped hygiene checks clean.
+
 ### 2026-09-23 — Monitoring gate replacement normalization
 - Persisted `scheduler.agents` is replacement state, not a partial patch: every effective load/reload rebuilds exactly the five member gates.
 - Only explicit booleans survive normalization; missing blocks, malformed blocks, missing members, and non-boolean members default to enabled, so a stale in-memory `false` cannot survive a replacement reload.

@@ -18,6 +18,7 @@ export interface RecentActivityRef {
 export interface AgentRow {
   key: string;
   symbol: string;
+  position_id?: string | null;
   display: string;
   underlying_price?: number | null;
   recent_activities?: RecentActivityRef[];

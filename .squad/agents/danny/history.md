@@ -15,6 +15,17 @@
 
 ## Recent Learnings
 
+### 2026-09-24 — Bounded retained scheduler results
+- `TaskRegistry.trigger_task_now()` remains allocation-free and
+  fire-and-forget by default; only callers that need a terminal result opt into
+  retained `TaskRun` state.
+- Waiter claims, publication, timeout release, late retrieval, and cleanup
+  share one lock. Completed unclaimed results are capped at 64 without evicting
+  active or claimed runs.
+- The lifecycle repair was retained, but the first revision's global
+  success-only `last_run` change was rejected. Final scheduler compatibility
+  keeps `last_run` as latest attempt and exposes `last_success` separately.
+
 ### 2026-09-09 — Economics Unified Dashboards Design
 - Established the three-view Economics information architecture: `/economics`, `/economics/options`, `/economics/dividends`.
 - Rejected a blended total KPI in v1 because options economics is not yet FX-normalized while dividends are authoritative in EUR.
@@ -118,3 +129,79 @@
 - Trigger slots and run-status data now live in one eagerly initialized process
   state object, with an atomic fallback initializer for isolated TestClient
   state, eliminating split lazy-registry/lock initialization.
+
+### 2026-09-24 — Dividend filter pagination revision
+- Offset pagination is safe only when the authoritative service applies a total
+  order. Movement pages now sort descending by `trade_date` and stable unique
+  movement `id` before slicing, including equal-date boundaries.
+- Multi-page Dividend/search retrieval must stop on a short-page exhaustion
+  signal rather than raw or deduplicated count; count-based stopping can miss a
+  unique later row when pages overlap.
+- Shared abortable request generations let both global Movements and symbol
+  history reject stale rows, counts, loading, errors, and pagination state,
+  including after component unmount. Stable-ID dedupe remains defense-in-depth,
+  never the authoritative pagination mechanism.
+
+### 2026-09-24 — Historical rights migration independent revision
+- A write-capable migration case has one durable journal head guarded by
+  revision/state ETag CAS, an expiring operation lease, and a fencing token
+  checked before every ledger mutation. Concurrent apply/resume/rollback losers
+  cannot enter writes or compensate another operator's documents.
+- Saved previews bind outcome, actor, rationale, account, canonical security,
+  exact source IDs, warning resolutions, and an explicit canonical
+  endpoint/database/container target identity. Apply requires literal parity
+  and revalidates source identity from storage.
+- Mixed rights outcome C may preserve exactly one genuine cash-dividend leg
+  alongside acquired shares and leftover rights sold; source removal plus one
+  cash leg prevents duplicate dividend income.
+- Rights discovery retains distant same-account/security alternatives within a
+  configurable horizon (or unbounded review) and marks distance/text-only
+  evidence weak rather than auto-linking or discarding it.
+- Strict user backup now has an authoritative rights-migration case section and
+  fail-closed ledger fields, with bidirectional journal/ledger dependency
+  closure and exact round-trip preservation.
+
+### 2026-09-24 — Historical rights terminal recovery revision
+- A terminal lease seal is now a complete durable commit intent: it binds the
+  apply-versus-rollback terminal state, expected journal head, operation, lease,
+  fence, full terminal payload, and canonical payload/verification hashes.
+- Lease release and expiry retain an unreflected seal. Resume can materialize
+  only that validated intent, reconcile an already-written terminal revision,
+  and repeat safely without re-running writes or guessing state.
+- Pending intent still blocks takeover, while completed recovery clears the
+  seal so an expired lease can advance to a higher fence; stale owners remain
+  unable to write or clear the winner's lease.
+
+### 2026-09-24 — Dashboard banner run lifecycle revision
+- Manual scheduler triggers remain fire-and-forget by default and allocate no
+  completion record. Callers that need a result opt in with
+  `retain_result=True`.
+- Retained terminal results are capacity-bounded, while active runs and runs
+  with attached waiters are never pruned. Waiter accounting makes completion,
+  timeout, concurrent retrieval, and cleanup deterministic.
+- The banner endpoint is the sole opt-in caller and awaits its owned run, so
+  failure still propagates without advancing `last_run`, while successful
+  completion returns the persisted-run timestamp.
+
+### 2026-09-24 — Guided rights migration trust revision
+- Local guided state and public checksums are navigation/corruption aids only;
+  they can neither authorize a write nor silently retire a no-write case.
+- Every restarted non-VERIFIED write path requires a fresh exact live-TTY
+  confirmation immediately before prepare/apply/resume. A legacy persisted
+  `confirmed` phase has no authority; only a target-bound `VERIFIED` service
+  journal proves completion and enables prompt-free reconciliation.
+- Local skip/reject/needs-evidence records are displayed and exactly
+  re-acknowledged on every resume, including forged terminal or previewed
+  forms. This makes tampering visible without claiming local authenticity.
+- Guided error diagnostics now redact credential/key/token/password/secret
+  variants and known environment values through nested causes and repr-only
+  exceptions while preserving useful exception types and context.
+
+### 2026-09-24 — Dashboard option-type identity revision
+- Monitor identity treats `type`, `current_option_type`, `option_type`, and
+  `right` as one strict option-type alias set at both the document top level
+  and nested `source`.
+- Explicit option type accepts only trimmed, case-insensitive `call` or `put`.
+  Null, blank, malformed, unknown, or conflicting aliases fail closed.
+- Exact `position_id` assignment still requires every explicit option-type
+  constraint to agree; mismatch never degrades to contract or symbol fallback.

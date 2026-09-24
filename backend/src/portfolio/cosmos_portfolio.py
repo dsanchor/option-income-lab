@@ -1774,7 +1774,7 @@ class CosmosPortfolioService:
 
         where = " AND ".join(conditions)
         count_query = f"SELECT VALUE COUNT(1) FROM c WHERE {where}"
-        data_query = f"SELECT * FROM c WHERE {where} ORDER BY c.trade_date DESC"
+        data_query = f"SELECT * FROM c WHERE {where}"
 
         query_kwargs: Dict[str, Any] = {
             "enable_cross_partition_query": True,
@@ -1800,6 +1800,16 @@ class CosmosPortfolioService:
                 parameters=params,
                 enable_cross_partition_query=True,
             ))
+            # Offset pagination requires one deterministic total order. Sorting
+            # after the complete query also avoids depending on a Cosmos
+            # composite index for trade_date + id.
+            all_items.sort(
+                key=lambda item: (
+                    str(item.get("trade_date") or ""),
+                    str(item.get("id") or ""),
+                ),
+                reverse=True,
+            )
             items = all_items[offset: offset + limit]
         except Exception as exc:
             logger.warning("Data query failed: %s", exc)

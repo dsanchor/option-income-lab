@@ -3,26 +3,116 @@
  *
  * Run with: node --test frontend/tests/filterMovementsByType.test.mjs
  *
- * Inline predicate mirrors filterMovementsByType.ts exactly.
- * Any divergence between helper and predicate is a defect.
+ * Imports the production helper so metadata membership cannot drift.
  */
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import {
+  filterMovementsByType,
+  filterMovementsForStocksTab,
+  getServerMovementTypeFilter,
+  isStocksTabMovement,
+  matchesMovementTypeFilter,
+} from "../src/lib/filterMovementsByType.ts";
 
-// ---------------------------------------------------------------------------
-// Inline predicate (mirrors filterMovementsByType.ts — update both together)
-// ---------------------------------------------------------------------------
+describe("user-facing movement type membership", () => {
+  const ordinaryBuy = { txn_type: "BUY" };
+  const cashDividend = { txn_type: "DIVIDEND", ca_leg_type: "CASH_DIVIDEND" };
+  const scripBuy = {
+    txn_type: "BUY",
+    ca_leg_type: "SHARE_ACQUISITION",
+    ca_event_type: "SCRIP_DIVIDEND",
+  };
+  const mixedScripBuy = {
+    txn_type: "BUY",
+    ca_leg_type: "SHARE_ACQUISITION",
+    ca_event_type: "DIVIDEND_WITH_SCRIP",
+  };
+  const rightsBuy = {
+    txn_type: "BUY",
+    ca_leg_type: "SHARE_ACQUISITION",
+    ca_event_type: "RIGHTS_ISSUE",
+  };
+  const sell = { txn_type: "SELL" };
 
-const STOCKS_TAB_TYPES = ["BUY", "SELL", "DIVIDEND"];
+  it("keeps dividend-derived share acquisitions in both Buy and Dividend", () => {
+    for (const movement of [scripBuy, mixedScripBuy]) {
+      assert.equal(matchesMovementTypeFilter(movement, "BUY"), true);
+      assert.equal(matchesMovementTypeFilter(movement, "DIVIDEND"), true);
+    }
+  });
 
-function isStocksTabMovement(txn_type) {
-  return STOCKS_TAB_TYPES.includes(txn_type);
-}
+  it("keeps ordinary and metadata-free buys in Buy only", () => {
+    for (const movement of [ordinaryBuy, { txn_type: "BUY", ca_leg_type: undefined }]) {
+      assert.equal(matchesMovementTypeFilter(movement, "BUY"), true);
+      assert.equal(matchesMovementTypeFilter(movement, "DIVIDEND"), false);
+    }
+  });
 
-function filterMovementsForStocksTab(movements) {
-  return movements.filter((m) => isStocksTabMovement(m.txn_type));
-}
+  it("keeps cash dividends in Dividend only", () => {
+    assert.equal(matchesMovementTypeFilter(cashDividend, "DIVIDEND"), true);
+    assert.equal(matchesMovementTypeFilter(cashDividend, "BUY"), false);
+  });
+
+  it("keeps rights-issue share acquisitions in Buy only", () => {
+    assert.equal(matchesMovementTypeFilter(rightsBuy, "BUY"), true);
+    assert.equal(matchesMovementTypeFilter(rightsBuy, "DIVIDEND"), false);
+  });
+
+  it("leaves SELL and unrelated types unaffected", () => {
+    assert.equal(matchesMovementTypeFilter(sell, "SELL"), true);
+    assert.equal(matchesMovementTypeFilter(sell, "BUY"), false);
+    assert.equal(matchesMovementTypeFilter(sell, "DIVIDEND"), false);
+  });
+
+  it("filters a mixed collection with the same dual-membership rule", () => {
+    const movements = [
+      ordinaryBuy,
+      cashDividend,
+      scripBuy,
+      mixedScripBuy,
+      rightsBuy,
+      sell,
+    ];
+    assert.deepEqual(filterMovementsByType(movements, "BUY"), [
+      ordinaryBuy,
+      scripBuy,
+      mixedScripBuy,
+      rightsBuy,
+    ]);
+    assert.deepEqual(filterMovementsByType(movements, "DIVIDEND"), [
+      cashDividend,
+      scripBuy,
+      mixedScripBuy,
+    ]);
+  });
+
+  it("omits only Dividend from the exact backend txn_type query", () => {
+    assert.equal(getServerMovementTypeFilter("BUY"), "BUY");
+    assert.equal(getServerMovementTypeFilter("SELL"), "SELL");
+    assert.equal(getServerMovementTypeFilter("DIVIDEND"), undefined);
+    assert.equal(getServerMovementTypeFilter("ALL"), undefined);
+  });
+});
+
+describe("Dividend filter surfaces use shared semantic filtering", () => {
+  for (const component of [
+    "PortfolioMovementsTable.tsx",
+    "StockTransactionsTable.tsx",
+  ]) {
+    it(`${component} uses the shared helper and client-filters Dividend`, () => {
+      const source = fs.readFileSync(
+        new URL(`../src/components/${component}`, import.meta.url),
+        "utf8",
+      );
+      assert.match(source, /filterMovementsByType/);
+      assert.match(source, /getServerMovementTypeFilter/);
+      assert.match(source, /filterMovementsByType\([^;]+(?:filter\.txn_type|tf)\)/s);
+    });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // isStocksTabMovement predicate

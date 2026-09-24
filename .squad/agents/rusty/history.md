@@ -16,6 +16,18 @@
 
 ## Recent Learnings
 
+### 2026-09-24 — Exact terminal-intent recovery
+- A terminal recovery seal must bind the complete canonical journal application document, not merely a payload subset. Recovery compares that document recursively and permits differences only for explicitly enumerated top-level Cosmos repository fields (`_etag`, `_rid`, `_self`, `_attachments`, `_ts`).
+- Build the terminal document once before sealing and persist that same sealed document on initial write, owner retry, or crash recovery. This preserves timestamps/history exactly and makes retries idempotent.
+- Added, removed, or changed application fields—including nested fields—must reject recovery without clearing the seal; seal clearing follows only an exact post-persistence match.
+
+### 2026-09-24 — Controlled historical-rights migration CLI
+- Historical rights resolution is a one-case, operator-driven workflow: discovery is advisory, preview is zero-write, and apply/rollback require literal case/outcome/hash/actor/rationale confirmation.
+- Keep discovery and financial preview construction pure and separate from the transactional service. The CLI now emits Livingston's canonical `RightsMigrationPreview`, while the service owns journaling, ETag/CAS, compensation, resume, and rollback.
+- Candidate recommendations require the same account and canonical security plus structured evidence; date proximity, small quantities, and text matches remain advisory and ambiguous alternatives stay visible.
+- A/B/C economics are explicit: A creates cash-dividend income plus a linked rights sale and no shares; B creates shares and no sale; C creates shares plus a leftover rights sale. Share FMV plus subscription top-up enters FIFO basis, and missing reliable FMV requires an explicit ZERO_COST affirmation.
+- Production-capable commands require explicit environment/database/container/factory inputs, reject piped confirmation, and add a separate production acknowledgement. The factory has no implicit target or connection fallback.
+
 ### 2026-09-23 — Global Monitoring Agent member gates
 - Store per-member gates under `scheduler.agents`; only an explicit boolean `false` disables a member, so missing, legacy, or malformed values preserve enabled behavior.
 - Enforce the gate at both orchestration boundaries: the scheduler/full-analysis loops skip disabled members, while direct dashboard per-agent triggers return an explicit `409 disabled` response.
@@ -70,3 +82,14 @@
 
 ### 2026-09-06 — Portfolio routed frontend conventions
 - Reinforced the pattern of thin BFF proxies, shared stat-card presentation, and account-name-only informational labels across portfolio surfaces.
+
+### 2026-09-24 — Dashboard banner refresh and last-run continuity
+- The Configuration `Dashboard Banner Agent` card was the only current UI combining the literal `Last Run` / `Never` fallback with the banner generator.
+- Manual banner execution must enter through `TaskRegistry.trigger_task_now`; bypassing the registry leaves runtime `last_run` unset even when the banner document is persisted.
+- Banner generation is persisted on `dashboard_banner.generated_at`. Settings falls back to that value after restart and updates from the single completed Run Now response; no global polling loop is needed.
+- Dashboard auto-refresh signatures must include the persisted banner generation timestamp; activity and monitoring-agent timestamps do not change when only banner content changes.
+
+### 2026-09-24 — Legacy dashboard monitor identity must be monotonic
+- A legacy monitor record without `position_id` is matched by intersecting every explicit identity field it carries with active positions; a failed strike, expiration, account, option type, paper lane, contract ID, or instrument ID may never be discarded in favor of symbol-only matching.
+- Legacy fallback is valid only when that complete predicate resolves exactly one active position. Zero or multiple matches remain unassigned while the record stays visible in the global Activities feed.
+- An explicit `position_id` remains authoritative, including stale rolled/closed IDs: failed ID lookup never falls back to contract or symbol identity.

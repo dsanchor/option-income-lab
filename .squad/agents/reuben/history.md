@@ -96,3 +96,33 @@ Frontend: npx tsc --noEmit — 0 errors
 - Added regression tests in `backend/tests/test_cosmos_roll.py:33-55`:
   - `test_roll_position_preserves_is_paper_for_paper_positions`
   - `test_roll_position_does_not_introduce_is_paper_for_real_positions`
+
+## Historical Rights Migration Recovery (2026-09-24)
+
+- Found the untracked core migration module replaced by 92 KB of NUL bytes after
+  the interrupted session; its cached bytecode was corrupted the same way.
+- Reconstructed the strict preview models, invariant calculation, durable
+  journal state machine, compensation/resume/rollback paths, Cosmos CAS adapter,
+  account-partition lease, monotonic fencing, and transactional ledger batches.
+- Verified the CLI remains one-case-at-a-time, target/hash bound, interactive,
+  production-acknowledged, bounded in discovery, and free of implicit targets or
+  credentials.
+- Focused validation: 109 tests passed; migration modules compile and import;
+  CLI help succeeds. Full `git diff --check` is blocked only by two pre-existing
+  trailing-space lines in `.squad/routing.md`, outside this artifact.
+
+## Historical Rights Guided Session Orchestration (2026-09-24)
+
+- Added `run-guided` to walk one complete discovery bundle in deterministic
+  case-ID order while retaining the existing exact preview, production
+  acknowledgement, prepare-hash, apply, lease/fence, journal, recovery, and
+  rollback contracts for every write case.
+- Added exact repeatable account and normalized Symbol/canonical-security
+  filters plus inclusive ISO source-date filters.
+- Added a strict versioned local session with canonical bundle/target/filter
+  binding, canonical self-hash, atomic fsync/replace persistence, per-case
+  preview references, durable non-write dispositions, explicit failures, and
+  restart reconciliation against the service journal.
+- Added deterministic guided-flow, filter, tamper, changed-bundle, duplicate
+  case, exact confirmation, no-credential, and post-apply reconciliation tests.
+- Updated the operator runbook. No production data or services were accessed.
