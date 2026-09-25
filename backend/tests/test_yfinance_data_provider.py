@@ -304,51 +304,6 @@ class TestTechnicalsStructure:
         parsed = json.loads(result["technicals"])
         assert "summary" in parsed
 
-    @patch("src.yfinance_data_provider.yf")
-    def test_technicals_match_banner_provider_contract(
-        self,
-        mock_yf,
-        mock_yf_ticker,
-    ):
-        mock_yf.Ticker.return_value = mock_yf_ticker
-        provider = create_provider()
-
-        parsed = json.loads(_run(provider.fetch_all("AAPL"))["technicals"])
-
-        for section_name, expected_count in (
-            ("summary", 25),
-            ("moving_averages", 15),
-        ):
-            section = parsed[section_name]
-            assert {"recommendation", "buy", "sell", "neutral"} <= set(section)
-            assert set(section["recommendation"]) == {"label", "value"}
-            assert section["recommendation"]["label"] in {
-                "Strong Buy",
-                "Buy",
-                "Neutral",
-                "Sell",
-                "Strong Sell",
-            }
-            assert type(section["recommendation"]["value"]) is float
-            assert all(type(section[field]) is int for field in ("buy", "sell", "neutral"))
-            assert sum(section[field] for field in ("buy", "sell", "neutral")) == expected_count
-            assert section["recommendation"]["value"] == pytest.approx(
-                (section["buy"] - section["sell"]) / expected_count
-            )
-
-        for name, indicator in parsed["moving_averages"]["indicators"].items():
-            assert name in {
-                "EMA10", "SMA10", "EMA20", "SMA20", "EMA30", "SMA30",
-                "EMA50", "SMA50", "EMA100", "SMA100", "EMA200", "SMA200",
-                "Ichimoku.BLine", "VWMA", "HullMA9",
-            }
-            assert {"label", "value", "formatted", "signal"} <= set(indicator)
-            assert type(indicator["label"]) is str
-            assert type(indicator["value"]) in (int, float)
-            assert type(indicator["formatted"]) is str
-            assert indicator["signal"] in {"Buy", "Sell", "Neutral"}
-
-
 # ---------------------------------------------------------------------------
 # 6. fetch_all integration
 # ---------------------------------------------------------------------------
@@ -359,14 +314,7 @@ class TestFetchAll:
         mock_yf.Ticker.return_value = mock_yf_ticker
         provider = create_provider()
         result = _run(provider.fetch_all("AAPL"))
-        expected_keys = {
-            "overview",
-            "technicals",
-            "forecast",
-            "dividends",
-            "options_chain",
-            "_source",
-        }
+        expected_keys = {"overview", "technicals", "forecast", "dividends", "options_chain"}
         assert expected_keys.issubset(set(result.keys())), (
             f"Missing keys: {expected_keys - set(result.keys())}"
         )
@@ -381,23 +329,6 @@ class TestFetchAll:
             assert len(value) > 0, f"fetch_all()['{key}'] is empty"
             # Each value should be valid JSON
             json.loads(value)  # Should not raise
-
-    @patch("src.yfinance_data_provider.yf")
-    def test_source_metadata_uses_actual_history_timestamp(
-        self,
-        mock_yf,
-        mock_yf_ticker,
-        mock_ohlcv,
-    ):
-        mock_yf.Ticker.return_value = mock_yf_ticker
-        provider = create_provider()
-
-        result = _run(provider.fetch_all("AAPL"))
-
-        source = json.loads(result["_source"])
-        assert source["timestamps"]["history"] == mock_ohlcv.index[-1].isoformat()
-        assert source["errors"] == []
-
 
 # ---------------------------------------------------------------------------
 # 7. Cache behavior

@@ -4467,7 +4467,6 @@ async def api_dashboard_status(request: Request):
         agents[agent_type] = status.get("last_run")
 
     latest_activity = None
-    banner_generated_at = None
     cosmos = getattr(request.app.state, "cosmos", None)
     monitor_agent_enabled = _monitor_agent_enabled_map(
         _effective_monitor_agent_config(scheduler, cosmos)
@@ -4479,13 +4478,6 @@ async def api_dashboard_status(request: Request):
                 latest_activity = recent[0].get("timestamp")
         except Exception:  # pragma: no cover - defensive
             pass
-        try:
-            banner = cosmos.get_banner()
-            if banner:
-                banner_generated_at = banner.get("generated_at")
-        except Exception:  # pragma: no cover - defensive
-            pass
-
     return JSONResponse({
         "agents": agents,
         "agent_statuses": agent_statuses,
@@ -4495,7 +4487,6 @@ async def api_dashboard_status(request: Request):
             name for name, enabled in monitor_agent_enabled.items() if not enabled
         ],
         "latest_activity": latest_activity,
-        "banner_generated_at": banner_generated_at,
     })
 
 
@@ -4510,7 +4501,6 @@ def _compute_dashboard_data(
     all_symbols = cosmos.list_symbols()
     all_alerts = cosmos.get_all_alerts(limit=500)
     all_activities = cosmos.get_all_activities(limit=200)
-    banner_doc = cosmos.get_banner()
 
     # Build set of closed position IDs so we can exclude their data
     closed_position_ids: set = set()
@@ -4597,11 +4587,6 @@ def _compute_dashboard_data(
         "total_put_exposure": total_put_exposure,
         "open_roc_annualized": open_roc_annualized,
         "activity": activity,
-        "banner_items": (banner_doc or {}).get("items", []),
-        "banner_generated_at": (banner_doc or {}).get("generated_at"),
-        "banner_source_as_of": (banner_doc or {}).get("source_as_of"),
-        "banner_source_watermarks": (banner_doc or {}).get("source_watermarks", {}),
-        "banner_source_counts": (banner_doc or {}).get("source_counts", {}),
     }
 
 
@@ -6739,9 +6724,6 @@ def _build_settings_config_context(
     dgi_top_n = dgi_cfg.get("top_n", 40)
     dgi_symbols = dgi_cfg.get("symbols", "")
 
-    banner_cfg = config.get("banner_agent", {})
-    banner_max_items = banner_cfg.get("max_items", 10)
-
     best_options_cfg = config.get("best_options_scheduler", {})
     best_options_run_on_startup = best_options_cfg.get("run_on_startup", True)
 
@@ -6780,20 +6762,6 @@ def _build_settings_config_context(
                 timestamps = [e.get("last_updated", "") for e in dgi_entries if e.get("last_updated")]
                 if timestamps:
                     return max(timestamps)
-
-            elif task_name == "banner_agent":
-                # Banner: generated_at from dashboard_banner doc
-                banner_doc = cosmos.get_banner()
-                if banner_doc and banner_doc.get("generated_at"):
-                    generated_at = banner_doc["generated_at"]
-                    try:
-                        parsed = datetime.fromisoformat(
-                            generated_at.replace("Z", "+00:00")
-                        )
-                    except (AttributeError, ValueError):
-                        return ""
-                    if parsed.tzinfo is not None:
-                        return generated_at
 
             elif task_name == "plan_monitor":
                 # Plan Monitor: most recent plan note timestamp
@@ -6934,17 +6902,6 @@ def _build_settings_config_context(
     dgi_last_run_iso = resolve_last_run_iso("dgi_screener", dgi.get("last_run"))
     dgi_next_run_iso = to_iso(dgi.get("next_run"))
 
-    banner = tasks_by_name.get("banner_agent", {})
-    banner_enabled = banner.get("enabled", True)
-    banner_cron = banner.get("cron", "0 5 * * *")
-    # Banner "Last run" is the verified persisted generation timestamp.
-    # Generic scheduler attempt/success clocks remain available as task
-    # metadata but are not banner freshness authority.
-    banner_last_run = resolve_last_run("banner_agent", "")
-    banner_next_run = fmt_time(banner.get("next_run"))
-    banner_last_run_iso = resolve_last_run_iso("banner_agent", "")
-    banner_next_run_iso = to_iso(banner.get("next_run"))
-
     calendar = tasks_by_name.get("calendar_sync", {})
     calendar_enabled = calendar.get("enabled", True)
     calendar_cron = calendar.get("cron", "0 5 * * 1-5")
@@ -7028,13 +6985,6 @@ def _build_settings_config_context(
         "dgi_next_run": dgi_next_run,
         "dgi_last_run_iso": dgi_last_run_iso,
         "dgi_next_run_iso": dgi_next_run_iso,
-        "banner_enabled": banner_enabled,
-        "banner_cron": banner_cron,
-        "banner_max_items": banner_max_items,
-        "banner_last_run": banner_last_run,
-        "banner_next_run": banner_next_run,
-        "banner_last_run_iso": banner_last_run_iso,
-        "banner_next_run_iso": banner_next_run_iso,
         "calendar_enabled": calendar_enabled,
         "calendar_cron": calendar_cron,
         "calendar_last_run": calendar_last_run,
@@ -7288,42 +7238,6 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
         except (ValueError, KeyError):
             pass
 
-    # Banner agent settings
-    banner_enabled = form.get("banner_enabled") == "true"
-    banner_cron = str(form.get("banner_cron", "0 5 * * *")).strip()
-    banner_max_items_str = str(form.get("banner_max_items", "10")).strip()
-    try:
-        banner_max_items = int(banner_max_items_str)
-        banner_max_items = max(3, min(20, banner_max_items))
-    except ValueError:
-        banner_max_items = 10
-
-    if banner_cron:
-        try:
-            croniter(banner_cron)
-            if cosmos:
-                cosmos_settings = _load_settings_from_cosmos(cosmos) or {}
-                cosmos_settings.setdefault("banner_agent", {})
-                cosmos_settings["banner_agent"]["enabled"] = banner_enabled
-                cosmos_settings["banner_agent"]["cron"] = banner_cron
-                cosmos_settings["banner_agent"]["max_items"] = banner_max_items
-                _save_settings_to_cosmos(cosmos, cosmos_settings)
-
-            config = _load_config()
-            config.setdefault("banner_agent", {})
-            config["banner_agent"]["enabled"] = banner_enabled
-            config["banner_agent"]["cron"] = banner_cron
-            config["banner_agent"]["max_items"] = banner_max_items
-            _write_config(config)
-            saved.append("Banner agent")
-
-            scheduler = getattr(request.app.state, "scheduler", None)
-            if scheduler is not None:
-                scheduler.reschedule_banner(banner_cron)
-                scheduler.registry.update_task_enabled("banner_agent", banner_enabled, scheduler.config)
-        except (ValueError, KeyError):
-            pass
-
     # Calendar sync settings
     calendar_enabled = form.get("calendar_enabled") == "true"
     calendar_cron = str(form.get("calendar_cron", "0 5 * * 1-5")).strip()
@@ -7566,7 +7480,6 @@ def _config_with_persisted_ai_overrides(
         "ai_function_overrides",
         "scheduler",
         "summary_agent",
-        "banner_agent",
         "plan_monitor",
     ):
         if key in settings:
@@ -7778,7 +7691,7 @@ def _save_ai_provider_overrides(
             raise RuntimeError(
                 "CosmosDB settings verification failed for settings/app-config"
             )
-        for task_key in ("scheduler", "summary_agent", "banner_agent", "plan_monitor"):
+        for task_key in ("scheduler", "summary_agent", "plan_monitor"):
             if verified_settings.get(task_key) != saved_settings.get(task_key):
                 raise RuntimeError(
                     "CosmosDB settings verification failed for settings/app-config"
@@ -7808,7 +7721,6 @@ def _save_ai_provider_overrides(
             "ai_function_overrides",
             "scheduler",
             "summary_agent",
-            "banner_agent",
             "plan_monitor",
         ):
             if key in effective_settings:
@@ -8525,84 +8437,6 @@ async def trigger_summary_agent(request: Request):
     )
     thread.start()
     return JSONResponse({"status": "triggered", "agent_type": "summary_agent"})
-
-
-@app.post("/api/trigger/banner_agent")
-async def trigger_banner_agent(request: Request):
-    scheduler = getattr(request.app.state, "scheduler", None)
-    if (
-        scheduler is None
-        or scheduler.config is None
-        or getattr(scheduler, "registry", None) is None
-    ):
-        return JSONResponse(
-            {"error": "Scheduler not running — cannot trigger banner agent"},
-            status_code=503)
-
-    result = scheduler.registry.trigger_task_now(
-        "banner_agent",
-        retain_result=True,
-    )
-    if not result.get("success"):
-        message = str(result.get("message", "Banner agent could not be queued"))
-        status_code = 404 if "not found" in message.lower() else 409
-        return JSONResponse({"error": message}, status_code=status_code)
-
-    run_id = result.get("run_id")
-    if not run_id or not hasattr(scheduler.registry, "wait_for_run"):
-        return JSONResponse(
-            {"error": "Banner run completion tracking is unavailable"},
-            status_code=503,
-        )
-
-    run = await asyncio.to_thread(scheduler.registry.wait_for_run, run_id)
-    if not run.get("completed"):
-        return JSONResponse(
-            {"error": run.get("error", "Banner agent did not complete")},
-            status_code=504,
-        )
-    if not run.get("success"):
-        return JSONResponse(
-            {"error": run.get("error", "Dashboard banner generation failed")},
-            status_code=500,
-        )
-
-    persisted = run.get("result")
-    persisted_generated_at = (
-        persisted.get("generated_at")
-        if isinstance(persisted, dict)
-        else None
-    )
-    last_run_iso = ""
-    if persisted_generated_at:
-        try:
-            parsed_generated_at = datetime.fromisoformat(
-                str(persisted_generated_at).replace("Z", "+00:00")
-            )
-            if parsed_generated_at.tzinfo is not None:
-                last_run_iso = parsed_generated_at.astimezone(timezone.utc).isoformat()
-        except ValueError:
-            pass
-    if not last_run_iso:
-        return JSONResponse(
-            {"error": "Banner persistence returned no valid generated_at"},
-            status_code=500,
-        )
-    last_run = ""
-    if last_run_iso:
-        try:
-            last_run = _format_time(datetime.fromisoformat(last_run_iso))
-        except ValueError:
-            last_run = last_run_iso
-
-    return JSONResponse({
-        "status": "completed",
-        "agent_type": "banner_agent",
-        "message": result.get("message"),
-        "run_id": run_id,
-        "banner_last_run": last_run,
-        "banner_last_run_iso": last_run_iso,
-    })
 
 
 # ---------------------------------------------------------------------------

@@ -9,7 +9,6 @@ ai:
     analysis: "gpt-5.4"
     buy_tracker: "gpt-5.4-mini"
     summary: "gpt-5.4-mini"
-    banner: "gpt-5.4-mini"
     report: "gpt-5.4-mini"
     chat: "gpt-5.4-mini"
     symbol_chat: "gpt-5.4-mini"
@@ -58,12 +57,6 @@ plan_monitor:
   enabled: true
   cron: "0 4,16 * * 1-5"  # 4 AM and 4 PM weekdays (UTC)
   model: "gpt-5.4-mini"
-
-banner_agent:
-  enabled: true
-  cron: "0 5 * * *"  # 5 AM daily
-  max_items: 10
-  provider_timeout_seconds: 30
 
 dps_scorer:
   enabled: true

@@ -43,12 +43,6 @@ AI_FUNCTIONS = {
         "description": "Scheduled portfolio summary generation.",
         "legacy_task": "summary_agent",
     },
-    "banner": {
-        "label": "Dashboard Banner",
-        "group": "Reporting",
-        "description": "Dashboard news and portfolio insight banner.",
-        "legacy_task": "banner_agent",
-    },
     "report": {
         "label": "Symbol Report",
         "group": "Reporting",

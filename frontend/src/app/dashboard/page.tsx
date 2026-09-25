@@ -1,7 +1,6 @@
 import { apiFetch } from "@/lib/api";
 import StatCard from "@/components/StatCard";
 import Reveal from "@/components/Reveal";
-import DashboardBanner from "@/components/DashboardBanner";
 import DashboardAgentTables from "@/components/DashboardAgentTables";
 import DashboardActivity from "@/components/DashboardActivity";
 import AutoRefresh from "@/components/AutoRefresh";
@@ -41,16 +40,6 @@ export default async function DashboardPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Agents HQ</h1>
         </div>
       </div>
-
-      {/* Banner marquee */}
-      {d.banner_items && d.banner_items.length > 0 && (
-        <DashboardBanner
-          items={d.banner_items}
-          sourceAsOf={d.banner_source_as_of}
-          sourceWatermarks={d.banner_source_watermarks}
-          sourceCounts={d.banner_source_counts}
-        />
-      )}
 
       {/* Summary cards (3, matching legacy) */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

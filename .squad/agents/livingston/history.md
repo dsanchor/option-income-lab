@@ -13,6 +13,15 @@
 
 ## Recent Learnings
 
+### 2026-09-25 — Dashboard banner removal cache cleanup
+- Removed only the stale pytest state files
+  `backend/.pytest_cache/v/cache/lastfailed` and
+  `backend/.pytest_cache/v/cache/nodeids`, then removed their now-empty
+  `v/cache` and `v` directories while retaining the pytest cache root metadata.
+- Repository-wide identifier search outside `.git` and append-only `.squad`
+  history now finds only the three explicit compatibility/removal tests;
+  banner-specific pytest cache content, bytecode, and cache artifacts are zero.
+
 ### 2026-09-09 — Dividends economics backend endpoints
 - Added `backend/src/dividends_economics.py` as a pure aggregation module so dividend economics behavior can be unit-tested without Cosmos fakes.
 - Added `GET /api/economics/dividends` and `GET /api/economics/overview` in `backend/web/app.py`.

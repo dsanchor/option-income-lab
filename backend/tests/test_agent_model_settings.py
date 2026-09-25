@@ -16,7 +16,7 @@ from src.llm import LlmConfig
 
 EXPECTED_FUNCTIONS = {
     "monitor_assessment", "monitor_roll", "supervisor", "alpha", "analysis",
-    "buy_tracker", "summary", "banner", "report", "chat", "symbol_chat",
+    "buy_tracker", "summary", "report", "chat", "symbol_chat",
     "technical_analysis", "plan_monitor", "activity_chat", "dps_insights",
 }
 
@@ -354,6 +354,7 @@ def base_config_store():
         "cosmosdb": {"endpoint": "https://cosmos.test", "key": "key"},
         "scheduler": {"cron": "0 9 * * 1-5"},
         "summary_agent": {"enabled": True, "cron": "0 8 * * *"},
+        # Obsolete settings are tolerated but do not recreate an AI function.
         "banner_agent": {"enabled": True, "cron": "0 5 * * *"},
         "plan_monitor": {"enabled": True, "cron": "0 4 * * 1-5"},
     }

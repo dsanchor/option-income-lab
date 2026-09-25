@@ -143,7 +143,7 @@ Del `app-config` se exporta una **allowlist** de configuración funcional, no el
 documento bruto. Incluye, cuando existan:
 
 - toggles y cron de scheduler;
-- `summary_agent`, `plan_monitor`, `banner_agent`, `dps_scorer`;
+- `summary_agent`, `plan_monitor`, `dps_scorer`;
 - `options_chain_scheduler`, `portfolio_enrichment`, `symbol_pricing`,
   `price_forecast`, `best_options_scheduler`;
 - parámetros curados de `dgi_screener`;

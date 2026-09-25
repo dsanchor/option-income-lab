@@ -3,7 +3,7 @@ import { API_BASE_URL } from "@/lib/api";
 
 /**
  * BFF proxy: run a named scheduler task now. Mirrors POST /api/trigger/{name}
- * (summary_agent, banner_agent, options_chain, dgi_screener,
+ * (summary_agent, options_chain, dgi_screener,
  * portfolio_enrichment, price_forecast, plan_monitor).
  */
 export async function POST(

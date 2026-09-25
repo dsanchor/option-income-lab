@@ -2,6 +2,41 @@
 
 ## Active Decisions
 
+### Dashboard Banner Agent removed
+
+**Date:** 2026-09-25
+**Status:** IMPLEMENTED AND APPROVED
+**Requested by:** Copilot
+
+- The Dashboard Banner Agent is no longer an active product capability. This
+  decision supersedes all earlier banner implementation, freshness,
+  provider-contract, scheduling, Last Run, persistence, and UI decisions
+  without rewriting those append-only historical records.
+- The implementation and instructions, scheduler registration, manual trigger,
+  configuration/settings controls, AI-function entry, persistence helpers,
+  API fields, dashboard component, refresh signature, and feature-specific
+  tests are removed.
+- `TaskRegistry` is restored to its generic fire-and-forget behavior. Other
+  agents, global controls, manual position execution, movement paging, and
+  dashboard tables remain unchanged.
+- Legacy persisted `banner_agent` configuration is tolerated as inert unknown
+  data. Existing Cosmos `dashboard_banner` documents remain untouched and
+  inert; the application no longer reads, renders, updates, or creates them.
+- Active product documentation, architecture/configuration examples, comments,
+  and team routing no longer advertise the removed capability. Only
+  append-only `.squad` history and three compatibility/removal tests retain its
+  former identifiers.
+- Basher's final read-only review approved the removal after generated-cache
+  identifiers reached zero, active runtime/config/API/UI/docs references
+  reached zero, the deletion set remained exactly seven intended feature
+  files, `git diff --check` passed, and the single expected removal test was
+  the only untracked file.
+- Earlier validation passed 128 targeted tests, TypeScript, ESLint, Ruff,
+  Python compilation, and the production build. Known residuals are the
+  pre-existing unrelated yfinance/event-loop and movement-contract failures
+  recorded in review history; no validation was rerun during release cleanup
+  to avoid regenerating caches.
+
 ### Manual monitoring-agent execution is position scoped
 
 **Date:** 2026-09-25

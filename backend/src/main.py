@@ -39,7 +39,6 @@ from .buy_tracker_agent import run_buy_tracker_analysis
 from .open_call_monitor_agent import run_open_call_monitor
 from .open_put_monitor_agent import run_open_put_monitor
 from .dgi_screener import run_dgi_screener
-from .banner_agent import run_banner_agent
 from .scheduler_registry import TaskRegistry
 
 
@@ -120,10 +119,6 @@ class OptionsAgentScheduler:
     def reschedule_symbol_pricing(self, new_cron: str):
         """Update symbol pricing cron expression."""
         self.registry.reschedule("symbol_pricing", new_cron, self.config)
-
-    def reschedule_banner(self, new_cron: str):
-        """Update banner agent cron expression. The run loop will pick it up on next iteration."""
-        self.registry.reschedule("banner_agent", new_cron, self.config)
 
     def reschedule_calendar(self, new_cron: str):
         """Update calendar sync cron expression. The run loop will pick it up on next iteration."""
@@ -227,20 +222,6 @@ class OptionsAgentScheduler:
         print(f"  Enabled: {dgi_enabled}")
         if dgi_enabled:
             print(f"  Cron: {dgi_cron}")
-        else:
-            print(f"  Status: Disabled in config")
-
-        banner_config = self.config.config.get('banner_agent', {})
-        banner_enabled = banner_config.get('enabled', True)
-        banner_cron = banner_config.get('cron', '0 5 * * *')
-        banner_max_items = banner_config.get('max_items', 10)
-
-        print(f"\nDashboard Banner Configuration:")
-        print(f"  Enabled: {banner_enabled}")
-        if banner_enabled:
-            print(f"  Cron: {banner_cron}")
-            print(f"  Model: {self.config.model_for('banner')}")
-            print(f"  Max items: {banner_max_items}")
         else:
             print(f"  Status: Disabled in config")
 
@@ -582,27 +563,6 @@ class OptionsAgentScheduler:
         except Exception as e:
             print(f"ERROR during Price Forecast: {e}")
 
-    def run_banner_agent_job(self):
-        """Execute banner agent (bridges async to sync for scheduler)."""
-        return _run_async(self._run_banner_agent_async())
-
-    async def _run_banner_agent_async(self):
-        """Run dashboard banner agent if enabled in config."""
-        banner_config = self.config.config.get('banner_agent', {})
-        if not banner_config.get('enabled', True):
-            print("⏭️  Dashboard banner agent disabled in config")
-            return
-
-        now_tz = _now_local()
-        print(f"\n{'*'*70}")
-        print(f"📰 Dashboard Banner Agent - Scheduled run at {now_tz.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        print(f"{'*'*70}\n")
-
-        result = await run_banner_agent(self.config, self.cosmos)
-        print(f"Banner agent complete: {len(result.get('items', []))} items from "
-              f"{result.get('symbols_analyzed', 0)} symbols")
-        return result
-
     def run_calendar_sync_job(self):
         """Execute calendar sync (bridges async to sync for scheduler)."""
         _run_async(self._run_calendar_sync_async())
@@ -846,14 +806,6 @@ class OptionsAgentScheduler:
             "0 6 * * 1-5",
             self.run_dgi_screener_job,
             has_extra_config=True,  # Has symbols + top_n extra config
-        )
-        self.registry.register(
-            "banner_agent",
-            "Dashboard Banner",
-            "banner_agent",
-            "0 5 * * *",
-            self.run_banner_agent_job,
-            has_extra_config=True,  # Has max_items extra config
         )
         self.registry.register(
             "calendar_sync",

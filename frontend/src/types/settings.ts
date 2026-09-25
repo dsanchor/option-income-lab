@@ -9,9 +9,6 @@ export interface SchedulerTask {
   enabled: boolean;
   cron: string;
   last_run?: string | null;
-  last_attempt?: string | null;
-  last_success?: string | null;
-  last_error?: string | null;
   next_run?: string | null;
   has_extra_config?: boolean;
 }
@@ -45,14 +42,6 @@ export interface SettingsConfig {
   summary_next_run: string;
   summary_last_run_iso: string;
   summary_next_run_iso: string;
-
-  banner_enabled: boolean;
-  banner_cron: string;
-  banner_max_items: number;
-  banner_last_run: string;
-  banner_next_run: string;
-  banner_last_run_iso: string;
-  banner_next_run_iso: string;
 
   calendar_enabled: boolean;
   calendar_cron: string;

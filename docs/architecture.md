@@ -258,7 +258,6 @@ backend/
 │   ├── report_instructions.py            # Report agent system prompt
 │   ├── summary_instructions.py           # Summary agent system prompt
 │   ├── technical_analysis_instructions.py # Technical analysis system prompt
-│   ├── banner_instructions.py            # Banner instructions
 │   ├── skills/                           # Native agent-framework Skills (SKILL.md format)
 │   │   ├── earnings-gate-monitor/SKILL.md   # Earnings gate for open position monitors
 │   │   ├── earnings-gate-sell/SKILL.md      # Earnings gate for sell-side watchers

@@ -16,7 +16,7 @@ Provider schema validation, semantic data eligibility, and freshness contracts.
 
 ## Tech Context
 - Python, TypeScript, provider payload normalization, Cosmos persistence
-- Dashboard banner generation, source metadata, API contracts
+- Source metadata and API contracts
 
 ## Model
 Preferred: auto

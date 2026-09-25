@@ -94,7 +94,7 @@ LEDGER_FIELDS = frozenset({
     "_repair_buy_fields_v1", "_repair_buy_fields_v2",
 })
 APP_SETTING_PATHS = frozenset({
-    "scheduler", "summary_agent", "plan_monitor", "banner_agent", "dps_scorer",
+    "scheduler", "summary_agent", "plan_monitor", "dps_scorer",
     "options_chain_scheduler", "portfolio_enrichment", "symbol_pricing",
     "price_forecast", "best_options_scheduler", "dgi_screener",
     "calendar_sync", "agent_trace", "ai_function_overrides", "context",

@@ -3,7 +3,7 @@
 Replaces per-task boilerplate with a unified registry-based approach.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Optional
 from croniter import croniter
@@ -11,7 +11,6 @@ import inspect
 import logging
 import queue
 import threading
-import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -33,30 +32,9 @@ class ScheduledTask:
     next_run: Optional[datetime] = None
     cron_obj: Optional[croniter] = None
     _cron_changed: bool = False        # Flag for web UI live reschedule
-    # Compatibility timestamp: the start of the most recent attempt,
-    # regardless of whether that attempt succeeded, failed, or timed out.
-    last_run: Optional[datetime] = None
-    # Explicit status fields for consumers that distinguish attempts/results.
-    last_attempt: Optional[datetime] = None
-    last_success: Optional[datetime] = None
-    last_error: Optional[str] = None
+    last_run: Optional[datetime] = None  # Last execution timestamp
     has_extra_config: bool = False     # Whether task has task-specific config beyond the 5 standard fields
     running: bool = False              # True if a job execution is in progress
-
-
-@dataclass
-class TaskRun:
-    """Completion state for a manually triggered registry run."""
-
-    run_id: str
-    task_name: str
-    completed: threading.Event = field(default_factory=threading.Event)
-    success: Optional[bool] = None
-    result: object = None
-    error: Optional[str] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    waiter_count: int = 0
 
 
 class TaskRegistry:
@@ -69,16 +47,12 @@ class TaskRegistry:
     - Task execution with error isolation
     - Non-blocking job execution via worker thread
     """
-
-    _MAX_RETAINED_COMPLETED_RUNS = 64
     
     def __init__(self):
         self.tasks: dict[str, ScheduledTask] = {}
         self._job_queue: queue.Queue = queue.Queue()
         self._worker_thread: Optional[threading.Thread] = None
         self._shutdown = False
-        self._runs: dict[str, TaskRun] = {}
-        self._runs_lock = threading.Lock()
     
     def register(
         self,
@@ -233,12 +207,9 @@ class TaskRegistry:
             try:
                 # Wait for a job (blocks with timeout so we can check shutdown flag)
                 try:
-                    queued = self._job_queue.get(timeout=1.0)
+                    task_name, job_kwargs = self._job_queue.get(timeout=1.0)
                 except queue.Empty:
                     continue
-
-                task_name, job_kwargs = queued[:2]
-                run_id = queued[2] if len(queued) > 2 else None
                 
                 task = self.tasks.get(task_name)
                 if not task:
@@ -247,13 +218,6 @@ class TaskRegistry:
                 
                 # Execute the job in a sub-thread with max-duration guard
                 start_time = datetime.now().astimezone()
-                task.last_run = start_time
-                task.last_attempt = start_time
-                with self._runs_lock:
-                    run = self._runs.get(run_id) if run_id else None
-                if run:
-                    run.started_at = start_time
-                outcome = {"result": None, "error": None}
                 
                 def run_task():
                     """Job execution wrapper for sub-thread."""
@@ -268,9 +232,8 @@ class TaskRegistry:
                         # in any case; see execute_due_tasks).
                         accepted = inspect.signature(task.job_func).parameters
                         kwargs = {k: v for k, v in job_kwargs.items() if k in accepted}
-                        outcome["result"] = task.job_func(**kwargs)
+                        task.job_func(**kwargs)
                     except Exception as e:
-                        outcome["error"] = str(e)
                         print(f"❌ SCHEDULER ERROR in {task.name}: {e}")
                         logger.exception(f"Error executing task {task_name}")
                 
@@ -289,28 +252,10 @@ class TaskRegistry:
                         f"Task {task_name} exceeded max duration of {_MAX_TASK_DURATION_SECONDS}s, abandoning"
                     )
                     print(f"❌ SCHEDULER TIMEOUT: {task.display_name} exceeded {_MAX_TASK_DURATION_SECONDS}s")
-                    outcome["error"] = (
-                        f"{task.display_name} exceeded "
-                        f"{_MAX_TASK_DURATION_SECONDS} seconds"
-                    )
 
-                completed_at = datetime.now().astimezone()
-                success = outcome["error"] is None
-                if success:
-                    task.last_success = completed_at
-                    task.last_error = None
-                else:
-                    task.last_error = outcome["error"]
-
+                # Record execution timestamp even on timeout/error
+                task.last_run = start_time
                 task.running = False
-                if run:
-                    with self._runs_lock:
-                        run.success = success
-                        run.result = outcome["result"]
-                        run.error = outcome["error"]
-                        run.completed_at = completed_at
-                        run.completed.set()
-                        self._prune_completed_runs_locked()
                     
             except Exception as e:
                 logger.exception(f"Worker thread error: {e}")
@@ -373,18 +318,8 @@ class TaskRegistry:
         """Store config reference for handle_cron_changes."""
         self._config = config
     
-    def trigger_task_now(
-        self,
-        name: str,
-        *,
-        retain_result: bool = False,
-        **job_kwargs,
-    ) -> dict:
+    def trigger_task_now(self, name: str, **job_kwargs) -> dict:
         """Manually trigger a task execution (for Run Now button).
-
-        retain_result: opt in to a bounded completion record that can be
-        retrieved with wait_for_run. Fire-and-forget callers retain no run
-        state, preserving the original trigger contract.
 
         job_kwargs: optional per-invocation keyword arguments forwarded to
         the task's job_func for this run only (e.g. run_trigger="manual",
@@ -407,94 +342,13 @@ class TaskRegistry:
         
         # Enqueue for worker thread
         task.running = True
-        run_id = None
-        if retain_result:
-            run_id = uuid.uuid4().hex
-            with self._runs_lock:
-                self._runs[run_id] = TaskRun(
-                    run_id=run_id,
-                    task_name=task.name,
-                )
-
-        queued = (task.name, job_kwargs, run_id) if run_id else (task.name, job_kwargs)
-        self._job_queue.put(queued)
-        response = {
-            "success": True,
-            "message": f"{task.display_name} queued for execution",
-        }
-        if run_id:
-            response["run_id"] = run_id
-        return response
-
-    def wait_for_run(self, run_id: str, timeout: Optional[float] = None) -> dict:
-        """Wait for a manual run and return its terminal result."""
-        with self._runs_lock:
-            run = self._runs.get(run_id)
-            if not run:
-                return {
-                    "success": False,
-                    "completed": False,
-                    "error": f"Run '{run_id}' not found",
-                }
-            run.waiter_count += 1
-
-        wait_timeout = (
-            _MAX_TASK_DURATION_SECONDS + 5 if timeout is None else timeout
-        )
-        if not run.completed.wait(wait_timeout):
-            with self._runs_lock:
-                run.waiter_count -= 1
-                self._prune_completed_runs_locked()
-            return {
-                "success": False,
-                "completed": False,
-                "error": f"Run '{run_id}' is still running",
-            }
-
-        result = {
-            "success": bool(run.success),
-            "completed": True,
-            "run_id": run.run_id,
-            "task_name": run.task_name,
-            "result": run.result,
-            "error": run.error,
-            "started_at": run.started_at.isoformat() if run.started_at else None,
-            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-        }
-        with self._runs_lock:
-            run.waiter_count -= 1
-            if run.waiter_count == 0:
-                self._runs.pop(run_id, None)
-            self._prune_completed_runs_locked()
-        return result
-
-    def _prune_completed_runs_locked(self) -> None:
-        """Bound unclaimed terminal results without removing active/waited runs."""
-        completed = [
-            run
-            for run in self._runs.values()
-            if run.completed.is_set() and run.waiter_count == 0
-        ]
-        excess = len(completed) - self._MAX_RETAINED_COMPLETED_RUNS
-        if excess <= 0:
-            return
-
-        completed.sort(
-            key=lambda run: (
-                run.completed_at,
-                run.run_id,
-            )
-        )
-        for run in completed[:excess]:
-            self._runs.pop(run.run_id, None)
+        self._job_queue.put((task.name, job_kwargs))
+        return {"success": True, "message": f"{task.display_name} queued for execution"}
     
     def get_all_task_metadata(self) -> list[dict]:
         """Get metadata for all tasks (for unified web API).
         
-        ``last_run`` and ``last_attempt`` are the latest attempt start for
-        backward compatibility. ``last_success`` advances only after a
-        successful completion, and ``last_error`` describes the latest failed
-        attempt until a later success clears it.
+        Returns list of dicts with: name, display_name, enabled, cron, last_run, next_run, has_extra_config
         """
         result = []
         for task in self.tasks.values():
@@ -505,9 +359,6 @@ class TaskRegistry:
                 "enabled": task.enabled,
                 "cron": task.cron_expr or task.default_cron,
                 "last_run": task.last_run.isoformat() if task.last_run else None,
-                "last_attempt": task.last_attempt.isoformat() if task.last_attempt else None,
-                "last_success": task.last_success.isoformat() if task.last_success else None,
-                "last_error": task.last_error,
                 "next_run": task.next_run.isoformat() if task.next_run else None,
                 "has_extra_config": task.has_extra_config,
             })

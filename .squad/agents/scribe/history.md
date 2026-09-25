@@ -272,3 +272,14 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
   position-scoped locking/results, and unchanged scheduled all-position path.
 - Added concise orchestration and session logs and prepared the approved
   product, tests, and squad records for commit and push.
+
+### 2026-09-25 — Dashboard Banner Agent removal release
+- Merged and deduplicated the removal, cleanup, cache-cleanup, and review inbox
+  records into a superseding canonical decision while preserving earlier
+  banner decisions as append-only history.
+- Recorded Basher's final approval, the exact seven intended feature
+  deletions, the compatibility/removal-test exception, and the decision to
+  leave existing Cosmos `dashboard_banner` documents untouched and inert.
+- Added concise orchestration/session records, verified routing whitespace,
+  and prepared the approved product, test, documentation, and squad changes
+  for commit and push without rerunning cache-generating validation.

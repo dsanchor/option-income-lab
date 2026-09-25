@@ -225,3 +225,12 @@
   is already canonical. The focused file is fully Ruff-clean, and app
   `RUF013` findings returned from 12 to the pre-existing baseline of 8.
 - All 76 focused manual position execution tests and Python compilation passed.
+
+### 2026-09-25 — Dashboard Banner Agent removal cleanup
+- Removed only the now-unused `dataclasses.field` import from
+  `backend/src/scheduler_registry.py`; `dataclass` behavior remains unchanged.
+- Deleted the eleven exact feature-exclusive banner bytecode artifacts and the
+  generated root `.pytest_cache`/`.ruff_cache` indexes without touching other
+  source, dependency, virtual-environment, or unrelated cache files.
+- Scoped F401 is clean. Full-file Ruff improved from the 25-finding HEAD
+  baseline to 15 pre-existing findings, with no new lint finding.

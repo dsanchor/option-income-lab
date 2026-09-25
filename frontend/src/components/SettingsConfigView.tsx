@@ -137,13 +137,6 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
       const res = await fetch(endpoint, { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        if (key === "banner" && data.banner_last_run_iso) {
-          setCfg((current) => ({
-            ...current,
-            banner_last_run: data.banner_last_run || current.banner_last_run,
-            banner_last_run_iso: data.banner_last_run_iso,
-          }));
-        }
         const msg = data.status || data.message || (data.saved ? "Done" : "Triggered ✓");
         setRunStates((s) => ({ ...s, [key]: { msg: `✅ ${msg}`, ok: true } }));
       } else {
@@ -196,9 +189,6 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
       summary_enabled: cfg.summary_enabled,
       summary_cron: cfg.summary_cron,
       summary_activity_count: cfg.summary_activity_count,
-      banner_enabled: cfg.banner_enabled,
-      banner_cron: cfg.banner_cron,
-      banner_max_items: cfg.banner_max_items,
       calendar_enabled: cfg.calendar_enabled,
       calendar_cron: cfg.calendar_cron,
       options_chain_enabled: cfg.options_chain_enabled,
@@ -373,48 +363,6 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
             lastIso={cfg.summary_last_run_iso}
             next={cfg.summary_next_run}
             nextIso={cfg.summary_next_run_iso}
-          />
-        </TaskCard>
-
-        {/* Dashboard Banner Agent */}
-        <TaskCard title="Dashboard Banner Agent" runStatus={<RunStatus id="banner" endpoint="/api/trigger/banner_agent" />}>
-          <Toggle
-            checked={cfg.banner_enabled}
-            onChange={(v) => set("banner_enabled", v)}
-            label="Enable dashboard banner agent"
-            hint="Generates daily news/insights banner for the dashboard (earnings proximity, ex-div dates, trend changes, alerts)."
-          />
-          <div className="mb-3 grid grid-cols-[2fr_1fr] gap-3">
-            <div>
-              <label className={labelCls}>Cron Expression</label>
-              <input
-                className={inputCls}
-                value={cfg.banner_cron}
-                onChange={(e) => set("banner_cron", e.target.value)}
-                placeholder="0 5 * * *"
-                spellCheck={false}
-              />
-              <small className={hintCls}>
-                Example: <code>0 5 * * *</code> = 5 AM daily
-              </small>
-            </div>
-            <div>
-              <label className={labelCls}>Max Items</label>
-              <input
-                type="number"
-                className={inputCls}
-                value={cfg.banner_max_items}
-                min={3}
-                max={20}
-                onChange={(e) => set("banner_max_items", Number(e.target.value))}
-              />
-            </div>
-          </div>
-          <RunTimes
-            last={cfg.banner_last_run}
-            lastIso={cfg.banner_last_run_iso}
-            next={cfg.banner_next_run}
-            nextIso={cfg.banner_next_run_iso}
           />
         </TaskCard>
 

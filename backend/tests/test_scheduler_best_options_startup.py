@@ -226,6 +226,7 @@ class TestBestOptionsStartupIntegration:
             "scheduler": {"cron": "30 9-16/4 * * 1-5", "enabled": True},
             "summary_agent": {"enabled": False},
             "plan_monitor": {"enabled": False},
+            # A legacy removed-feature section must be harmless at startup.
             "banner_agent": {"enabled": False},
             "calendar_sync": {"enabled": False},
             "options_chain_scheduler": {"enabled": False},
@@ -314,7 +315,6 @@ class TestBestOptionsStartupIntegration:
             "scheduler": {"cron": "30 9-16/4 * * 1-5", "enabled": True},
             "summary_agent": {"enabled": False},
             "plan_monitor": {"enabled": False},
-            "banner_agent": {"enabled": False},
             "calendar_sync": {"enabled": False},
             "options_chain_scheduler": {"enabled": False},
             "dgi_screener": {"enabled": False},

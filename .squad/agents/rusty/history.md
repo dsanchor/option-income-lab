@@ -107,3 +107,11 @@
 - Past earnings/ex-dividend dates and expired-but-active positions are excluded from current-event context. When neither a fresh market snapshot nor recent activity is available, the persisted banner explicitly says no recent eligible data.
 - Banner documents now persist `source_as_of`, per-source watermarks/counts, a content hash, and a unique generation ID. A run fails unless Cosmos returns the exact generation ID/content it was asked to persist.
 - `/api/dashboard` exposes the watermark and Agents HQ renders `Sources as of`; AutoRefresh continues to key on the unique microsecond `generated_at`.
+
+### 2026-09-25 — Dashboard Banner Agent removed
+- Removed the Dashboard Banner Agent implementation, instructions, scheduler registration, manual endpoint, settings/config/provider catalog entries, Cosmos read/write helpers, dashboard payload fields, UI component, refresh signature, and feature-specific tests.
+- Restored `TaskRegistry` to its generic fire-and-forget contract by removing banner-only retained completion results and attempt/success/error metadata.
+- Legacy persisted `banner_agent` settings remain harmless unknown data: startup and settings loading ignore them, while the application no longer reads, updates, exports, or presents them.
+- Existing `dashboard_banner` Cosmos documents were not accessed or deleted; they are inert orphaned production data.
+- Preserved the bounded generic AutoRefresh poller and all non-banner dashboard, monitoring, reporting, plan, pricing, and portfolio behavior.
+- Removed the final active documentation reference from the architecture tree and retired banner-specific wording from Saul's active charter; remaining banner mentions are append-only historical `.squad` records, the superseding removal decision, and compatibility/removal regression fixtures.

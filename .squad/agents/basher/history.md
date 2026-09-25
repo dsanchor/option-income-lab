@@ -408,3 +408,62 @@
   provider fixture failures; 10 frontend contracts passed; independent probes
   were 1 passed/1 failed. Banner Ruff, TypeScript, changed-file ESLint, Python
   compilation, and diff whitespace passed. No source/tests were modified.
+
+### 2026-09-25 — Dashboard Banner Agent removal review
+- **REJECT.** Active source/config/docs cleanup is otherwise complete: exactly
+  the banner scheduler registration was removed, seven feature-exclusive
+  tracked files are deleted, and only three compatibility/removal tests plus
+  append-only `.squad` history retain identifiers.
+- Release blocker: `backend/src/scheduler_registry.py` still imports the
+  banner-only `dataclasses.field`; scoped Ruff reports `F401`.
+- Release blocker: eleven feature-exclusive compiled artifacts remain under
+  backend `__pycache__` directories for the deleted agent, instructions, and
+  focused tests. Pytest/Ruff cache indexes also retain removed identifiers.
+- Validation passed 206 focused backend tests, 12 focused frontend tests,
+  TypeScript, scoped ESLint, Python compilation, production build, diff
+  whitespace, registration comparison, and exact active-source searches.
+  Broader suites reported 4,263 backend passes with 20 unrelated yfinance
+  event-loop failures and 1,335 frontend passes with two unrelated movement
+  contract failures. No implementation/tests/docs were modified.
+
+### 2026-09-25 — Dashboard Banner Agent removal final review
+- **REJECT.** Danny correctly removed the unused `dataclasses.field` import;
+  scoped F401 is clean, and scheduler-registry Ruff improved from the known
+  25-finding HEAD baseline to 15 pre-existing findings.
+- Banner-specific bytecode count is zero, active product references are zero,
+  and only three allowed compatibility/removal test references remain.
+- Final blocker: `backend/.pytest_cache/v/cache/lastfailed` and `nodeids`
+  retain 85 matching lines / 88 occurrences of removed banner identifiers.
+  They predated this review and were not reviewer-created, so they were not
+  deleted.
+- Seven tracked deletions remain exactly the intended feature-exclusive files;
+  diff whitespace passes. No tests were rerun for the import/cache-only cleanup,
+  and no source/tests/docs, commit, push, deployment, or production change was
+  performed by the reviewer.
+
+### 2026-09-25 — Dashboard Banner removal post-cache final review
+- **REJECT.** Livingston cleared the two stale pytest indexes; pytest-cache
+  identifiers are now zero.
+- Final blockers remain in generated artifacts: two Ruff cache files retain
+  four identifier occurrences, and four compatibility-test `.pyc` files
+  retain four occurrences. Banner-named `.pyc` files remain zero.
+- Active runtime/config/API/UI/docs references remain zero; only the exact
+  three compatibility/removal test files and append-only `.squad` records
+  retain identifiers. Five broader production `banner` matches are unrelated
+  Best Options/Economics terminology.
+- The deletion set remains exactly seven intended tracked feature files with
+  zero unexpected deletions. Current status is 27 modified, 7 deleted, and 1
+  untracked; `git diff --check` passes and the known import/Ruff baseline is
+  unchanged. No tests, imports, or linters were run, and no source/tests/docs,
+  commit, push, deployment, or production change was performed.
+
+### 2026-09-25 — Dashboard Banner removal final approval
+- **APPROVE.** Generated cache identifiers are zero; only four identifier lines
+  remain across the three intentional compatibility/removal tests.
+- Active runtime, configuration, API, UI, and documentation references are
+  zero. The seven tracked deletions are exactly the intended feature files,
+  with no unexpected deletion, secret, or generated artifact.
+- `git diff --check` passes and the one untracked file is the expected frontend
+  removal contract. No tests, imports, linters, builds, deployment, production
+  access, or production-data operation was performed during the final
+  read-only review.

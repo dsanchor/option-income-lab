@@ -1,13 +1,5 @@
 import type { RuleEvaluation } from "@/types/activity-detail";
 
-export interface BannerItem {
-  emoji?: string;
-  symbol?: string;
-  text?: string;
-  priority?: number | string;
-  category?: string;
-}
-
 export interface RecentActivityRef {
   activity?: string;
   timestamp?: string;
@@ -122,11 +114,6 @@ export interface DashboardData {
   total_put_exposure?: number;
   open_roc_annualized?: number;
   activity?: ActivityItem[];
-  banner_items?: BannerItem[];
-  banner_generated_at?: string | null;
-  banner_source_as_of?: string | null;
-  banner_source_watermarks?: Record<string, string>;
-  banner_source_counts?: Record<string, number>;
   market_open?: boolean;
   error?: string;
 }
@@ -151,5 +138,4 @@ export interface DashboardStatusPayload {
   monitor_agent_enabled?: Record<string, boolean>;
   disabled_monitor_agents?: string[];
   latest_activity?: string | null;
-  banner_generated_at?: string | null;
 }

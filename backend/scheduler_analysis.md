@@ -63,13 +63,12 @@ run.py
           └─> while self.running:
               ├─> heartbeat log every 10 min (line 920)
               ├─> _reload_config_from_cosmos() every 60s (line 926)
-              ├─> check 8 schedulers: if now >= next_run → execute
+              ├─> check schedulers: if now >= next_run → execute
               │   ├─> run_all_agents()              [main monitors]
               │   ├─> run_summary_agent_job()       [daily summary]
               │   ├─> run_plan_monitor_job()        [planned trade monitor]
               │   ├─> run_options_chain_fetch_job() [cache refresh]
               │   ├─> run_dgi_screener_job()        [DGI screener]
-              │   ├─> run_banner_agent_job()        [dashboard banner]
               │   ├─> run_calendar_sync_job()       [earnings/ex-div dates]
               │   └─> run_portfolio_enrichment_job()[DGI enrichment]
               └─> sleep(1)
@@ -117,7 +116,6 @@ run.py
 | **Plan Monitor** | Checks "planned" trades for entry conditions | `0 4,16 * * 1-5` (4 AM, 4 PM weekdays) | No | `runner.run_plan_monitor()` | `plan_monitor.cron` |
 | **Options Chain Scheduler** | Refreshes options chain cache for all symbols | `0 * * * *` (hourly) | No | `options_chain_cache.refresh_all()` | `options_chain_scheduler.cron` |
 | **DGI Screener** | Screens S&P 500 for dividend growth opportunities | `0 6 * * 1-5` (6 AM weekdays) | No | `run_dgi_screener()` | `dgi_screener.cron` |
-| **Dashboard Banner** | Generates priority banner items for web UI | `0 5 * * *` (5 AM daily) | No | `run_banner_agent()` | `banner_agent.cron` |
 | **Calendar Sync** | Fetches earnings + ex-dividend dates from yfinance | `0 5 * * 1-5` (5 AM weekdays) | No | `_run_calendar_sync_async()` | `calendar_sync.cron` |
 | **Portfolio Enrichment** | DGI-style quality scoring for portfolio symbols | `0 9-17 * * 1-5` (hourly 9-17, weekdays) | No | `run_portfolio_enrichment()` | `portfolio_enrichment.cron` |
 | **DPS Cron** (ORPHANED) | Daily DPS score calculation for active positions | `0 22 * * 1-5` (10 PM weekdays) | No | `run_dps_cron()` in `src/dps_cron.py` | `dps_scorer.cron` |
@@ -152,23 +150,17 @@ run.py
    - Scores symbols on dividend yield, growth, payout safety, valuation, etc.
    - Top N results stored in CosmosDB
 
-6. **Dashboard Banner** (lines 459-480):
-   - LLM-based synthesis of priority items across portfolio
-   - Categories: earnings_proximity, ex_div_proximity, trend_change, actionable_alert, risk_warning
-   - Max items configurable (default: 10)
-   - Model: `config.model_for('banner')` (default: gpt-5.4-mini)
-
-7. **Calendar Sync** (lines 482-545):
+6. **Calendar Sync** (lines 482-545):
    - Fetches earnings timestamp + ex-dividend date from yfinance `.info`
    - Stores in CosmosDB `calendar_events` container
    - Flags events for symbols with active positions
 
-8. **Portfolio Enrichment** (lines 434-457):
+7. **Portfolio Enrichment** (lines 434-457):
    - Reuses DGI screener's `analyze_single_symbol()` for portfolio symbols
    - Stores `enrichment` field on each symbol doc (quality score, category, entry tag, technicals)
    - Runs hourly during market hours to keep enrichment fresh
 
-9. **DPS Cron** (ORPHANED):
+8. **DPS Cron** (ORPHANED):
    - **Problem:** Defined in `src/dps_cron.py` but NOT scheduled in `src/main.py`
    - Config entry exists: `dps_scorer.cron: "0 22 * * 1-5"` (line 62-63 in config.yaml)
    - Never imported or called by the scheduler
