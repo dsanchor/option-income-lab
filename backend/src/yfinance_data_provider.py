@@ -254,12 +254,18 @@ class YFinanceDataProvider:
         except Exception as exc:
             logger.error("%s: failed to fetch info: %s", symbol, exc)
             info = {}
+            info_error = f"info: {type(exc).__name__}"
+        else:
+            info_error = None
 
         try:
             history = ticker.history(period="1y")
         except Exception as exc:
             logger.error("%s: failed to fetch history: %s", symbol, exc)
             history = pd.DataFrame()
+            history_error = f"history: {type(exc).__name__}"
+        else:
+            history_error = None
         history = _drop_incomplete_trailing_bars(history)
 
         current_price = info.get("regularMarketPrice") or info.get("currentPrice") or (
@@ -274,6 +280,23 @@ class YFinanceDataProvider:
             "forecast": self._build_forecast(info, ticker),
             "dividends": self._build_dividends(info, ticker),
             "options_chain": options_chain,
+            "_source": json.dumps(
+                {
+                    "timestamps": {
+                        "market": _safe_timestamp(info.get("regularMarketTime")),
+                        "history": (
+                            history.index[-1].isoformat()
+                            if not history.empty
+                            else None
+                        ),
+                    },
+                    "errors": [
+                        error
+                        for error in (info_error, history_error)
+                        if error is not None
+                    ],
+                }
+            ),
         }
 
         # IV/HV volatility context (best-effort, stateless premium-richness proxy).

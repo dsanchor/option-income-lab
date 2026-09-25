@@ -75,6 +75,17 @@ def test_banner_last_run_falls_back_to_persisted_generation_after_restart():
     assert context["banner_last_run_iso"] == "2026-09-24T12:34:56+00:00"
 
 
+@pytest.mark.parametrize("generated_at", [None, "", "not-a-timestamp", "2026-09-24"])
+def test_legacy_banner_without_valid_generated_at_remains_never(generated_at):
+    context = _build_settings_config_context(
+        _request_with_tasks(),
+        _Cosmos({"generated_at": generated_at, "items": [{"text": "legacy"}]}),
+    )
+
+    assert context["banner_last_run"] == ""
+    assert context["banner_last_run_iso"] == ""
+
+
 def test_banner_trigger_waits_for_registry_success_and_returns_last_run(monkeypatch):
     calls = []
 
@@ -452,7 +463,7 @@ def test_banner_job_does_not_swallow_generation_failure(monkeypatch):
         )
 
 
-def test_settings_context_prefers_advanced_runtime_banner_last_run():
+def test_settings_context_uses_verified_persisted_banner_generation():
     runtime_timestamp = "2026-09-24T13:45:00+00:00"
     tasks = [{
         "name": "banner_agent",
@@ -468,7 +479,7 @@ def test_settings_context_prefers_advanced_runtime_banner_last_run():
     )
 
     assert context["banner_last_run"]
-    assert context["banner_last_run_iso"] == runtime_timestamp
+    assert context["banner_last_run_iso"] == "2026-09-24T12:34:56+00:00"
 
 
 def test_banner_prior_success_survives_later_failed_attempt_in_settings():

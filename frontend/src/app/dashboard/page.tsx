@@ -44,7 +44,12 @@ export default async function DashboardPage() {
 
       {/* Banner marquee */}
       {d.banner_items && d.banner_items.length > 0 && (
-        <DashboardBanner items={d.banner_items} />
+        <DashboardBanner
+          items={d.banner_items}
+          sourceAsOf={d.banner_source_as_of}
+          sourceWatermarks={d.banner_source_watermarks}
+          sourceCounts={d.banner_source_counts}
+        />
       )}
 
       {/* Summary cards (3, matching legacy) */}

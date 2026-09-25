@@ -58,3 +58,11 @@
   position (including account, contract, type, strike, expiry, and paper lane);
   stale or mismatched IDs and ambiguous symbol-only requests fail closed.
   Scheduled monitoring still iterates every active position independently.
+- **2026-09-25:** Dashboard Banner technical recommendations now fail closed:
+  recommendation labels of any polarity are eligible only with a finite
+  normalized score, at least one non-zero calculated signal count, finite
+  measured technical evidence, and an actual recent provider history
+  timestamp. Moving-average recommendations additionally require finite
+  moving-average indicator evidence. Case/nesting/alias normalization cannot
+  turn bare `NEUTRAL`, `BUY`, `SELL`, or default text into a fact, count, or
+  watermark.

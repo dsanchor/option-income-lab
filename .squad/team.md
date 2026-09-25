@@ -18,6 +18,7 @@
 | Basher | Tester | .squad/agents/basher/charter.md | 🧪 Tester |
 | Livingston | Persistence & Integration Engineer | .squad/agents/livingston/charter.md | 🔧 Integration |
 | Reuben | Reliability & Migration Engineer | .squad/agents/reuben/charter.md | 🔧 Reliability |
+| Saul | Data Contract Engineer | .squad/agents/saul/charter.md | 📊 Data Contracts |
 | Scribe | Scribe | .squad/agents/scribe/charter.md | 📋 Scribe |
 | Ralph | Work Monitor | — | 🔄 Monitor |
 

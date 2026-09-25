@@ -100,3 +100,10 @@
 - Exact-ID selection validates every supplied constraint before launch. Mismatches remain conflicts, and ambiguous symbol-only legacy requests remain HTTP 409.
 - Position-specific locking continues to permit different position IDs concurrently while rejecting a duplicate run for the same position.
 - Monitor wrapper annotations now use explicit `str | None` and `dict[str, Any] | None`, resolving the four changed-code RUF013 findings without ignores.
+
+### 2026-09-25 — Dashboard banner content freshness
+- The banner fed yfinance's historical `exDividendDate` (`ex_dividend_date_recent`) and any past earnings/position dates directly to an LLM explicitly told to mention proximity. Regenerating the document advanced `generated_at` while allowing the same 20-day-old facts to be presented as current.
+- Banner activities now consume all Cosmos continuation pages and are parsed, filtered to 24 hours, and sorted as UTC datetimes rather than relying on lexicographic timestamp order. Market reads bypass the shared process cache for each banner generation.
+- Past earnings/ex-dividend dates and expired-but-active positions are excluded from current-event context. When neither a fresh market snapshot nor recent activity is available, the persisted banner explicitly says no recent eligible data.
+- Banner documents now persist `source_as_of`, per-source watermarks/counts, a content hash, and a unique generation ID. A run fails unless Cosmos returns the exact generation ID/content it was asked to persist.
+- `/api/dashboard` exposes the watermark and Agents HQ renders `Sources as of`; AutoRefresh continues to key on the unique microsecond `generated_at`.

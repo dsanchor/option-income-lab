@@ -39,10 +39,13 @@ Return JSON only in this exact shape:
 - Prefer concrete, near-term signals over generic commentary.
 - Avoid duplicates and repetitive wording.
 - Mention earnings / ex-dividend timing when near.
+- Never describe a past event date as upcoming or current.
+- Source dates omitted from the input are ineligible and must not be inferred.
 - Use trend-change items when technical posture materially shifted.
 - Use actionable_alert for fresh alerts or recent agent actions.
 - Use risk_warning for assignment, dividend capture, or elevated review risk.
-- If the data is sparse, still produce the best 5 concise items available.
+- If the data is sparse, use only the eligible facts supplied; never recycle
+  prior banner wording or fill gaps with old facts.
 
 Do not add prose, markdown, or explanations outside the JSON.
 """

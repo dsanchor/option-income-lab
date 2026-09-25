@@ -11,6 +11,7 @@ How to decide who handles what.
 | Options strategy & signals | Linus | Covered call logic, CSP logic, MCP data integration |
 | Persistence & integration | Livingston | Cosmos round-trips, cache/store seams, async concurrency |
 | Reliability & migration safety | Reuben | Fencing, transactional migration, rollback, strict schemas |
+| Data contracts & freshness | Saul | Provider schemas, semantic eligibility, source timestamps |
 | Code review | Danny | Review PRs, check quality, suggest improvements |
 | Testing | Basher | Write tests, edge cases, signal validation |
 | Scope & priorities | Danny | What to build next, trade-offs, decisions |

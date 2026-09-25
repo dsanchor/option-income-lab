@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { createAutoRefreshPoller } from "@/lib/autoRefreshPoller";
 import type { DashboardStatusPayload } from "@/types/dashboard";
 
 /**
@@ -17,66 +18,45 @@ import type { DashboardStatusPayload } from "@/types/dashboard";
  */
 export default function AutoRefresh({ intervalMs = 30000 }: { intervalMs?: number }) {
   const router = useRouter();
-  const sigRef = useRef<string | null>(null);
 
   useEffect(() => {
-    let timer: ReturnType<typeof setInterval> | null = null;
-    let aborted = false;
-
-    const check = async () => {
-      if (document.visibilityState !== "visible") return;
-      try {
-        const res = await fetch("/api/dashboard/status", { cache: "no-store" });
-        if (!res.ok) return;
+    const poller = createAutoRefreshPoller({
+      intervalMs,
+      timeoutMs: Math.min(10000, intervalMs),
+      poll: async (signal) => {
+        if (document.visibilityState !== "visible") return null;
+        const res = await fetch("/api/dashboard/status", {
+          cache: "no-store",
+          signal,
+        });
+        if (!res.ok) return null;
         const data = (await res.json()) as DashboardStatusPayload;
-        const sig = JSON.stringify({
+        return JSON.stringify({
           a: data.agents ?? {},
           s: data.agent_statuses ?? {},
           g: data.monitor_agent_enabled ?? {},
           l: data.latest_activity ?? null,
           b: data.banner_generated_at ?? null,
         });
-        if (aborted) return;
-        // First poll: record the baseline without refreshing.
-        if (sigRef.current === null) {
-          sigRef.current = sig;
-          return;
-        }
-        if (sig !== sigRef.current) {
-          sigRef.current = sig;
-          router.refresh();
-        }
-      } catch {
-        /* transient network error — ignore, try again next tick */
-      }
-    };
-
-    const start = () => {
-      if (!timer) timer = setInterval(check, intervalMs);
-    };
-    const stop = () => {
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
-    };
+      },
+      onChange: () => {
+        router.refresh();
+      },
+    });
 
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
-        check();
-        start();
+        poller.start();
       } else {
-        stop();
+        poller.stop();
       }
     };
 
-    check();
-    start();
+    if (document.visibilityState === "visible") poller.start();
     document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
-      aborted = true;
-      stop();
+      poller.stop();
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [router, intervalMs]);

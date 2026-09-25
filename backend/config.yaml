@@ -63,6 +63,7 @@ banner_agent:
   enabled: true
   cron: "0 5 * * *"  # 5 AM daily
   max_items: 10
+  provider_timeout_seconds: 30
 
 dps_scorer:
   enabled: true

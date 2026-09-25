@@ -123,6 +123,10 @@ export interface DashboardData {
   open_roc_annualized?: number;
   activity?: ActivityItem[];
   banner_items?: BannerItem[];
+  banner_generated_at?: string | null;
+  banner_source_as_of?: string | null;
+  banner_source_watermarks?: Record<string, string>;
+  banner_source_counts?: Record<string, number>;
   market_open?: boolean;
   error?: string;
 }

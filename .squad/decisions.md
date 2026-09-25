@@ -134,6 +134,47 @@ The only residual is a pre-existing order-dependent test stub that replaces the
 installed Azure namespace before `azure.core` is imported. No commit, push,
 deployment, or production access occurred.
 
+### Dashboard Banner source freshness and provider contract
+
+**Date:** 2026-09-25
+**Status:** IMPLEMENTED AND APPROVED
+**Requested by:** Copilot
+
+- Banner freshness is derived only from eligible source timestamps: recent
+  activity uses a 24-hour UTC window, market facts require actual non-future
+  provider timestamps within seven days, and past earnings/ex-dividend events
+  plus expired positions are excluded.
+- Empty, malformed, provider-error, timeout, default-only, and unsupported
+  alias payloads do not count, invoke the LLM, persist a new banner, or advance
+  Last run. Zero eligible facts use deterministic no-data without an LLM call.
+- Recommendation facts follow the exact `TechnicalsCalculator` contract:
+  authoritative summary/moving-average recommendation shapes, exact count
+  totals and score/label consistency, exact direct indicator allowlists, and a
+  real recent history timestamp. Unsupported casing, nesting, aliases,
+  lookalikes, and conflicts fail closed.
+- Persistence verifies exact `generation_id`, content hash, generated time,
+  items, source counts, and watermarks in both the write result and a reload;
+  `generated_at` must advance. The dashboard API/UI expose Data as of, coverage
+  counts, and source watermarks.
+- AutoRefresh is completion-scheduled, single-flight, abortable,
+  deadline-bounded, and generation-fenced so hidden, unmounted, stale, or late
+  responses cannot refresh the UI or overlap requests.
+- Saul joined temporarily as Data Contract Engineer under user authorization
+  to close the strict provider-contract gap.
+
+Basher's first review rejected fetch-time provenance, empty-payload counting,
+missing timeouts/coverage, and weak persistence verification. Livingston,
+Danny, Linus, and Reuben successively closed freshness, AutoRefresh,
+default-recommendation, and exact-indicator gaps. Basher rejected the remaining
+permissive recommendation aliases, then approved Saul's exact-contract
+revision.
+
+Final evidence: 168 focused backend tests passed; the provider suite passed 20
+tests with 3 unchanged unrelated option-chain fixture failures; 10 frontend
+tests and 7 independent probes passed. Ruff, Python compilation, TypeScript,
+and scoped diff checks passed. The combined backend collection retains a known
+order-dependent `SkillsProvider` test-stub collision.
+
 ### Livingston — Dividends economics ambiguity note
 
 ## Date

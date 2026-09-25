@@ -27,6 +27,25 @@
 
 ## Learnings
 
+### 2026-09-25 — Dashboard banner freshness revision
+- Banner market freshness now requires a valid non-empty provider payload plus
+  an actual source timestamp no older than seven days; empty/missing/stale
+  payloads cannot count as market snapshots, while malformed payloads,
+  provider-reported failures, and bounded provider timeouts fail explicitly
+  before any LLM or persistence write.
+- Provider reads run in abandonable daemon workers with a configurable
+  30-second per-symbol deadline. Timed-out read-only workers cannot continue
+  into banner generation or persistence, so TaskRegistry success remains
+  unchanged on timeout/failure.
+- `source_as_of` is the maximum eligible activity/provider timestamp, never a
+  local fetch clock. Source watermarks and activity/market counts now
+  round-trip through Cosmos, dashboard API/types, and visible UI coverage.
+- Persistence supplies an exact expected `generated_at`, verifies generation
+  ID/hash/items/source metadata in both the upsert response and a reload, and
+  requires monotonic advancement over the prior document. Settings Last Run
+  now uses only the verified persisted generation timestamp; malformed legacy
+  timestamps remain Never.
+
 ### 2026-09-24 — Position-identity dashboard monitor joins
 - Dashboard position-monitor rows must be seeded, joined, snapshotted, and
   React-keyed by stable `position_id`; `(symbol, strike, expiration)` is a

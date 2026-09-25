@@ -18,10 +18,11 @@ class _Snapshots:
 class _DashboardCosmos(_Snapshots):
     portfolio_container = None
 
-    def __init__(self, positions, activities, snapshots=None):
+    def __init__(self, positions, activities, snapshots=None, banner=None):
         super().__init__(snapshots or {})
         self.positions = positions
         self.activities = activities
+        self.banner = banner
 
     def list_symbols(self):
         return [_symbol(*self.positions)]
@@ -33,7 +34,7 @@ class _DashboardCosmos(_Snapshots):
         return list(self.activities)
 
     def get_banner(self):
-        return None
+        return self.banner
 
 
 def _symbol(*positions):
@@ -597,6 +598,26 @@ def test_dashboard_payload_keeps_both_general_activities_and_position_rows():
         "activity-pos-a",
         "activity-pos-b",
     }
+
+
+def test_dashboard_payload_exposes_banner_source_counts_and_watermarks():
+    banner = {
+        "items": [{"text": "Recent fact"}],
+        "generated_at": "2026-09-25T10:00:00Z",
+        "source_as_of": "2026-09-25T09:55:00Z",
+        "source_watermarks": {
+            "market:MSFT": "2026-09-25T09:55:00Z",
+            "latest_activity_at": "2026-09-25T09:50:00Z",
+        },
+        "source_counts": {"market_snapshots": 1, "activities": 2},
+    }
+    cosmos = _DashboardCosmos([], [], banner=banner)
+
+    payload = _compute_dashboard_data(cosmos)
+
+    assert payload["banner_source_as_of"] == banner["source_as_of"]
+    assert payload["banner_source_watermarks"] == banner["source_watermarks"]
+    assert payload["banner_source_counts"] == banner["source_counts"]
 
 
 def test_unassigned_stale_legacy_activity_remains_in_global_activity_feed():

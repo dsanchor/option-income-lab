@@ -16,6 +16,62 @@
 
 ## Recent Learnings
 
+### 2026-09-25 — Dashboard Banner provider-contract final gate approved
+- Saul's revision now consumes only the exact `TechnicalsCalculator` summary,
+  moving-average, indicator-entry, and real history-timestamp contract.
+  Unsupported aliases, casing normalization, alternate nesting, scalars, and
+  lookalikes fail closed; authoritative conflicts are rejected, while valid
+  fields coexisting with aliases remain single-counted.
+- Independently confirmed the prior exact-SMA50/alias-envelope blocker now
+  yields deterministic no-data with zero facts, counts, watermarks, or LLM
+  calls. Exact technical and MA schemas, including direct real-calculator
+  output, preserve one snapshot and the actual history watermark.
+- Validation passed 168 focused backend tests, 20/23 full yfinance provider
+  tests with the same 3 unrelated option-chain fixture failures, 10 frontend
+  contracts, and 7 independent probes. Scoped Ruff, compile, TypeScript, and
+  Saul diff hygiene passed. Final verdict: APPROVE.
+
+### 2026-09-25 — Dashboard Banner strict MA allowlist final gate rejected
+- Reuben's exact direct indicator allowlist correctly blocks generic
+  period/length structures, deceptive/case variants, nested recognized copies,
+  unknown oscillators, non-finite values, and unsupported default evidence.
+- Rejected because the surrounding recommendation schema remains permissive:
+  an exact `SMA50` combined with unsupported `name`/`score` recommendation
+  aliases and case-normalized `Buy` count invoked the LLM, counted/published a
+  market snapshot and watermark, and persisted commentary. The summary path
+  accepts the same non-provider aliases.
+- Validation passed 94 focused backend tests and 10 frontend contracts; the
+  same 3 unrelated option-chain fixture failures remain. Seven independent
+  evidence cases passed and two strict-schema alias cases failed. Ruff,
+  TypeScript/ESLint, Python compilation, and diff hygiene passed.
+
+### 2026-09-25 — Dashboard Banner semantic freshness final gate rejected
+- Danny's revision closed provider-shaped empty/null/non-finite/old/future
+  handling and replaced unbounded dashboard polling with a single-flight,
+  abort-deadlined, generation-fenced AutoRefresh poller.
+- Rejected because provider-default `NEUTRAL` technical and moving-average
+  recommendations remain semantically eligible. A default-only payload invoked
+  the LLM, persisted commentary, counted one market snapshot, and exposed a
+  current watermark instead of deterministic no-data metadata.
+- Validation passed 230 focused backend tests and 115 frontend tests; the same
+  3 unrelated provider option-chain fixture failures remain. Independent
+  AutoRefresh and timestamp probes passed; the default-only semantic probe
+  failed. Type, scoped lint, compile, production build, and diff hygiene passed.
+
+### 2026-09-25 — Dashboard Banner freshness rereview rejected
+- Livingston's revision fixed explicit provider errors/malformed payloads,
+  bounded provider timeout with no late persistence, actual source watermarks,
+  counts/API/UI coverage, exact reload verification, monotonic generated time,
+  old-event filtering, no-recent fallback, and legacy Last Run behavior.
+- Rejected because provider-shaped payload wrappers containing no usable facts
+  still satisfy `any(parsed.values())`; an independent probe counted the empty
+  snapshot and persisted LLM commentary with a current `source_as_of`.
+- Dashboard `AutoRefresh` is still unbounded: interval polling has neither an
+  abort deadline nor an in-flight guard, so hung status requests overlap.
+- Validation passed 166 focused backend tests and 115 focused frontend tests;
+  the same 3 unrelated provider option-chain fixture failures remain. Type,
+  scoped lint, compile, production build, and diff hygiene passed.
+
 ### 2026-09-24 — Dashboard Banner last-run gate approved
 - Rejected successive revisions for false completion/global polling, unbounded
   retained `TaskRun` state, and a global `last_run` compatibility regression.
@@ -338,3 +394,17 @@
   pre-existing app `RUF013` findings and 3 pre-existing/deprecation warnings.
 - No source/tests were modified; no commit, push, deployment, or production
   access occurred.
+
+### 2026-09-25 — Dashboard Banner recommendation eligibility final gate
+- **REJECT.** Exact default-only summary/MA `NEUTRAL` now correctly produces
+  zero facts/count/watermark, skips the LLM, and persists deterministic
+  no-data.
+- Release blocker: `_has_finite_indicator()` treats any finite pseudo-indicator
+  with a positive `period`/`length` as recognized evidence. A full-flow
+  `provider_default={value:0,period:20}` probe made an unsupported MA `BUY`
+  invoke the LLM, count a market snapshot, publish a watermark, and persist
+  generated commentary.
+- Validation: 73 focused backend tests passed with the same 3 pre-existing
+  provider fixture failures; 10 frontend contracts passed; independent probes
+  were 1 passed/1 failed. Banner Ruff, TypeScript, changed-file ESLint, Python
+  compilation, and diff whitespace passed. No source/tests were modified.

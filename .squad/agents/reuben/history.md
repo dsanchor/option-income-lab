@@ -126,3 +126,22 @@ Frontend: npx tsc --noEmit — 0 errors
 - Added deterministic guided-flow, filter, tamper, changed-bundle, duplicate
   case, exact confirmation, no-credential, and post-apply reconciliation tests.
 - Updated the operator runbook. No production data or services were accessed.
+
+## Dashboard Banner Moving-Average Evidence Allowlist (2026-09-25)
+
+- Replaced generic prefix/`period`/`length` indicator eligibility with exact,
+  case-sensitive provider-schema allowlists and direct `indicators[*].value`
+  finite-number validation.
+- Recognized moving averages are exactly EMA/SMA 10, 20, 30, 50, 100, and 200,
+  plus `Ichimoku.BLine`, `VWMA`, and `HullMA9`; periods are encoded in provider
+  identities, not supplied through generic fields.
+- Unknown, deceptive aliases, scalar measurements, alternate value keys,
+  non-finite values, and nested duplicates cannot create evidence, counts, or
+  watermarks. Recognized SMA/EMA evidence still preserves computed neutral and
+  non-neutral recommendations.
+- Added adversarial unit/integration coverage for LLM suppression, deterministic
+  no-data, mixed valid/unknown symbols, deduplicated counts, and eligible-source
+  watermarks.
+- Validation: 105 banner/technical tests and 23 last-run tests passed; provider
+  suite retained its 3 pre-existing option-chain fixture failures. Ruff,
+  `py_compile`, and scoped diff checks passed.

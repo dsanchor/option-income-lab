@@ -4598,6 +4598,10 @@ def _compute_dashboard_data(
         "open_roc_annualized": open_roc_annualized,
         "activity": activity,
         "banner_items": (banner_doc or {}).get("items", []),
+        "banner_generated_at": (banner_doc or {}).get("generated_at"),
+        "banner_source_as_of": (banner_doc or {}).get("source_as_of"),
+        "banner_source_watermarks": (banner_doc or {}).get("source_watermarks", {}),
+        "banner_source_counts": (banner_doc or {}).get("source_counts", {}),
     }
 
 
@@ -6781,7 +6785,15 @@ def _build_settings_config_context(
                 # Banner: generated_at from dashboard_banner doc
                 banner_doc = cosmos.get_banner()
                 if banner_doc and banner_doc.get("generated_at"):
-                    return banner_doc["generated_at"]
+                    generated_at = banner_doc["generated_at"]
+                    try:
+                        parsed = datetime.fromisoformat(
+                            generated_at.replace("Z", "+00:00")
+                        )
+                    except (AttributeError, ValueError):
+                        return ""
+                    if parsed.tzinfo is not None:
+                        return generated_at
 
             elif task_name == "plan_monitor":
                 # Plan Monitor: most recent plan note timestamp
@@ -6925,11 +6937,12 @@ def _build_settings_config_context(
     banner = tasks_by_name.get("banner_agent", {})
     banner_enabled = banner.get("enabled", True)
     banner_cron = banner.get("cron", "0 5 * * *")
-    # Banner "Last run" is intentionally successful-generation time. Generic
-    # scheduler ``last_run`` remains the latest attempt for compatibility.
-    banner_last_run = resolve_last_run("banner_agent", banner.get("last_success"))
+    # Banner "Last run" is the verified persisted generation timestamp.
+    # Generic scheduler attempt/success clocks remain available as task
+    # metadata but are not banner freshness authority.
+    banner_last_run = resolve_last_run("banner_agent", "")
     banner_next_run = fmt_time(banner.get("next_run"))
-    banner_last_run_iso = resolve_last_run_iso("banner_agent", banner.get("last_success"))
+    banner_last_run_iso = resolve_last_run_iso("banner_agent", "")
     banner_next_run_iso = to_iso(banner.get("next_run"))
 
     calendar = tasks_by_name.get("calendar_sync", {})
@@ -8563,13 +8576,18 @@ async def trigger_banner_agent(request: Request):
     last_run_iso = ""
     if persisted_generated_at:
         try:
-            last_run_iso = datetime.fromisoformat(
+            parsed_generated_at = datetime.fromisoformat(
                 str(persisted_generated_at).replace("Z", "+00:00")
-            ).astimezone(timezone.utc).isoformat()
+            )
+            if parsed_generated_at.tzinfo is not None:
+                last_run_iso = parsed_generated_at.astimezone(timezone.utc).isoformat()
         except ValueError:
             pass
     if not last_run_iso:
-        last_run_iso = str(run.get("completed_at") or "")
+        return JSONResponse(
+            {"error": "Banner persistence returned no valid generated_at"},
+            status_code=500,
+        )
     last_run = ""
     if last_run_iso:
         try:

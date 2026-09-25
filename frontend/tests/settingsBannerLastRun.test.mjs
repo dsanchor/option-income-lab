@@ -58,6 +58,9 @@ test("settings server and BFF reads opt out of stale fetch caching", () => {
 test("dashboard refresh signature includes persisted banner generation", () => {
   assert.match(dashboardTypes, /banner_generated_at\?: string \| null/);
   assert.match(autoRefresh, /b: data\.banner_generated_at \?\? null/);
+  assert.match(autoRefresh, /createAutoRefreshPoller/);
+  assert.match(autoRefresh, /signal,/);
+  assert.doesNotMatch(autoRefresh, /setInterval/);
   assert.match(dashboardPage, /apiFetch<DashboardData>\("\/api\/dashboard", \{ cache: "no-store" \}\)/);
   assert.equal((autoRefresh.match(/^\s*router\.refresh\(\);/gm) || []).length, 1);
 });

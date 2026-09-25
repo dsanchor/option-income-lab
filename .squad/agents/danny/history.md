@@ -15,6 +15,17 @@
 
 ## Recent Learnings
 
+### 2026-09-25 — Dashboard banner semantic freshness revision
+- Banner source eligibility is now fact-grained rather than wrapper-grained:
+  only valid, banner-consumed market facts with their corresponding plausible
+  provider timestamp and semantically useful recent activities can count.
+- Empty/default/null/error-shaped payloads, non-finite values, old-only facts,
+  and future source timestamps cannot create watermarks or invoke the LLM.
+  All-zero input persists the deterministic no-data banner with null provenance.
+- Dashboard AutoRefresh now uses single-flight completion scheduling with an
+  abort deadline and generation fencing. Hide/unmount cleanup and late response
+  handling cannot overlap requests, update state, or trigger a refresh.
+
 ### 2026-09-24 — Bounded retained scheduler results
 - `TaskRegistry.trigger_task_now()` remains allocation-free and
   fire-and-forget by default; only callers that need a terminal result opt into
