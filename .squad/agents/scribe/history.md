@@ -9,6 +9,7 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 
 ## Recent Updates
 
+📌 2026-09-26T07:23:18Z: Consolidated the approved Simulate a Roll lifecycle into one canonical decision, cleared three inbox records, confirmed Linus/Saul/Basher histories already covered implementation, precision repair, and final review, and added orchestration/session logs; separately recorded that account-level PortfolioHoldingsCard P&L remains deliberately unavailable with no code change
 📌 2026-09-25T13:18:25Z: Consolidated the approved Dashboard Banner source-freshness/provider-contract lifecycle, cleared seven inbox records, removed routing whitespace, added orchestration/session logs, and prepared the reviewed product/test/team diff for commit and push
 📌 2026-09-24T22:35:11Z: Consolidated the approved manual position-agent execution fix, cleared four inbox records, added orchestration/session logs, and prepared the position-scoped product/test diff for commit and push
 📌 2026-09-24T21:35:54Z: Consolidated final review/removal/monitor decisions, cleared 10 inbox records, added orchestration/session logs, aligned team routing/registry/Reuben charter, and removed the two routing whitespace findings; no product changes, commit, or push

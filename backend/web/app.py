@@ -3725,6 +3725,135 @@ async def api_roll_table(request: Request, symbol: str, position_id: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.post("/api/symbols/{symbol}/positions/{position_id}/roll-simulation")
+async def api_roll_simulation(request: Request, symbol: str, position_id: str):
+    """Simulate an informational full-position roll using exact chain contracts."""
+    try:
+        cosmos = _get_cosmos(request)
+        symbol = _ticker_from_symbol_param(symbol)
+        sym_doc = cosmos.get_symbol(symbol)
+        if not sym_doc:
+            return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
+
+        from src.us_exchange_eligibility import enforce_us_options_eligible
+        guard = enforce_us_options_eligible(sym_doc)
+        if guard:
+            return guard
+
+        matches = [
+            position for position in sym_doc.get("positions", [])
+            if position.get("position_id") == position_id
+        ]
+        if not matches:
+            return JSONResponse({"error": f"Position {position_id} not found"}, status_code=404)
+        if len(matches) != 1:
+            return JSONResponse(
+                {"error": "Position identity is ambiguous", "code": "ambiguous_position"},
+                status_code=409,
+            )
+        position = matches[0]
+        if position.get("status") != "active":
+            return JSONResponse(
+                {"error": f"Position {position_id} is not active", "code": "inactive_position"},
+                status_code=409,
+            )
+        option_type = str(position.get("type") or "").strip().lower()
+        if option_type not in {"call", "put"}:
+            return JSONResponse(
+                {"error": "Position is not an active CALL or PUT option", "code": "invalid_position"},
+                status_code=400,
+            )
+
+        def reject_nonfinite_json(value: str):
+            raise ValueError(f"unsupported JSON number {value}")
+
+        try:
+            body = json.loads(
+                (await request.body()).decode("utf-8"),
+                parse_float=Decimal,
+                parse_int=Decimal,
+                parse_constant=reject_nonfinite_json,
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            return JSONResponse({"error": "invalid JSON body", "code": "invalid_request"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse(
+                {"error": "JSON body must be an object", "code": "invalid_request"},
+                status_code=400,
+            )
+        target_strike = body.get("target_strike")
+        target_expiration = body.get("target_expiration")
+        if target_strike is None or target_expiration is None:
+            return JSONResponse(
+                {
+                    "error": "target_strike and target_expiration are required",
+                    "code": "invalid_request",
+                },
+                status_code=400,
+            )
+
+        from src.options_chain_cache import apply_agent_view, get_options_chain_cache
+        chain = await get_options_chain_cache().get_or_load_async(symbol)
+        chain = apply_agent_view(chain)
+
+        from src.roll_table import RollSimulationError, compute_roll_simulation
+        try:
+            result = compute_roll_simulation(
+                chain,
+                current_strike=position.get("strike"),
+                current_expiration=position.get("expiration"),
+                target_strike=target_strike,
+                target_expiration=target_expiration,
+                option_type=option_type,
+                contracts=position.get("contracts"),
+                # The endpoint is reachable only after the repository's
+                # NYSE/NASDAQ eligibility guard; this codebase models those
+                # standard US equity option contracts with a 100-share multiplier.
+                multiplier=100,
+            )
+        except RollSimulationError as exc:
+            if exc.code == "target_contract_not_found":
+                status_code = 404
+            elif exc.code in {"quote_unavailable", "current_contract_not_found"}:
+                status_code = 503
+            else:
+                status_code = 400
+            return JSONResponse(
+                {"error": str(exc), "code": exc.code},
+                status_code=status_code,
+            )
+
+        source = position.get("source") if isinstance(position.get("source"), dict) else {}
+        identity = {
+            "position_id": position_id,
+            "symbol": symbol,
+            "option_type": option_type.upper(),
+            "account_id": (
+                position.get("account_id")
+                or source.get("account_id")
+                or source.get("brokerage_account_id")
+            ),
+            "is_paper": bool(position.get("is_paper")),
+            "contract_id": (
+                position.get("contract_id")
+                or source.get("contract_id")
+                or source.get("option_contract_id")
+            ),
+            "instrument_id": (
+                position.get("instrument_id")
+                or source.get("instrument_id")
+                or source.get("security_id")
+            ),
+        }
+        return JSONResponse({**result, "position": identity})
+
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        logger.exception("Roll simulation failed for %s/%s", symbol, position_id)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ===========================================================================
 # REST API — Action Plans
 # ===========================================================================

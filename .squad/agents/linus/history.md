@@ -66,3 +66,11 @@
   moving-average indicator evidence. Case/nesting/alias normalization cannot
   turn bare `NEUTRAL`, `BUY`, `SELL`, or default text into a fact, count, or
   watermark.
+- **2026-09-25:** Simulate a Roll is an exact-position, exact-contract,
+  read-only calculation. Both close and open legs require positive,
+  non-crossed two-sided markets and use the repository robust midpoint; the
+  signed target-minus-current result scales by the explicit 100-share
+  US-options multiplier and the full positive integer `position.contracts`.
+  Missing quantity, missing exact contracts, invalid quotes, inactive
+  positions, and non-US eligibility fail closed, while quote timestamps,
+  source, stale/carried status, and field status remain visible.

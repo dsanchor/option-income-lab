@@ -6,10 +6,42 @@ No dependency on options_chain_parser.py.
 
 import datetime
 import logging
+import re
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
-from src.options_math import executable_buyback_ask
 from src.options_chain_view import is_candidate_eligible, usable_greek, usable_quote
+from src.options_math import executable_buyback_ask
+
+_STRIKE_PATTERN = re.compile(r"^(?P<integer>\d{1,9})(?:\.(?P<fraction>\d{1,20}))?$")
+
+
+def parse_strike_decimal(value) -> Decimal:
+    """Parse a strike using the canonical plain-decimal chain-key contract."""
+    if isinstance(value, bool) or value is None:
+        raise ValueError("strike must be a positive plain decimal")
+    text = str(value)
+    match = _STRIKE_PATTERN.fullmatch(text)
+    if match is None:
+        raise ValueError(
+            "strike must use plain decimal notation with at most "
+            "9 integer and 20 fractional digits"
+        )
+    try:
+        strike = Decimal(text)
+    except InvalidOperation as exc:
+        raise ValueError("strike must be a positive plain decimal") from exc
+    if not strike.is_finite() or strike <= 0:
+        raise ValueError("strike must be a positive plain decimal")
+    return strike
+
+
+def canonical_strike(value) -> str:
+    """Return the exact normalized identity used to compare chain strikes."""
+    text = format(parse_strike_decimal(value), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +237,7 @@ def filter_options_chain_by_delta(
 
 def get_contract(
     chain: dict,
-    current_strike: float,
+    current_strike,
     current_expiration: str,
     option_type: str,
 ) -> Optional[dict]:
@@ -218,7 +250,7 @@ def get_contract(
     ----------
     chain : dict
         Structured chain dict (calls/puts buckets).
-    current_strike : float
+    current_strike
         Strike of the contract to find.
     current_expiration : str
         Expiration of the contract to find (YYYY-MM-DD or YYYYMMDD).
@@ -253,13 +285,19 @@ def get_contract(
         # Expiration not in chain
         return None
     
-    # Search for the strike by float value (handles "65.0", "65.00", "65")
+    try:
+        wanted_strike = canonical_strike(current_strike)
+    except ValueError:
+        return None
+
+    # Compare normalized Decimal identities so equivalent formatting matches
+    # without collapsing distinct high-precision strikes.
     strikes_dict = bucket[exp_key]
     for sk, contract in strikes_dict.items():
         try:
-            if float(sk) == float(current_strike):
+            if canonical_strike(sk) == wanted_strike:
                 return contract
-        except (ValueError, TypeError):
+        except ValueError:
             # Non-numeric strike key — skip
             continue
     

@@ -467,3 +467,47 @@
   removal contract. No tests, imports, linters, builds, deployment, production
   access, or production-data operation was performed during the final
   read-only review.
+
+### 2026-09-25 — Simulate a Roll end-to-end review
+- **REJECT.** One strict exact-contract blocker remains. The simulator parses
+  target strikes with `Decimal`, but converts them to `float` before the shared
+  contract lookup. Targets `100.00000000000000000001` and
+  `99.99999999999999999999` both collapsed to `100.0`, matched the existing
+  current contract, bypassed `same_contract`, and returned successful
+  `Estimated even` simulations instead of `target_contract_not_found` or
+  `same_contract`.
+- The reviewed path otherwise preserves exact `position_id`, active CALL/PUT
+  gating, full positive-integer quantity, multiplier 100 behind the existing
+  US-options guard, robust two-sided midpoint-only pricing, quote provenance,
+  explicit UI states, informational/no-commission disclosure, and no
+  persistence mutation.
+- Validation: 89 focused backend tests and 107 focused frontend/regression
+  tests passed; 38 independent formula, quote, quantity, identity, date,
+  provenance, and mutation probes passed before the two precision probes
+  exposed the blocker. TypeScript, scoped ESLint, Python compilation,
+  production build, and diff whitespace passed. Ruff reported 435 findings
+  across the two changed legacy Python modules versus 437 on `HEAD`, with the
+  new test clean; the changed endpoint region still contains one `BLE001`
+  finding. The build retained one pre-existing malformed generated CSS utility
+  warning. No implementation/tests, commit, push, deployment, production
+  access, or production data were modified.
+
+### 2026-09-26 — Simulate a Roll strike-precision final review
+- **APPROVE.** Saul's revision preserves canonical base-10 `Decimal` strike
+  identity from raw JSON parsing through same-contract comparison, exact chain
+  lookup, response serialization, frontend text state, and raw BFF forwarding.
+- Independently confirmed `100`/`100.0`/`100.000` equality and rejection,
+  distinct exact lookup/response identity for 20-place strikes on either side
+  of 100, exact misses without collapse, and fail-closed booleans, null, signs,
+  whitespace, exponent, nonfinite, overflow, and excess-precision requests.
+- Midpoint-only formula, 100-share and full-position scaling, any-expiry policy,
+  quote integrity/provenance, exact active position and CALL/PUT identity, UI
+  states/disclaimer, and no-mutation behavior remain correct.
+- Validation passed 288 backend tests, 165 focused frontend tests, and 64
+  independent probes. The full frontend suite passed 1,340 with the same two
+  unrelated source-contract failures. TypeScript, scoped ESLint, Python
+  compilation, production build, and diff hygiene passed. Scoped Ruff improved
+  from 441 findings on `HEAD` to 439; the new test and changed endpoint region
+  are clean. Residuals are the two unrelated frontend failures, legacy baseline
+  Ruff findings, and one existing generated-CSS warning. No source/tests,
+  commit, push, deployment, or production access was performed.

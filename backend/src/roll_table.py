@@ -36,16 +36,20 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Optional
 
-from src.options_math import executable_buyback_ask
+from src.options_chain_filters import canonical_strike, get_contract, parse_strike_decimal
 from src.options_chain_view import usable_greek, usable_quote
-from src.options_chain_filters import get_contract
+from src.options_math import executable_buyback_ask, robust_mid_optional
 
 logger = logging.getLogger(__name__)
 
 _PROFIT_TARGET_PCT = 0.70  # Mirrors open_call_assessment_instructions.py line 68
+_MONEY_4 = Decimal("0.0001")
+_MONEY_2 = Decimal("0.01")
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +134,152 @@ def _bucket_key(option_type: str) -> str:
         return "puts"
     logger.warning("roll_table: unknown option_type '%s', defaulting to 'calls'", option_type)
     return "calls"
+
+
+class RollSimulationError(ValueError):
+    """Structured, caller-safe failure from the pure roll simulation."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def _positive_decimal(value, *, field: str) -> Decimal:
+    if isinstance(value, bool):
+        raise RollSimulationError("invalid_input", f"{field} must be a finite positive number")
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise RollSimulationError("invalid_input", f"{field} must be a finite positive number")
+    if not parsed.is_finite() or parsed <= 0:
+        raise RollSimulationError("invalid_input", f"{field} must be a finite positive number")
+    return parsed
+
+
+def _strike_decimal(value, *, field: str) -> Decimal:
+    try:
+        return parse_strike_decimal(value)
+    except ValueError as exc:
+        raise RollSimulationError("invalid_input", f"{field} {exc}") from exc
+
+
+def _two_sided_midpoint(contract: dict | None, *, label: str) -> Decimal:
+    """Return the repository robust midpoint for a valid two-sided market."""
+    if not isinstance(contract, dict):
+        raise RollSimulationError("contract_not_found", f"{label} contract was not found")
+    bid = usable_quote(contract, "bid")
+    ask = usable_quote(contract, "ask")
+    if bid is None or ask is None or not math.isfinite(bid) or not math.isfinite(ask):
+        raise RollSimulationError(
+            "quote_unavailable",
+            f"{label} contract has no usable two-sided bid/ask market",
+        )
+    if ask < bid:
+        raise RollSimulationError(
+            "quote_unavailable",
+            f"{label} contract market is crossed (ask below bid)",
+        )
+    midpoint = robust_mid_optional(bid, ask)
+    if midpoint is None or not math.isfinite(midpoint) or midpoint <= 0:
+        raise RollSimulationError("quote_unavailable", f"{label} contract midpoint is unavailable")
+    return Decimal(str(midpoint)).quantize(_MONEY_4, rounding=ROUND_HALF_UP)
+
+
+def _quote_provenance(contract: dict) -> dict:
+    meta = contract.get("_meta") if isinstance(contract, dict) else {}
+    meta = meta if isinstance(meta, dict) else {}
+    field_status = meta.get("field_status")
+    return {
+        "quote_asof": meta.get("quote_asof"),
+        "source": meta.get("quote_source"),
+        "stale": bool(meta.get("stale")),
+        "carried": bool(meta.get("carried")),
+        "field_status": dict(field_status) if isinstance(field_status, dict) else {},
+    }
+
+
+def compute_roll_simulation(
+    chain: dict,
+    *,
+    current_strike,
+    current_expiration: str,
+    target_strike,
+    target_expiration: str,
+    option_type: str,
+    contracts,
+    multiplier: int,
+) -> dict:
+    """Calculate an informational close-and-open roll using exact contracts.
+
+    Both legs use the repository robust midpoint over a valid, positive,
+    non-crossed two-sided market. The function is pure and never mutates the
+    chain or position.
+    """
+    if not isinstance(chain, dict):
+        raise RollSimulationError("quote_unavailable", "Options chain is unavailable")
+    current_strike_d = _strike_decimal(current_strike, field="current strike")
+    target_strike_d = _strike_decimal(target_strike, field="target strike")
+    contracts_d = _positive_decimal(contracts, field="contracts")
+    if contracts_d != contracts_d.to_integral_value():
+        raise RollSimulationError("invalid_input", "contracts must be a positive whole number")
+    if isinstance(multiplier, bool) or not isinstance(multiplier, int) or multiplier <= 0:
+        raise RollSimulationError("invalid_input", "multiplier must be a positive integer")
+
+    normalized_type = str(option_type or "").strip().lower()
+    if normalized_type not in {"call", "put"}:
+        raise RollSimulationError("invalid_input", "position option type must be CALL or PUT")
+    try:
+        current_exp = date.fromisoformat(str(current_expiration))
+        target_exp = date.fromisoformat(str(target_expiration))
+    except ValueError:
+        raise RollSimulationError("invalid_input", "expiration must use YYYY-MM-DD")
+    if current_exp == target_exp and current_strike_d == target_strike_d:
+        raise RollSimulationError(
+            "same_contract",
+            "Target contract is identical to the current contract and is not a roll",
+        )
+
+    current_contract = get_contract(chain, current_strike_d, current_exp.isoformat(), normalized_type)
+    target_contract = get_contract(chain, target_strike_d, target_exp.isoformat(), normalized_type)
+    if current_contract is None:
+        raise RollSimulationError("current_contract_not_found", "Current contract is not in the option chain")
+    if target_contract is None:
+        raise RollSimulationError("target_contract_not_found", "Exact target contract was not found")
+
+    current_mid = _two_sided_midpoint(current_contract, label="Current")
+    target_mid = _two_sided_midpoint(target_contract, label="Target")
+    per_share_net = (target_mid - current_mid).quantize(_MONEY_4, rounding=ROUND_HALF_UP)
+    multiplier_d = Decimal(multiplier)
+    per_contract_net = (per_share_net * multiplier_d).quantize(_MONEY_2, rounding=ROUND_HALF_UP)
+    total_net = (per_contract_net * abs(contracts_d)).quantize(_MONEY_2, rounding=ROUND_HALF_UP)
+    outcome = "credit" if total_net > 0 else "debit" if total_net < 0 else "even"
+
+    return {
+        "pricing_method": "robust_midpoint",
+        "option_type": normalized_type.upper(),
+        "contracts": int(contracts_d),
+        "multiplier": multiplier,
+        "current_contract": {
+            "strike": canonical_strike(current_strike_d),
+            "expiration": current_exp.isoformat(),
+            "midpoint": float(current_mid),
+            **_quote_provenance(current_contract),
+        },
+        "target_contract": {
+            "strike": canonical_strike(target_strike_d),
+            "expiration": target_exp.isoformat(),
+            "midpoint": float(target_mid),
+            **_quote_provenance(target_contract),
+        },
+        "per_share_net": float(per_share_net),
+        "per_contract_net": float(per_contract_net),
+        "total_net": float(total_net),
+        "outcome": outcome,
+        "chain_timestamp": chain.get("timestamp"),
+        "chain_source": chain.get("source") or chain.get("_source"),
+        "informational_only": True,
+        "commissions_included": False,
+    }
 
 
 # ---------------------------------------------------------------------------

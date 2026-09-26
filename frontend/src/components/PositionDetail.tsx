@@ -663,6 +663,246 @@ function DField({ label, children }: { label: string; children: React.ReactNode 
   );
 }
 
+interface RollSimulationQuote {
+  strike: string;
+  expiration: string;
+  midpoint: number;
+  quote_asof?: string | null;
+  source?: string | null;
+  stale?: boolean;
+  carried?: boolean;
+  field_status?: Record<string, string>;
+}
+
+interface RollSimulationResult {
+  error?: string;
+  code?: string;
+  pricing_method?: string;
+  option_type: "CALL" | "PUT";
+  contracts: number;
+  multiplier: number;
+  current_contract: RollSimulationQuote;
+  target_contract: RollSimulationQuote;
+  per_share_net: number;
+  per_contract_net: number;
+  total_net: number;
+  outcome: "credit" | "debit" | "even";
+  chain_timestamp?: string | null;
+  chain_source?: string | null;
+  position?: { position_id?: string; account_id?: string | null; is_paper?: boolean };
+}
+
+function signedMoney(value: number, decimals = 2): string {
+  const sign = value > 0 ? "+" : value < 0 ? "−" : "";
+  return `${sign}$${Math.abs(value).toFixed(decimals)}`;
+}
+
+function RollSimulation({
+  symbol,
+  positionId,
+  position,
+  accounts,
+}: {
+  symbol: string;
+  positionId: string;
+  position: Position;
+  accounts: BrokerAccount[];
+}) {
+  const [targetExpiration, setTargetExpiration] = useState("");
+  const [targetStrike, setTargetStrike] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<RollSimulationResult | null>(null);
+  const [error, setError] = useState<{ kind: string; message: string } | null>(null);
+
+  async function simulate() {
+    setError(null);
+    setResult(null);
+    const strikePattern = /^\d{1,9}(?:\.\d{1,20})?$/;
+    if (!targetExpiration || !strikePattern.test(targetStrike) || /^0+(?:\.0+)?$/.test(targetStrike)) {
+      setError({
+        kind: "validation",
+        message: "Enter a positive strike with up to 9 integer and 20 fractional digits; exponents are not supported.",
+      });
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch(
+        `/api/symbols/${encodeURIComponent(symbol)}/positions/${encodeURIComponent(positionId)}/roll-simulation`,
+        {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({
+            target_strike: targetStrike,
+            target_expiration: targetExpiration,
+          }),
+        },
+      );
+      const data = (await res.json().catch(() => ({}))) as RollSimulationResult;
+      if (!res.ok || data.error) {
+        const kind = res.status === 404
+          ? "not-found"
+          : res.status === 503 || data.code === "quote_unavailable"
+            ? "unavailable"
+            : res.status === 400
+              ? "validation"
+              : "generic";
+        setError({ kind, message: data.error || `Request failed (HTTP ${res.status})` });
+        return;
+      }
+      setResult(data);
+    } catch (e) {
+      setError({ kind: "generic", message: e instanceof Error ? e.message : "Network error" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const quoteWarnings = result
+    ? [
+        result.current_contract.stale && "Current-contract quote is stale.",
+        result.current_contract.carried && "Current-contract quote contains carried last-known-good data.",
+        Object.values(result.current_contract.field_status ?? {}).includes("last_known_good")
+          && "Current-contract quote fields include last-known-good values.",
+        result.target_contract.stale && "Target-contract quote is stale.",
+        result.target_contract.carried && "Target-contract quote contains carried last-known-good data.",
+        Object.values(result.target_contract.field_status ?? {}).includes("last_known_good")
+          && "Target-contract quote fields include last-known-good values.",
+      ].filter((warning): warning is string => Boolean(warning))
+    : [];
+  const outcomeLabel = result?.outcome === "credit"
+    ? "Estimated credit"
+    : result?.outcome === "debit"
+      ? "Estimated debit"
+      : "Estimated even";
+  const outcomeColor = result?.outcome === "credit"
+    ? "text-accent-green"
+    : result?.outcome === "debit"
+      ? "text-accent-red"
+      : "text-text";
+  const accountIds = position.linked_accounts?.filter(Boolean) ?? [];
+
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+        <label className="space-y-1 text-xs text-text-muted">
+          <span>Target expiration</span>
+          <input
+            type="date"
+            value={targetExpiration}
+            onChange={(event) => setTargetExpiration(event.target.value)}
+            className="w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text"
+          />
+        </label>
+        <label className="space-y-1 text-xs text-text-muted">
+          <span>Target strike</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={targetStrike}
+            onChange={(event) => setTargetStrike(event.target.value)}
+            aria-invalid={error?.kind === "validation"}
+            aria-describedby={error ? `roll-simulation-error-${positionId}` : undefined}
+            className="w-full rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text"
+            placeholder="e.g. 105"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={simulate}
+          disabled={loading}
+          className="rounded-[var(--radius-pill)] bg-accent-blue px-4 py-2 text-sm text-white disabled:opacity-50"
+        >
+          {loading ? "Calculating…" : "Simulate"}
+        </button>
+      </div>
+
+      <p className="text-xs text-text-muted">
+        Preserves the current {(position.type ?? "option").toUpperCase()} type and uses the exact strike and expiration entered.
+      </p>
+      {error && (
+        <div
+          id={`roll-simulation-error-${positionId}`}
+          role="alert"
+          data-error-state={error.kind}
+          className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-3 py-2 text-sm text-accent-red"
+        >
+          {error.kind === "not-found" && <strong>Exact contract not found. </strong>}
+          {error.kind === "unavailable" && <strong>Midpoint unavailable. </strong>}
+          {error.message}
+        </div>
+      )}
+
+      {result && (
+        <div className="space-y-3 rounded-[var(--radius)] border border-border bg-bg-input p-3">
+          {quoteWarnings.length > 0 && (
+            <div className="rounded-[var(--radius)] border border-accent-orange/50 bg-accent-orange/10 px-3 py-2 text-xs text-accent-orange">
+              <strong>Quote warning:</strong> {quoteWarnings.join(" ")}
+            </div>
+          )}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className={`text-lg font-semibold ${outcomeColor}`}>{outcomeLabel}</div>
+              <div className={`font-mono text-2xl font-bold ${outcomeColor}`}>
+                ${Math.abs(result.total_net).toFixed(2)}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {accountIds.map((accountId) => (
+                <AccountBadge key={accountId} accountId={accountId} accounts={accounts} />
+              ))}
+              {position.is_paper && (
+                <span className="rounded-[var(--radius-pill)] border border-accent-purple/40 bg-accent-purple/10 px-2 py-0.5 text-xs text-accent-purple">
+                  Paper
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-text-muted">
+                  <th className="py-1 pr-3 font-medium">Leg</th>
+                  <th className="py-1 pr-3 font-medium">Contract</th>
+                  <th className="py-1 text-right font-medium">Midpoint estimate</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b border-border/50">
+                  <td className="py-2 pr-3">Close current</td>
+                  <td className="py-2 pr-3 font-mono">{result.option_type} {result.current_contract.expiration} ${result.current_contract.strike}</td>
+                  <td className="py-2 text-right font-mono">${result.current_contract.midpoint.toFixed(4)}</td>
+                </tr>
+                <tr>
+                  <td className="py-2 pr-3">Open target</td>
+                  <td className="py-2 pr-3 font-mono">{result.option_type} {result.target_contract.expiration} ${result.target_contract.strike}</td>
+                  <td className="py-2 text-right font-mono">${result.target_contract.midpoint.toFixed(4)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div className="grid gap-2 text-sm sm:grid-cols-3">
+            <DField label="Per-share difference"><span className="font-mono">{signedMoney(result.per_share_net, 4)}</span></DField>
+            <DField label={`Per contract (×${result.multiplier})`}><span className="font-mono">{signedMoney(result.per_contract_net)}</span></DField>
+            <DField label={`Full position (${result.contracts} contracts)`}><span className="font-mono">{signedMoney(result.total_net)}</span></DField>
+          </div>
+          <div className="grid gap-1 text-xs text-text-muted sm:grid-cols-2">
+            <span>Chain timestamp: <span className="font-mono">{result.chain_timestamp ?? "Unavailable"}</span></span>
+            <span>Chain source: {result.chain_source ?? result.target_contract.source ?? result.current_contract.source ?? "Unavailable"}</span>
+            <span>Current quote as of: <span className="font-mono">{result.current_contract.quote_asof ?? "Unavailable"}</span></span>
+            <span>Current quote source: {result.current_contract.source ?? "Unavailable"}</span>
+            <span>Target quote as of: <span className="font-mono">{result.target_contract.quote_asof ?? "Unavailable"}</span></span>
+            <span>Target quote source: {result.target_contract.source ?? "Unavailable"}</span>
+          </div>
+          <p className="border-t border-border pt-2 text-xs font-medium text-text-muted">
+            Informational midpoint estimate; commissions excluded; not an executable quote.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EditableFinancialField({
   symbol,
   positionId,
@@ -1040,6 +1280,15 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
           <div className="border-t border-dashed border-border pt-3">
             <h4 className="mb-2 text-sm font-semibold">🔄 Roll Scenarios</h4>
             <RollTableView symbol={symbol} positionId={posId} />
+          </div>
+          <div className="border-t border-dashed border-border pt-3">
+            <h4 className="mb-2 text-sm font-semibold">Simulate a Roll</h4>
+            <RollSimulation
+              symbol={symbol}
+              positionId={posId}
+              position={position}
+              accounts={accounts}
+            />
           </div>
         </>
       )}

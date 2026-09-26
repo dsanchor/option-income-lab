@@ -2,6 +2,47 @@
 
 ## Active Decisions
 
+### Simulate a Roll is informational, exact-contract, and read-only
+
+**Date:** 2026-09-26
+**Status:** IMPLEMENTED AND APPROVED
+**Requested by:** Copilot
+
+- Simulate a Roll appears immediately after Roll Scenarios and is scoped to the
+  exact active option position. It preserves CALL/PUT, supports any target
+  expiration, applies to the full positive integer contract quantity, excludes
+  commissions, and performs no trade, cash, plan, movement, or position
+  mutation.
+- Both current and target legs require finite positive, non-crossed bid/ask
+  quotes and use midpoint only. The estimate is
+  `(target_mid - current_mid) * 100 * abs(contracts)`, displayed as estimated
+  credit, debit, or even. Quote timestamps, source, stale/carried state, and
+  field status remain visible, with provenance warnings and an informational
+  disclaimer.
+- The position-scoped POST API, BFF, and UI use an exact target contract. Strike
+  identity is a canonical base-10 `Decimal` string end to end; no binary-float
+  conversion, tolerance, nearest match, interpolation, or formatted-string
+  guessing is allowed. Equivalent forms such as `100`, `100.0`, and `100.000`
+  identify the same contract, while distinct values through 20 fractional
+  digits remain distinct.
+- Strike input accepts positive plain decimals with 1-9 integer digits and up
+  to 20 fractional digits. Booleans, null, signs, exponent notation,
+  whitespace, nonfinite values, zero/negative values, overflow, and excess
+  precision fail closed. The exact same type, expiry, and canonical strike is
+  rejected as not being a roll.
+- Basher initially rejected the implementation because target strikes were
+  converted to `float` during chain lookup, collapsing high-precision values.
+  Saul replaced that seam with canonical Decimal parsing, exact lookup,
+  same-contract comparison, response serialization, frontend text state, and
+  unchanged BFF forwarding. Basher's final verdict was **APPROVE** with zero
+  blockers.
+- Staged validation included 216 backend tests, 5 frontend contracts, and 5
+  high-precision probes, plus type, lint, compile, build, and diff checks.
+  Basher's expanded final gate passed 288 backend tests, 165 focused frontend
+  tests, and 64 adversarial probes. Residuals are two unrelated existing
+  frontend source-contract failures, legacy scoped Ruff findings, and one
+  existing generated-CSS warning.
+
 ### Dashboard Banner Agent removed
 
 **Date:** 2026-09-25

@@ -21,3 +21,18 @@
 - 2026-09-25: Focused validation: 191 backend passes with the same 3 unrelated
   option-chain fixture failures; 6 frontend contracts pass; strict-contract
   probe, Python compilation, scoped Ruff, and changed-file diff checks pass.
+- 2026-09-26: Simulate-a-Roll strike identity now uses one canonical Decimal
+  contract from raw JSON through same-contract rejection, exact chain lookup,
+  response serialization, and frontend payloads. Accepted strikes are positive
+  plain decimals with 1-9 integer digits and up to 20 fractional digits;
+  exponent notation, signs, booleans, nonfinite values, overflow, and excess
+  precision fail closed. Redundant leading/trailing zeros normalize by numeric
+  equality, while distinct 20-place chain strikes remain distinct.
+- 2026-09-26: Validation passed 144 backend roll regressions, 5 focused
+  frontend roll contracts, 5 independent high-precision probes, TypeScript,
+  scoped ESLint, Python compilation, production build, and diff hygiene. The
+  full frontend suite passed 1340/1342; its two failures are unrelated
+  pre-existing paper-position/economics and sparse-ledger MovementDetail
+  source-contract assertions. The build retained one pre-existing generated
+  CSS warning; focused Ruff reports only legacy findings outside the new test
+  and import-order change.
