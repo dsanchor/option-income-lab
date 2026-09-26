@@ -125,3 +125,8 @@
 ### 2026-09-26 — Total Dividends card simplified
 - Economics/Dividends now presents `Total Dividends` as one localized net-dividends-received value with a matching accessible label.
 - Removed the nested breakdown structure; focused source-contract coverage prevents redundant subcards from returning.
+
+### 2026-09-26 — Total Dividends card grouped metrics
+- The Economics/Dividends summary keeps `total_net_eur` as the primary Total Dividends headline and groups canonical gross, combined withholding, and effective withholding beneath it in a semantic definition list.
+- Dividend Count, Avg Monthly Net (last 12mo), and Portfolio Yield on Cost remain the only three sibling `StatCard` metrics, in their prior relative order.
+- The primary and sibling regions stack on mobile/tablet and align as equal-height desktop columns without nested card components; missing/nonfinite grouped values render as unavailable.

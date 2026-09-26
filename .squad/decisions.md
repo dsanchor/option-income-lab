@@ -8649,3 +8649,29 @@ surface adoption, TypeScript, changed-file lint, and diff hygiene.
 - Historical-rights migration runtime, tests, and documentation remain removed
   outside append-only `.squad` history. The successful build's generated-CSS
   warning and legacy Ruff findings are non-blocking.
+
+## Economics Dividends Summary Card Layout (2026-09-26)
+
+**Status:** APPROVED
+**Owner:** Rusty
+**Reviewer:** Basher
+
+- `Total Dividends` remains the primary headline and is sourced exclusively
+  from finite canonical `summary.total_net_eur`; there is no `cash_net`
+  fallback or frontend aggregate recomputation.
+- The primary card contains one flat semantic definition list for `Total
+  Gross` (`total_gross_eur`), `Total Withholding`
+  (`total_withholding_eur`), and `Effective Withholding`
+  (`effective_withholding_pct`). These rows are not nested cards.
+- Exactly three sibling cards remain outside the primary card, in order:
+  `Dividend Count`, `Avg Monthly Net (last 12mo)`, and `Portfolio Yield on
+  Cost`.
+- Missing or nonfinite grouped values render as unavailable. Existing EUR and
+  percentage formatting, localization, accessible labeling, and
+  filter-driven refresh behavior are preserved.
+- The summary stacks at smaller breakpoints and uses equal-height primary and
+  sibling regions on desktop. No rights labels or semantics are introduced.
+- Basher issued final **APPROVE** after 23 focused frontend tests, an
+  independent structural probe, TypeScript, changed-test ESLint, production
+  build, and diff-hygiene checks passed. The three component ESLint findings
+  and generated-CSS build warning are pre-existing and non-blocking.

@@ -26,3 +26,15 @@
   decision, preserved contributor histories, cleared the inbox, and prepared
   the approved product, tests, documentation, and squad records for commit and
   push. No deployment or production access was performed.
+
+## Dividends card layout consolidation — 19:54:00Z
+
+- Rusty grouped gross, withholding, and effective withholding as semantic rows
+  beneath canonical net Total Dividends while retaining the three external
+  sibling metrics and responsive equal-height layout.
+- Basher approved after 23 focused tests, a structural probe, TypeScript,
+  changed-test ESLint, build, and diff checks; residuals were pre-existing.
+- Scribe merged and deduplicated both inbox records, preserved existing Rusty
+  and Basher histories, updated administrative records, and cleared the inbox.
+  No product/test change, commit, push, deployment, or production access was
+  performed by Scribe.

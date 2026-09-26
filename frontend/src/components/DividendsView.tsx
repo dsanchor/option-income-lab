@@ -161,12 +161,16 @@ function ChartTooltip({
 
 function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: DividendsMonthlyRow[] }) {
   const netDividendsReceived = getNetDividendsReceived(summary);
+  const totalGross = Number.isFinite(summary.total_gross_eur) ? summary.total_gross_eur : undefined;
+  const totalWithholding = Number.isFinite(summary.total_withholding_eur)
+    ? summary.total_withholding_eur
+    : undefined;
+  const effectiveWithholding = Number.isFinite(summary.effective_withholding_pct)
+    ? summary.effective_withholding_pct
+    : undefined;
   const avgLast12 = averageLastNExcludingZero(monthly.map((row) => getTotalNet(row)), 12);
   const cards = [
-    { label: "Total Gross (EUR)", value: summary.total_gross_eur ?? 0, prefix: "€", suffix: "", decimals: 2, tone: "blue" as const },
-    { label: "Total Withholding (EUR)", value: summary.total_withholding_eur ?? 0, prefix: "€", suffix: "", decimals: 2, tone: "orange" as const },
     { label: "Dividend Count", value: summary.total_dividends ?? 0, suffix: "", decimals: 0, tone: "purple" as const },
-    { label: "Effective Withholding %", value: summary.effective_withholding_pct ?? 0, prefix: "", suffix: "%", decimals: 2, tone: "red" as const },
     {
       label: "Avg Monthly Net (last 12mo)",
       value: avgLast12 ?? undefined,
@@ -188,28 +192,66 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
   ];
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,0.7fr)_minmax(0,1fr)]">
+    <div
+      className="grid items-stretch gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]"
+      data-testid="dividends-summary-grid"
+    >
       <Reveal index={0} className="h-full">
-        <div
-          className="surface card-hover relative flex h-full flex-col overflow-hidden p-3"
-          aria-label={netDividendsReceived == null
-            ? "Net dividends received unavailable"
-            : `Net dividends received ${eur(netDividendsReceived)}`}
+        <section
+          className="surface card-hover relative flex h-full flex-col overflow-hidden p-5"
+          aria-labelledby="total-dividends-label"
+          data-testid="total-dividends-card"
         >
           <span
             className="absolute inset-y-0 left-0 w-1"
             style={{ background: "var(--grad-green)" }}
             aria-hidden
           />
-          <div className="text-xs uppercase tracking-wide text-text-muted">Total Dividends</div>
-          <div className={`mt-1 font-mono text-2xl font-semibold tracking-tight ${
+          <div id="total-dividends-label" className="text-xs uppercase tracking-wide text-text-muted">
+            Total Dividends
+          </div>
+          <div
+            className={`mt-2 font-mono text-3xl font-semibold tracking-tight ${
             netDividendsReceived == null ? "text-text-muted" : signedColor(netDividendsReceived)
-          }`}>
+            }`}
+            aria-label={netDividendsReceived == null
+              ? "Net dividends received unavailable"
+              : `Net dividends received ${eur(netDividendsReceived)}`}
+          >
             {netDividendsReceived == null ? "—" : eur(netDividendsReceived)}
           </div>
-        </div>
+          <dl className="mt-5 grid grid-cols-1 divide-y divide-border border-t border-border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+            <div className="py-3 sm:px-3 sm:first:pl-0">
+              <dt className="text-[11px] uppercase tracking-wide text-text-muted">Total Gross</dt>
+              <dd className={`mt-1 font-mono text-sm font-medium ${
+                totalGross == null ? "text-text-muted" : "text-accent-blue"
+              }`}>
+                {totalGross == null ? "—" : eur(totalGross)}
+              </dd>
+            </div>
+            <div className="py-3 sm:px-3">
+              <dt className="text-[11px] uppercase tracking-wide text-text-muted">Total Withholding</dt>
+              <dd className={`mt-1 font-mono text-sm font-medium ${
+                totalWithholding == null ? "text-text-muted" : "text-accent-orange"
+              }`}>
+                {totalWithholding == null ? "—" : eur(totalWithholding)}
+              </dd>
+            </div>
+            <div className="py-3 sm:px-3 sm:last:pr-0">
+              <dt className="text-[11px] uppercase tracking-wide text-text-muted">Effective Withholding</dt>
+              <dd className={`mt-1 font-mono text-sm font-medium ${
+                effectiveWithholding == null ? "text-text-muted" : "text-accent-red"
+              }`}>
+                {effectiveWithholding == null ? "—" : `${effectiveWithholding.toFixed(2)}%`}
+              </dd>
+            </div>
+          </dl>
+        </section>
       </Reveal>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+      <div
+        className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-3"
+        data-testid="dividends-sibling-cards"
+      >
         {cards.map((card, index) => (
           <Reveal key={card.label} index={index + 1} className="h-full">
             <StatCard

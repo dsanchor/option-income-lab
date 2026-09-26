@@ -9,6 +9,7 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 
 ## Recent Updates
 
+📌 2026-09-26T19:54:00Z: Consolidated the approved Economics/Dividends summary-card layout into the canonical decision log, deduplicated and cleared two inbox records, preserved existing Rusty/Basher histories, and added concise orchestration/session records; no product code/tests, commit, push, deployment, or production access
 📌 2026-09-26T16:10:01Z: Consolidated the approved repository-wide rights-movement removal and Total Dividends simplification into one superseding decision, cleared eight inbox records, added concise orchestration/session logs, verified release scope and hygiene, and prepared the approved branch for commit and push without deployment or production access
 📌 2026-09-26T13:25:50Z: Consolidated the approved roll contract quantity correction into the canonical Simulate a Roll decision, merged and cleared three inbox records, preserved Livingston/Danny/Basher implementation and review histories, and added concise orchestration/session logs; no product code/tests, commit, push, deployment, or production access
 📌 2026-09-26T08:53:40Z: Consolidated the approved roll simulation cache/view and midpoint correction into the existing canonical Simulate a Roll decision, preserved Saul/Livingston/Basher histories, cleared three decision inbox records, and added orchestration/session logs; no product code/tests, commit, push, deployment, or production access

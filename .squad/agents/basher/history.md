@@ -633,3 +633,19 @@
   contracts with the unrelated paper-action failure, and 81 independent
   adversarial probes. TypeScript, scoped ESLint/Ruff, compile, production
   build, conflict/diff checks passed; existing lint debt remains unrelated.
+
+### 2026-09-26 — Dividends summary card layout approved
+- **APPROVE.** The seven pre-change displayed values are preserved: canonical
+  Total Dividends plus six secondary metrics. Gross, withholding, and effective
+  withholding now form a flat semantic definition list in the primary card;
+  count, last-12-month average, and portfolio YoC remain the only three sibling
+  cards in their original order.
+- Confirmed finite canonical fields, correct unavailable/currency/percentage
+  rendering, no `cash_net` fallback, no new frontend recomputation, no nested
+  cards, responsive stretched grids, complete filter-driven refresh, and no
+  rights semantics.
+- Validation passed 23 focused frontend tests, an independent structural probe,
+  TypeScript, changed-test ESLint, production build, and diff hygiene. The
+  component's three ESLint errors reproduce on HEAD, and the generated-CSS
+  build warning is existing. Blockers: zero. No source/tests, commit, push,
+  deployment, or production access was performed.

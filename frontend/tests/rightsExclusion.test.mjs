@@ -214,7 +214,7 @@ describe("creation and import UX", () => {
 });
 
 describe("Economics dividends summary", () => {
-  it("renders Total Dividends as one accessible net value with no nested breakdown", () => {
+  it("renders Total Dividends from the canonical net field without rights or cash fallback", () => {
     const source = fs.readFileSync(
       new URL("../src/components/DividendsView.tsx", import.meta.url),
       "utf8",
@@ -226,10 +226,11 @@ describe("Economics dividends summary", () => {
     assert.match(source, /const netDividendsReceived = getNetDividendsReceived\(summary\)/);
     assert.match(source, /return getCanonicalTotalNetEur\(summary\)/);
     assert.doesNotMatch(source, /summary\.total_net_eur\s*\?\?/);
+    assert.match(summary, /aria-labelledby="total-dividends-label"/);
     assert.match(summary, /aria-label=\{netDividendsReceived == null/);
     assert.match(summary, /netDividendsReceived == null \? "—" : eur\(netDividendsReceived\)/);
     assert.equal((summary.match(/Total Dividends/g) ?? []).length, 1);
-    assert.doesNotMatch(summary, /Cash Net|grid-cols-2|rounded-\[var\(--radius\)\].*border-border\/70/);
+    assert.doesNotMatch(summary, /Cash Net|Rights/);
   });
 
   it("keeps missing or nonfinite canonical totals unavailable instead of using cash_net", () => {
