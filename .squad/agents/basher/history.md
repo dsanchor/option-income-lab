@@ -511,3 +511,38 @@
   are clean. Residuals are the two unrelated frontend failures, legacy baseline
   Ruff findings, and one existing generated-CSS warning. No source/tests,
   commit, push, deployment, or production access was performed.
+
+### 2026-09-26 — Roll simulation midpoint/cache fix review
+- **REJECT.** The production cache JSON string and ordinary provider wrapper
+  now decode correctly, and exact Decimal lookup, quote integrity, stale/carried
+  warnings, frontend error headings, position identity, and no-mutation
+  behavior remain correct.
+- Three normalization blockers remain: empty or malformed `calls`/`puts`
+  payloads are misreported as `current_contract_not_found`; generic Mapping
+  payloads are rejected; and outer wrapper status is discarded, allowing an
+  explicit error-status wrapper with a valid inner chain to be priced.
+- Validation: 279 backend tests and 5 focused frontend tests passed; the full
+  frontend suite remained 1,340/1,342 with two unrelated failures. Independent
+  probes passed 31/36 and exposed the five failing shapes covered by the three
+  blockers. TypeScript, scoped ESLint, Python compilation, production build,
+  and diff hygiene passed. Ruff retained legacy findings plus one changed-test
+  import-order finding. No implementation/tests, commit, push, deployment, or
+  production access was performed.
+
+### 2026-09-26 — Roll simulation chain normalization final review
+- **APPROVE.** Livingston cleared all three prior blockers: generic nested
+  Mapping inputs normalize without mutation, structural empty/malformed
+  required sides fail as `chain_unavailable`, and explicit wrapper status is
+  validated before embedded payload extraction.
+- Revalidated serialized JSON/bytes/dict/Mapping inputs, accepted and rejected
+  statuses, retained-state warnings, matching one-sided chains, exact
+  current/target errors, two-sided midpoint integrity, Decimal strike/expiry/
+  type identity, formula/scaling, frontend visibility, and no mutation.
+- Validation passed 925 comprehensive backend roll/chain tests, 140 focused
+  backend tests, 5 frontend contracts, and 24 independent probes. TypeScript,
+  scoped ESLint, Python compilation, critical scoped Ruff, clean production
+  build, and diff hygiene passed.
+- Residuals are one existing generated-CSS warning, 440 broad legacy Ruff
+  findings, and one unrelated pre-existing `web/app.py:6024` F821 when the
+  whole legacy endpoint module is included. Blockers: zero. No source/tests,
+  commit, push, deployment, or production access was performed.

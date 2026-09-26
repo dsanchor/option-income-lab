@@ -3792,12 +3792,25 @@ async def api_roll_simulation(request: Request, symbol: str, position_id: str):
                 status_code=400,
             )
 
-        from src.options_chain_cache import apply_agent_view, get_options_chain_cache
-        chain = await get_options_chain_cache().get_or_load_async(symbol)
-        chain = apply_agent_view(chain)
-
         from src.roll_table import RollSimulationError, compute_roll_simulation
         try:
+            from src.options_chain_cache import get_options_chain_cache
+            try:
+                chain = await get_options_chain_cache().get_or_load_async(symbol)
+            except Exception as exc:
+                logger.warning(
+                    "Options chain retrieval failed for roll simulation %s/%s: %s",
+                    symbol,
+                    position_id,
+                    exc,
+                )
+                return JSONResponse(
+                    {
+                        "error": f"Options chain retrieval failed: {exc}",
+                        "code": "chain_unavailable",
+                    },
+                    status_code=503,
+                )
             result = compute_roll_simulation(
                 chain,
                 current_strike=position.get("strike"),
@@ -3812,10 +3825,12 @@ async def api_roll_simulation(request: Request, symbol: str, position_id: str):
                 multiplier=100,
             )
         except RollSimulationError as exc:
-            if exc.code == "target_contract_not_found":
+            if exc.code in {"current_contract_not_found", "target_contract_not_found"}:
                 status_code = 404
-            elif exc.code in {"quote_unavailable", "current_contract_not_found"}:
+            elif exc.code == "chain_unavailable":
                 status_code = 503
+            elif exc.code in {"current_midpoint_unavailable", "target_midpoint_unavailable"}:
+                status_code = 422
             else:
                 status_code = 400
             return JSONResponse(

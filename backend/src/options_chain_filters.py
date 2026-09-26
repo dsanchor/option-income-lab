@@ -7,6 +7,7 @@ No dependency on options_chain_parser.py.
 import datetime
 import logging
 import re
+from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
@@ -236,20 +237,20 @@ def filter_options_chain_by_delta(
 
 
 def get_contract(
-    chain: dict,
+    chain: Mapping,
     current_strike,
     current_expiration: str,
     option_type: str,
-) -> Optional[dict]:
-    """Retrieve the EXACT contract dict for the given strike+expiration.
+) -> Optional[Mapping]:
+    """Retrieve the exact contract Mapping for the given strike+expiration.
     
     Returns the contract dict (bid/ask/delta/etc.) for the specified strike and
     expiration, or None if not found. Null-safe: None args → None.
     
     Parameters
     ----------
-    chain : dict
-        Structured chain dict (calls/puts buckets).
+    chain : Mapping
+        Structured chain mapping (calls/puts buckets).
     current_strike
         Strike of the contract to find.
     current_expiration : str
@@ -260,11 +261,15 @@ def get_contract(
     
     Returns
     -------
-    dict or None
-        The contract dict if found, otherwise None.
+    Mapping or None
+        The contract mapping if found, otherwise None.
     """
     # Null-safe: if either strike or expiration is None, return None
-    if current_strike is None or current_expiration is None:
+    if (
+        not isinstance(chain, Mapping)
+        or current_strike is None
+        or current_expiration is None
+    ):
         return None
     
     # Determine which bucket to search
@@ -276,13 +281,33 @@ def get_contract(
         # Unknown type — return None
         return None
     
-    # Normalize expiration to chain key format (YYYYMMDD)
-    exp_key = str(current_expiration).replace("-", "")[:8]
-    
     # Get the bucket
     bucket = chain.get(bucket_key, {})
-    if not bucket or exp_key not in bucket:
-        # Expiration not in chain
+    if not isinstance(bucket, Mapping) or not bucket:
+        return None
+
+    def _expiration_identity(value) -> Optional[str]:
+        text = str(value)
+        digits = text.replace("-", "")
+        if len(digits) != 8 or not digits.isdigit():
+            return None
+        try:
+            return datetime.date(
+                int(digits[:4]), int(digits[4:6]), int(digits[6:8])
+            ).strftime("%Y%m%d")
+        except ValueError:
+            return None
+
+    wanted_expiration = _expiration_identity(current_expiration)
+    if wanted_expiration is None:
+        return None
+
+    strikes_dict = None
+    for expiration_key, candidate_strikes in bucket.items():
+        if _expiration_identity(expiration_key) == wanted_expiration:
+            strikes_dict = candidate_strikes
+            break
+    if not isinstance(strikes_dict, Mapping):
         return None
     
     try:
@@ -292,7 +317,6 @@ def get_contract(
 
     # Compare normalized Decimal identities so equivalent formatting matches
     # without collapsing distinct high-precision strikes.
-    strikes_dict = bucket[exp_key]
     for sk, contract in strikes_dict.items():
         try:
             if canonical_strike(sk) == wanted_strike:

@@ -13,6 +13,24 @@
 
 ## Recent Learnings
 
+### 2026-09-26 — Roll-chain wrapper and structural availability revision
+- Roll simulation accepts only JSON text/bytes or `Mapping` inputs, copies the
+  documented wrapper/chain/expiry/contract metadata shapes into plain
+  dictionaries, and never uses object attributes or mutates provider/cache
+  values.
+- Explicit wrapper status is checked before `options_chain` extraction:
+  `ok`, `success`, `stale`, and `carried` are usable; all other explicit
+  statuses fail closed. Retained `stale`/`carried` payloads may include a
+  refresh error and remain usable with visible chain warnings, while any
+  error on an absent/nominal-success status is unavailable.
+- Structural availability is evaluated against the position's required side.
+  A valid CALL-only or PUT-only chain is usable for the matching position;
+  missing/malformed/record-empty required sides are `chain_unavailable`.
+  Exact misses remain current-versus-target specific only after that gate.
+- Preserved serialized cache decoding, numeric-string bid/ask normalization,
+  exact Decimal strike identity, midpoint-only pricing, provenance warnings,
+  position identity, and input immutability.
+
 ### 2026-09-25 — Dashboard banner removal cache cleanup
 - Removed only the stale pytest state files
   `backend/.pytest_cache/v/cache/lastfailed` and

@@ -36,3 +36,19 @@
   source-contract assertions. The build retained one pre-existing generated
   CSS warning; focused Ruff reports only legacy findings outside the new test
   and import-order change.
+- 2026-09-26: Fixed the merged roll-simulator regression at the cache/view
+  boundary: `OptionsChainCache.get_or_load_async()` returns serialized JSON,
+  but the endpoint passed that string to `apply_agent_view()`, which correctly
+  left non-dicts unchanged; simulation then rejected every request as an
+  unavailable chain. The roll boundary now decodes the real cache payload (and
+  the provider `options_chain` envelope), normalizes only canonical numeric
+  bid/ask strings before the approved view, preserves Decimal strike identity,
+  and matches both compact and hyphenated expiry keys exactly.
+- 2026-09-26: Roll failures now distinguish retrieval (`chain_unavailable`),
+  exact current/target misses, and current/target midpoint failures with the
+  quote reason. Stale/carried values remain eligible with visible provenance;
+  one-sided, zero, crossed, last/mark-only markets remain ineligible without
+  fallback. Validation passed 271 backend chain/roll tests, 5 frontend
+  contracts, TypeScript, scoped ESLint, Python compile/critical Ruff, production
+  build, and diff hygiene; the build retained one pre-existing generated-CSS
+  warning and broad Ruff retained legacy findings.

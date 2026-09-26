@@ -22,7 +22,10 @@ export async function POST(
     return NextResponse.json(data, { status: res.status });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Upstream API error" },
+      {
+        error: err instanceof Error ? err.message : "Upstream API error",
+        code: "chain_unavailable",
+      },
       { status: 502 },
     );
   }

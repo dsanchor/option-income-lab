@@ -34,15 +34,22 @@ describe("simulate a roll frontend contract", () => {
     assert.match(route, /positions\/\$\{encodeURIComponent\(positionId\)\}\/roll-simulation/);
   });
 
-  it("covers loading, validation, not-found, unavailable, stale and carried states", () => {
+  it("covers precise chain, contract, midpoint, stale and carried states", () => {
     assert.match(detail, /loading \? "Calculating…" : "Simulate"/);
     assert.match(detail, /kind: "validation"/);
-    assert.match(detail, /kind = res\.status === 404/);
-    assert.match(detail, /"unavailable"/);
+    assert.match(detail, /data\.code === "current_contract_not_found"/);
+    assert.match(detail, /data\.code === "target_contract_not_found"/);
+    assert.match(detail, /data\.code === "current_midpoint_unavailable"/);
+    assert.match(detail, /data\.code === "target_midpoint_unavailable"/);
+    assert.match(detail, /data\.code === "chain_unavailable"/);
+    assert.match(detail, /Options chain unavailable\./);
+    assert.match(detail, /Midpoint unavailable\./);
     assert.match(detail, /aria-invalid=\{error\?\.kind === "validation"\}/);
     assert.match(detail, /role="alert"/);
     assert.match(detail, /Current-contract quote is stale/);
     assert.match(detail, /carried last-known-good data/);
+    assert.match(detail, /\.\.\.\(result\.chain_warnings \?\? \[\]\)/);
+    assert.match(route, /code: "chain_unavailable"/);
   });
 
   it("renders credit, debit and even totals with midpoint disclaimer", () => {

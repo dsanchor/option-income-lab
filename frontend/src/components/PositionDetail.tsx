@@ -689,6 +689,7 @@ interface RollSimulationResult {
   outcome: "credit" | "debit" | "even";
   chain_timestamp?: string | null;
   chain_source?: string | null;
+  chain_warnings?: string[];
   position?: { position_id?: string; account_id?: string | null; is_paper?: boolean };
 }
 
@@ -740,10 +741,12 @@ function RollSimulation({
       );
       const data = (await res.json().catch(() => ({}))) as RollSimulationResult;
       if (!res.ok || data.error) {
-        const kind = res.status === 404
+        const kind = data.code === "current_contract_not_found" || data.code === "target_contract_not_found"
           ? "not-found"
-          : res.status === 503 || data.code === "quote_unavailable"
-            ? "unavailable"
+          : data.code === "current_midpoint_unavailable" || data.code === "target_midpoint_unavailable"
+            ? "midpoint"
+            : data.code === "chain_unavailable" || res.status === 502 || res.status === 503
+              ? "chain"
             : res.status === 400
               ? "validation"
               : "generic";
@@ -760,6 +763,7 @@ function RollSimulation({
 
   const quoteWarnings = result
     ? [
+        ...(result.chain_warnings ?? []),
         result.current_contract.stale && "Current-contract quote is stale.",
         result.current_contract.carried && "Current-contract quote contains carried last-known-good data.",
         Object.values(result.current_contract.field_status ?? {}).includes("last_known_good")
@@ -828,7 +832,8 @@ function RollSimulation({
           className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-3 py-2 text-sm text-accent-red"
         >
           {error.kind === "not-found" && <strong>Exact contract not found. </strong>}
-          {error.kind === "unavailable" && <strong>Midpoint unavailable. </strong>}
+          {error.kind === "midpoint" && <strong>Midpoint unavailable. </strong>}
+          {error.kind === "chain" && <strong>Options chain unavailable. </strong>}
           {error.message}
         </div>
       )}

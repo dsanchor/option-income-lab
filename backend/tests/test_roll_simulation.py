@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from copy import deepcopy
+from types import MappingProxyType
 
 import pytest
 from starlette.testclient import TestClient
@@ -58,6 +61,20 @@ def _simulate(chain, **overrides):
     }
     params.update(overrides)
     return compute_roll_simulation(chain, **params)
+
+
+class _ReadOnlyMapping(Mapping):
+    def __init__(self, values):
+        self._values = values
+
+    def __getitem__(self, key):
+        return self._values[key]
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self):
+        return len(self._values)
 
 
 @pytest.mark.parametrize("option_type", ["call", "put"])
@@ -188,7 +205,7 @@ def test_unusable_or_crossed_market_is_unavailable(bid, ask):
     chain["calls"]["20261016"]["105.0"] = _contract(bid, ask)
     with pytest.raises(RollSimulationError) as exc:
         _simulate(chain)
-    assert exc.value.code == "quote_unavailable"
+    assert exc.value.code == "target_midpoint_unavailable"
 
 
 def test_provenance_and_chain_metadata_are_returned_without_mutation():
@@ -214,11 +231,16 @@ class _FakeCosmos:
 
 
 class _FakeCache:
-    def __init__(self, chain):
+    def __init__(self, chain, *, serialize=True, error=None):
         self.chain = chain
+        self.serialize = serialize
+        self.error = error
 
     async def get_or_load_async(self, symbol):
-        return deepcopy(self.chain)
+        if self.error:
+            raise self.error
+        chain = deepcopy(self.chain)
+        return json.dumps(chain) if self.serialize else chain
 
 
 @pytest.fixture
@@ -318,6 +340,237 @@ def test_endpoint_returns_404_for_exact_target_miss(endpoint_client):
     assert response.json()["code"] == "target_contract_not_found"
 
 
+def test_actual_cache_json_string_is_decoded_before_agent_view(endpoint_client):
+    client, _, _ = endpoint_client
+    response = client.post(
+        "/api/symbols/TEST/positions/position-a/roll-simulation",
+        json={"target_strike": "105", "target_expiration": "2026-10-16"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["target_contract"]["midpoint"] == 1.6
+
+
+def test_endpoint_never_prices_explicit_error_wrapper(endpoint_client):
+    client, _, _ = endpoint_client
+    set_options_chain_cache(
+        _FakeCache(
+            {
+                "status": "error",
+                "options_chain": _chain(),
+            },
+            serialize=False,
+        )
+    )
+
+    response = client.post(
+        "/api/symbols/TEST/positions/position-a/roll-simulation",
+        json={"target_strike": "105", "target_expiration": "2026-10-16"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "chain_unavailable"
+
+
+def test_endpoint_returns_stale_wrapper_warning(endpoint_client):
+    client, _, _ = endpoint_client
+    set_options_chain_cache(
+        _FakeCache(
+            {
+                "status": "stale",
+                "error": "latest refresh failed",
+                "options_chain": _chain(),
+            },
+            serialize=False,
+        )
+    )
+
+    response = client.post(
+        "/api/symbols/TEST/positions/position-a/roll-simulation",
+        json={"target_strike": "105", "target_expiration": "2026-10-16"},
+    )
+
+    assert response.status_code == 200
+    assert "Options chain wrapper is stale." in response.json()["chain_warnings"]
+
+
+def test_provider_options_chain_wrapper_is_supported():
+    wrapped = {"options_chain": json.dumps(_chain())}
+    result = _simulate(wrapped)
+
+    assert result["current_contract"]["midpoint"] == 1.1
+    assert result["target_contract"]["midpoint"] == 1.6
+
+
+def test_serialized_bytes_wrapper_is_supported():
+    wrapped = json.dumps(
+        {"status": "success", "options_chain": json.dumps(_chain())}
+    ).encode()
+
+    result = _simulate(wrapped)
+
+    assert result["current_contract"]["midpoint"] == 1.1
+    assert result["target_contract"]["midpoint"] == 1.6
+
+
+def test_generic_mapping_normalizes_wrapper_payload_expiry_contract_and_metadata():
+    current_meta = {"quote_source": "proxy", "field_status": {"bid": "live", "ask": "live"}}
+    current = {"bid": "1.00", "ask": "1.20", "_meta": MappingProxyType(current_meta)}
+    target = {"bid": "1.50", "ask": "1.70"}
+    backing = {
+        "symbol": "TEST",
+        "calls": _ReadOnlyMapping(
+            {
+                "20261016": MappingProxyType(
+                    {
+                        "100.0": _ReadOnlyMapping(current),
+                        "105.0": MappingProxyType(target),
+                    }
+                )
+            }
+        ),
+    }
+    wrapped = _ReadOnlyMapping(
+        {
+            "status": "success",
+            "options_chain": MappingProxyType(backing),
+        }
+    )
+
+    result = _simulate(wrapped)
+
+    assert result["current_contract"]["midpoint"] == 1.1
+    assert result["target_contract"]["midpoint"] == 1.6
+    assert current["bid"] == "1.00"
+    assert target["ask"] == "1.70"
+    assert current_meta["field_status"] == {"bid": "live", "ask": "live"}
+
+
+@pytest.mark.parametrize("option_type", ["call", "put"])
+def test_valid_matching_one_side_chain_does_not_require_other_side(option_type):
+    chain = _chain(option_type)
+    chain.pop("puts" if option_type == "call" else "calls")
+
+    result = _simulate(chain, option_type=option_type)
+
+    assert result["option_type"] == option_type.upper()
+
+
+@pytest.mark.parametrize(
+    ("payload", "option_type"),
+    [
+        ({"calls": [], "puts": []}, "call"),
+        ({"calls": {}, "puts": {}}, "call"),
+        ({"calls": {"20261016": []}, "puts": {}}, "call"),
+        ({"calls": {"not-a-date": {"100.0": _contract(1.0, 1.2)}}, "puts": {}}, "call"),
+        ({"calls": {"20261016": {"100.0": "not-a-contract"}}, "puts": {}}, "call"),
+        ({"calls": _chain("call")["calls"], "puts": []}, "call"),
+        ({"calls": _chain("call")["calls"]}, "put"),
+        ({"puts": _chain("put")["puts"]}, "call"),
+    ],
+)
+def test_structurally_unusable_required_side_is_chain_unavailable(payload, option_type):
+    with pytest.raises(RollSimulationError) as exc:
+        _simulate(payload, option_type=option_type)
+
+    assert exc.value.code == "chain_unavailable"
+
+
+@pytest.mark.parametrize("status", ["error", "failed", "unavailable", "warming"])
+def test_explicit_failure_or_unknown_wrapper_status_fails_closed(status):
+    wrapped = {"status": status, "options_chain": _chain()}
+
+    with pytest.raises(RollSimulationError) as exc:
+        _simulate(wrapped)
+
+    assert exc.value.code == "chain_unavailable"
+
+
+def test_explicit_wrapper_error_fails_even_with_success_status_and_valid_chain():
+    wrapped = {
+        "status": "success",
+        "error": "provider timeout; serving embedded payload",
+        "options_chain": _chain(),
+    }
+
+    with pytest.raises(RollSimulationError) as exc:
+        _simulate(wrapped)
+
+    assert exc.value.code == "chain_unavailable"
+
+
+@pytest.mark.parametrize("status", ["stale", "carried"])
+def test_retained_wrapper_may_report_refresh_error_with_visible_warning(status):
+    result = _simulate(
+        {
+            "status": status,
+            "error": "latest refresh failed",
+            "options_chain": _chain(),
+        }
+    )
+
+    assert result["target_contract"]["midpoint"] == 1.6
+    assert (
+        "Options chain wrapper reports a refresh error; using retained data."
+        in result["chain_warnings"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "warning"),
+    [
+        ("ok", None),
+        ("success", None),
+        ("stale", "Options chain wrapper is stale."),
+        ("carried", "Options chain wrapper contains carried last-known-good data."),
+    ],
+)
+def test_accepted_wrapper_statuses_preserve_visible_warnings(status, warning):
+    result = _simulate({"status": status, "options_chain": _chain()})
+
+    if warning is None:
+        assert result["chain_warnings"] == []
+    else:
+        assert warning in result["chain_warnings"]
+
+
+@pytest.mark.parametrize(
+    ("bid", "ask"),
+    [("1.50", "1.70"), (1.5, "1.70"), ("1.50", 1.7)],
+)
+def test_numeric_string_quotes_are_normalized_at_roll_boundary(bid, ask):
+    chain = _chain()
+    chain["calls"]["20261016"]["105.0"] = _contract(bid, ask)
+
+    result = _simulate(chain)
+
+    assert result["target_contract"]["midpoint"] == 1.6
+
+
+@pytest.mark.parametrize("fallback_field", ["lastPrice", "mark", "mid"])
+def test_one_sided_quote_does_not_fall_back_to_display_price(fallback_field):
+    chain = _chain()
+    target = _contract(None, 1.7)
+    target[fallback_field] = 1.6
+    chain["calls"]["20261016"]["105.0"] = target
+
+    with pytest.raises(RollSimulationError) as exc:
+        _simulate(chain)
+
+    assert exc.value.code == "target_midpoint_unavailable"
+    assert "bid" in str(exc.value)
+
+
+def test_hyphenated_expiry_keys_retain_exact_decimal_lookup():
+    chain = _chain()
+    chain["calls"]["2026-10-16"] = chain["calls"].pop("20261016")
+
+    result = _simulate(chain)
+
+    assert result["current_contract"]["strike"] == "100"
+    assert result["target_contract"]["strike"] == "105"
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -370,6 +623,104 @@ def test_endpoint_preserves_high_precision_numeric_target(endpoint_client):
 
     assert response.status_code == 200
     assert response.json()["target_contract"]["strike"] == precise
+
+
+def test_current_contract_miss_is_not_reported_as_target_or_chain_failure(endpoint_client):
+    client, _, _ = endpoint_client
+    chain = _chain()
+    del chain["calls"]["20261016"]["100.0"]
+    set_options_chain_cache(_FakeCache(chain))
+
+    response = client.post(
+        "/api/symbols/TEST/positions/position-a/roll-simulation",
+        json={"target_strike": 105, "target_expiration": "2026-10-16"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": "Current contract is not in the option chain",
+        "code": "current_contract_not_found",
+    }
+
+
+@pytest.mark.parametrize(
+    ("leg", "bid", "ask", "reason"),
+    [
+        ("current", None, 1.2, "bid is unavailable"),
+        ("target", 1.5, None, "ask is unavailable"),
+        ("target", 1.8, 1.7, "market is crossed"),
+        ("target", 0, 1.7, "bid is no market"),
+    ],
+)
+def test_endpoint_distinguishes_leg_and_midpoint_reason(
+    endpoint_client, leg, bid, ask, reason
+):
+    client, _, _ = endpoint_client
+    chain = _chain()
+    strike = "100.0" if leg == "current" else "105.0"
+    chain["calls"]["20261016"][strike] = _contract(bid, ask)
+    set_options_chain_cache(_FakeCache(chain))
+
+    response = client.post(
+        "/api/symbols/TEST/positions/position-a/roll-simulation",
+        json={"target_strike": 105, "target_expiration": "2026-10-16"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == f"{leg}_midpoint_unavailable"
+    assert reason in response.json()["error"]
+
+
+def test_stale_and_carried_quotes_are_warnings_not_pricing_gates(endpoint_client):
+    client, _, _ = endpoint_client
+    chain = _chain()
+    contract = chain["calls"]["20261016"]["105.0"]
+    contract["_meta"].update(
+        {
+            "quote_asof": "2000-01-01T00:00:00Z",
+            "carried": True,
+            "field_status": {
+                "bid": "last_known_good",
+                "ask": "last_known_good",
+            },
+        }
+    )
+    set_options_chain_cache(_FakeCache(chain))
+
+    response = client.post(
+        "/api/symbols/TEST/positions/position-a/roll-simulation",
+        json={"target_strike": 105, "target_expiration": "2026-10-16"},
+    )
+
+    assert response.status_code == 200
+    target = response.json()["target_contract"]
+    assert target["stale"] is True
+    assert target["carried"] is True
+    assert target["field_status"]["bid"] == "last_known_good"
+
+
+def test_chain_retrieval_failure_has_chain_unavailable_contract(endpoint_client):
+    client, _, _ = endpoint_client
+    set_options_chain_cache(_FakeCache({}, error=RuntimeError("provider timeout")))
+
+    response = client.post(
+        "/api/symbols/TEST/positions/position-a/roll-simulation",
+        json={"target_strike": 105, "target_expiration": "2026-10-16"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "chain_unavailable"
+    assert response.json()["error"] == "Options chain retrieval failed: provider timeout"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, "not-json", b"\xff", {}, {"options_chain": "bad"}],
+)
+def test_malformed_chain_payload_is_retrieval_unavailable(payload):
+    with pytest.raises(RollSimulationError) as exc:
+        _simulate(payload)
+    assert exc.value.code == "chain_unavailable"
 
 
 def test_endpoint_rejects_non_us_multiplier_assumption(endpoint_client):

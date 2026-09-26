@@ -36,12 +36,37 @@
   same-contract comparison, response serialization, frontend text state, and
   unchanged BFF forwarding. Basher's final verdict was **APPROVE** with zero
   blockers.
+- A later production-shape regression was traced to the roll endpoint passing
+  serialized cache JSON directly to `apply_agent_view()`, while the working
+  options-chain path decoded it first. The roll boundary now accepts JSON
+  strings, UTF-8 bytes, dictionaries, and generic read-only `Mapping` values;
+  decodes bounded `options_chain` wrappers; copies only documented structures;
+  and never mutates provider/cache inputs.
+- Explicit wrapper status is validated before payload extraction. `ok`,
+  `success`, `stale`, and `carried` are accepted; failure and unknown statuses
+  fail as `chain_unavailable`. Retained stale/carried payloads remain usable
+  with visible warnings, including refresh-error context, while errors on
+  absent or nominal-success status fail closed.
+- Structural availability is checked against the position's required CALL or
+  PUT side. Missing, malformed, or record-empty required sides are
+  `chain_unavailable`; a valid one-sided chain is usable only for its matching
+  option type. After that gate, exact current and target misses remain
+  `current_contract_not_found` and `target_contract_not_found`, and unusable
+  two-sided quotes remain leg-specific midpoint errors. Decimal lookup,
+  midpoint-only pricing, provenance, and no-fallback behavior are preserved.
+- Basher rejected Saul's first cache/view correction because empty/malformed
+  sides, generic mappings, and discarded wrapper status still violated the
+  contract. Livingston implemented the strict wrapper/status/schema boundary,
+  after which Basher issued final **APPROVE** with zero blockers.
 - Staged validation included 216 backend tests, 5 frontend contracts, and 5
   high-precision probes, plus type, lint, compile, build, and diff checks.
   Basher's expanded final gate passed 288 backend tests, 165 focused frontend
-  tests, and 64 adversarial probes. Residuals are two unrelated existing
-  frontend source-contract failures, legacy scoped Ruff findings, and one
-  existing generated-CSS warning.
+  tests, and 64 adversarial probes. The cache/wrapper final gate passed 925
+  comprehensive backend tests, 140 focused backend tests, 5 frontend
+  contracts, and 24 independent probes, plus type, lint, compile, build, and
+  diff checks. Residuals are legacy broad Ruff findings, one unrelated
+  pre-existing `web/app.py` F821 under whole-module lint, and one existing
+  generated-CSS warning.
 
 ### Dashboard Banner Agent removed
 
