@@ -16,6 +16,22 @@
 
 ## Recent Learnings
 
+### 2026-09-26 — Roll contract quantity final gate approved
+- Danny's revision closed all three prior blockers: legacy implicit-one now
+  requires unversioned historical writer evidence with matching UTC ID/open
+  timestamps strictly before the schema-v2 boundary; successful rolls resolve
+  before mutation and always persist canonical positive contracts/schema v2;
+  Roll Scenarios rejects inactive, ambiguous, malformed, and quantity-invalid
+  positions before provider or chain access.
+- Independently verified alias precedence/conflicts, signed shorts, invalid
+  numeric forms, legacy and partial-close roll persistence, exact identity,
+  full-position economics, warnings/source, Decimal/midpoint/chain behavior,
+  and no simulation/scenario mutation.
+- Validation passed 421 backend tests, 6 focused frontend tests, 1,341/1,343
+  full frontend contracts with the same two unrelated failures, and 49
+  adversarial assertions/probes. Static checks, production build, and diff
+  hygiene passed. Final verdict: APPROVE.
+
 ### 2026-09-25 — Dashboard Banner provider-contract final gate approved
 - Saul's revision now consumes only the exact `TechnicalsCalculator` summary,
   moving-average, indicator-entry, and real history-timestamp contract.
@@ -546,3 +562,20 @@
   findings, and one unrelated pre-existing `web/app.py:6024` F821 when the
   whole legacy endpoint module is included. Blockers: zero. No source/tests,
   commit, push, deployment, or production access was performed.
+
+### 2026-09-26 — Roll contract quantity review
+- **REJECT.** Quantity parsing, explicit remaining-count precedence, exact
+  position isolation, scaling, API/UI provenance, and new manual/paper writes
+  are correct, but three release blockers remain.
+- The supposed historical fallback has no schema/version or time boundary, so
+  current corrupt quantity-less positions are silently treated as one
+  contract. Legacy rolls also create another quantity-less active position
+  instead of persisting the resolved one-contract count.
+- Roll Scenarios lacks the simulator's active-position gate and returned
+  successful scenarios for a closed position.
+- Validation passed 343 focused backend tests, 6 focused frontend contracts,
+  1,341/1,343 full frontend contracts, type/lint/compile/build/diff checks, and
+  25 adversarial probes with 7 unsafe outcomes. The two frontend failures,
+  deprecation/subprocess warnings, and generated-CSS warning are unrelated.
+  No implementation/tests, commit, push, deployment, or production access was
+  performed.

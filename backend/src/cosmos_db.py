@@ -552,8 +552,11 @@ class CosmosDBService:
                      strike: float, expiration: str,
                      notes: str = "",
                      source: dict | None = None,
-                     is_paper: bool = False) -> dict:
+                     is_paper: bool = False,
+                     contracts: int = 1) -> dict:
         """Add an open position to a symbol."""
+        from src.position_contracts import CURRENT_POSITION_SCHEMA_VERSION
+
         doc = self.get_symbol(symbol)
         if doc is None:
             raise ValueError(f"Symbol {symbol} not found")
@@ -568,6 +571,8 @@ class CosmosDBService:
             "opened_at": datetime.utcnow().isoformat() + "Z",
             "status": "active",
             "notes": notes,
+            "contracts": contracts,
+            "position_schema_version": CURRENT_POSITION_SCHEMA_VERSION,
         }
         if is_paper:
             position["is_paper"] = True
@@ -598,6 +603,12 @@ class CosmosDBService:
         if old_pos.get("status") != "active":
             raise ValueError(f"Position {old_position_id} is not active")
 
+        from src.position_contracts import (
+            CURRENT_POSITION_SCHEMA_VERSION,
+            resolve_open_contract_count,
+        )
+        contracts = resolve_open_contract_count(old_pos).contracts
+
         # Generate new position ID with timestamp for uniqueness
         new_position_id = self._generate_position_id(symbol, new_type, new_strike, new_expiration)
 
@@ -619,6 +630,8 @@ class CosmosDBService:
             "status": "active",
             "notes": notes,
             "rolled_from": old_position_id,
+            "contracts": contracts,
+            "position_schema_version": CURRENT_POSITION_SCHEMA_VERSION,
         }
         if old_pos.get("is_paper") is True:
             new_pos["is_paper"] = True

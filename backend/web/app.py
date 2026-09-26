@@ -2984,9 +2984,15 @@ async def api_add_position(request: Request, symbol: str):
         if raw_is_paper is not None and not isinstance(raw_is_paper, bool):
             return JSONResponse({"error": "is_paper must be a boolean"}, status_code=400)
         is_paper = bool(raw_is_paper)
+        from src.position_contracts import PositionContractCountError, resolve_open_contract_count
+        try:
+            contracts = resolve_open_contract_count({"contracts": body.get("contracts", 1)}).contracts
+        except PositionContractCountError as exc:
+            return JSONResponse({"error": str(exc), "code": exc.code}, status_code=400)
 
         doc = cosmos.add_position(_ticker_from_symbol_param(symbol), position_type, strike,
-                                  expiration, notes, source=source, is_paper=is_paper)
+                                  expiration, notes, source=source, is_paper=is_paper,
+                                  contracts=contracts)
         return JSONResponse(_clean_doc(doc), status_code=201)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
@@ -3660,17 +3666,43 @@ async def api_roll_table(request: Request, symbol: str, position_id: str):
         if _guard:
             return _guard
 
-        position = None
-        for pos in sym_doc.get("positions", []):
-            if pos.get("position_id") == position_id:
-                position = pos
-                break
-        if position is None:
+        matches = [
+            position for position in sym_doc.get("positions", [])
+            if position.get("position_id") == position_id
+        ]
+        if not matches:
             return JSONResponse({"error": f"Position {position_id} not found"}, status_code=404)
+        if len(matches) != 1:
+            return JSONResponse(
+                {"error": "Position identity is ambiguous", "code": "ambiguous_position"},
+                status_code=409,
+            )
+        position = matches[0]
+        if position.get("status") != "active":
+            return JSONResponse(
+                {"error": f"Position {position_id} is not active", "code": "inactive_position"},
+                status_code=409,
+            )
+        option_type = str(position.get("type") or "").strip().lower()
+        if option_type not in {"call", "put"}:
+            return JSONResponse(
+                {"error": "Position is not an active CALL or PUT option", "code": "invalid_position"},
+                status_code=400,
+            )
+        from src.position_contracts import (
+            PositionContractCountError,
+            resolve_open_contract_count,
+        )
+        try:
+            quantity = resolve_open_contract_count(position)
+        except PositionContractCountError as exc:
+            return JSONResponse(
+                {"error": str(exc), "code": exc.code},
+                status_code=409 if exc.code == "position_quantity_zero" else 400,
+            )
 
         strike = float(position["strike"])
         expiration = position["expiration"]
-        option_type = position.get("type", "call")
 
         _source = position.get("source") or {}
         premium = None
@@ -3713,8 +3745,12 @@ async def api_roll_table(request: Request, symbol: str, position_id: str):
             option_type=option_type,
             underlying_price=underlying_price,
             premium_received=premium,
+            contracts=quantity.contracts,
             strike_offsets=(0.03, 0.0, -0.03),
         )
+        result["contracts"] = quantity.contracts
+        result["quantity_source"] = quantity.quantity_source
+        result["quantity_warnings"] = list(quantity.warnings)
 
         return JSONResponse(result)
 
@@ -3792,8 +3828,13 @@ async def api_roll_simulation(request: Request, symbol: str, position_id: str):
                 status_code=400,
             )
 
+        from src.position_contracts import (
+            PositionContractCountError,
+            resolve_open_contract_count,
+        )
         from src.roll_table import RollSimulationError, compute_roll_simulation
         try:
+            quantity = resolve_open_contract_count(position)
             from src.options_chain_cache import get_options_chain_cache
             try:
                 chain = await get_options_chain_cache().get_or_load_async(symbol)
@@ -3818,11 +3859,16 @@ async def api_roll_simulation(request: Request, symbol: str, position_id: str):
                 target_strike=target_strike,
                 target_expiration=target_expiration,
                 option_type=option_type,
-                contracts=position.get("contracts"),
+                contracts=quantity.contracts,
                 # The endpoint is reachable only after the repository's
                 # NYSE/NASDAQ eligibility guard; this codebase models those
                 # standard US equity option contracts with a 100-share multiplier.
                 multiplier=100,
+            )
+        except PositionContractCountError as exc:
+            return JSONResponse(
+                {"error": str(exc), "code": exc.code},
+                status_code=409 if exc.code == "position_quantity_zero" else 400,
             )
         except RollSimulationError as exc:
             if exc.code in {"current_contract_not_found", "target_contract_not_found"}:
@@ -3860,7 +3906,12 @@ async def api_roll_simulation(request: Request, symbol: str, position_id: str):
                 or source.get("security_id")
             ),
         }
-        return JSONResponse({**result, "position": identity})
+        return JSONResponse({
+            **result,
+            "quantity_source": quantity.quantity_source,
+            "quantity_warnings": list(quantity.warnings),
+            "position": identity,
+        })
 
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)

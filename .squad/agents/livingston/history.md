@@ -13,6 +13,26 @@
 
 ## Recent Learnings
 
+### 2026-09-26 — Roll position contract-count authority
+- Persisted option positions historically had no quantity field: manual,
+  alert-created, rolled, and paper writers implicitly represented one
+  contract, while later fixtures/import-compatible shapes used `contracts` or
+  `quantity`; option ledger movements deliberately keep `quantity="0"` and
+  are not contract-count authority.
+- Roll simulation incorrectly read only `position.contracts`, so authentic
+  legacy/user positions reached the decoded chain and then failed generic
+  numeric validation on `None`.
+- Added one exact-position resolver: `open_contracts`/`contracts_open` take
+  precedence over `contracts`/`quantity`; numeric strings/ints/Decimals and
+  signed short counts normalize to a positive whole count, while booleans,
+  nonfinite, fractional, explicit zero, conflicts, and corrupt/missing shapes
+  fail precisely.
+- The one-contract fallback is limited to the exact historical writer shape
+  (`pos_` ID, active CALL/PUT, valid strike/expiry/opened time, and notes
+  field), returns `quantity_source=legacy_implicit_one`, and emits a warning.
+  New manual/paper positions persist an explicit count and rolls preserve the
+  resolved remaining quantity. Roll Scenarios now uses the same resolver.
+
 ### 2026-09-26 — Roll-chain wrapper and structural availability revision
 - Roll simulation accepts only JSON text/bytes or `Mapping` inputs, copies the
   documented wrapper/chain/expiry/contract metadata shapes into plain

@@ -526,7 +526,8 @@ def compute_roll_table(
     premium_received : float
         Premium received per share when the position was opened.
     contracts : int
-        Number of contracts (default 1; position schema has no contracts field yet).
+        Number of contracts. API callers resolve this from the exact position;
+        the default remains only for direct helper compatibility.
     num_expiries : int
         Number of future expirations after current_expiration to include.
     strike_offsets : tuple[float]

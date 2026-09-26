@@ -18,6 +18,13 @@ describe("simulate a roll frontend contract", () => {
     assert.match(detail, /positionId=\{posId\}/);
   });
 
+  it("shows resolved full-position quantity and quantity-specific errors", () => {
+    assert.match(detail, /quantity_source/);
+    assert.match(detail, /Full position:/);
+    assert.match(detail, /Position quantity unavailable/);
+    assert.match(detail, /data\.quantity_source/);
+  });
+
   it("sends exact position id, strike and expiration only on explicit action", () => {
     const simulatorStart = detail.indexOf("function RollSimulation(");
     const simulatorEnd = detail.indexOf("function EditableFinancialField(", simulatorStart);

@@ -366,6 +366,7 @@ export interface AddPositionRequest {
   notes?: string;
   premium?: number;
   is_paper?: boolean;
+  contracts?: number;
 }
 
 /** Payload for POST /api/portfolio/transfers (creates TRANSFER_OUT + TRANSFER_IN pair). */

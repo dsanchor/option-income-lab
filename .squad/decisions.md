@@ -67,6 +67,40 @@
   diff checks. Residuals are legacy broad Ruff findings, one unrelated
   pre-existing `web/app.py` F821 under whole-module lint, and one existing
   generated-CSS warning.
+- Historical persisted option positions could omit quantity because the
+  original manual, activity, paper, and roll writers implicitly represented
+  one contract. Simulation read only `contracts`, causing authentic legacy
+  positions to fail with `contracts must be a finite positive number`.
+- The shared exact-position resolver now prefers authoritative remaining-count
+  aliases (`open_contracts`, `contracts_open`) over original-count aliases
+  (`contracts`, `quantity`). Equal-tier conflicts and boolean, null, zero,
+  nonfinite, fractional, malformed, or unsupported values fail closed; valid
+  signed short counts normalize to a positive whole count.
+- Implicit one-contract resolution is restricted to verifiable historical
+  records: no schema marker, the complete historical active CALL/PUT shape, a
+  generated `pos_..._YYYYMMDD_HHMMSS` ID, a timezone-aware `opened_at` matching
+  that UTC second, and both timestamps strictly before
+  `2026-09-26T10:44:42Z`, the baseline commit `62f4ad5` boundary. Current,
+  schema-v2, imported/lookalike, malformed, and boundary-equal omissions fail
+  closed. A valid fallback is exposed as `legacy_implicit_one` with a warning.
+- New positions and every successful roll persist canonical positive
+  `contracts` with `position_schema_version=2`. Roll persistence resolves the
+  exact source position's remaining quantity before mutation, preserving
+  partial-close and multi-contract counts and upgrading valid legacy rolls;
+  resolution failure performs no write.
+- Roll Scenarios now applies the same exact identity, active CALL/PUT, and
+  quantity guards before provider or chain access. Closed, expired, rolled,
+  ambiguous, malformed, and quantity-invalid positions return precise errors
+  without market-data work. Both roll views expose quantity source/warnings
+  and scale economics across the full position.
+- Livingston established the resolver and surfaced the historical omission.
+  Basher rejected the initial broad fallback, quantity-less legacy rolls, and
+  missing Roll Scenarios active guard. Danny supplied the bounded discriminator,
+  schema-v2 persistence invariant, and pre-chain guard. Basher's final verdict
+  was **APPROVE** after 421 backend tests, 6 focused frontend tests, and 49
+  adversarial assertions/probes, with type, lint, compile, build, and diff
+  checks passing. The two full-frontend failures remain unrelated baseline
+  source-contract failures.
 
 ### Dashboard Banner Agent removed
 

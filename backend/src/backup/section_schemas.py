@@ -61,10 +61,11 @@ SYMBOL_CONFIG_FIELDS = frozenset({
 })
 POSITION_FIELDS = frozenset({
     "security_id", "symbol", "position_id", "type", "option_type", "strike",
-    "expiration", "expiry", "contracts", "quantity", "status", "opened_at",
+    "expiration", "expiry", "contracts", "quantity", "open_contracts",
+    "contracts_open", "status", "opened_at",
     "closed_at", "close_reason", "rolled_from", "rolled_to", "notes",
     "source", "closing_source", "premium", "buyback_cost", "position_kind",
-    "is_paper", "created_at", "updated_at",
+    "is_paper", "position_schema_version", "created_at", "updated_at",
 })
 ACTION_PLAN_FIELDS = frozenset({
     "id", "doc_type", "symbol", "security_id", "title", "objective",

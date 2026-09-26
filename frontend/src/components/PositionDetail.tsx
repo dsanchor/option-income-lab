@@ -422,6 +422,9 @@ interface RollExp {
 }
 interface RollTable {
   error?: string;
+  contracts?: number;
+  quantity_source?: string;
+  quantity_warnings?: string[];
   current_position?: { strike?: number | null; expiration?: string; premium_received?: number | null; option_type?: string };
   underlying_price?: number;
   pct_captured?: number | null;
@@ -506,6 +509,13 @@ function RollTableView({ symbol, positionId }: { symbol: string; positionId: str
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        {data.contracts != null && (
+          <span>
+            <span className="text-text-muted">Position:</span>{" "}
+            <span className="font-mono">{data.contracts} contract{data.contracts === 1 ? "" : "s"}</span>
+            {data.quantity_source ? <span className="text-text-muted"> ({data.quantity_source})</span> : null}
+          </span>
+        )}
         <span><span className="text-text-muted">Strike:</span> <span className="font-mono">${cp.strike ?? "—"}</span></span>
         {cpMoneyness && (
           <span
@@ -534,6 +544,9 @@ function RollTableView({ symbol, positionId }: { symbol: string; positionId: str
           <span className="rounded-[var(--radius-pill)] bg-accent-green/20 px-2 py-0.5 text-accent-green">✅ 70%+ captured — consider closing</span>
         )}
       </div>
+      {(data.quantity_warnings ?? []).map((warning) => (
+        <p key={warning} className="text-xs text-accent-orange">⚠️ {warning}</p>
+      ))}
 
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-xs">
@@ -680,6 +693,8 @@ interface RollSimulationResult {
   pricing_method?: string;
   option_type: "CALL" | "PUT";
   contracts: number;
+  quantity_source: string;
+  quantity_warnings?: string[];
   multiplier: number;
   current_contract: RollSimulationQuote;
   target_contract: RollSimulationQuote;
@@ -747,6 +762,8 @@ function RollSimulation({
             ? "midpoint"
             : data.code === "chain_unavailable" || res.status === 502 || res.status === 503
               ? "chain"
+            : data.code?.startsWith("position_quantity_")
+              ? "quantity"
             : res.status === 400
               ? "validation"
               : "generic";
@@ -764,6 +781,7 @@ function RollSimulation({
   const quoteWarnings = result
     ? [
         ...(result.chain_warnings ?? []),
+        ...(result.quantity_warnings ?? []),
         result.current_contract.stale && "Current-contract quote is stale.",
         result.current_contract.carried && "Current-contract quote contains carried last-known-good data.",
         Object.values(result.current_contract.field_status ?? {}).includes("last_known_good")
@@ -834,6 +852,7 @@ function RollSimulation({
           {error.kind === "not-found" && <strong>Exact contract not found. </strong>}
           {error.kind === "midpoint" && <strong>Midpoint unavailable. </strong>}
           {error.kind === "chain" && <strong>Options chain unavailable. </strong>}
+          {error.kind === "quantity" && <strong>Position quantity unavailable. </strong>}
           {error.message}
         </div>
       )}
@@ -851,6 +870,10 @@ function RollSimulation({
               <div className={`font-mono text-2xl font-bold ${outcomeColor}`}>
                 ${Math.abs(result.total_net).toFixed(2)}
               </div>
+              <p className="text-xs text-text-muted">
+                Full position: {result.contracts} contract{result.contracts === 1 ? "" : "s"} · quantity source:{" "}
+                <span className="font-mono">{result.quantity_source}</span>
+              </p>
             </div>
             <div className="flex flex-wrap gap-1">
               {accountIds.map((accountId) => (

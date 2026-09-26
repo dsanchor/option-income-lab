@@ -26,7 +26,10 @@ export interface Position {
   expiration?: string;
   status?: string;
   coverage_status?: "linked" | "unlinked" | "unresolved_security" | "account_filtered_out" | "paper" | null;
-  contracts?: number;
+  contracts?: number | string;
+  quantity?: number | string;
+  open_contracts?: number | string;
+  contracts_open?: number | string;
   assignment_risk?: string | null;
   moneyness?: string | null;
   display_premium?: number | null;

@@ -160,7 +160,10 @@ class FakeCosmos:
         self.container._store[(normalized, f"config_{normalized}")] = dict(doc)
         return doc
 
-    def add_position(self, symbol, position_type, strike, expiration, notes="", source=None, is_paper=False):
+    def add_position(
+        self, symbol, position_type, strike, expiration, notes="", source=None,
+        is_paper=False, contracts=1,
+    ):
         doc = self._symbols[symbol.upper()]
         position = {
             "position_id": f"pos_{symbol.upper()}_{len(doc['positions']) + 1}",
@@ -170,6 +173,7 @@ class FakeCosmos:
             "opened_at": "2026-01-01T00:00:00Z",
             "status": "active",
             "notes": notes,
+            "contracts": contracts,
         }
         if source is not None:
             position["source"] = source
@@ -311,6 +315,21 @@ class TestPositionAndMovementEndpoints:
         assert resp.status_code == 201
         body = resp.json()
         assert body["positions"][-1]["is_paper"] is True
+        assert body["positions"][-1]["contracts"] == 1
+
+    def test_add_position_persists_selected_contract_count(self, client):
+        c, fake = client
+        fake.add_symbol_doc("AAPL")
+
+        resp = c.post("/api/symbols/AAPL/positions", json={
+            "type": "put",
+            "strike": 180,
+            "expiration": "2026-01-16",
+            "contracts": 4,
+        })
+
+        assert resp.status_code == 201
+        assert resp.json()["positions"][-1]["contracts"] == 4
 
     def test_create_manual_option_movement_ignores_is_paper(self, client):
         c, fake = client

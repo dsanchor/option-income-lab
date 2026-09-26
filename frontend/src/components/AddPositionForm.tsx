@@ -11,6 +11,7 @@ export default function AddPositionForm({ symbol }: { symbol: string }) {
   const [strike, setStrike] = useState("");
   const [expiration, setExpiration] = useState("");
   const [premium, setPremium] = useState("");
+  const [contracts, setContracts] = useState("1");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -19,8 +20,8 @@ export default function AddPositionForm({ symbol }: { symbol: string }) {
   async function submit(isPaper = false) {
     setError(null);
     setSuccess(null);
-    if (!strike || !expiration) {
-      setError("Strike and expiration are required.");
+    if (!strike || !expiration || !/^[1-9]\d*$/.test(contracts)) {
+      setError("Strike, expiration, and a positive whole-number contract count are required.");
       return;
     }
     setSaving(true);
@@ -31,6 +32,7 @@ export default function AddPositionForm({ symbol }: { symbol: string }) {
         expiration,
         notes: notes.trim(),
         is_paper: isPaper || undefined,
+        contracts: Number(contracts),
       };
       if (premium) payload.premium = parseFloat(premium);
       const res = await fetch(`/api/symbols/${encodeURIComponent(symbol)}/positions`, {
@@ -46,6 +48,7 @@ export default function AddPositionForm({ symbol }: { symbol: string }) {
         setStrike("");
         setExpiration("");
         setPremium("");
+        setContracts("1");
         setNotes("");
         setTimeout(() => router.refresh(), 700);
       }
@@ -68,6 +71,15 @@ export default function AddPositionForm({ symbol }: { symbol: string }) {
           <option value="call">Call</option>
           <option value="put">Put</option>
         </select>
+        <input
+          type="number"
+          min="1"
+          step="1"
+          placeholder="Contracts"
+          value={contracts}
+          onChange={(e) => setContracts(e.target.value)}
+          className="w-28 rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm text-text"
+        />
         <input
           type="number"
           step="0.5"

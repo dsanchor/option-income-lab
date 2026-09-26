@@ -235,12 +235,23 @@ class _FakeCache:
         self.chain = chain
         self.serialize = serialize
         self.error = error
+        self.calls = 0
 
     async def get_or_load_async(self, symbol):
+        self.calls += 1
         if self.error:
             raise self.error
         chain = deepcopy(self.chain)
         return json.dumps(chain) if self.serialize else chain
+
+
+class _FakeYFProvider:
+    async def fetch_all(self, symbol):
+        return {
+            "overview": json.dumps(
+                {"fundamentals": {"current_price": {"value": 103}}}
+            )
+        }
 
 
 @pytest.fixture
@@ -273,7 +284,10 @@ def endpoint_client():
     original = deepcopy(document)
     app.router.on_startup = []
     app.state.cosmos = _FakeCosmos(document)
-    set_options_chain_cache(_FakeCache(_chain()))
+    app.state.yf_provider = _FakeYFProvider()
+    cache = _FakeCache(_chain())
+    app.state.roll_test_cache = cache
+    set_options_chain_cache(cache)
     client = TestClient(app, raise_server_exceptions=False)
     yield client, document, original
     set_options_chain_cache(None)
@@ -293,8 +307,20 @@ def test_endpoint_uses_exact_position_identity_and_does_not_mutate(endpoint_clie
     assert payload["position"]["is_paper"] is True
     assert payload["current_contract"]["strike"] == "110"
     assert payload["contracts"] == 4
+    assert payload["quantity_source"] == "contracts"
     assert payload["total_net"] == -200.0
     assert document == original
+
+
+def test_roll_table_uses_same_authoritative_position_quantity(endpoint_client):
+    client, document, _ = endpoint_client
+    document["positions"][1]["open_contracts"] = "2"
+
+    response = client.get("/api/symbols/TEST/positions/position-b/roll-table")
+
+    assert response.status_code == 200
+    assert response.json()["contracts"] == 2
+    assert response.json()["quantity_source"] == "open_contracts"
 
 
 def test_endpoint_rejects_closed_position(endpoint_client):
@@ -327,7 +353,103 @@ def test_endpoint_rejects_missing_quantity(endpoint_client):
         json={"target_strike": 105, "target_expiration": "2026-10-16"},
     )
     assert response.status_code == 400
-    assert response.json()["code"] == "invalid_input"
+    assert response.json()["code"] == "position_quantity_missing"
+    assert "Set 'contracts'" in response.json()["error"]
+
+
+def test_endpoint_uses_proven_legacy_one_contract_shape_with_warning(endpoint_client):
+    client, document, _ = endpoint_client
+    position = document["positions"][0]
+    position.pop("contracts")
+    position.update({
+        "position_id": "pos_TEST_call_100_20261016_20260901_120000",
+        "opened_at": "2026-09-01T12:00:00Z",
+        "notes": "",
+    })
+    response = client.post(
+        f"/api/symbols/TEST/positions/{position['position_id']}/roll-simulation",
+        json={"target_strike": 105, "target_expiration": "2026-10-16"},
+    )
+    assert response.status_code == 200
+    assert response.json()["contracts"] == 1
+    assert response.json()["quantity_source"] == "legacy_implicit_one"
+    assert response.json()["quantity_warnings"]
+
+
+def test_endpoint_rejects_current_writer_shape_with_omitted_quantity(endpoint_client):
+    client, document, _ = endpoint_client
+    position = document["positions"][0]
+    position.pop("contracts")
+    position.update({
+        "position_id": "pos_TEST_call_100_20261016_20260926_120000",
+        "opened_at": "2026-09-26T12:00:00Z",
+        "notes": "",
+    })
+    response = client.post(
+        f"/api/symbols/TEST/positions/{position['position_id']}/roll-simulation",
+        json={"target_strike": 105, "target_expiration": "2026-10-16"},
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "position_quantity_missing"
+
+
+@pytest.mark.parametrize("status", ["closed", "expired", "rolled"])
+def test_roll_table_rejects_inactive_position_before_chain_retrieval(endpoint_client, status):
+    client, document, _ = endpoint_client
+    document["positions"][0]["status"] = status
+
+    response = client.get("/api/symbols/TEST/positions/position-a/roll-table")
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "inactive_position"
+    assert app.state.roll_test_cache.calls == 0
+
+
+def test_roll_table_rejects_current_missing_quantity_before_chain_retrieval(endpoint_client):
+    client, document, _ = endpoint_client
+    document["positions"][0].pop("contracts")
+
+    response = client.get("/api/symbols/TEST/positions/position-a/roll-table")
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "position_quantity_missing"
+    assert app.state.roll_test_cache.calls == 0
+
+
+def test_endpoint_accepts_numeric_string_negative_short_quantity(endpoint_client):
+    client, document, _ = endpoint_client
+    document["positions"][0].pop("contracts")
+    document["positions"][0]["quantity"] = "-2"
+    response = client.post(
+        "/api/symbols/TEST/positions/position-a/roll-simulation",
+        json={"target_strike": 105, "target_expiration": "2026-10-16"},
+    )
+    assert response.status_code == 200
+    assert response.json()["contracts"] == 2
+    assert response.json()["quantity_source"] == "quantity"
+
+
+def test_endpoint_uses_remaining_quantity_after_partial_close(endpoint_client):
+    client, document, _ = endpoint_client
+    document["positions"][0]["open_contracts"] = "1"
+    response = client.post(
+        "/api/symbols/TEST/positions/position-a/roll-simulation",
+        json={"target_strike": 105, "target_expiration": "2026-10-16"},
+    )
+    assert response.status_code == 200
+    assert response.json()["contracts"] == 1
+    assert response.json()["quantity_source"] == "open_contracts"
+
+
+def test_endpoint_rejects_explicit_zero_open_quantity(endpoint_client):
+    client, document, _ = endpoint_client
+    document["positions"][0]["open_contracts"] = 0
+    response = client.post(
+        "/api/symbols/TEST/positions/position-a/roll-simulation",
+        json={"target_strike": 105, "target_expiration": "2026-10-16"},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "position_quantity_zero"
 
 
 def test_endpoint_returns_404_for_exact_target_miss(endpoint_client):

@@ -15,6 +15,21 @@
 
 ## Recent Learnings
 
+### 2026-09-26 — Roll contract quantity independent revision
+- Legacy implicit-one eligibility is now bounded by persisted evidence from the
+  historical writer: no schema marker, the exact generated `pos_..._YYYYMMDD_HHMMSS`
+  suffix, a matching timezone-aware `opened_at`, and both timestamps before the
+  quantity-persistence boundary immediately after baseline commit `62f4ad5`.
+  New writes carry `position_schema_version=2`; current or malformed omissions
+  fail closed rather than becoming one contract.
+- Roll persistence resolves authoritative remaining quantity before mutating
+  the source, then always writes canonical positive `contracts` and schema v2
+  on the new position. This preserves partial-close counts and upgrades valid
+  legacy one-contract positions during roll.
+- Roll Scenarios now matches simulator identity, active CALL/PUT, and quantity
+  guards before price or chain retrieval; closed, expired, rolled, ambiguous,
+  malformed, and corrupt quantity records fail without market-data work.
+
 ### 2026-09-25 — Dashboard banner semantic freshness revision
 - Banner source eligibility is now fact-grained rather than wrapper-grained:
   only valid, banner-consumed market facts with their corresponding plausible
