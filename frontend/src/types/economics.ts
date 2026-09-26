@@ -136,6 +136,7 @@ export interface DividendsSummary {
   total_withholding_eur: number;
   total_net_eur: number;
   cash_net?: number | null;
+  /** Legacy response compatibility; stripped before rendering. */
   derechos_net?: number | null;
   total_net?: number | null;
   effective_withholding_pct: number;
@@ -153,6 +154,7 @@ export interface DividendsMonthlyRow {
   withholding_total_eur: number;
   net_eur: number;
   cash_net?: number | null;
+  /** Legacy response compatibility; stripped before rendering. */
   derechos_net?: number | null;
   total_net?: number | null;
   dividend_count: number;
@@ -164,6 +166,7 @@ export interface DividendsBySymbolRow {
   withholding_total_eur: number;
   net_eur: number;
   cash_net?: number | null;
+  /** Legacy response compatibility; stripped before rendering. */
   derechos_net?: number | null;
   total_net?: number | null;
   dividend_count: number;
@@ -180,6 +183,7 @@ export interface DividendsYearlyRow {
   withholding_eur: number;
   net_eur: number;
   cash_net?: number | null;
+  /** Legacy response compatibility; stripped before rendering. */
   derechos_net?: number | null;
   total_net?: number | null;
   dividend_count: number;
@@ -189,9 +193,11 @@ export interface DividendsCumulativeRow {
   month: string;
   cumulative_net_eur: number;
   cash_net?: number | null;
+  /** Legacy response compatibility; stripped before rendering. */
   derechos_net?: number | null;
   total_net?: number | null;
   cumulative_cash_net_eur?: number | null;
+  /** Legacy response compatibility; stripped before rendering. */
   cumulative_derechos_net_eur?: number | null;
   cumulative_total_net_eur?: number | null;
 }
@@ -211,8 +217,18 @@ export interface DividendPosition {
   withholding_total_eur: number;
   net_eur: number;
   cash_net?: number | null;
-  derechos_net?: number | null;
-  derechos_eur?: number | null;
+  /** Legacy response compatibility; used only to exclude this row. */
+  derechos_net?: unknown;
+  derechos_eur?: unknown;
+  source_derechos_amount?: unknown;
+  rights_amount?: unknown;
+  sales_type?: string | null;
+  sales_type_raw?: unknown;
+  is_rights_sale?: unknown;
+  ca_leg_type?: string | null;
+  ca_event_type?: string | null;
+  warnings?: Array<{ type?: string | null } | string> | null;
+  source_row?: unknown;
   total_net?: number | null;
   correction_status: string;
 }

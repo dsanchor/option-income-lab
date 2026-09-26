@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+import pytest
+
 from src.dividends_economics import (
     build_dividend_yoc_snapshot,
     build_dividends_economics_report,
@@ -164,7 +166,6 @@ def test_build_dividends_economics_report_aggregates_active_dividends_only():
         "total_withholding_eur": 35.0,
         "total_net_eur": 392.0,
         "cash_net": 392.0,
-        "derechos_net": 0.0,
         "total_net": 392.0,
         "effective_withholding_pct": 8.14,
         "total_dividends": 4,
@@ -180,7 +181,6 @@ def test_build_dividends_economics_report_aggregates_active_dividends_only():
             "withholding_total_eur": 10.0,
             "net_eur": 89.0,
             "cash_net": 89.0,
-            "derechos_net": 0.0,
             "total_net": 89.0,
             "dividend_count": 1,
         },
@@ -193,7 +193,6 @@ def test_build_dividends_economics_report_aggregates_active_dividends_only():
             "withholding_total_eur": 5.0,
             "net_eur": 45.0,
             "cash_net": 45.0,
-            "derechos_net": 0.0,
             "total_net": 45.0,
             "dividend_count": 1,
         },
@@ -206,7 +205,6 @@ def test_build_dividends_economics_report_aggregates_active_dividends_only():
             "withholding_total_eur": 20.0,
             "net_eur": 258.0,
             "cash_net": 258.0,
-            "derechos_net": 0.0,
             "total_net": 258.0,
             "dividend_count": 2,
         },
@@ -218,7 +216,6 @@ def test_build_dividends_economics_report_aggregates_active_dividends_only():
             "withholding_total_eur": 35.0,
             "net_eur": 312.0,
             "cash_net": 312.0,
-            "derechos_net": 0.0,
             "total_net": 312.0,
             "dividend_count": 3,
         },
@@ -228,7 +225,6 @@ def test_build_dividends_economics_report_aggregates_active_dividends_only():
             "withholding_total_eur": 0.0,
             "net_eur": 80.0,
             "cash_net": 80.0,
-            "derechos_net": 0.0,
             "total_net": 80.0,
             "dividend_count": 1,
         },
@@ -268,7 +264,6 @@ def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_
             "withholding_total_eur": 20.0,
             "net_eur": 178.0,
             "cash_net": 178.0,
-            "derechos_net": 0.0,
             "total_net": 178.0,
             "dividend_count": 1,
         }
@@ -280,7 +275,6 @@ def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_
             "withholding_eur": 10.0,
             "net_eur": 89.0,
             "cash_net": 89.0,
-            "derechos_net": 0.0,
             "total_net": 89.0,
             "dividend_count": 1,
         },
@@ -290,7 +284,6 @@ def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_
             "withholding_eur": 25.0,
             "net_eur": 223.0,
             "cash_net": 223.0,
-            "derechos_net": 0.0,
             "total_net": 223.0,
             "dividend_count": 2,
         },
@@ -300,30 +293,24 @@ def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_
             "month": "2023-12",
             "cumulative_net_eur": 89.0,
             "cumulative_cash_net_eur": 89.0,
-            "cumulative_derechos_net_eur": 0.0,
             "cumulative_total_net_eur": 89.0,
             "cash_net": 89.0,
-            "derechos_net": 0.0,
             "total_net": 89.0,
         },
         {
             "month": "2024-01",
             "cumulative_net_eur": 134.0,
             "cumulative_cash_net_eur": 134.0,
-            "cumulative_derechos_net_eur": 0.0,
             "cumulative_total_net_eur": 134.0,
             "cash_net": 134.0,
-            "derechos_net": 0.0,
             "total_net": 134.0,
         },
         {
             "month": "2024-02",
             "cumulative_net_eur": 312.0,
             "cumulative_cash_net_eur": 312.0,
-            "cumulative_derechos_net_eur": 0.0,
             "cumulative_total_net_eur": 312.0,
             "cash_net": 312.0,
-            "derechos_net": 0.0,
             "total_net": 312.0,
         },
     ]
@@ -344,7 +331,6 @@ def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_
             "withholding_eur": 20.0,
             "net_eur": 178.0,
             "cash_net": 178.0,
-            "derechos_net": 0.0,
             "total_net": 178.0,
             "dividend_count": 1,
         }
@@ -354,10 +340,8 @@ def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_
             "month": "2024-02",
             "cumulative_net_eur": 178.0,
             "cumulative_cash_net_eur": 178.0,
-            "cumulative_derechos_net_eur": 0.0,
             "cumulative_total_net_eur": 178.0,
             "cash_net": 178.0,
-            "derechos_net": 0.0,
             "total_net": 178.0,
         }
     ]
@@ -426,7 +410,7 @@ def test_withholding_taxonomy_fields_and_effective_withholding_pct_are_computed_
     assert report["summary"]["effective_withholding_pct"] == 10.0
 
 
-def test_derechos_amounts_flow_through_summary_monthly_yearly_cumulative_and_positions():
+def test_legacy_rights_amounts_are_ignored_everywhere():
     report = build_dividends_economics_report(
         [
             _dividend_movement(
@@ -461,144 +445,48 @@ def test_derechos_amounts_flow_through_summary_monthly_yearly_cumulative_and_pos
         ]
     )
 
-    assert report["summary"] == {
-        "total_gross_eur": 160.0,
-        "total_fees_eur": 0.0,
-        "total_withholding_eur": 0.0,
-        "total_net_eur": 130.0,
-        "cash_net": 130.0,
-        "derechos_net": 25.0,
-        "total_net": 155.0,
-        "effective_withholding_pct": 0.0,
-        "total_dividends": 3,
-        "total_accounts": 2,
-    }
-    assert report["monthly"] == [
-        {
-            "month": "2023-12",
-            "gross_eur": 100.0,
-            "fees_eur": 0.0,
-            "withholding_source_eur": 0.0,
-            "withholding_destination_eur": 0.0,
-            "withholding_total_eur": 0.0,
-            "net_eur": 80.0,
-            "cash_net": 80.0,
-            "derechos_net": 20.0,
-            "total_net": 100.0,
-            "dividend_count": 1,
-        },
-        {
-            "month": "2024-01",
-            "gross_eur": 40.0,
-            "fees_eur": 0.0,
-            "withholding_source_eur": 0.0,
-            "withholding_destination_eur": 0.0,
-            "withholding_total_eur": 0.0,
-            "net_eur": 40.0,
-            "cash_net": 40.0,
-            "derechos_net": 0.0,
-            "total_net": 40.0,
-            "dividend_count": 1,
-        },
-        {
-            "month": "2024-02",
-            "gross_eur": 20.0,
-            "fees_eur": 0.0,
-            "withholding_source_eur": 0.0,
-            "withholding_destination_eur": 0.0,
-            "withholding_total_eur": 0.0,
-            "net_eur": 10.0,
-            "cash_net": 10.0,
-            "derechos_net": 5.0,
-            "total_net": 15.0,
-            "dividend_count": 1,
-        },
-    ]
-    assert report["yearly"] == [
-        {
-            "year": 2023,
-            "gross_eur": 100.0,
-            "withholding_eur": 0.0,
-            "net_eur": 80.0,
-            "cash_net": 80.0,
-            "derechos_net": 20.0,
-            "total_net": 100.0,
-            "dividend_count": 1,
-        },
-        {
-            "year": 2024,
-            "gross_eur": 60.0,
-            "withholding_eur": 0.0,
-            "net_eur": 50.0,
-            "cash_net": 50.0,
-            "derechos_net": 5.0,
-            "total_net": 55.0,
-            "dividend_count": 2,
-        },
-    ]
-    assert report["by_symbol"] == [
-        {
-            "symbol": "IBE",
-            "gross_eur": 140.0,
-            "withholding_total_eur": 0.0,
-            "net_eur": 120.0,
-            "cash_net": 120.0,
-            "derechos_net": 20.0,
-            "total_net": 140.0,
-            "dividend_count": 2,
-        },
-        {
-            "symbol": "SAN",
-            "gross_eur": 20.0,
-            "withholding_total_eur": 0.0,
-            "net_eur": 10.0,
-            "cash_net": 10.0,
-            "derechos_net": 5.0,
-            "total_net": 15.0,
-            "dividend_count": 1,
-        },
-    ]
-    assert report["cumulative"] == [
-        {
-            "month": "2023-12",
-            "cumulative_net_eur": 80.0,
-            "cumulative_cash_net_eur": 80.0,
-            "cumulative_derechos_net_eur": 20.0,
-            "cumulative_total_net_eur": 100.0,
-            "cash_net": 80.0,
-            "derechos_net": 20.0,
-            "total_net": 100.0,
-        },
-        {
-            "month": "2024-01",
-            "cumulative_net_eur": 120.0,
-            "cumulative_cash_net_eur": 120.0,
-            "cumulative_derechos_net_eur": 20.0,
-            "cumulative_total_net_eur": 140.0,
-            "cash_net": 120.0,
-            "derechos_net": 20.0,
-            "total_net": 140.0,
-        },
-        {
-            "month": "2024-02",
-            "cumulative_net_eur": 130.0,
-            "cumulative_cash_net_eur": 130.0,
-            "cumulative_derechos_net_eur": 25.0,
-            "cumulative_total_net_eur": 155.0,
-            "cash_net": 130.0,
-            "derechos_net": 25.0,
-            "total_net": 155.0,
-        },
-    ]
-
+    assert report["summary"]["total_net_eur"] == 40.0
+    assert report["summary"]["total_net"] == 40.0
+    assert report["summary"]["total_dividends"] == 1
+    assert all("derechos_net" not in row for row in report["monthly"])
+    assert all("derechos_net" not in row for row in report["yearly"])
+    assert all("cumulative_derechos_net_eur" not in row for row in report["cumulative"])
     positions_by_id = {position["id"]: position for position in report["positions"]}
-    assert positions_by_id["with-derechos-2023"]["net_eur"] == 80.0
-    assert positions_by_id["with-derechos-2023"]["cash_net"] == 80.0
-    assert positions_by_id["with-derechos-2023"]["derechos_eur"] == 20.0
-    assert positions_by_id["with-derechos-2023"]["derechos_net"] == 20.0
-    assert positions_by_id["with-derechos-2023"]["total_net"] == 100.0
-    assert positions_by_id["cash-only-2024"]["derechos_eur"] == 0.0
+    assert set(positions_by_id) == {"cash-only-2024"}
     assert positions_by_id["cash-only-2024"]["total_net"] == 40.0
+
+
+@pytest.mark.parametrize(
+    "rights_data",
+    [
+        {"SOURCE_DERECHOS_AMOUNT": "7"},
+        {"rights amount": "NaN"},
+        {"source_payload": {"nested": {"Importe en Derechos": "5,00"}}},
+    ],
+)
+def test_rights_aliases_and_malformed_values_are_absent_from_every_dividend_model(
+    rights_data,
+):
+    movement = _dividend_movement(
+        movement_id="inert",
+        trade_date="2024-01-01",
+        ticker="SAN",
+        account_id="acct-1",
+        gross_eur=100,
+        fees_eur=0,
+        net_eur=100,
+    )
+    movement.update(rights_data)
+
+    report = build_dividends_economics_report([movement])
+
+    assert report["positions"] == []
+    assert report["monthly"] == []
+    assert report["yearly"] == []
+    assert report["cumulative"] == []
+    assert report["by_symbol"] == []
+    assert report["summary"]["total_net_eur"] == 0.0
+    assert report["summary"]["total_dividends"] == 0
 
 
 def test_zero_gross_dividend_keeps_effective_withholding_pct_at_zero():
@@ -623,7 +511,6 @@ def test_zero_gross_dividend_keeps_effective_withholding_pct_at_zero():
         "total_withholding_eur": 3.0,
         "total_net_eur": -3.0,
         "cash_net": -3.0,
-        "derechos_net": 0.0,
         "total_net": -3.0,
         "effective_withholding_pct": 0.0,
         "total_dividends": 1,
@@ -640,7 +527,6 @@ def test_empty_movements_returns_empty_valid_report_shape():
         "total_withholding_eur": 0.0,
         "total_net_eur": 0.0,
         "cash_net": 0.0,
-        "derechos_net": 0.0,
         "total_net": 0.0,
         "effective_withholding_pct": 0.0,
         "total_dividends": 0,

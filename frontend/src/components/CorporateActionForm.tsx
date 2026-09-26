@@ -48,12 +48,6 @@ const EVENT_TYPES: Array<{ value: CaEventType; label: string; description: strin
     legs: ["SHARE_ACQUISITION"],
   },
   {
-    value: "RIGHTS_ISSUE",
-    label: "Rights Issue",
-    description: "New shares allocated from subscription rights",
-    legs: ["SHARE_ACQUISITION"],
-  },
-  {
     value: "SHARE_CONSOLIDATION",
     label: "Share Consolidation",
     description: "Reverse split — fewer shares, same total cost basis; optional fractional cash",
@@ -63,7 +57,6 @@ const EVENT_TYPES: Array<{ value: CaEventType; label: string; description: strin
 
 const CA_LEG_BADGE: Record<string, string> = {
   CASH_DIVIDEND: "bg-accent-blue/15 text-accent-blue",
-  RIGHTS_SOLD: "bg-accent-red/15 text-accent-red",
   SHARE_ACQUISITION: "bg-accent-green/15 text-accent-green",
   CASH_TOP_UP: "bg-accent-orange/15 text-accent-orange",
   CONSOLIDATION_OUT: "bg-accent-red/15 text-accent-red",
@@ -73,7 +66,6 @@ const CA_LEG_BADGE: Record<string, string> = {
 
 const CA_LEG_LABEL: Record<string, string> = {
   CASH_DIVIDEND: "Cash Dividend",
-  RIGHTS_SOLD: "Rights Sold",
   SHARE_ACQUISITION: "Share Acquisition",
   CASH_TOP_UP: "Investor Cash Top-Up",
   CONSOLIDATION_OUT: "Shares Removed",
@@ -106,19 +98,12 @@ export interface CaFormState {
   cd_wht_dest_country: string;
   cd_wht_dest_amount: string;
 
-  // SHARE_ACQUISITION leg (DIVIDEND_WITH_SCRIP, SCRIP_DIVIDEND, RIGHTS_ISSUE)
+  // SHARE_ACQUISITION leg (DIVIDEND_WITH_SCRIP, SCRIP_DIVIDEND)
   sa_quantity: string;
   sa_gross: string;          // FMV; "0" accepted for pure scrip
   sa_gross_eur: string;
   sa_cost_basis: CostBasisStatus;
   sa_notes: string;
-
-  // Optional: RIGHTS_SOLD leg (RIGHTS_ISSUE only)
-  rs_enabled: boolean;
-  rs_quantity: string;
-  rs_gross: string;
-  rs_gross_eur: string;
-  rs_fees: string;
 
   // Optional: CASH_TOP_UP leg (DIVIDEND_WITH_SCRIP only)
   ctu_enabled: boolean;
@@ -158,11 +143,6 @@ const defaultState = (): CaFormState => ({
   sa_gross_eur: "",
   sa_cost_basis: "INCOMPLETE",
   sa_notes: "",
-  rs_enabled: false,
-  rs_quantity: "",
-  rs_gross: "",
-  rs_gross_eur: "",
-  rs_fees: "",
   ctu_enabled: false,
   ctu_gross: "",
   ctu_gross_eur: "",
@@ -182,7 +162,6 @@ const defaultState = (): CaFormState => ({
 export function buildCaInitialState(legs: LedgerMovement[], representative: LedgerMovement): Partial<CaFormState> {
   const cdLeg = legs.find((l) => l.ca_leg_type === "CASH_DIVIDEND");
   const saLeg = legs.find((l) => l.ca_leg_type === "SHARE_ACQUISITION");
-  const rsLeg = legs.find((l) => l.ca_leg_type === "RIGHTS_SOLD");
   const ctuLeg = legs.find((l) => l.ca_leg_type === "CASH_TOP_UP");
   const coLeg = legs.find((l) => l.ca_leg_type === "CONSOLIDATION_OUT");
   const ciLeg = legs.find((l) => l.ca_leg_type === "CONSOLIDATION_IN");
@@ -227,14 +206,6 @@ export function buildCaInitialState(legs: LedgerMovement[], representative: Ledg
     state.sa_gross_eur = saLeg.gross?.eur_amount ?? "";
     state.sa_cost_basis = (saLeg.cost_basis_status as CostBasisStatus) ?? "INCOMPLETE";
     state.sa_notes = "";
-  }
-
-  if (rsLeg) {
-    state.rs_enabled = true;
-    state.rs_quantity = rsLeg.quantity ?? "";
-    state.rs_gross = rsLeg.gross?.amount ?? "";
-    state.rs_gross_eur = rsLeg.gross?.eur_amount ?? "";
-    state.rs_fees = rsLeg.fees?.total ?? "";
   }
 
   if (ctuLeg) {
@@ -571,7 +542,7 @@ function buildLegs(form: CaFormState): CorporateActionLegRequest[] {
   }
 
   // SHARE_ACQUISITION leg
-  if (ev === "DIVIDEND_WITH_SCRIP" || ev === "SCRIP_DIVIDEND" || ev === "RIGHTS_ISSUE") {
+  if (ev === "DIVIDEND_WITH_SCRIP" || ev === "SCRIP_DIVIDEND") {
     legs.push({
       leg_type: "SHARE_ACQUISITION",
       trade_date: form.payment_date,
@@ -589,20 +560,6 @@ function buildLegs(form: CaFormState): CorporateActionLegRequest[] {
       fx: makeFx(form.fx_rate, form.currency),
       notes: form.sa_notes || undefined,
     });
-  }
-
-  // RIGHTS_SOLD leg (optional — RIGHTS_ISSUE)
-  if (ev === "RIGHTS_ISSUE" && form.rs_enabled) {
-    const rsGrossEur = form.rs_gross_eur || (form.currency === "EUR" ? form.rs_gross : "0");
-    legs.push({
-      leg_type: "RIGHTS_SOLD",
-      trade_date: form.payment_date,
-      quantity: form.rs_quantity || undefined,
-      gross: makeGross(form.rs_gross, form.currency, form.rs_gross_eur),
-      fees: makeFees(form.rs_fees, form.currency),
-      fx: makeFx(form.fx_rate, form.currency),
-    });
-    void rsGrossEur;
   }
 
   // CASH_TOP_UP leg (optional — DIVIDEND_WITH_SCRIP)
@@ -656,7 +613,7 @@ function validate(form: CaFormState): string | null {
   if (ev === "CASH_DIVIDEND" || ev === "DIVIDEND_WITH_SCRIP") {
     if (!form.cd_gross) return "Cash dividend gross amount is required.";
   }
-  if (ev === "DIVIDEND_WITH_SCRIP" || ev === "SCRIP_DIVIDEND" || ev === "RIGHTS_ISSUE") {
+  if (ev === "DIVIDEND_WITH_SCRIP" || ev === "SCRIP_DIVIDEND") {
     if (!form.sa_quantity) return "Share acquisition quantity is required.";
     const fmvError = shareAcquisitionFmvValidationError(
       form.sa_gross,
@@ -683,9 +640,6 @@ function validate(form: CaFormState): string | null {
         return "Fractional cash-out gross proceeds is required when enabled.";
       }
     }
-  }
-  if (ev === "RIGHTS_ISSUE" && form.rs_enabled && !form.rs_gross) {
-    return "Rights sold proceeds (gross) is required.";
   }
   if (ev === "DIVIDEND_WITH_SCRIP" && form.ctu_enabled && !form.ctu_gross) {
     return "Cash top-up amount is required when included.";
@@ -817,9 +771,7 @@ export default function CorporateActionForm({
   const hasCashDiv = form.event_type === "CASH_DIVIDEND" || form.event_type === "DIVIDEND_WITH_SCRIP";
   const hasShareAcq =
     form.event_type === "DIVIDEND_WITH_SCRIP" ||
-    form.event_type === "SCRIP_DIVIDEND" ||
-    form.event_type === "RIGHTS_ISSUE";
-  const canRightsSold = form.event_type === "RIGHTS_ISSUE";
+    form.event_type === "SCRIP_DIVIDEND";
   const canCashTopUp = form.event_type === "DIVIDEND_WITH_SCRIP";
   const isConsolidation = form.event_type === "SHARE_CONSOLIDATION";
 
@@ -1169,7 +1121,7 @@ export default function CorporateActionForm({
                   disabled
                   className={inputCls}
                 >
-                  <option value="INCOMPLETE">INCOMPLETE (scrip/rights — FMV pending)</option>
+                  <option value="INCOMPLETE">INCOMPLETE (scrip FMV pending)</option>
                   <option value="ZERO_COST">ZERO_COST (pure scrip)</option>
                   <option value="COMPLETE">COMPLETE (known FMV)</option>
                 </select>
@@ -1231,69 +1183,6 @@ export default function CorporateActionForm({
                   value={form.sa_notes}
                   onChange={(e) => set({ sa_notes: e.target.value })}
                   placeholder="Optional"
-                  className={inputCls}
-                />
-              </div>
-            </div>
-          </LegSection>
-        )}
-
-        {/* Optional: RIGHTS_SOLD leg (RIGHTS_ISSUE) */}
-        {canRightsSold && (
-          <LegSection
-            legType="RIGHTS_SOLD"
-            optional
-            enabled={form.rs_enabled}
-            onToggle={() => set({ rs_enabled: !form.rs_enabled })}
-          >
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <label className={labelCls}>Quantity (rights sold)</label>
-                <input
-                  type="number"
-                  step="any"
-                  min="0"
-                  value={form.rs_quantity}
-                  onChange={(e) => set({ rs_quantity: e.target.value })}
-                  placeholder="Rights units"
-                  className={inputCls}
-                />
-              </div>
-              <div>
-                <label className={labelCls}>Gross proceeds *</label>
-                <input
-                  type="number"
-                  step="any"
-                  min="0"
-                  value={form.rs_gross}
-                  onChange={(e) => set({ rs_gross: e.target.value })}
-                  placeholder="0.00"
-                  className={inputCls}
-                />
-              </div>
-              {form.currency !== "EUR" && (
-                <div>
-                  <label className={labelCls}>Gross EUR</label>
-                  <input
-                    type="number"
-                    step="any"
-                    min="0"
-                    value={form.rs_gross_eur}
-                    onChange={(e) => set({ rs_gross_eur: e.target.value })}
-                    placeholder="0.00"
-                    className={inputCls}
-                  />
-                </div>
-              )}
-              <div>
-                <label className={labelCls}>Fees</label>
-                <input
-                  type="number"
-                  step="any"
-                  min="0"
-                  value={form.rs_fees}
-                  onChange={(e) => set({ rs_fees: e.target.value })}
-                  placeholder="0.00"
                   className={inputCls}
                 />
               </div>

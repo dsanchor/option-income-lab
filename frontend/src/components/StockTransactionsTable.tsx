@@ -5,7 +5,6 @@ import { Link2 } from "lucide-react";
 import { getMovements, listAccounts } from "@/lib/portfolio-api";
 import { subCalendarMonths, toLocalDateString } from "@/lib/dateHelpers";
 import type { LedgerMovement, BrokerAccount, TxnType } from "@/types/portfolio";
-import { SALES_TYPE_LABELS } from "@/types/portfolio";
 import MovementDetailDialog from "./MovementDetailDialog";
 import ReassignmentDialog from "./ReassignmentDialog";
 import { getAccountName } from "@/lib/accountDisplay";
@@ -279,11 +278,6 @@ export default function StockTransactionsTable({ securityId }: Props) {
                         >
                           {getMovementTypeLabel(m)}
                         </span>
-                        {m.txn_type === "SELL" && m.sales_type && (
-                          <span className="text-xs text-text-muted">
-                            {SALES_TYPE_LABELS[m.sales_type] ?? m.sales_type}
-                          </span>
-                        )}
                         {isGrouped && (
                           <span
                             title={`Corporate action group: ${m.ca_group_id}`}

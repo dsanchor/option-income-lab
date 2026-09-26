@@ -167,7 +167,7 @@ export default async function SymbolsPage() {
             label="Realized Result"
             value={kpiEur(netGains)}
             tone={netGainsTone}
-            tooltip="Ganancia o pérdida cerrada por ventas de acciones y derechos. No incluye ganancias no realizadas ni P&L de opciones."
+            tooltip="Ganancia o pérdida cerrada por ventas de acciones. No incluye ganancias no realizadas ni P&L de opciones."
           />
           <KpiCard
             label="Net Dividends"

@@ -6,7 +6,7 @@ import { FileUp, Plus } from "lucide-react";
 import { getMovements, deleteMovement, listAccounts } from "@/lib/portfolio-api";
 import { getDefaultMovementsDateRange } from "@/lib/dateHelpers";
 import type { MovementsResponse, LedgerMovement, OptionTxnType, TxnType, WarningType } from "@/types/portfolio";
-import { OPTION_TXN_TYPES, SALES_TYPE_LABELS } from "@/types/portfolio";
+import { OPTION_TXN_TYPES } from "@/types/portfolio";
 import type { BrokerAccount } from "@/types/portfolio";
 import type { MovementsFilter } from "@/lib/portfolio-api";
 import MovementDetailDialog from "./MovementDetailDialog";
@@ -40,11 +40,7 @@ const TXN_BADGE: Record<TxnType, string> = {
 
 const WARNING_SHORT: Record<WarningType, string> = {
   NEGATIVE_INVENTORY: "Negative inventory",
-  RIGHTS_AMOUNT: "Rights amount",
   PROBABLE_DUPLICATE: "Probable duplicate",
-  DERECHOS_WITH_QUANTITY: "Rights sale with quantity",
-  ACCIONES_ZERO_QUANTITY: "Share sale, zero quantity",
-  INVALID_SALES_TYPE: "Invalid sale type",
 };
 
 const MOVEMENT_WARNING_LABELS: Record<string, string> = {
@@ -574,11 +570,6 @@ function MovementRow({
           >
             {getMovementTypeLabel(m)}
           </span>
-          {m.txn_type === "SELL" && m.sales_type === "DERECHOS" && (
-            <span className="ml-1 rounded-full px-1.5 py-0.5 text-xs bg-accent-orange/15 text-accent-orange">
-              {SALES_TYPE_LABELS.DERECHOS}
-            </span>
-          )}
           {hasUnlinkedOptionWarning && (
             <span
               className="ml-1 inline-flex items-center rounded-full px-1.5 py-0.5 text-xs bg-accent-orange/15 text-accent-orange"

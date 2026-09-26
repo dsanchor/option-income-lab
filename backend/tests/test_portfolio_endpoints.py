@@ -431,6 +431,37 @@ class TestImportSessionEndpoints:
         assert resp.status_code == 400
         assert resp.json()["error"] == "parse_error"
 
+    @pytest.mark.parametrize(
+        ("content", "format_hint"),
+        [
+            (
+                (
+                    "Año\tEmpresa\tFecha venta\tTipo\tAcciones\tComisión\tTotal Venta\n"
+                    "2024\tApple Inc.\t20/06/2024\tDerechos\t0\t2,00\t50,00\n"
+                ).encode(),
+                "sales",
+            ),
+            (
+                (
+                    "Año\tEmpresa\tFecha de cobro\tImporte Bruto\tImporte Neto\t"
+                    "Importe en Derechos\tRetención Origen\tRetención Destino\n"
+                    "2024\tApple Inc.\t20/06/2024\t100,00\t80,00\t20,00\t0\t0\n"
+                ).encode(),
+                "dividends",
+            ),
+        ],
+    )
+    def test_create_session_rejects_rights_imports(self, client, content, format_hint):
+        c, _ = client
+        resp = c.post(
+            "/api/import/sessions",
+            files={"file": ("rights.csv", io.BytesIO(content), "text/csv")},
+            data={"format_hint": format_hint},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "parse_error"
+        assert "no longer supported" in resp.json()["detail"]
+
     def test_get_session_200(self, client):
         c, _ = client
         create_resp = c.post(

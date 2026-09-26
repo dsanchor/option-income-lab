@@ -33,7 +33,6 @@ export function isCaGroupMovement(
  */
 export const CA_LEG_TYPE_LABELS: Record<string, string> = {
   CASH_DIVIDEND: "Cash Dividend",
-  RIGHTS_SOLD: "Rights Sold",
   SHARE_ACQUISITION: "Share Acquisition",
   CASH_TOP_UP: "Cash Top-Up",
   CONSOLIDATION_OUT: "Consolidation Out",

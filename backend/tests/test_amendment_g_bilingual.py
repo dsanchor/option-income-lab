@@ -25,7 +25,7 @@ import pytest
 from decimal import Decimal
 
 from src.portfolio.parsers.purchases import parse_purchases
-from src.portfolio.parsers.sales import parse_sales, _normalize_sales_type
+from src.portfolio.parsers.sales import parse_sales, _validate_legacy_type_cell
 from src.portfolio.parsers.dividends import parse_dividends
 
 
@@ -142,7 +142,7 @@ _SALES_6COL_EN = (
 _SALES_7COL_EN_TYPE = (
     "Year\tCompany\tSale Date\tType\tShares\tCommission\tTotal Proceeds\n"
     "2024\tApple Inc.\t20/06/2024\tStocks\t5\t7,50\t1.050,00\n"
-    "2024\tBanco Santander\t15/07/2024\tRights\t0\t3,00\t150,00\n"
+    "2024\tBanco Santander\t15/07/2024\tStocks\t10\t3,00\t150,00\n"
 )
 
 # Sale Type header as "Sale Type" (alias)
@@ -177,23 +177,22 @@ class TestSalesEnglishHeaders:
         """6-column English CSV (no Type column) → every row is ACCIONES."""
         rows = parse_sales(_enc(_SALES_6COL_EN))
         for row in rows:
-            assert row["sales_type"] == "ACCIONES"
+            assert "sales_type" not in row
 
     def test_7col_english_type_header_stocks_parsed(self):
         """Type column with English header 'Type' + value 'Stocks' → ACCIONES."""
         rows = parse_sales(_enc(_SALES_7COL_EN_TYPE))
-        assert rows[0]["sales_type"] == "ACCIONES"
+        assert "sales_type" not in rows[0]
 
-    def test_7col_english_type_header_rights_parsed(self):
-        """Type column value 'Rights' → DERECHOS."""
+    def test_7col_english_type_header_has_no_active_metadata(self):
         rows = parse_sales(_enc(_SALES_7COL_EN_TYPE))
-        assert rows[1]["sales_type"] == "DERECHOS"
+        assert "sales_type" not in rows[1]
 
     def test_7col_alternative_headers_accepted(self):
         """'Sell Date', 'Sale Type', 'Quantity', 'Fees', 'Proceeds' are valid aliases."""
         rows = parse_sales(_enc(_SALES_7COL_EN_SALETYPE))
         assert len(rows) == 1
-        assert rows[0]["sales_type"] == "ACCIONES"  # Shares → ACCIONES
+        assert "sales_type" not in rows[0]
 
 
 # ---------------------------------------------------------------------------
@@ -201,65 +200,63 @@ class TestSalesEnglishHeaders:
 # ---------------------------------------------------------------------------
 
 class TestSalesTypeAliases:
-    """Strict tests for _normalize_sales_type() English alias expansion.
-
-    These aliases are NEW in Amendment G and must not regress.
-    Previous behavior: only ACCIONES and DERECHOS (Spanish) accepted.
-    New behavior: STOCKS, SHARES, RIGHTS (English) also accepted.
-    """
+    """Legacy ordinary labels remain accepted; rights labels fail closed."""
 
     def test_stocks_maps_to_acciones(self):
-        assert _normalize_sales_type("STOCKS") == "ACCIONES"
+        assert _validate_legacy_type_cell("STOCKS") is None
 
     def test_stocks_lowercase_maps_to_acciones(self):
         """Case-insensitive: 'stocks' → ACCIONES."""
-        assert _normalize_sales_type("stocks") == "ACCIONES"
+        assert _validate_legacy_type_cell("stocks") is None
 
     def test_stocks_mixedcase_maps_to_acciones(self):
-        assert _normalize_sales_type("Stocks") == "ACCIONES"
+        assert _validate_legacy_type_cell("Stocks") is None
 
     def test_shares_maps_to_acciones(self):
-        assert _normalize_sales_type("SHARES") == "ACCIONES"
+        assert _validate_legacy_type_cell("SHARES") is None
 
     def test_shares_lowercase_maps_to_acciones(self):
-        assert _normalize_sales_type("shares") == "ACCIONES"
+        assert _validate_legacy_type_cell("shares") is None
 
-    def test_rights_maps_to_derechos(self):
-        assert _normalize_sales_type("RIGHTS") == "DERECHOS"
+    def test_rights_is_rejected(self):
+        with pytest.raises(ValueError, match="no longer supported"):
+            _validate_legacy_type_cell("RIGHTS")
 
     def test_rights_lowercase_maps_to_derechos(self):
-        assert _normalize_sales_type("rights") == "DERECHOS"
+        with pytest.raises(ValueError, match="no longer supported"):
+            _validate_legacy_type_cell("rights")
 
     def test_rights_mixedcase_maps_to_derechos(self):
-        assert _normalize_sales_type("Rights") == "DERECHOS"
+        with pytest.raises(ValueError, match="no longer supported"):
+            _validate_legacy_type_cell("Rights")
 
     def test_acciones_unchanged(self):
         """Spanish 'ACCIONES' continues to work (regression guard)."""
-        assert _normalize_sales_type("ACCIONES") == "ACCIONES"
+        assert _validate_legacy_type_cell("ACCIONES") is None
 
-    def test_derechos_unchanged(self):
-        """Spanish 'DERECHOS' continues to work (regression guard)."""
-        assert _normalize_sales_type("DERECHOS") == "DERECHOS"
+    def test_derechos_is_rejected(self):
+        with pytest.raises(ValueError, match="no longer supported"):
+            _validate_legacy_type_cell("DERECHOS")
 
     def test_empty_string_defaults_acciones(self):
         """Empty / whitespace → ACCIONES (legacy 6-col default; unchanged behavior)."""
-        assert _normalize_sales_type("") == "ACCIONES"
-        assert _normalize_sales_type("   ") == "ACCIONES"
+        assert _validate_legacy_type_cell("") is None
+        assert _validate_legacy_type_cell("   ") is None
 
     def test_invalid_english_typo_raises(self):
         """'stock' (without S) is not in aliases → ValueError."""
         with pytest.raises(ValueError, match="Invalid Tipo"):
-            _normalize_sales_type("stock")
+            _validate_legacy_type_cell("stock")
 
     def test_invalid_spanish_opciones_raises(self):
         """'OPCIONES' is not a valid alias → ValueError (unchanged behavior)."""
         with pytest.raises(ValueError):
-            _normalize_sales_type("OPCIONES")
+            _validate_legacy_type_cell("OPCIONES")
 
     def test_invalid_mixed_garbage_raises(self):
         """Arbitrary non-empty string → ValueError."""
         with pytest.raises(ValueError):
-            _normalize_sales_type("VENTA_RAPIDA")
+            _validate_legacy_type_cell("VENTA_RAPIDA")
 
     def test_stocks_in_7col_csv(self):
         """End-to-end: 'Stocks' in Tipo column of a 7-col CSV → ACCIONES."""
@@ -268,7 +265,7 @@ class TestSalesTypeAliases:
             "2024\tFoo Corp\t20/06/2024\tStocks\t5\t7,50\t1.050,00\n"
         )
         rows = parse_sales(_enc(csv))
-        assert rows[0]["sales_type"] == "ACCIONES"
+        assert "sales_type" not in rows[0]
 
     def test_shares_in_7col_csv(self):
         """End-to-end: 'Shares' in Tipo column → ACCIONES."""
@@ -277,16 +274,15 @@ class TestSalesTypeAliases:
             "2024\tFoo Corp\t20/06/2024\tShares\t10\t5,00\t2.000,00\n"
         )
         rows = parse_sales(_enc(csv))
-        assert rows[0]["sales_type"] == "ACCIONES"
+        assert "sales_type" not in rows[0]
 
-    def test_rights_in_7col_csv(self):
-        """End-to-end: 'Rights' in Tipo column → DERECHOS."""
+    def test_rights_in_7col_csv_rejected(self):
         csv = (
             "Año\tEmpresa\tFecha venta\tTipo\tAcciones\tComisión\tTotal Venta\n"
             "2024\tFoo Corp\t20/06/2024\tRights\t0\t3,00\t150,00\n"
         )
-        rows = parse_sales(_enc(csv))
-        assert rows[0]["sales_type"] == "DERECHOS"
+        with pytest.raises(ValueError, match="no longer supported"):
+            parse_sales(_enc(csv))
 
     def test_invalid_type_in_7col_csv_raises(self):
         """Non-empty unrecognized type in actual CSV row raises ValueError (G-13)."""
@@ -307,7 +303,7 @@ _DIVIDENDS_EN = (
     "Year\tCompany\tPayment Date\tGross Amount\tNet Amount\t"
     "Rights Amount\tSource Withholding\tDestination Withholding\n"
     "2024\tApple Inc.\t15/03/2024\t1.000,00\t800,00\t0,00\t100,00\t100,00\n"
-    "2024\tTelefónica\t20/06/2024\t500,00\t400,00\t50,00\t75,00\t25,00\n"
+    "2024\tTelefónica\t20/06/2024\t500,00\t400,00\t0,00\t75,00\t25,00\n"
 )
 
 # Alternative English aliases
@@ -349,15 +345,14 @@ class TestDividendsEnglishHeaders:
         rows = parse_dividends(_enc(_DIVIDENDS_EN))
         assert rows[0]["wht_destination"] == Decimal("100.00")
 
-    def test_english_rights_amount_nonzero_warns(self):
-        """Rights amount > 0 in English-header file still emits RIGHTS_AMOUNT warning."""
+    def test_english_rights_amount_nonzero_rejected(self):
         csv = (
             "Year\tCompany\tPayment Date\tGross Amount\tNet Amount\t"
             "Rights Amount\tSource Withholding\tDestination Withholding\n"
             "2024\tFoo Corp\t2024-01-01\t500,00\t400,00\t50,00\t50,00\t0,00\n"
         )
-        rows = parse_dividends(_enc(csv))
-        assert any(w["type"] == "RIGHTS_AMOUNT" for w in rows[0]["warnings"])
+        with pytest.raises(ValueError, match="no longer supported"):
+            parse_dividends(_enc(csv))
 
     def test_alternative_english_aliases_accepted(self):
         """'Date', 'Gross', 'Net', 'Scrip Amount', 'WHT Source', 'WHT Dest' are valid."""

@@ -356,7 +356,7 @@ def _dividend(fake, security_id: str, doc_id: str = "txn_div_1",
 class TestMapRecentMovementFieldContract:
     """Unit tests for the _map_recent_movement() pure mapping function.
 
-    All 13 fields required by the Stocks tab contract must be present.
+    All active fields required by the Stocks tab contract must be present.
     """
 
     def test_all_13_contract_fields_present_for_buy(self):
@@ -371,7 +371,6 @@ class TestMapRecentMovementFieldContract:
             "fees": {"total_eur": "9.95"},
             "net": {"eur_amount": "5009.95"},
             "account_id": "broker_a",
-            "sales_type": None,
             "correction_status": "ACTIVE",
             "import_source": None,
         }
@@ -379,7 +378,7 @@ class TestMapRecentMovementFieldContract:
         required_fields = (
             "id", "txn_type", "trade_date", "quantity",
             "gross_eur", "fees_eur", "net_eur", "currency",
-            "account_id", "sales_type", "correction_status", "import_source",
+            "account_id", "correction_status", "import_source",
         )
         for field in required_fields:
             assert field in result, (
@@ -454,7 +453,7 @@ class TestMapRecentMovementFieldContract:
             "currency must come from gross.currency"
         )
 
-    def test_sell_includes_sales_type_acciones(self):
+    def test_sell_omits_obsolete_sales_type(self):
         from web.app import _map_recent_movement
         raw = {
             "id": "txn_sell",
@@ -465,11 +464,9 @@ class TestMapRecentMovementFieldContract:
             "net": {"eur_amount": "2691.50"},
         }
         result = _map_recent_movement(raw)
-        assert result["sales_type"] == "ACCIONES", (
-            "SELL movement must preserve sales_type=ACCIONES"
-        )
+        assert "sales_type" not in result
 
-    def test_sell_includes_sales_type_derechos(self):
+    def test_legacy_rights_metadata_is_not_serialized(self):
         from web.app import _map_recent_movement
         raw = {
             "id": "txn_sell_rights",
@@ -480,9 +477,7 @@ class TestMapRecentMovementFieldContract:
             "net": {"eur_amount": "147.50"},
         }
         result = _map_recent_movement(raw)
-        assert result["sales_type"] == "DERECHOS", (
-            "SELL movement must preserve sales_type=DERECHOS (rights sale)"
-        )
+        assert "sales_type" not in result
 
     def test_correction_status_active_preserved(self):
         from web.app import _map_recent_movement
@@ -771,7 +766,7 @@ class TestStocksTabMovementTypes:
         buy_movs = [m for m in movements if m.get("txn_type") == "BUY"]
         assert len(buy_movs) == 1, "BUY movement must appear with txn_type='BUY'"
 
-    def test_sell_movement_has_correct_txn_type_and_sales_type(self, client):
+    def test_sell_movement_has_correct_txn_type(self, client):
         c, fake = client
         fake.container.seed_security("XNYS:STYPE", "Sell Type Co")
         fake.container.seed_config("STYPE", {"security_id": "XNYS:STYPE"})
@@ -783,11 +778,9 @@ class TestStocksTabMovementTypes:
         movements = resp.json().get("portfolio", {}).get("recent_movements", [])
         sell_movs = [m for m in movements if m.get("txn_type") == "SELL"]
         assert len(sell_movs) == 1, "SELL movement must appear with txn_type='SELL'"
-        assert sell_movs[0].get("sales_type") == "ACCIONES", (
-            "SELL movement must expose sales_type in the Stocks tab"
-        )
+        assert "sales_type" not in sell_movs[0]
 
-    def test_sell_rights_has_sales_type_derechos(self, client):
+    def test_legacy_rights_sell_is_hidden(self, client):
         c, fake = client
         fake.container.seed_security("XNYS:DREC", "Rights Co")
         fake.container.seed_config("DREC", {"security_id": "XNYS:DREC"})
@@ -797,12 +790,7 @@ class TestStocksTabMovementTypes:
 
         resp = c.get("/api/symbols/XNYS:DREC/detail")
         movements = resp.json().get("portfolio", {}).get("recent_movements", [])
-        rights_sells = [m for m in movements
-                        if m.get("txn_type") == "SELL" and
-                        m.get("sales_type") == "DERECHOS"]
-        assert len(rights_sells) == 1, (
-            "Rights SELL (sales_type=DERECHOS) must appear in Stocks tab movements"
-        )
+        assert all(m.get("id") != "txn_drec_rights" for m in movements)
 
     def test_transfer_in_currently_appears(self, client):
         """TRANSFER_IN currently appears in recent_movements (not yet filtered).
@@ -1010,7 +998,7 @@ class TestMovementsEndpointForStocksTable:
         assert "mvt_pill_buy" in buy_ids
 
     def test_txn_type_filter_sell_returns_only_sell(self, client):
-        """?txn_type=SELL returns only SELL rows (ACCIONES and DERECHOS)."""
+        """?txn_type=SELL returns ordinary SELL rows and hides legacy rights."""
         c, fake = client
         _buy(fake, "XNYS:AAPL", doc_id="mvt_pills_buy")
         _sell(fake, "XNYS:AAPL", doc_id="mvt_pills_sell_acc", sales_type="ACCIONES")
@@ -1022,7 +1010,7 @@ class TestMovementsEndpointForStocksTable:
         assert all(m["txn_type"] == "SELL" for m in movements)
         sell_ids = {m["id"] for m in movements}
         assert "mvt_pills_sell_acc" in sell_ids
-        assert "mvt_pills_sell_dec" in sell_ids
+        assert "mvt_pills_sell_dec" not in sell_ids
         assert "mvt_pills_buy" not in sell_ids
 
     def test_invalid_txn_type_returns_400(self, client):
@@ -1055,17 +1043,13 @@ class TestMovementsEndpointForStocksTable:
         assert len(data["movements"]) <= 3, "Must not return more rows than limit"
         assert data["total_count"] == 5, "total_count reflects full unfiltered count"
 
-    def test_sell_movement_exposes_sales_type(self, client):
-        """SELL movements returned by the endpoint include sales_type field."""
+    def test_legacy_rights_movement_is_hidden(self, client):
         c, fake = client
         _sell(fake, "XNYS:AAPL", doc_id="mvt_st_sell", sales_type="DERECHOS")
         resp = c.get("/api/portfolio/movements?security_id=XNYS:AAPL")
         movements = resp.json()["movements"]
         sell = next((m for m in movements if m["id"] == "mvt_st_sell"), None)
-        assert sell is not None
-        assert sell.get("sales_type") == "DERECHOS", (
-            "SELL movement must expose sales_type for StockTransactionsTable sub-label"
-        )
+        assert sell is None
 
 
 class TestMovementsEndpointCaGroupFields:
@@ -1167,9 +1151,7 @@ class TestMovementsEndpointCaGroupFields:
             "Standalone BUY must not carry a ca_group_id"
         )
 
-    def test_all_four_ca_leg_types_accepted(self, client):
-        """All four Amendment H leg types (CASH_DIVIDEND, RIGHTS_SOLD,
-        SHARE_ACQUISITION, CASH_TOP_UP) must be returned with their ca_leg_type."""
+    def test_supported_ca_leg_types_returned_and_legacy_rights_hidden(self, client):
         c, fake = client
         grp = "cag_allfour"
         leg_specs = [
@@ -1189,7 +1171,5 @@ class TestMovementsEndpointCaGroupFields:
             m["ca_leg_type"] for m in movements if m.get("ca_group_id") == grp
         }
         assert returned_types == {
-            "CASH_DIVIDEND", "RIGHTS_SOLD", "SHARE_ACQUISITION", "CASH_TOP_UP"
-        }, (
-            "All four Amendment H leg types must be preserved in the endpoint response"
-        )
+            "CASH_DIVIDEND", "SHARE_ACQUISITION", "CASH_TOP_UP"
+        }

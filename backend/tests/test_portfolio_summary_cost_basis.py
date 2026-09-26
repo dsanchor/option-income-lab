@@ -435,17 +435,11 @@ class TestS4MultipleBuysAndSale:
 
 
 # ---------------------------------------------------------------------------
-# S5 — SELL DERECHOS: rights proceeds and realized result increase;
-#      shares/cost pool unchanged.
+# S5 — A legacy rights SELL is fully inert.
 # ---------------------------------------------------------------------------
 
 class TestS5SellDerechos:
-    """S5: BUY 100@€10 (€0) → SELL DERECHOS 20@€5 (€0).
-    Pool unchanged: 100 shares, €1000.
-    rights_proceeds = 100, sale_proceeds = 100.
-    cost_sold = 0 (DERECHOS don't consume pool).
-    realized = 100 (rights income with no cost).
-    """
+    """A stored legacy rights record contributes no holdings or economics."""
 
     def setup_method(self):
         svc = _make_svc([
@@ -468,33 +462,28 @@ class TestS5SellDerechos:
         assert _d(self.h["cost_basis_sold_eur"]) == _d("0.00")
 
     def test_rights_proceeds(self):
-        assert _d(self.h["rights_proceeds_eur"]) == _d("100.00")
+        assert "rights_proceeds_eur" not in self.h
 
     def test_total_sale_proceeds_equals_rights(self):
-        assert _d(self.h["total_sale_proceeds_eur"]) == _d("100.00")
+        assert _d(self.h["total_sale_proceeds_eur"]) == _d("0.00")
 
     def test_realized_result_equals_rights(self):
-        """Rights income with no assigned cost → realized = 100."""
-        assert _d(self.h["realized_result_eur"]) == _d("100.00")
+        """The excluded record contributes no realized result."""
+        assert _d(self.h["realized_result_eur"]) == _d("0.00")
 
     def test_summary_rights_proceeds(self):
-        assert _d(self.s["rights_proceeds_eur"]) == _d("100.00")
+        assert "rights_proceeds_eur" not in self.s
 
     def test_summary_realized(self):
-        assert _d(self.s["realized_result_eur"]) == _d("100.00")
+        assert _d(self.s["realized_result_eur"]) == _d("0.00")
 
 
 # ---------------------------------------------------------------------------
-# S6 — Mixed ACCIONES/DERECHOS totals.
+# S6 — An ordinary sale remains correct beside an inert legacy rights record.
 # ---------------------------------------------------------------------------
 
 class TestS6MixedAccionesDerechos:
-    """S6: BUY 100@€10 → SELL 30 ACCIONES@€15 → SELL DERECHOS 10@€5.
-    cost_sold = 30×10 = 300, remaining = 700
-    sale_proceeds = 450+50 = 500
-    rights = 50
-    realized = 500 − 300 = 200
-    """
+    """Only the ordinary SELL affects shares, proceeds, and realized result."""
 
     def setup_method(self):
         svc = _make_svc([
@@ -516,19 +505,19 @@ class TestS6MixedAccionesDerechos:
         assert _d(self.h["remaining_cost_basis_eur"]) == _d("700.00")
 
     def test_rights_proceeds(self):
-        assert _d(self.h["rights_proceeds_eur"]) == _d("50.00")
+        assert "rights_proceeds_eur" not in self.h
 
     def test_total_sale_proceeds(self):
-        assert _d(self.h["total_sale_proceeds_eur"]) == _d("500.00")
+        assert _d(self.h["total_sale_proceeds_eur"]) == _d("450.00")
 
     def test_realized_result(self):
-        assert _d(self.h["realized_result_eur"]) == _d("200.00")
+        assert _d(self.h["realized_result_eur"]) == _d("150.00")
 
     def test_summary_rights_proceeds(self):
-        assert _d(self.s["rights_proceeds_eur"]) == _d("50.00")
+        assert "rights_proceeds_eur" not in self.s
 
     def test_summary_total_sale_proceeds(self):
-        assert _d(self.s["total_sale_proceeds_eur"]) == _d("500.00")
+        assert _d(self.s["total_sale_proceeds_eur"]) == _d("450.00")
 
 
 # ---------------------------------------------------------------------------
@@ -1017,7 +1006,6 @@ class TestApiFieldPresence:
         "remaining_cost_basis_eur",
         "total_sales_eur",
         "total_sale_proceeds_eur",
-        "rights_proceeds_eur",
         "realized_result_eur",
         "current_invested_eur",
         "total_dividends_eur",
@@ -1037,7 +1025,6 @@ class TestApiFieldPresence:
         "remaining_cost_basis_eur",
         "total_sales_eur",
         "total_sale_proceeds_eur",
-        "rights_proceeds_eur",
         "realized_result_eur",
         "total_dividends_eur",
         "accounts",
@@ -1252,9 +1239,9 @@ class TestCurrentInvestedNonNegative:
 # ---------------------------------------------------------------------------
 
 class TestRightsProceedsZeroDefault:
-    def test_rights_proceeds_zero_when_no_derechos(self):
+    def test_rights_proceeds_field_is_removed(self):
         svc = _make_svc([_buy("b1", "XNYS:AAPL", 100, "1000.00")])
         result = svc.compute_holdings()
-        assert result["summary"]["rights_proceeds_eur"] == "0.00"
+        assert "rights_proceeds_eur" not in result["summary"]
         h = _holding(result, "XNYS:AAPL")
-        assert h["rights_proceeds_eur"] == "0.00"
+        assert "rights_proceeds_eur" not in h

@@ -146,7 +146,7 @@ class TestFractionalConsolidation:
         result = svc.create_corporate_action(_SC_3_LEGS)
         fco = next(m for m in result["movements"] if m["ca_leg_type"] == "FRACTIONAL_CASH_OUT")
         assert fco["txn_type"] == "SELL"
-        assert fco["sales_type"] == "ACCIONES"
+        assert "sales_type" not in fco
         assert fco["quantity"] == "0.12"
 
 
@@ -357,10 +357,10 @@ class TestCorrectConsolidation:
 # ---------------------------------------------------------------------------
 
 class TestFractionalCashOutSalesType:
-    def test_sct8_sales_type_always_acciones(self, svc):
+    def test_sct8_has_no_obsolete_sales_type(self, svc):
         result = svc.create_corporate_action(_SC_3_LEGS)
         fco = next(m for m in result["movements"] if m["ca_leg_type"] == "FRACTIONAL_CASH_OUT")
-        assert fco["sales_type"] == "ACCIONES"
+        assert "sales_type" not in fco
 
 
 # ---------------------------------------------------------------------------

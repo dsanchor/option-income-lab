@@ -25,6 +25,7 @@ import type {
   EconomicsAggregatedReport,
   EconomicsAggregatedSummary,
 } from "@/types/economics";
+import { excludeUnsupportedRightsFromEconomicsOverview } from "@/lib/rightsExclusion";
 
 const MONTHS = [
   { value: "1", label: "Jan" },
@@ -418,7 +419,7 @@ export default function EconomicsOverviewView() {
       const response = await fetch(`/api/economics/overview${queryString ? `?${queryString}` : ""}`);
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-      const report = body as EconomicsAggregatedReport;
+      const report = excludeUnsupportedRightsFromEconomicsOverview(body as EconomicsAggregatedReport);
       const withTotals: EconomicsAggregatedReport = {
         ...report,
         summary: {

@@ -4,6 +4,7 @@
  */
 import Link from "next/link";
 import type { RecentMovement } from "@/types/symbol-detail";
+import { excludeUnsupportedRightsMovements } from "@/lib/rightsExclusion";
 
 interface Props {
   movements: RecentMovement[];
@@ -17,11 +18,6 @@ const TXN_LABELS: Record<string, { label: string; cls: string }> = {
   DIVIDEND: { label: "Dividend", cls: "text-accent-blue border-accent-blue/40 bg-accent-blue/10" },
   TRANSFER_IN: { label: "In", cls: "text-text-muted border-border bg-bg-input" },
   TRANSFER_OUT: { label: "Out", cls: "text-text-muted border-border bg-bg-input" },
-};
-
-const SALES_TYPE_LABELS: Record<string, string> = {
-  ACCIONES: "Shares",
-  DERECHOS: "Rights",
 };
 
 function eur(v: string | null | undefined): string {
@@ -39,7 +35,11 @@ function qty(v: string | null | undefined): string {
 }
 
 export default function SymbolMovementsTable({ movements, movementCount, securityId }: Props) {
-  if (movements.length === 0) {
+  const visibleMovements = excludeUnsupportedRightsMovements(movements);
+  const visibleMovementCount = movementCount === undefined
+    ? undefined
+    : Math.max(0, movementCount - (movements.length - visibleMovements.length));
+  if (visibleMovements.length === 0) {
     return (
       <div className="surface rounded-[var(--radius)] border border-border p-4">
         <h3 className="mb-2 text-sm font-semibold text-text">Stock Movements</h3>
@@ -57,9 +57,9 @@ export default function SymbolMovementsTable({ movements, movementCount, securit
       <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
         <h3 className="text-sm font-semibold text-text">
           Stock Movements
-          {movementCount !== undefined && movementCount > movements.length && (
+          {visibleMovementCount !== undefined && visibleMovementCount > visibleMovements.length && (
             <span className="ml-1.5 text-xs font-normal text-text-muted">
-              (showing {movements.length} of {movementCount})
+              (showing {visibleMovements.length} of {visibleMovementCount})
             </span>
           )}
         </h3>
@@ -82,15 +82,14 @@ export default function SymbolMovementsTable({ movements, movementCount, securit
             </tr>
           </thead>
           <tbody>
-            {movements.map((m) => {
+            {visibleMovements.map((m) => {
               const meta = TXN_LABELS[m.txn_type] ?? { label: m.txn_type, cls: "text-text-muted border-border bg-bg-input" };
-              const salesSuffix = m.sales_type ? ` · ${SALES_TYPE_LABELS[m.sales_type] ?? m.sales_type}` : "";
               return (
                 <tr key={m.id} className="border-b border-border/40 last:border-0">
                   <td className="px-4 py-2 font-mono text-xs text-text-muted">{m.trade_date}</td>
                   <td className="px-4 py-2">
                     <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 text-xs ${meta.cls}`}>
-                      {meta.label}{salesSuffix}
+                      {meta.label}
                     </span>
                   </td>
                   <td className="px-4 py-2 text-right font-mono text-xs">{qty(m.quantity)}</td>

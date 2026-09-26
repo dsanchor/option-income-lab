@@ -33,6 +33,7 @@ from src.portfolio.import_service import (
     UnresolvedQuestionsError,
     AlreadyCommittedError,
 )
+from src.portfolio.rights_policy import RIGHTS_UNSUPPORTED_MESSAGE, payload_requests_rights
 from src.portfolio.provider_symbols import (
     validate_provider_symbols,
     resolve_yfinance_symbol,
@@ -826,6 +827,8 @@ async def create_movement(request: Request):
         return _err("validation_error", "Invalid JSON body", 400)
 
     txn_type = body.get("txn_type", "")
+    if payload_requests_rights(body) or "sales_type" in body:
+        return _err("validation_error", RIGHTS_UNSUPPORTED_MESSAGE, 400)
     option_txn_types = set(OPTION_TXN_TYPES)
     if txn_type not in {"BUY", "SELL", "DIVIDEND"} | option_txn_types:
         return _err(
@@ -954,6 +957,8 @@ async def correct_movement(request: Request, movement_id: str):
         return _err("validation_error", "Invalid JSON body", 400)
 
     account_id = body.get("account_id", "")
+    if payload_requests_rights(body) or "sales_type" in body:
+        return _err("validation_error", RIGHTS_UNSUPPORTED_MESSAGE, 400)
     if not account_id:
         return _err("validation_error", "account_id is required", 400)
     if not body.get("correction_note", "").strip():
@@ -1737,6 +1742,10 @@ async def create_corporate_action(request: Request):
 
     if not isinstance(body.get("legs"), list):
         return _err("validation_error", "legs must be a list", 400)
+    if payload_requests_rights(body) or any(
+        payload_requests_rights(leg) for leg in body["legs"] if isinstance(leg, dict)
+    ):
+        return _err("validation_error", RIGHTS_UNSUPPORTED_MESSAGE, 400)
 
     try:
         svc = _get_portfolio_svc(request)
@@ -1806,7 +1815,7 @@ async def correct_corporate_action_group(request: Request, ca_group_id: str):
         "notes": "<str|null>",
         "legs": [                       # required, non-empty list
           {
-            "leg_type": "CASH_DIVIDEND|RIGHTS_SOLD|SHARE_ACQUISITION|CASH_TOP_UP",
+            "leg_type": "CASH_DIVIDEND|SHARE_ACQUISITION|CASH_TOP_UP",
             "trade_date": "...",
             "quantity": "...",
             "gross": {"amount": "...", "currency": "...", "eur_amount": "..."},
@@ -1831,6 +1840,12 @@ async def correct_corporate_action_group(request: Request, ca_group_id: str):
         return _err("validation_error", "Invalid JSON body", 400)
 
     body["ca_group_id_path"] = ca_group_id  # informational only
+    if payload_requests_rights(body) or any(
+        payload_requests_rights(leg)
+        for leg in body.get("legs") or []
+        if isinstance(leg, dict)
+    ):
+        return _err("validation_error", RIGHTS_UNSUPPORTED_MESSAGE, 400)
 
     try:
         svc = _get_portfolio_svc(request)

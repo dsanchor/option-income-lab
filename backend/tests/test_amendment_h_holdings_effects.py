@@ -459,24 +459,15 @@ class TestRightsSoldLegHoldings:
         )
 
     def test_rights_sold_counted_in_rights_proceeds(self):
-        """RIGHTS_SOLD net proceeds must appear in rights_proceeds_eur."""
-        gross = "78.67"
-        fees = "2.33"
-        expected_net = Decimal(gross) - Decimal(fees)
-
+        """Legacy RIGHTS_SOLD records are inert and expose no aggregate."""
         svc = _make_services([
             _standard_buy(quantity="100"),
-            _rights_sold_leg(quantity="3", gross_eur=gross, fees_eur=fees),
+            _rights_sold_leg(quantity="3", gross_eur="78.67", fees_eur="2.33"),
         ])
         result = svc.compute_holdings()
         h = result["holdings"][0]
-        rights_proceeds = h.get("rights_proceeds_eur")
-        assert rights_proceeds is not None, (
-            "rights_proceeds_eur must be present when RIGHTS_SOLD leg exists"
-        )
-        assert Decimal(rights_proceeds) == expected_net, (
-            f"rights_proceeds_eur ({rights_proceeds}) must equal gross-fees of RIGHTS_SOLD"
-        )
+        assert "rights_proceeds_eur" not in h
+        assert Decimal(h["total_sale_proceeds_eur"]) == Decimal("0")
 
 
 # ---------------------------------------------------------------------------
@@ -574,11 +565,8 @@ class TestDividendWithScripGroupHoldings:
     def test_full_group_rights_proceeds_counted(self):
         svc = _make_services(self._build_full_group())
         h = svc.compute_holdings()["holdings"][0]
-        rights = Decimal(h.get("rights_proceeds_eur", "0"))
-        expected_rights = Decimal("78.67") - Decimal("2.33")
-        assert rights == expected_rights, (
-            f"rights_proceeds_eur must be {expected_rights}; got {rights}"
-        )
+        assert "rights_proceeds_eur" not in h
+        assert Decimal(h["total_sale_proceeds_eur"]) == Decimal("0")
 
     def test_full_group_pool_cost_unchanged_by_incomplete_legs(self):
         """Pool avg cost reflects only the COMPLETE BUY, not INCOMPLETE CA legs."""

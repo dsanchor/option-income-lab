@@ -630,29 +630,17 @@ def test_api_dividends_economics_smoke(economics_client):
 
 
 
-def test_api_dividends_economics_exposes_cash_derechos_and_total_fields(economics_client):
+def test_api_dividends_economics_exposes_cash_only_totals(economics_client):
     response = economics_client.get("/api/economics/dividends")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["summary"]["total_net_eur"] == 17.0
-    assert body["summary"]["cash_net"] == 17.0
-    assert body["summary"]["derechos_net"] == 2.0
-    assert body["summary"]["total_net"] == 19.0
+    assert body["summary"]["total_net_eur"] == 8.0
+    assert body["summary"]["cash_net"] == 8.0
+    assert "derechos_net" not in body["summary"]
+    assert body["summary"]["total_net"] == 8.0
+    assert body["summary"]["total_dividends"] == 1
     assert body["monthly"] == [
-        {
-            "month": "2026-01",
-            "gross_eur": 10.0,
-            "fees_eur": 0.0,
-            "withholding_source_eur": 1.0,
-            "withholding_destination_eur": 0.0,
-            "withholding_total_eur": 1.0,
-            "net_eur": 9.0,
-            "cash_net": 9.0,
-            "derechos_net": 2.0,
-            "total_net": 11.0,
-            "dividend_count": 1,
-        },
         {
             "month": "2026-02",
             "gross_eur": 8.0,
@@ -662,7 +650,6 @@ def test_api_dividends_economics_exposes_cash_derechos_and_total_fields(economic
             "withholding_total_eur": 0.0,
             "net_eur": 8.0,
             "cash_net": 8.0,
-            "derechos_net": 0.0,
             "total_net": 8.0,
             "dividend_count": 1,
         },
@@ -717,12 +704,11 @@ def test_api_economics_overview_uses_eur_options_fields_and_coverage(economics_c
     }
     assert body["summary"] == {
         "options_net_eur": 3.15,
-        "dividends_net_eur": 9.0,
-        "dividends_cash_net_eur": 9.0,
-        "dividends_derechos_net_eur": 2.0,
-        "dividends_total_net_eur": 11.0,
+        "dividends_net_eur": 0.0,
+        "dividends_cash_net_eur": 0.0,
+        "dividends_total_net_eur": 0.0,
         "portfolio_yoc_pct": None,
-        "combined_net_eur": 14.15,
+        "combined_net_eur": 3.15,
         "total_option_positions": 8,
         "options_coverage": {
             "linked_positions": 5,
@@ -736,20 +722,19 @@ def test_api_economics_overview_uses_eur_options_fields_and_coverage(economics_c
             "excluded_positions_linked_only_outside_account_filter": 1,
             "excluded_paper_positions": 0,
         },
-        "total_dividend_events": 1,
+        "total_dividend_events": 0,
         "total_symbols": 8,
     }
     january = next(row for row in body["monthly"] if row["month"] == "2026-01")
     assert january == {
         "month": "2026-01",
         "options_net_eur": 3.7,
-        "dividends_net_eur": 9.0,
-        "dividends_cash_net_eur": 9.0,
-        "dividends_derechos_net_eur": 2.0,
-        "dividends_total_net_eur": 11.0,
-        "combined_net_eur": 14.7,
+        "dividends_net_eur": 0.0,
+        "dividends_cash_net_eur": 0.0,
+        "dividends_total_net_eur": 0.0,
+        "combined_net_eur": 3.7,
         "option_positions": 4,
-        "dividend_events": 1,
+        "dividend_events": 0,
     }
     assert body["meta"] == {
         "options_bucket_field": "opened_at",
@@ -891,7 +876,6 @@ def test_apply_dividends_yoc_ignores_year_month_filters_but_respects_visible_row
             "withholding_total_eur": 0.0,
             "net_eur": 10.0,
             "cash_net": 10.0,
-            "derechos_net": 0.0,
             "total_net": 10.0,
             "dividend_count": 1,
             "yoc_pct": 20.0,

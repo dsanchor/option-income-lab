@@ -186,6 +186,29 @@
 - Validation passed: 69 focused backup/infrastructure tests, 218 migration/security/pricing persistence regressions (4 pre-existing warnings), 71 Symbol Details backend regressions (3 pre-existing warnings), 78 frontend contracts, independent secret-rule probes, Python compile, and `git diff --check`.
 - Final verdict: APPROVE. Safe to commit. Production requires building and deploying a new image containing this revision before retrying the read-only export; the currently deployed image remains unfixed.
 
+### 2026-09-26 — Rights-removal integration gate rejected
+- Rejected after 934 focused backend tests and 430 focused frontend tests passed,
+  because independent adversarial probes exposed three fail-closed gaps.
+- A legacy dividend carrying non-zero `source_derechos_amount` is recognized by
+  the strict backup detector but `sanitize_legacy_movement()` removes the field
+  and retains the dividend. It then contributes cash income/counts instead of
+  remaining inert. The authored dividends test explicitly expects this legacy
+  record to remain included.
+- The six-column sales CSV path still accepts a zero-quantity, positive-proceeds
+  sale and merely warns that it may be a rights transaction, allowing silent
+  conversion into an ordinary stock SELL.
+- Frontend compatibility filtering is not fail-closed: malformed non-numeric
+  rights amounts and whitespace/lowercase legacy type/warning values are
+  displayed because checks require finite numeric and exact-case matches.
+- Exact search found 36 legacy identifier occurrences across 9 active source
+  files and 170 across 21 test files. Runtime rejection/compatibility guards are
+  justified, but multiple stale tests/comments still describe and assert the
+  removed positive rights model rather than explicit rejection/inertness.
+- TypeScript, production build, removal-specific ESLint, new policy Ruff, Python
+  compile, and diff/conflict checks passed. Full frontend remained at 1325/1327
+  with the same two unrelated baseline failures; broader changed-file lint
+  retained three existing DividendsView hook findings and legacy Ruff debt.
+
 ### 2026-09-20 — Blob tag RBAC and daily cron gate rejected
 - Approved the daily `15 23 * * *` UTC schedule and its 00:15 Madrid standard-time / 01:15 daylight-saving-time documentation; the internal due/local-date/idempotency gate remains retry/manual safety only, and no stale backup `*/15` claim remains.
 - Confirmed Blob diagnostics expose operation, fixed path category, status, error code, and request ID without object names or payloads. Immutable create, lease, archive verification, CAS pointers, and retention tagging remain intact.
@@ -579,3 +602,34 @@
   deprecation/subprocess warnings, and generated-CSS warning are unrelated.
   No implementation/tests, commit, push, deployment, or production access was
   performed.
+
+### 2026-09-26 — Rights-removal revision final review
+- **REJECT.** Backend inertness, strict sales quantities, backup boundaries,
+  ordinary trades/cash dividends, and Dividend · Buy passed independent
+  probes, but the frontend shared normalizer only trims and uppercases marker
+  values. It allowed accented and punctuation/whitespace-equivalent rights
+  markers (`dérêchos`, `rights.sold`, `rights sold`, `rights-sold`).
+- The Total Dividends card still falls back from canonical `total_net_eur` to
+  legacy `cash_net`, and orphan `ACCIONES_ZERO_QUANTITY` /
+  `INVALID_SALES_TYPE` warning types and four label maps remain without a
+  backend runtime producer.
+- Full validation: backend 4428 passed, 5 skipped, 12 failed, 16 errors
+  (unrelated best-options/yfinance fixture failures); frontend 1335/1337 with
+  the same two unrelated failures. TypeScript, scoped ESLint/Ruff, compile,
+  production build, and diff hygiene passed. Frontend adversarial rights
+  probes passed 5/9 and failed the four equivalent-marker cases.
+
+### 2026-09-26 — Rights-removal final gate approved
+- **APPROVE.** Saul closed the normalization, canonical Total Dividends, and
+  orphan-warning blockers. NFKD/accent/case/punctuation/separator/whitespace
+  and nested variants now fail closed without rejecting ordinary descriptions,
+  company names, trades, cash dividends, or Dividend · Buy.
+- Confirmed one Total Dividends card sourced only from finite canonical
+  `total_net_eur`, zero obsolete warning references, no rights creation/import/
+  correction/corporate-action/backup acceptance, inert legacy records, strict
+  positive finite sales quantity, and preserved filters/pagination/FIFO.
+- Validation passed 973 focused backend tests, 1339/1341 full frontend
+  contracts with the same two unrelated failures, 328/329 focused frontend
+  contracts with the unrelated paper-action failure, and 81 independent
+  adversarial probes. TypeScript, scoped ESLint/Ruff, compile, production
+  build, conflict/diff checks passed; existing lint debt remains unrelated.

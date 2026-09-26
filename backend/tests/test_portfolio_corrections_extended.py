@@ -215,22 +215,19 @@ class TestBuyFullCorrection:
 
 class TestSellCorrection:
     def test_sell_sales_type_acciones_to_derechos(self, client):
-        """C-4: SELL sales_type ACCIONES → DERECHOS."""
+        """C-4: correction cannot convert an ordinary sale into rights."""
         c, fake = client
         _seed(fake, "sell_std_001", txn_type="SELL", sales_type="ACCIONES")
         resp = _correct(c, "sell_std_001", sales_type="DERECHOS")
-        assert resp.status_code == 200
-        repl = resp.json()["replacement"]
-        assert repl["sales_type"] == "DERECHOS"
+        assert resp.status_code == 400
+        assert "no longer supported" in resp.json()["detail"]
 
     def test_sell_sales_type_derechos_to_acciones(self, client):
-        """C-4: SELL sales_type DERECHOS → ACCIONES."""
+        """Legacy rights records are hidden and cannot be corrected."""
         c, fake = client
         _seed(fake, "sell_dta_001", txn_type="SELL", sales_type="DERECHOS")
         resp = _correct(c, "sell_dta_001", sales_type="ACCIONES")
-        assert resp.status_code == 200
-        repl = resp.json()["replacement"]
-        assert repl["sales_type"] == "ACCIONES"
+        assert resp.status_code == 400
 
     def test_sell_withholding_source_added(self, client):
         """C-3: SELL correction adds withholding.source; net reduced."""

@@ -52,3 +52,15 @@
   contracts, TypeScript, scoped ESLint, Python compile/critical Ruff, production
   build, and diff hygiene; the build retained one pre-existing generated-CSS
   warning and broad Ruff retained legacy findings.
+- 2026-09-26: Final frontend rights-removal revision aligned the shared
+  compatibility gate with backend-style NFKD/accent, case, punctuation,
+  separator, whitespace, and nested payload normalization while keeping
+  ordinary descriptions, company names, BUY/SELL, cash dividends, and
+  Dividend · Buy inert. Explicit rights amounts/flags and unknown sale markers
+  fail closed. Total Dividends now reads only finite canonical
+  `total_net_eur`, otherwise rendering the standard em dash, with no `cash_net`
+  fallback. Removed the two obsolete sale warning types and all ten production
+  label/type references. Validation passed 67 focused tests, TypeScript, scoped
+  ESLint, production build, reference/diff checks; full frontend was 1339/1341
+  with two known unrelated failures, and full ESLint retained 17 unrelated
+  existing errors.

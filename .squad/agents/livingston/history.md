@@ -13,6 +13,19 @@
 
 ## Recent Learnings
 
+### 2026-09-26 — Rights movements removed from backend/domain
+- Removed rights creation from CSV import, manual API, corrections, and
+  corporate actions; requests fail closed and converted shares remain modeled
+  through `Dividend · Buy` / `SHARE_ACQUISITION`.
+- Legacy rights documents are preserved physically but suppressed from active
+  reads, holdings/FIFO, membership, transfer calculations, symbol details,
+  dividend Economics, and all totals. They are never migrated or retyped.
+- Backup export/restore rejects actual legacy rights data, while harmless
+  `sales_type=ACCIONES` metadata on ordinary sales is sanitized.
+- Rights-affected validation passed 1,038 tests; the full backend run reached
+  4,385 passed and 5 skipped, with 27 unrelated yfinance/provider failures at
+  the suite tail.
+
 ### 2026-09-26 — Roll position contract-count authority
 - Persisted option positions historically had no quantity field: manual,
   alert-created, rolled, and paper writers implicitly represented one

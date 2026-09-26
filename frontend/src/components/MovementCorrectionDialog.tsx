@@ -16,7 +16,7 @@ import type {
   OptionTxnType,
   WithholdingLegInput,
 } from "@/types/portfolio";
-import { OPTION_TXN_TYPES, SALES_TYPE_LABELS } from "@/types/portfolio";
+import { OPTION_TXN_TYPES } from "@/types/portfolio";
 import { getMovementTypeLabel } from "@/lib/movementTypeLabel";
 import { getAccountName } from "@/lib/accountDisplay";
 import OptionPositionLinkPicker from "./OptionPositionLinkPicker";
@@ -307,9 +307,6 @@ export default function MovementCorrectionDialog({
   const [fxRate, setFxRate] = useState(m.fx?.rate ?? "");
   const [fxSource, setFxSource] = useState<FxRateSource>(m.fx?.rate_source ?? "ECB");
 
-  // ── Sales type (SELL) ──────────────────────────────────────────────────────
-  const [salesType, setSalesType] = useState<"ACCIONES" | "DERECHOS">(m.sales_type ?? "ACCIONES");
-
   // ── Cost basis status (BUY) ────────────────────────────────────────────────
   const [costBasisStatus, setCostBasisStatus] = useState<CostBasisStatus>(
     m.cost_basis_status ?? "COMPLETE"
@@ -489,12 +486,6 @@ export default function MovementCorrectionDialog({
       // FX
       if (fxRate && (fxRate !== (m.fx?.rate ?? "") || fxSource !== (m.fx?.rate_source ?? "ECB"))) {
         payload.fx = { rate: fxRate, rate_source: fxSource };
-        hasChanges = true;
-      }
-
-      // Sales type (SELL only)
-      if (m.txn_type === "SELL" && salesType !== (m.sales_type ?? "ACCIONES")) {
-        payload.sales_type = salesType;
         hasChanges = true;
       }
 
@@ -841,34 +832,6 @@ export default function MovementCorrectionDialog({
                       placeholder="Shares / units"
                       className={`${inputCls} mt-2`}
                     />
-                  )}
-                </div>
-              )}
-
-              {/* ── Sale type (SELL only) ── */}
-              {m.txn_type === "SELL" && (
-                <div>
-                  <div className={sectionHeadCls}>Sale type</div>
-                  <div className="flex gap-6">
-                    {(["ACCIONES", "DERECHOS"] as const).map((t) => (
-                      <label key={t} className="flex items-center gap-2 cursor-pointer select-none">
-                        <input
-                          type="radio"
-                          name="corr_sales_type"
-                          value={t}
-                          checked={salesType === t}
-                          onChange={() => setSalesType(t)}
-                          className="accent-accent-blue"
-                        />
-                        <span className="text-sm text-text">{SALES_TYPE_LABELS[t]}</span>
-                      </label>
-                    ))}
-                  </div>
-                  {salesType === "DERECHOS" && (
-                    <div className="mt-2 rounded-[var(--radius)] border border-accent-blue/20 bg-accent-blue/5 px-3 py-2 text-xs text-text-muted">
-                      ℹ Rights sale: proceeds recorded, but share quantity is{" "}
-                      <strong className="text-text">NOT</strong> reduced from holdings.
-                    </div>
                   )}
                 </div>
               )}

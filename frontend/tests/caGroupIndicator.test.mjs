@@ -21,7 +21,6 @@ function isCaGroupMovement(movement) {
 
 const CA_LEG_TYPE_LABELS = {
   CASH_DIVIDEND: "Cash Dividend",
-  RIGHTS_SOLD: "Rights Sold",
   SHARE_ACQUISITION: "Share Acquisition",
   CASH_TOP_UP: "Cash Top-Up",
   CONSOLIDATION_OUT: "Consolidation Out",
@@ -97,15 +96,6 @@ describe("isCaGroupMovement", () => {
     assert.equal(isCaGroupMovement(movement), true);
   });
 
-  it("RIGHTS_SOLD leg with ca_group_id → true", () => {
-    const movement = {
-      txn_type: "SELL",
-      id: "mvt_rights_001",
-      ca_group_id: "cag_def",
-      ca_leg_type: "RIGHTS_SOLD",
-    };
-    assert.equal(isCaGroupMovement(movement), true);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -115,10 +105,6 @@ describe("isCaGroupMovement", () => {
 describe("getCaLegTypeLabel", () => {
   it("CASH_DIVIDEND → 'Cash Dividend'", () => {
     assert.equal(getCaLegTypeLabel("CASH_DIVIDEND"), "Cash Dividend");
-  });
-
-  it("RIGHTS_SOLD → 'Rights Sold'", () => {
-    assert.equal(getCaLegTypeLabel("RIGHTS_SOLD"), "Rights Sold");
   });
 
   it("SHARE_ACQUISITION → 'Share Acquisition'", () => {
@@ -165,7 +151,6 @@ describe("getCaLegTypeLabel", () => {
 describe("CA_LEG_TYPE_LABELS exhaustive coverage", () => {
   const ALL_LEG_TYPES = [
     "CASH_DIVIDEND",
-    "RIGHTS_SOLD",
     "SHARE_ACQUISITION",
     "CASH_TOP_UP",
     "CONSOLIDATION_OUT",
@@ -173,7 +158,7 @@ describe("CA_LEG_TYPE_LABELS exhaustive coverage", () => {
     "FRACTIONAL_CASH_OUT",
   ];
 
-  it("covers exactly 7 leg types from Amendment H §H.3.2 + SHARE_CONSOLIDATION", () => {
+  it("covers exactly the active corporate-action leg types", () => {
     assert.deepEqual(
       Object.keys(CA_LEG_TYPE_LABELS).sort(),
       ALL_LEG_TYPES.sort(),

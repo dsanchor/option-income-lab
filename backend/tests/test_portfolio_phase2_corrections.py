@@ -665,7 +665,7 @@ class TestFullCorrectionFieldMatrix:
         net_expected = Decimal("5000") - Decimal("3.00") - Decimal("45.30")
         assert Decimal(repl["net"]["eur_amount"]) == net_expected
 
-    # ── C-4: SELL — sales_type ACCIONES→DERECHOS ─────────────────────────
+    # ── C-4: SELL — removed rights conversion is rejected ─────────────────
     def test_c4_sell_sales_type_acciones_to_derechos(self, client):
         c, fake = client
         _seed_full(fake, "c4_001", txn_type="SELL", sales_type="ACCIONES")
@@ -674,8 +674,9 @@ class TestFullCorrectionFieldMatrix:
             "correction_note": "Was a rights sale not a share sale",
             "sales_type": "DERECHOS",
         })
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["replacement"]["sales_type"] == "DERECHOS"
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "validation_error"
+        assert "no longer supported" in resp.json()["detail"]
 
     # ─────────────────────────────────────────────────────────────────────
     # C-5 through C-7, C-10, C-12, C-13: DIVIDEND — ⚠️ PENDING AMENDMENT

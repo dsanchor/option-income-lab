@@ -15,6 +15,19 @@
 
 ## Recent Learnings
 
+### 2026-09-26 — Rights-removal backend rejection revision
+- Rights detection must inspect normalized legacy amount, flag, type, and nested
+  source-payload aliases. Non-zero values and malformed/non-finite values are
+  fail-closed; only provably zero/false obsolete metadata may be stripped.
+- Sanitization must decide inertness before removing metadata. Otherwise a
+  rights-bearing dividend can be reinterpreted as ordinary cash income.
+- Stock SELL CSV rows require a positive finite share quantity. Zero, missing,
+  negative, NaN, or infinite quantities cannot be warnings or commit-eligible
+  rows, even when proceeds are positive.
+- Logical backup export/restore is a strict rejection boundary for rights data,
+  while ordinary stock records with zero/false legacy metadata remain
+  exportable after sanitization.
+
 ### 2026-09-26 — Roll contract quantity independent revision
 - Legacy implicit-one eligibility is now bounded by persisted evidence from the
   historical writer: no schema marker, the exact generated `pos_..._YYYYMMDD_HHMMSS`

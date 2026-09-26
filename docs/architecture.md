@@ -36,6 +36,21 @@ the exact deterministic role definition ID.
 Storage has public Blob access disabled, versioning enabled, and 14-day
 Blob/container soft delete.
 
+**Portfolio rights compatibility:** Rights-associated portfolio movements are
+not an active ledger type. Detection normalizes marker names and values for
+case, accents, punctuation, and whitespace, scans supported nested source
+payloads, and treats malformed or non-finite marker amounts as rights data.
+Portal/API creation, correction, corporate-action, and CSV import boundaries
+reject those records rather than converting them into stock sales or dividend
+income. Stock SELL imports additionally require a positive finite share
+quantity; zero or missing quantity with proceeds is rejected. Shares received
+through a scrip conversion are recorded through `Dividend · Buy`
+(`SHARE_ACQUISITION`). Legacy rights documents are preserved in storage without
+migration, but are excluded from movement read models, holdings/FIFO,
+portfolio membership, dividend Economics, symbol details, and totals. Logical
+backup export and restore validation reject backups containing actual legacy
+rights data; harmless obsolete ordinary-sale metadata is stripped.
+
 The platform invokes the Job once daily with cron `15 23 * * *` (23:15 UTC).
 That is 00:15 in `Europe/Madrid` during standard time and 01:15 during
 daylight-saving time. Application code retains its local-date, due-time, and

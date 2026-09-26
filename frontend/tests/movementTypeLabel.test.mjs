@@ -32,14 +32,6 @@ describe("movement type presentation", () => {
     }), "Dividend");
   });
 
-  it("RIGHTS_ISSUE share acquisition does not claim to be a dividend", () => {
-    assert.equal(getMovementTypeLabel({
-      txn_type: "BUY",
-      ca_leg_type: "SHARE_ACQUISITION",
-      ca_event_type: "RIGHTS_ISSUE",
-    }), "Buy");
-  });
-
   it("missing optional corporate-action metadata preserves the base label", () => {
     assert.equal(getMovementTypeLabel({
       txn_type: "BUY",

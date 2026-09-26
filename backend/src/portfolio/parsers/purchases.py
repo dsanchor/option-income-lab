@@ -109,7 +109,7 @@ def parse_purchases(content: bytes) -> List[Dict[str, Any]]:
 
         empresa_normalized = normalize_company_name(empresa_raw)
 
-        # Zero-cost acquisition detection (e.g. scrip dividend, rights issue).
+        # Zero-cost acquisition detection (e.g. scrip dividend/share acquisition).
         # price=0 with quantity>0 is an explicit zero-cost entry — known cost,
         # happens to be zero.  Not a warning; enters pool at cost 0 (ZERO_COST).
         is_zero_cost = (price_per_share == Decimal("0") and quantity > Decimal("0"))

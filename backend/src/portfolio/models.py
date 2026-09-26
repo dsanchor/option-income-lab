@@ -80,11 +80,7 @@ class WarningType(str, Enum):
     NEGATIVE_INVENTORY = "NEGATIVE_INVENTORY"
     ZERO_COST_ACQUISITION = "ZERO_COST_ACQUISITION"
     INCOMPLETE_COST_BASIS = "INCOMPLETE_COST_BASIS"   # Genuinely unknown cost
-    RIGHTS_AMOUNT = "RIGHTS_AMOUNT"
     PROBABLE_DUPLICATE = "PROBABLE_DUPLICATE"
-    DERECHOS_WITH_QUANTITY = "DERECHOS_WITH_QUANTITY"
-    ACCIONES_ZERO_QUANTITY = "ACCIONES_ZERO_QUANTITY"
-    INVALID_SALES_TYPE = "INVALID_SALES_TYPE"
 
 
 class SessionState(str, Enum):
@@ -268,10 +264,9 @@ class HoldingItem(BaseModel):
     cost_basis_status: str
     # CMP cost basis fields (Danny contract §3.2)
     total_purchase_outflow_eur: str   # Σ gross_eur BUY COMPLETE (ZERO_COST excluded — no cash outflow)
-    cost_basis_sold_eur: str          # Σ CMP cost assigned to SELL ACCIONES
+    cost_basis_sold_eur: str          # Σ FIFO cost assigned to SELL
     remaining_cost_basis_eur: str     # pool_cost residual
-    total_sale_proceeds_eur: str      # Σ(gross-fee) SELL (all types)
-    rights_proceeds_eur: str          # Σ(gross-fee) SELL DERECHOS
+    total_sale_proceeds_eur: str      # Σ(gross-fee) SELL
     realized_result_eur: str          # total_sale_proceeds − cost_basis_sold
     # Backward-compatible aliases
     total_invested_eur: str           # alias: total_purchase_outflow_eur
@@ -287,10 +282,9 @@ class HoldingsSummary(BaseModel):
     total_securities: int
     # CMP cost basis fields (Danny contract §3.1)
     total_purchase_outflow_eur: str   # Σ gross_eur BUY COMPLETE (ZERO_COST excluded)
-    cost_basis_sold_eur: str          # Σ CMP cost assigned to SELL ACCIONES
+    cost_basis_sold_eur: str          # Σ FIFO cost assigned to SELL
     remaining_cost_basis_eur: str     # pool_cost residual (= "Inversión actual")
-    total_sale_proceeds_eur: str      # Σ(gross-fee) SELL (all types)
-    rights_proceeds_eur: str          # Σ(gross-fee) SELL DERECHOS
+    total_sale_proceeds_eur: str      # Σ(gross-fee) SELL
     realized_result_eur: str          # total_sale_proceeds − cost_basis_sold
     has_incomplete_cost_basis: bool   # true if any security has genuinely INCOMPLETE buys
     # Backward-compatible aliases
@@ -373,7 +367,6 @@ class ManualMovementCreate(BaseModel):
     fees: Optional[FeesInput] = None
     withholding: Optional[Any] = None
     fx: Optional[Dict[str, str]] = None
-    sales_type: Optional[str] = None      # SELL only: ACCIONES | DERECHOS
     cost_basis_status: Optional[str] = None  # BUY only: COMPLETE | INCOMPLETE
     notes: Optional[str] = None
     option_position_id: Optional[str] = None
@@ -411,13 +404,6 @@ class ManualMovementCreate(BaseModel):
             raise ValueError("quantity must be >= 0")
         return v
 
-    @field_validator("sales_type")
-    @classmethod
-    def valid_sales_type(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v not in ("ACCIONES", "DERECHOS"):
-            raise ValueError("sales_type must be ACCIONES or DERECHOS")
-        return v
-
     @field_validator("option_link_kind")
     @classmethod
     def valid_option_link_kind(cls, v: Optional[str]) -> Optional[str]:
@@ -448,7 +434,6 @@ class MovementCorrectionRequest(BaseModel):
     fees: Optional[FeesInput] = None
     withholding: Optional[Any] = None
     fx: Optional[Dict[str, str]] = None
-    sales_type: Optional[str] = None
     cost_basis_status: Optional[str] = None
     notes: Optional[str] = None
     option_position_id: Optional[str] = None
@@ -543,7 +528,6 @@ class FxRateResponse(BaseModel):
 
 class CaLegType(str, Enum):
     CASH_DIVIDEND = "CASH_DIVIDEND"
-    RIGHTS_SOLD = "RIGHTS_SOLD"
     SHARE_ACQUISITION = "SHARE_ACQUISITION"
     CASH_TOP_UP = "CASH_TOP_UP"
     CONSOLIDATION_OUT = "CONSOLIDATION_OUT"
@@ -555,7 +539,6 @@ class CaEventType(str, Enum):
     CASH_DIVIDEND = "CASH_DIVIDEND"
     DIVIDEND_WITH_SCRIP = "DIVIDEND_WITH_SCRIP"
     SCRIP_DIVIDEND = "SCRIP_DIVIDEND"
-    RIGHTS_ISSUE = "RIGHTS_ISSUE"
     SHARE_CONSOLIDATION = "SHARE_CONSOLIDATION"
 
 

@@ -11,7 +11,7 @@ import type {
   OptionTxnType,
   TransferRequest,
 } from "@/types/portfolio";
-import { OPTION_TXN_TYPES, SALES_TYPE_LABELS } from "@/types/portfolio";
+import { OPTION_TXN_TYPES } from "@/types/portfolio";
 import type { SecurityMaster } from "@/types/portfolio";
 import CorporateActionForm from "@/components/CorporateActionForm";
 import OptionPositionLinkPicker from "@/components/OptionPositionLinkPicker";
@@ -26,8 +26,8 @@ type UiMovementType = "BUY" | "SELL" | "DIVIDEND" | "TRANSFER" | OptionTxnType;
 
 const TXN_TYPES: Array<{ value: UiMovementType; label: string; description: string }> = [
   { value: "BUY", label: "Buy", description: "Purchase shares or other securities" },
-  { value: "SELL", label: "Sell", description: "Sell shares — choose Stocks or Rights" },
-  { value: "DIVIDEND", label: "Dividend / Corp. Action", description: "Cash dividend, scrip dividend, or rights issue" },
+  { value: "SELL", label: "Sell", description: "Sell shares" },
+  { value: "DIVIDEND", label: "Dividend / Corp. Action", description: "Cash or scrip dividend" },
   { value: "CALL_SELL", label: "Call Sell", description: "Covered-call opening premium received" },
   { value: "CALL_BUY", label: "Call Buy", description: "Call buyback paid to close" },
   { value: "PUT_SELL", label: "Put Sell", description: "Cash-secured-put premium received" },
@@ -492,7 +492,6 @@ interface SellFormState {
   account_id: string;
   trade_date: string;
   quantity: string;
-  sales_type: "ACCIONES" | "DERECHOS";
   price_per_share: string;
   trade_value: string;   // gross proceeds (before fees); was total_proceeds
   currency: string;
@@ -528,44 +527,18 @@ function SellForm({ form, onChange, accounts, securities }: SellFormProps) {
         </div>
       </div>
 
-      {/* Sale type — Amendment G: English labels via SALES_TYPE_LABELS */}
-      <div>
-        <label className={labelCls}>Sale type *</label>
-        <div className="flex gap-3">
-          {(["ACCIONES", "DERECHOS"] as const).map((t) => (
-            <label key={t} className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="radio"
-                name="sales_type"
-                value={t}
-                checked={form.sales_type === t}
-                onChange={() => onChange({ sales_type: t })}
-                className="accent-accent-blue"
-              />
-              <span className="text-sm text-text">{SALES_TYPE_LABELS[t]}</span>
-            </label>
-          ))}
-        </div>
-        {form.sales_type === "DERECHOS" && (
-          <div className="mt-2 rounded-[var(--radius)] border border-accent-blue/20 bg-accent-blue/5 px-3 py-2 text-xs text-text-muted">
-            ℹ <strong className="text-text">Rights sale:</strong> proceeds are recorded but{" "}
-            <strong className="text-text">share quantity is NOT reduced</strong>. Rights entitlements are separate from ordinary share ownership.
-          </div>
-        )}
-      </div>
-
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
-          <label className={labelCls}>Quantity{form.sales_type === "DERECHOS" ? " (rights units, optional)" : " *"}</label>
+          <label className={labelCls}>Quantity *</label>
           <input
             type="number"
             step="any"
             min="0"
             value={form.quantity}
             onChange={(e) => onChange({ quantity: e.target.value })}
-            placeholder="Shares / rights"
+            placeholder="Shares"
             className={inputCls}
-            required={form.sales_type === "ACCIONES"}
+            required
           />
         </div>
         <div>
@@ -717,7 +690,7 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
   });
   const [sellForm, setSellForm] = useState<SellFormState>({
     security_id: "", account_id: "_unassigned", trade_date: "", quantity: "",
-    sales_type: "ACCIONES", price_per_share: "", trade_value: "", currency: "EUR", fees: "", notes: "",
+    price_per_share: "", trade_value: "", currency: "EUR", fees: "", notes: "",
   });
   const [transferForm, setTransferForm] = useState<TransferFormState>({
     security_id: "", source_account_id: "_unassigned", dest_account_id: "_unassigned",
@@ -804,12 +777,8 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
         await createMovement(req);
 
       } else if (txnType === "SELL") {
-        if (!sellForm.security_id || !sellForm.trade_date || !sellForm.trade_value) {
-          setError("Symbol, date, and trade value are required.");
-          return;
-        }
-        if (sellForm.sales_type === "ACCIONES" && !sellForm.quantity) {
-          setError("Quantity is required for Stocks sales.");
+        if (!sellForm.security_id || !sellForm.trade_date || !sellForm.quantity || !sellForm.trade_value) {
+          setError("Symbol, date, quantity, and trade value are required.");
           return;
         }
         const req: ManualMovementRequest = {
@@ -817,8 +786,7 @@ export default function AddMovementDialog({ onClose, onCreated }: AddMovementDia
           security_id: sellForm.security_id,
           account_id: sellForm.account_id || "_unassigned",
           trade_date: sellForm.trade_date,
-          quantity: sellForm.quantity || undefined,
-          sales_type: sellForm.sales_type,
+          quantity: sellForm.quantity,
           gross: makeGross(sellForm.trade_value, currency),
           fees: sellForm.fees ? makeFeesInput(sellForm.fees, currency) : undefined,
           notes: sellForm.notes || undefined,

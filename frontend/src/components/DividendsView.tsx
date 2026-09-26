@@ -34,6 +34,10 @@ import type {
   DividendsSummary,
   DividendsYearlyRow,
 } from "@/types/economics";
+import {
+  excludeUnsupportedRightsFromDividends,
+  getCanonicalTotalNetEur,
+} from "@/lib/rightsExclusion";
 
 const MONTHS = [
   { value: "1", label: "Jan" },
@@ -98,23 +102,13 @@ function compareValues(a: unknown, b: unknown): number {
   return String(left).localeCompare(String(right));
 }
 
-function getSummaryCashNet(summary: DividendsSummary) {
-  return amountOrZero(summary.cash_net ?? summary.total_net_eur);
-}
-
-function getSummaryDerechosNet(summary: DividendsSummary) {
-  return amountOrZero(summary.derechos_net);
-}
-
-function getSummaryTotalNet(summary: DividendsSummary) {
-  return amountOrZero(summary.total_net ?? (getSummaryCashNet(summary) + getSummaryDerechosNet(summary)));
+function getNetDividendsReceived(summary: DividendsSummary) {
+  return getCanonicalTotalNetEur(summary);
 }
 
 type DividendsNetRow = {
   net_eur: number;
   cash_net?: number | null;
-  derechos_net?: number | null;
-  derechos_eur?: number | null;
   total_net?: number | null;
 };
 
@@ -122,19 +116,13 @@ function getCashNet(row: DividendsNetRow) {
   return amountOrZero(row.cash_net ?? row.net_eur);
 }
 
-function getDerechosNet(row: Pick<DividendsNetRow, "derechos_net" | "derechos_eur">) {
-  return amountOrZero(row.derechos_net ?? row.derechos_eur);
-}
-
 function getTotalNet(row: DividendsNetRow) {
-  return amountOrZero(row.total_net ?? (getCashNet(row) + getDerechosNet(row)));
+  return getCashNet(row);
 }
 
 function getCumulativeTotalNet(row: DividendsCumulativeRow) {
   return amountOrZero(
-    row.cumulative_total_net_eur ??
-      row.total_net ??
-      (row.cumulative_cash_net_eur ?? row.cumulative_net_eur ?? 0) + (row.cumulative_derechos_net_eur ?? 0),
+    row.cumulative_cash_net_eur ?? row.cumulative_total_net_eur ?? row.cumulative_net_eur,
   );
 }
 
@@ -142,8 +130,6 @@ function resolveDividendSortValue(
   row: (DividendsBySymbolRow | DividendsYearlyRow | DividendPosition) & DividendsNetRow,
   sortKey: string,
 ) {
-  if (sortKey === "cash_net") return getCashNet(row);
-  if (sortKey === "derechos_net") return getDerechosNet(row);
   if (sortKey === "total_net") return getTotalNet(row);
   if (sortKey === "yoc_pct") return (row as Partial<DividendsBySymbolRow>).yoc_pct ?? -Infinity;
   return (row as unknown as Record<string, unknown>)[sortKey];
@@ -174,9 +160,7 @@ function ChartTooltip({
 }
 
 function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: DividendsMonthlyRow[] }) {
-  const totalNet = getSummaryTotalNet(summary);
-  const cashNet = getSummaryCashNet(summary);
-  const derechosNet = getSummaryDerechosNet(summary);
+  const netDividendsReceived = getNetDividendsReceived(summary);
   const avgLast12 = averageLastNExcludingZero(monthly.map((row) => getTotalNet(row)), 12);
   const cards = [
     { label: "Total Gross (EUR)", value: summary.total_gross_eur ?? 0, prefix: "€", suffix: "", decimals: 2, tone: "blue" as const },
@@ -206,25 +190,22 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,0.7fr)_minmax(0,1fr)]">
       <Reveal index={0} className="h-full">
-        <div className="surface card-hover relative flex h-full flex-col overflow-hidden p-3">
+        <div
+          className="surface card-hover relative flex h-full flex-col overflow-hidden p-3"
+          aria-label={netDividendsReceived == null
+            ? "Net dividends received unavailable"
+            : `Net dividends received ${eur(netDividendsReceived)}`}
+        >
           <span
             className="absolute inset-y-0 left-0 w-1"
             style={{ background: "var(--grad-green)" }}
             aria-hidden
           />
           <div className="text-xs uppercase tracking-wide text-text-muted">Total Dividends</div>
-          <div className={`mt-1 font-mono text-2xl font-semibold tracking-tight ${signedColor(totalNet)}`}>
-            {eur(totalNet)}
-          </div>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <div className="rounded-[var(--radius)] border border-border/70 bg-bg-card/40 px-2 py-1.5">
-              <div className="text-[11px] uppercase tracking-wide text-text-muted">Cash Net</div>
-              <div className={`mt-0.5 font-mono text-sm ${signedColor(cashNet)}`}>{eur(cashNet)}</div>
-            </div>
-            <div className="rounded-[var(--radius)] border border-border/70 bg-bg-card/40 px-2 py-1.5">
-              <div className="text-[11px] uppercase tracking-wide text-text-muted">Rights</div>
-              <div className={`mt-0.5 font-mono text-sm ${signedColor(derechosNet)}`}>{eur(derechosNet)}</div>
-            </div>
+          <div className={`mt-1 font-mono text-2xl font-semibold tracking-tight ${
+            netDividendsReceived == null ? "text-text-muted" : signedColor(netDividendsReceived)
+          }`}>
+            {netDividendsReceived == null ? "—" : eur(netDividendsReceived)}
           </div>
         </div>
       </Reveal>
@@ -263,8 +244,6 @@ function MonthlySection({ rows }: { rows: DividendsMonthlyRow[] }) {
               <th className="px-3 py-2 font-medium">Month</th>
               <th className="px-3 py-2 text-right font-medium">Gross</th>
               <th className="px-3 py-2 text-right font-medium">Withholding</th>
-              <th className="px-3 py-2 text-right font-medium">Cash Net</th>
-              <th className="px-3 py-2 text-right font-medium">Rights</th>
               <th className="px-3 py-2 text-right font-medium">Total Net</th>
               <th className="px-3 py-2 text-right font-medium">Dividend Count</th>
             </tr>
@@ -272,7 +251,7 @@ function MonthlySection({ rows }: { rows: DividendsMonthlyRow[] }) {
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-text-muted">
+                <td colSpan={5} className="px-3 py-6 text-center text-text-muted">
                   No dividends match the selected filters.
                 </td>
               </tr>
@@ -282,8 +261,6 @@ function MonthlySection({ rows }: { rows: DividendsMonthlyRow[] }) {
                 <td className="px-3 py-2">{formatMonthLabel(row.month)}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.gross_eur)}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_total_eur)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(getCashNet(row))}`}>{eur(getCashNet(row))}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(getDerechosNet(row))}`}>{eur(getDerechosNet(row))}</td>
                 <td className={`px-3 py-2 text-right font-mono ${signedColor(getTotalNet(row))}`}>{eur(getTotalNet(row))}</td>
                 <td className="px-3 py-2 text-right font-mono">{row.dividend_count}</td>
               </tr>
@@ -297,15 +274,13 @@ function MonthlySection({ rows }: { rows: DividendsMonthlyRow[] }) {
 
 type DividendsBySymbolKey = keyof Pick<
   DividendsBySymbolRow,
-  "symbol" | "gross_eur" | "withholding_total_eur" | "net_eur" | "cash_net" | "derechos_net" | "total_net" | "dividend_count" | "yoc_pct"
+  "symbol" | "gross_eur" | "withholding_total_eur" | "net_eur" | "total_net" | "dividend_count" | "yoc_pct"
 >;
 
 const BY_SYMBOL_COLS: { key: DividendsBySymbolKey; label: string; num?: boolean }[] = [
   { key: "symbol", label: "Symbol" },
   { key: "gross_eur", label: "Gross", num: true },
   { key: "withholding_total_eur", label: "Withholding", num: true },
-  { key: "cash_net", label: "Cash Net", num: true },
-  { key: "derechos_net", label: "Rights", num: true },
   { key: "total_net", label: "Total Net", num: true },
   { key: "dividend_count", label: "Dividend Count", num: true },
   { key: "yoc_pct", label: "YoC", num: true },
@@ -377,7 +352,7 @@ function BySymbolSection({ rows }: { rows: DividendsBySymbolRow[] }) {
           <tbody>
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-text-muted">
+                <td colSpan={6} className="px-3 py-6 text-center text-text-muted">
                   No symbol-level dividends available.
                 </td>
               </tr>
@@ -389,8 +364,6 @@ function BySymbolSection({ rows }: { rows: DividendsBySymbolRow[] }) {
                 <td className="px-3 py-2 font-semibold">{row.symbol}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.gross_eur)}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_total_eur)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(getCashNet(row))}`}>{eur(getCashNet(row))}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(getDerechosNet(row))}`}>{eur(getDerechosNet(row))}</td>
                 <td className={`px-3 py-2 text-right font-mono ${signedColor(getTotalNet(row))}`}>{eur(getTotalNet(row))}</td>
                 <td className="px-3 py-2 text-right font-mono">{row.dividend_count}</td>
                 <td className="px-3 py-2 text-right font-mono text-text-muted" title={yoc.title}>
@@ -408,15 +381,13 @@ function BySymbolSection({ rows }: { rows: DividendsBySymbolRow[] }) {
 
 type DividendsYearlyKey = keyof Pick<
   DividendsYearlyRow,
-  "year" | "gross_eur" | "withholding_eur" | "net_eur" | "cash_net" | "derechos_net" | "total_net" | "dividend_count"
+  "year" | "gross_eur" | "withholding_eur" | "net_eur" | "total_net" | "dividend_count"
 >;
 
 const BY_YEAR_COLS: { key: DividendsYearlyKey; label: string; num?: boolean }[] = [
   { key: "year", label: "Year" },
   { key: "gross_eur", label: "Gross", num: true },
   { key: "withholding_eur", label: "Withholding", num: true },
-  { key: "cash_net", label: "Cash Net", num: true },
-  { key: "derechos_net", label: "Rights", num: true },
   { key: "total_net", label: "Total Net", num: true },
   { key: "dividend_count", label: "Dividend Count", num: true },
 ];
@@ -471,7 +442,7 @@ function ByYearSection({ rows }: { rows: DividendsYearlyRow[] }) {
           <tbody>
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-text-muted">
+                <td colSpan={5} className="px-3 py-6 text-center text-text-muted">
                   No yearly dividend comparison data available.
                 </td>
               </tr>
@@ -481,8 +452,6 @@ function ByYearSection({ rows }: { rows: DividendsYearlyRow[] }) {
                 <td className="px-3 py-2 font-semibold">{row.year}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.gross_eur)}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_eur)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(getCashNet(row))}`}>{eur(getCashNet(row))}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(getDerechosNet(row))}`}>{eur(getDerechosNet(row))}</td>
                 <td className={`px-3 py-2 text-right font-mono ${signedColor(getTotalNet(row))}`}>{eur(getTotalNet(row))}</td>
                 <td className="px-3 py-2 text-right font-mono">{row.dividend_count}</td>
               </tr>
@@ -761,8 +730,6 @@ type DividendSortKey =
   | "symbol"
   | "gross_eur"
   | "withholding_total_eur"
-  | "cash_net"
-  | "derechos_net"
   | "total_net";
 
 const POSITION_COLS: {
@@ -787,8 +754,6 @@ const POSITION_COLS: {
   { key: "withholding_source_eur", label: "Withholding Src", num: true },
   { key: "withholding_destination_eur", label: "Withholding Dest", num: true },
   { key: "withholding_total_eur", label: "Withholding Total", num: true, sortable: true },
-  { key: "cash_net", label: "Cash Net EUR", num: true, sortable: true },
-  { key: "derechos_net", label: "Rights EUR", num: true, sortable: true },
   { key: "total_net", label: "Total EUR", num: true, sortable: true },
 ];
 
@@ -861,8 +826,6 @@ function DividendsDetail({ rows, accounts }: { rows: DividendPosition[]; account
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_source_eur)}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_destination_eur)}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_total_eur)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(getCashNet(row))}`}>{eur(getCashNet(row))}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(getDerechosNet(row))}`}>{eur(getDerechosNet(row))}</td>
                 <td className={`px-3 py-2 text-right font-mono ${signedColor(getTotalNet(row))}`}>{eur(getTotalNet(row))}</td>
               </tr>
             ))}
@@ -930,8 +893,8 @@ export default function DividendsView() {
       ]);
       if (!mainRes.ok) throw new Error((mainBody as { error?: string }).error || `HTTP ${mainRes.status}`);
       if (!comparisonRes.ok) throw new Error((comparisonBody as { error?: string }).error || `HTTP ${comparisonRes.status}`);
-      setData(mainBody as DividendsReport);
-      setComparisonData(comparisonBody as DividendsReport);
+      setData(excludeUnsupportedRightsFromDividends(mainBody as DividendsReport));
+      setComparisonData(excludeUnsupportedRightsFromDividends(comparisonBody as DividendsReport));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load dividends data.");
     } finally {
@@ -980,7 +943,7 @@ export default function DividendsView() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Economics · Dividends</h1>
         <p className="mt-1 text-sm text-text-muted">
-          Gross, withholding, cash vs derechos income, and total dividend snowball trends across your accounts and symbols.
+          Gross, withholding, net income, and dividend snowball trends across your accounts and symbols.
         </p>
       </div>
 

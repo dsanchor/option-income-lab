@@ -4,8 +4,7 @@ Cost method: FIFO (First-In, First-Out) lot depletion.
 - BUY COMPLETE: creates a lot; lot cost = net.eur_amount (total cash outflow incl. commission).
 - BUY ZERO_COST: creates a zero-cost lot (scrip dividends); dilutes avg naturally.
 - BUY INCOMPLETE: creates an unknown-cost lot; warning emitted; cost treated as 0 when consumed.
-- SELL ACCIONES: consumes oldest lots first (FIFO by trade_date, then movement_id).
-- SELL DERECHOS: no lot consumption; net proceeds counted in sales and rights.
+- SELL: consumes oldest lots first (FIFO by trade_date, then movement_id).
 - TRANSFER_IN: creates a lot at carried_cost_basis_eur; not counted in purchase_outflow.
 - TRANSFER_OUT: consumes oldest lots first (like SELL ACCIONES); not counted in sale_proceeds.
 - DIVIDEND: net_eur accumulated separately.
@@ -30,6 +29,7 @@ from typing import Any, Dict, List, Optional
 from .cosmos_portfolio import CosmosPortfolioService
 from .cosmos_securities import CosmosSecuritiesService
 from .models import OPTION_TXN_TYPES as _MODEL_OPTION_TXN_TYPES
+from .rights_policy import sanitize_legacy_movement
 from .symbol_config_sync import ensure_symbol_config
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,11 @@ class HoldingsService:
         Returns:
             Dict with 'holdings' list and 'summary' dict.
         """
-        movements = self.portfolio_svc.get_all_movements_for_holdings()
+        movements = [
+            sanitized
+            for movement in self.portfolio_svc.get_all_movements_for_holdings()
+            if (sanitized := sanitize_legacy_movement(movement)) is not None
+        ]
 
         # Filter by account if requested
         if account_id:
@@ -168,9 +172,8 @@ class HoldingsService:
                     "total_shares": _ZERO,
                     # Accumulators
                     "total_purchase_outflow_eur": _ZERO,  # Σ net_eur BUY COMPLETE only
-                    "cost_basis_sold_eur": _ZERO,         # Σ FIFO cost → SELL ACCIONES
-                    "total_sale_proceeds_eur": _ZERO,     # Σ net proceeds all SELL types
-                    "rights_proceeds_eur": _ZERO,         # Σ net proceeds SELL DERECHOS
+                    "cost_basis_sold_eur": _ZERO,         # Σ FIFO cost → SELL
+                    "total_sale_proceeds_eur": _ZERO,     # Σ net proceeds SELL
                     "total_dividends_eur": _ZERO,
                     "buy_count": 0,
                     "zero_cost_count": 0,    # ZERO_COST acquisitions (informational)
@@ -231,20 +234,13 @@ class HoldingsService:
                         agg["zero_cost_count"] += 1
 
             elif txn_type == "SELL":
-                # DERECHOS sales contribute to proceeds but do NOT consume lots.
-                sale_type = m.get("sales_type") or "ACCIONES"
                 net_proceeds = gross_eur - commission_eur
                 agg["total_sale_proceeds_eur"] += net_proceeds
-
-                if sale_type == "ACCIONES":
-                    agg["total_shares"] -= qty
-                    cost_consumed, neg_inv = _consume_lots(account_lots, qty)
-                    agg["cost_basis_sold_eur"] += cost_consumed
-                    if neg_inv:
-                        agg["has_negative_inventory"] = True
-                else:
-                    # DERECHOS: no lot consumption.
-                    agg["rights_proceeds_eur"] += net_proceeds
+                agg["total_shares"] -= qty
+                cost_consumed, neg_inv = _consume_lots(account_lots, qty)
+                agg["cost_basis_sold_eur"] += cost_consumed
+                if neg_inv:
+                    agg["has_negative_inventory"] = True
 
             elif txn_type == "DIVIDEND":
                 agg["total_dividends_eur"] += net_eur
@@ -324,7 +320,6 @@ class HoldingsService:
         summary_cost_basis_sold = _ZERO
         summary_remaining = _ZERO
         summary_sale_proceeds = _ZERO
-        summary_rights_proceeds = _ZERO
         summary_dividends = _ZERO
         global_has_incomplete = False
 
@@ -371,7 +366,6 @@ class HoldingsService:
             cost_sold = agg["cost_basis_sold_eur"]
             remaining = remaining_cost
             sale_proceeds = agg["total_sale_proceeds_eur"]
-            rights_proceeds = agg["rights_proceeds_eur"]
             realized = sale_proceeds - cost_sold
             dividends = agg["total_dividends_eur"]
 
@@ -379,7 +373,6 @@ class HoldingsService:
             summary_cost_basis_sold += cost_sold
             summary_remaining += remaining
             summary_sale_proceeds += sale_proceeds
-            summary_rights_proceeds += rights_proceeds
             summary_dividends += dividends
 
             item_warnings = []
@@ -415,7 +408,6 @@ class HoldingsService:
                 "cost_basis_sold_eur": _fmt2(cost_sold),
                 "remaining_cost_basis_eur": _fmt2(remaining),
                 "total_sale_proceeds_eur": _fmt2(sale_proceeds),
-                "rights_proceeds_eur": _fmt2(rights_proceeds),
                 "realized_result_eur": _fmt2(realized),
                 # Backward-compatible aliases
                 "total_invested_eur": _fmt2(purchase_outflow),
@@ -446,7 +438,6 @@ class HoldingsService:
                 "cost_basis_sold_eur": _fmt2(summary_cost_basis_sold),
                 "remaining_cost_basis_eur": _fmt2(summary_remaining),
                 "total_sale_proceeds_eur": _fmt2(summary_sale_proceeds),
-                "rights_proceeds_eur": _fmt2(summary_rights_proceeds),
                 "realized_result_eur": _fmt2(summary_realized),
                 "has_incomplete_cost_basis": global_has_incomplete,
                 # Backward-compatible aliases

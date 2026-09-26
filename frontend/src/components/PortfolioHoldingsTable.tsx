@@ -13,11 +13,7 @@ import { formatAccountName, getAccountName } from "@/lib/accountDisplay";
 
 const WARNING_SHORT: Record<WarningType, string> = {
   NEGATIVE_INVENTORY: "Negative inventory",
-  RIGHTS_AMOUNT: "Rights amount pending",
   PROBABLE_DUPLICATE: "Probable duplicate",
-  DERECHOS_WITH_QUANTITY: "Rights sale with quantity",
-  ACCIONES_ZERO_QUANTITY: "Share sale, zero quantity",
-  INVALID_SALES_TYPE: "Invalid sale type",
 };
 
 function Skeleton() {
@@ -151,7 +147,7 @@ export default function PortfolioHoldingsTable() {
                   ? "green"
                   : "red"
               }
-              tooltip="Ganancia o pérdida cerrada: ingresos por ventas de acciones y derechos menos el coste de adquisición de las acciones vendidas (media ponderada móvil). No válido para fines fiscales."
+              tooltip="Ganancia o pérdida cerrada: ingresos por ventas de acciones menos el coste de adquisición de las acciones vendidas (media ponderada móvil). No válido para fines fiscales."
             />
           </Reveal>
           <Reveal index={2} className="h-full">

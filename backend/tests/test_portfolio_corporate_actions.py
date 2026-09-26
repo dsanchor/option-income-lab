@@ -91,14 +91,6 @@ _CA_4_LEGS = {
             "notes": "FMV: 24.75 GBP/share",
         },
         {
-            "leg_type": "RIGHTS_SOLD",
-            "trade_date": "2024-03-28",
-            "quantity": "3",
-            "gross": {"amount": "67.50", "currency": "GBP", "eur_amount": "78.67"},
-            "fees": {"total": "2.00", "currency": "GBP", "total_eur": "2.33"},
-            "fx": {"rate": "1.165500000", "rate_source": "ECB"},
-        },
-        {
             "leg_type": "CASH_TOP_UP",
             "trade_date": "2024-03-28",
             "gross": {"amount": "4.95", "currency": "GBP", "eur_amount": "5.77"},
@@ -119,7 +111,7 @@ class TestCorporateActionCreate:
         assert "ca_group_id" in result
         assert result["ca_group_id"].startswith("cag_")
         assert result["event_type"] == "DIVIDEND_WITH_SCRIP"
-        assert len(result["movements"]) == 4
+        assert len(result["movements"]) == 3
 
     def test_ht1_all_share_group_id(self, svc):
         """H-T1: All 4 movements share the same ca_group_id."""
@@ -132,7 +124,7 @@ class TestCorporateActionCreate:
         """H-T1: ca_group_seq is 1-based and monotonically increasing."""
         result = svc.create_corporate_action(_CA_4_LEGS)
         seqs = sorted(m["ca_group_seq"] for m in result["movements"])
-        assert seqs == [1, 2, 3, 4]
+        assert seqs == [1, 2, 3]
 
     def test_ht2_cash_dividend_txn_type(self, svc):
         """H-T2: CASH_DIVIDEND leg → txn_type=DIVIDEND."""
@@ -298,12 +290,38 @@ class TestCorporateActionCreate:
         assert response.status_code == 400
         assert response.json()["error"] == "validation_error"
 
-    def test_ht5_rights_sold_derechos(self, svc):
-        """H-T5: RIGHTS_SOLD → txn_type=SELL, sales_type=DERECHOS."""
-        result = svc.create_corporate_action(_CA_4_LEGS)
-        rs = next(m for m in result["movements"] if m["ca_leg_type"] == "RIGHTS_SOLD")
-        assert rs["txn_type"] == "SELL"
-        assert rs["sales_type"] == "DERECHOS"
+    def test_rights_sold_leg_rejected(self, svc):
+        request = {**_CA_4_LEGS, "legs": [*_CA_4_LEGS["legs"], {
+            "leg_type": "RIGHTS_SOLD",
+            "trade_date": "2024-03-28",
+            "gross": {"amount": "1", "currency": "EUR", "eur_amount": "1"},
+        }]}
+        with pytest.raises(ValueError, match="no longer supported"):
+            svc.create_corporate_action(request)
+
+    def test_rights_sold_leg_api_returns_400(self, client):
+        c, _ = client
+        request = {**_CA_4_LEGS, "legs": [*_CA_4_LEGS["legs"], {
+            "leg_type": "RIGHTS_SOLD",
+            "trade_date": "2024-03-28",
+            "gross": {"amount": "1", "currency": "EUR", "eur_amount": "1"},
+        }]}
+        response = c.post("/api/portfolio/corporate-actions", json=request)
+        assert response.status_code == 400
+        assert response.json()["error"] == "validation_error"
+        assert "no longer supported" in response.json()["detail"]
+
+    def test_rights_issue_event_api_returns_400(self, client):
+        c, _ = client
+        request = {
+            "event_type": "RIGHTS_ISSUE",
+            "security_id": _SECURITY_ID,
+            "payment_date": "2024-03-28",
+            "legs": [_CA_4_LEGS["legs"][1]],
+        }
+        response = c.post("/api/portfolio/corporate-actions", json=request)
+        assert response.status_code == 400
+        assert "no longer supported" in response.json()["detail"]
 
     def test_ht6_cash_top_up_qty_zero_incomplete(self, svc):
         """H-T6: CASH_TOP_UP → BUY, quantity=0, cost_basis_status=INCOMPLETE."""
@@ -519,13 +537,13 @@ class TestCorporateActionLegCorrection:
 
 class TestVoidCorporateActionGroup:
     def test_ht8_void_all_legs(self, svc):
-        """H-T8: void_corporate_action_group voids all 4 active legs."""
+        """H-T8: void_corporate_action_group voids all active legs."""
         create_result = svc.create_corporate_action(_CA_4_LEGS)
         group_id = create_result["ca_group_id"]
 
         void_result = svc.void_corporate_action_group(group_id, _ACCOUNT_ID, "test void")
         assert void_result["ca_group_id"] == group_id
-        assert void_result["voided_count"] == 4
+        assert void_result["voided_count"] == 3
         for doc in void_result["movements"]:
             assert doc["correction_status"] == "VOIDED"
 

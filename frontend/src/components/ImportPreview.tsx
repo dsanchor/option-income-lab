@@ -2,7 +2,10 @@
 
 import type { ImportPreviewData } from "@/types/import";
 import type { WarningType } from "@/types/portfolio";
-import { SALES_TYPE_LABELS } from "@/types/portfolio";
+import {
+  excludeUnsupportedRightsMovements,
+  isUnsupportedRightsWarning,
+} from "@/lib/rightsExclusion";
 
 interface Props {
   preview: ImportPreviewData;
@@ -13,23 +16,22 @@ interface Props {
 
 const WARNING_LABELS: Record<WarningType, string> = {
   NEGATIVE_INVENTORY: "Negative inventory",
-  RIGHTS_AMOUNT: "Rights / scrip amount",
   PROBABLE_DUPLICATE: "Probable duplicate",
-  DERECHOS_WITH_QUANTITY: "Rights sale with quantity",
-  ACCIONES_ZERO_QUANTITY: "Share sale, zero quantity",
-  INVALID_SALES_TYPE: "Invalid sale type",
 };
 
 /** Preview table showing movements to be committed, persistent warnings, and confirm button. */
 export default function ImportPreview({ preview, onCommit, onBack, committing }: Props) {
-  const { movements, warnings, total_movements, skipped_rows, skip_reasons } = preview;
+  const movements = excludeUnsupportedRightsMovements(preview.movements);
+  const warnings = preview.warnings.filter((warning) => !isUnsupportedRightsWarning(warning));
+  const { skipped_rows, skip_reasons } = preview;
+  const hasUnsupportedRows = movements.length !== preview.movements.length;
 
   return (
     <div className="space-y-6">
       {/* Summary bar */}
       <div className="flex flex-wrap gap-4 text-sm">
         <span>
-          <span className="font-semibold text-text">{total_movements}</span>
+          <span className="font-semibold text-text">{movements.length}</span>
           <span className="text-text-muted"> movements to commit</span>
         </span>
         {skipped_rows > 0 && (
@@ -65,6 +67,12 @@ export default function ImportPreview({ preview, onCommit, onBack, committing }:
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {hasUnsupportedRows && (
+        <div className="rounded-[var(--radius)] border border-accent-red/30 bg-accent-red/5 p-4 text-sm text-accent-red">
+          This import contains unsupported movement rows and cannot be committed.
         </div>
       )}
 
@@ -120,11 +128,6 @@ export default function ImportPreview({ preview, onCommit, onBack, committing }:
                     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${txnBadge(m.txn_type)}`}>
                       {m.txn_type}
                     </span>
-                    {m.txn_type === "SELL" && m.sales_type === "DERECHOS" && (
-                      <span className="ml-1 rounded-full px-1.5 py-0.5 text-xs bg-accent-orange/15 text-accent-orange">
-                        {SALES_TYPE_LABELS.DERECHOS}
-                      </span>
-                    )}
                   </td>
                   <td className="px-4 py-2">
                     <div className="font-mono font-semibold text-text">{m.ticker}</div>
@@ -166,12 +169,12 @@ export default function ImportPreview({ preview, onCommit, onBack, committing }:
         <button
           type="button"
           onClick={onCommit}
-          disabled={committing}
+          disabled={committing || hasUnsupportedRows || movements.length === 0}
           className="rounded-[var(--radius)] bg-[image:var(--grad-blue)] px-6 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 shadow-[var(--shadow-glow-blue)]"
         >
           {committing
             ? "Committing…"
-            : `Confirm & commit ${total_movements} movements`}
+            : `Confirm & commit ${movements.length} movements`}
         </button>
       </div>
     </div>

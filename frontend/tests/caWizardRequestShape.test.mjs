@@ -12,9 +12,9 @@
  *   POST /api/portfolio/corporate-actions/{id}/correct → 201
  *
  * Key rules:
- *   - event_type ∈ {CASH_DIVIDEND, DIVIDEND_WITH_SCRIP, SCRIP_DIVIDEND, RIGHTS_ISSUE,
+ *   - event_type ∈ {CASH_DIVIDEND, DIVIDEND_WITH_SCRIP, SCRIP_DIVIDEND,
  *     SHARE_CONSOLIDATION}
- *   - leg_type ∈ {CASH_DIVIDEND, RIGHTS_SOLD, SHARE_ACQUISITION, CASH_TOP_UP,
+ *   - leg_type ∈ {CASH_DIVIDEND, SHARE_ACQUISITION, CASH_TOP_UP,
  *     CONSOLIDATION_OUT, CONSOLIDATION_IN, FRACTIONAL_CASH_OUT}
  *   - Required legs per event_type enforced before submit
  *   - withholding.source.amount_eur and .destination.amount_eur are primary inputs;
@@ -35,13 +35,11 @@ const CA_EVENT_TYPES = [
   "CASH_DIVIDEND",
   "DIVIDEND_WITH_SCRIP",
   "SCRIP_DIVIDEND",
-  "RIGHTS_ISSUE",
   "SHARE_CONSOLIDATION",
 ];
 
 const CA_LEG_TYPES = [
   "CASH_DIVIDEND",
-  "RIGHTS_SOLD",
   "SHARE_ACQUISITION",
   "CASH_TOP_UP",
   "CONSOLIDATION_OUT",
@@ -54,7 +52,6 @@ const CA_REQUIRED_LEGS = {
   CASH_DIVIDEND: ["CASH_DIVIDEND"],
   DIVIDEND_WITH_SCRIP: ["CASH_DIVIDEND", "SHARE_ACQUISITION"],
   SCRIP_DIVIDEND: ["SHARE_ACQUISITION"],
-  RIGHTS_ISSUE: ["SHARE_ACQUISITION"],
   SHARE_CONSOLIDATION: ["CONSOLIDATION_OUT", "CONSOLIDATION_IN"],
 };
 
@@ -183,10 +180,6 @@ describe("missingRequiredLegs", () => {
 
   it("SCRIP_DIVIDEND needs SHARE_ACQUISITION only", () => {
     assert.deepEqual(missingRequiredLegs("SCRIP_DIVIDEND", []), ["SHARE_ACQUISITION"]);
-  });
-
-  it("RIGHTS_ISSUE needs SHARE_ACQUISITION only", () => {
-    assert.deepEqual(missingRequiredLegs("RIGHTS_ISSUE", []), ["SHARE_ACQUISITION"]);
   });
 
   it("unknown event_type returns empty (no required legs)", () => {
@@ -500,7 +493,6 @@ function buildWithholding(srcCountry, srcAmount, grossEur, destState, destCountr
 function buildCaInitialState(legs, representative) {
   const cdLeg = legs.find((l) => l.ca_leg_type === "CASH_DIVIDEND");
   const saLeg = legs.find((l) => l.ca_leg_type === "SHARE_ACQUISITION");
-  const rsLeg = legs.find((l) => l.ca_leg_type === "RIGHTS_SOLD");
   const ctuLeg = legs.find((l) => l.ca_leg_type === "CASH_TOP_UP");
   const baseLeg = cdLeg ?? saLeg ?? representative;
   const currency = baseLeg.gross?.currency ?? "EUR";
@@ -541,14 +533,6 @@ function buildCaInitialState(legs, representative) {
     state.sa_gross_eur = saLeg.gross?.eur_amount ?? "";
     state.sa_cost_basis = saLeg.cost_basis_status ?? "INCOMPLETE";
     state.sa_notes = "";
-  }
-
-  if (rsLeg) {
-    state.rs_enabled = true;
-    state.rs_quantity = rsLeg.quantity ?? "";
-    state.rs_gross = rsLeg.gross?.amount ?? "";
-    state.rs_gross_eur = rsLeg.gross?.eur_amount ?? "";
-    state.rs_fees = rsLeg.fees?.total ?? "";
   }
 
   if (ctuLeg) {
@@ -872,19 +856,6 @@ describe("buildCaInitialState — WHT destination pre-fill", () => {
     const state = buildCaInitialState([saLeg], saLeg);
     assert.equal(state.sa_quantity, "9");
     assert.equal(state.sa_cost_basis, "INCOMPLETE");
-  });
-
-  it("RIGHTS_SOLD leg sets rs_enabled = true", () => {
-    const rsLeg = {
-      ...BASE_LEG,
-      ca_leg_type: "RIGHTS_SOLD",
-      quantity: "50",
-      gross: { amount: "25.00", currency: "GBP", eur_amount: "29.14" },
-      fees: { total: "0", currency: "GBP", total_eur: "0" },
-    };
-    const state = buildCaInitialState([rsLeg], rsLeg);
-    assert.equal(state.rs_enabled, true);
-    assert.equal(state.rs_quantity, "50");
   });
 
   it("CASH_TOP_UP leg sets ctu_enabled = true", () => {

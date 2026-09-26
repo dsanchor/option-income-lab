@@ -7,6 +7,12 @@ from copy import deepcopy
 from hashlib import sha256
 from typing import Any
 
+from src.portfolio.rights_policy import (
+    RIGHTS_UNSUPPORTED_MESSAGE,
+    contains_legacy_rights_data,
+    sanitize_legacy_movement,
+)
+
 from .canonical import COSMOS_SYSTEM_KEYS, normalize
 from .models import SECTION_NAMES
 
@@ -75,7 +81,7 @@ ACTION_PLAN_FIELDS = frozenset({
 LEDGER_FIELDS = frozenset({
     "id", "account_id", "doc_type", "txn_type", "security_id", "ticker",
     "symbol", "trade_date", "settlement_date", "quantity", "gross", "fees",
-    "net", "withholding", "fx", "sales_type", "cost_basis_status",
+    "net", "withholding", "fx", "cost_basis_status",
     "import_source", "batch_id", "session_id", "idempotency_hash",
     "source_row_index", "source_row", "correction_status", "corrects_movement_id",
     "superseded_by", "reassigned_from", "reassigned_to", "transfer_group_id",
@@ -89,7 +95,6 @@ LEDGER_FIELDS = frozenset({
     "transfer_source_account_id", "transfer_dest_account_id",
     "transfer_cost_basis_derived_eur", "transfer_cost_basis_eur",
     "transfer_cost_basis_overridden", "transfer_fee", "transfer_peer_id",
-    "source_derechos_amount", "sales_type_raw", "is_rights_sale",
     "correction_note", "void_reason", "superseded_by_ca_group_id",
     "company_name", "warnings",
     "_repair_buy_fields_v1", "_repair_buy_fields_v2",
@@ -338,10 +343,24 @@ def project_positions(doc: dict[str, Any], include_paper: bool) -> list[dict[str
 
 
 def project_ledger(doc: dict[str, Any], include_source_row: bool) -> dict[str, Any]:
-    source = dict(doc)
+    identity = f"{doc.get('account_id')}|{doc.get('id')}"
+    if contains_legacy_rights_data(doc):
+        raise SchemaError(
+            RIGHTS_UNSUPPORTED_MESSAGE,
+            section="ledger_movements",
+            logical_identity=identity,
+            issue="unsupported_rights_movement",
+        )
+    source = sanitize_legacy_movement(doc)
+    if source is None:  # Defensive: the strict check above already rejects this.
+        raise SchemaError(
+            RIGHTS_UNSUPPORTED_MESSAGE,
+            section="ledger_movements",
+            logical_identity=identity,
+            issue="unsupported_rights_movement",
+        )
     if not include_source_row:
         source.pop("source_row", None)
-    identity = f"{doc.get('account_id')}|{doc.get('id')}"
     result = _project(
         source,
         LEDGER_FIELDS,
@@ -452,6 +471,13 @@ def validate_record(section: str, record: dict[str, Any]) -> None:
         raise SchemaError(f"Unknown section {section}")
     if not isinstance(record, dict):
         raise SchemaError(f"{section} record must be an object")
+    if section == "ledger_movements" and contains_legacy_rights_data(record):
+        raise SchemaError(
+            RIGHTS_UNSUPPORTED_MESSAGE,
+            section=section,
+            logical_identity=f"{record.get('account_id')}|{record.get('id')}",
+            issue="unsupported_rights_movement",
+        )
     unknown = set(record) - FIELDS[section]
     if unknown:
         raise SchemaError(f"{section} contains unknown fields: {sorted(unknown)}")

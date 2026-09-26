@@ -505,9 +505,7 @@ class TestRightsSaleInvariant:
         result = svc.compute_holdings()
         aapl = next((h for h in result["holdings"] if h["security_id"] == "XNYS:AAPL"), None)
         assert aapl is not None
-        assert Decimal(aapl["total_sales_eur"]) == Decimal("500.00"), (
-            "DERECHOS proceeds must appear in total_sales_eur"
-        )
+        assert Decimal(aapl["total_sales_eur"]) == Decimal("0.00")
 
 
 # ---------------------------------------------------------------------------

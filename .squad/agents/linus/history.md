@@ -15,6 +15,14 @@
 
 ## Recent Learnings
 
+- **2026-09-26:** Frontend legacy-rights exclusion now uses one fail-closed
+  normalizer across movement lists, import preview, semantic filters, symbol
+  and stock tables, detail/search reads, dividends, economics totals, counts,
+  and charts. Marker casing/whitespace, supported aliases, nested source
+  payloads, non-zero amounts, malformed/non-finite/object amounts, conflicting
+  flags, and unknown explicit sales markers are excluded; explicit zero-only
+  amounts remain ordinary unless another rights marker exists. Ordinary SELL,
+  cash DIVIDEND, and Dividend · Buy semantics remain intact.
 - **2026-09-24:** Historical-rights writes are fenced in the portfolio account
   partition: every ledger mutation transactionally CAS-replaces the lease
   document and performs exactly one create/replace/delete. Lease ID, monotonic

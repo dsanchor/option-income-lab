@@ -17,21 +17,11 @@ export type OptionLinkKind = "OPEN_SELL" | "CLOSE_BUY" | "ASSIGNMENT_STOCK";
 export type OptionContractType = "call" | "put";
 export type WarningType =
   | "NEGATIVE_INVENTORY"
-  | "RIGHTS_AMOUNT"
-  | "PROBABLE_DUPLICATE"
-  | "DERECHOS_WITH_QUANTITY"
-  | "ACCIONES_ZERO_QUANTITY"
-  | "INVALID_SALES_TYPE";
+  | "PROBABLE_DUPLICATE";
 export type AssetClass = "Equity";
 export type SecurityStatus = "ACTIVE" | "DELISTED";
 export type FxRateSource = "ECB" | "BROKER" | "MANUAL";
 export type ImportSource = "csv_import" | "manual";
-
-// Amendment G: Display-only labels for sales_type enum values (internal enum stays ACCIONES/DERECHOS)
-export const SALES_TYPE_LABELS: Record<"ACCIONES" | "DERECHOS", string> = {
-  ACCIONES: "Stocks",
-  DERECHOS: "Rights",
-};
 
 export const OPTION_TXN_TYPES: readonly OptionTxnType[] = [
   "CALL_SELL",
@@ -61,8 +51,8 @@ export interface LinkablePositionsResponse {
 
 
 // Amendment H: Corporate action group types (Phase H-α — linked ledger legs)
-export type CaLegType = "CASH_DIVIDEND" | "RIGHTS_SOLD" | "SHARE_ACQUISITION" | "CASH_TOP_UP" | "CONSOLIDATION_OUT" | "CONSOLIDATION_IN" | "FRACTIONAL_CASH_OUT";
-export type CaEventType = "DIVIDEND_WITH_SCRIP" | "SCRIP_DIVIDEND" | "RIGHTS_ISSUE" | "CASH_DIVIDEND" | "SHARE_CONSOLIDATION";
+export type CaLegType = "CASH_DIVIDEND" | "SHARE_ACQUISITION" | "CASH_TOP_UP" | "CONSOLIDATION_OUT" | "CONSOLIDATION_IN" | "FRACTIONAL_CASH_OUT";
+export type CaEventType = "DIVIDEND_WITH_SCRIP" | "SCRIP_DIVIDEND" | "CASH_DIVIDEND" | "SHARE_CONSOLIDATION";
 
 // ─── Security Master ─────────────────────────────────────────────────────────
 
@@ -170,8 +160,8 @@ export interface LedgerMovement {
   import_source: ImportSource;
   created_at: string;
   cost_basis_status?: CostBasisStatus;
+  /** Legacy compatibility fields used only to exclude unsupported rights rows. */
   source_derechos_amount?: string;
-  // Sale classification — present only on SELL movements
   sales_type?: "ACCIONES" | "DERECHOS" | null;
   is_rights_sale?: boolean | null;
   warnings?: MovementWarning[];
@@ -197,8 +187,8 @@ export interface LedgerMovement {
 
   // Amendment H: corporate action group linkage (Phase H-α)
   ca_group_id?: string;
-  ca_leg_type?: CaLegType;
-  ca_event_type?: CaEventType;
+  ca_leg_type?: CaLegType | "RIGHTS_SOLD";
+  ca_event_type?: CaEventType | "RIGHTS_ISSUE";
   ca_group_seq?: number;
 
   // Option movement linkage / metadata
@@ -239,7 +229,6 @@ export interface HoldingEntry {
   cost_basis_sold_eur?: string;
   remaining_cost_basis_eur?: string;
   total_sale_proceeds_eur?: string;
-  rights_proceeds_eur?: string;
   realized_result_eur?: string;
 }
 
@@ -255,7 +244,6 @@ export interface HoldingsSummary {
   cost_basis_sold_eur?: string;
   remaining_cost_basis_eur?: string;
   total_sale_proceeds_eur?: string;
-  rights_proceeds_eur?: string;
   realized_result_eur?: string;
   has_incomplete_cost_basis?: boolean;
 }
@@ -347,7 +335,6 @@ export interface ManualMovementRequest {
   fees?: FeesInput;
   withholding?: WithholdingInput | null;
   fx?: { rate: string; rate_source: FxRateSource };
-  sales_type?: "ACCIONES" | "DERECHOS"; // SELL only; default ACCIONES
   cost_basis_status?: CostBasisStatus;  // BUY only
   option_position_id?: string;
   option_link_kind?: OptionLinkKind;
@@ -404,7 +391,6 @@ export interface MovementCorrectionRequest {
   fees?: FeesInput;
   withholding?: WithholdingInput | null;   // null = clear; object = override both legs
   fx?: { rate: string; rate_source: FxRateSource };
-  sales_type?: "ACCIONES" | "DERECHOS";
   cost_basis_status?: CostBasisStatus;     // BUY only
   option_position_id?: string;
   option_link_kind?: OptionLinkKind;
@@ -498,7 +484,7 @@ export interface FxRateResponse {
 export interface CorporateActionLegRequest {
   leg_type: CaLegType;
   trade_date: string;                        // REQUIRED per leg
-  quantity?: string;                         // SHARE_ACQUISITION, RIGHTS_SOLD
+  quantity?: string;                         // SHARE_ACQUISITION
   gross?: AmountInput;
   fees?: FeesInput | null;
   withholding?: WithholdingInput | null;
@@ -510,7 +496,7 @@ export interface CorporateActionLegRequest {
 
 /** POST /api/portfolio/corporate-actions */
 export interface CorporateActionCreateRequest {
-  event_type: CaEventType;                   // CASH_DIVIDEND | DIVIDEND_WITH_SCRIP | SCRIP_DIVIDEND | RIGHTS_ISSUE
+  event_type: CaEventType;
   security_id: string;
   account_id: string;
   payment_date: string;                      // REQUIRED; YYYY-MM-DD

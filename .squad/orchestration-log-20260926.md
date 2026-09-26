@@ -13,3 +13,16 @@
 - Scribe merged and deduplicated the three decision records, updated
   administrative history, and cleared the inbox. No product or release action
   was performed.
+
+## Rights-removal release finalization — 16:10:01Z
+
+- Livingston and Rusty removed backend and frontend rights creation/display
+  paths; Danny, Linus, and Saul completed fail-closed revisions after two
+  Basher rejection gates.
+- Basher approved the integrated change after 973 focused backend tests,
+  1339/1341 frontend tests with two unrelated failures, 81 adversarial probes,
+  and successful static/build/diff checks.
+- Scribe consolidated eight inbox records into one superseding canonical
+  decision, preserved contributor histories, cleared the inbox, and prepared
+  the approved product, tests, documentation, and squad records for commit and
+  push. No deployment or production access was performed.

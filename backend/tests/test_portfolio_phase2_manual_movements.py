@@ -61,7 +61,7 @@ def _buy_body(security_id="XNYS:AAPL", quantity="100",
 
 def _sell_body(security_id="XNYS:AAPL", quantity="50",
                gross_eur="9500", commission_eur="5.00",
-               sales_type="ACCIONES", account_id="_unassigned",
+               account_id="_unassigned",
                trade_date="2024-06-01"):
     return {
         "txn_type": "SELL",
@@ -70,7 +70,6 @@ def _sell_body(security_id="XNYS:AAPL", quantity="50",
         "quantity": quantity,
         "gross": {"amount": gross_eur, "currency": "EUR", "eur_amount": gross_eur},
         "fees": {"total": commission_eur, "currency": "EUR", "total_eur": commission_eur},
-        "sales_type": sales_type,
         "account_id": account_id,
     }
 
@@ -226,33 +225,35 @@ class TestManualBuy:
 
 
 # ===========================================================================
-# SELL ACCIONES vs DERECHOS
+# SELL creation
 # ===========================================================================
 
 class TestManualSell:
-    def test_post_sell_acciones_201(self, client):
+    def test_post_sell_201_without_obsolete_metadata(self, client):
         c, _ = client
-        resp = c.post("/api/portfolio/movements", json=_sell_body(sales_type="ACCIONES"))
+        resp = c.post("/api/portfolio/movements", json=_sell_body())
         assert resp.status_code == 201
-        assert resp.json()["sales_type"] == "ACCIONES"
+        assert "sales_type" not in resp.json()
 
-    def test_post_sell_derechos_201(self, client):
-        c, _ = client
-        resp = c.post("/api/portfolio/movements", json=_sell_body(sales_type="DERECHOS"))
-        assert resp.status_code == 201
-        assert resp.json()["sales_type"] == "DERECHOS"
-
-    def test_sell_no_sales_type_defaults_acciones(self, client):
+    def test_post_sell_derechos_rejected(self, client):
         c, _ = client
         body = _sell_body()
-        del body["sales_type"]
+        body["sales_type"] = "DERECHOS"
+        resp = c.post("/api/portfolio/movements", json=body)
+        assert resp.status_code == 400
+        assert "no longer supported" in resp.json()["detail"]
+
+    def test_sell_without_sales_type_is_ordinary(self, client):
+        c, _ = client
+        body = _sell_body()
         resp = c.post("/api/portfolio/movements", json=body)
         assert resp.status_code == 201
-        assert resp.json()["sales_type"] == "ACCIONES"
+        assert "sales_type" not in resp.json()
 
     def test_sell_invalid_sales_type_400(self, client):
         c, _ = client
-        body = _sell_body(sales_type="BONOS")
+        body = _sell_body()
+        body["sales_type"] = "BONOS"
         resp = c.post("/api/portfolio/movements", json=body)
         assert resp.status_code == 400
         assert resp.json()["error"] == "validation_error"
@@ -406,7 +407,7 @@ class TestMovementDetail:
 
 
 # ===========================================================================
-# Unit tests — HoldingsService SELL ACCIONES/DERECHOS
+# Unit tests — HoldingsService SELL and legacy rights filtering
 # ===========================================================================
 
 class FakePortfolioForHoldings:
@@ -466,31 +467,29 @@ class TestSellTypeHoldingsUnit:
     def test_acciones_decrements_shares(self):
         movements = [
             _mvt("b1", "XNYS:AAPL", "BUY", 100, "18250"),
-            _mvt("s1", "XNYS:AAPL", "SELL", 40, "7600", sales_type="ACCIONES"),
+            _mvt("s1", "XNYS:AAPL", "SELL", 40, "7600"),
         ]
         result = _make_svc(movements).compute_holdings()
         aapl = next(h for h in result["holdings"] if h["security_id"] == "XNYS:AAPL")
         assert Decimal(aapl["total_shares"]) == Decimal("60")
 
-    def test_derechos_does_not_decrement_shares(self):
+    def test_legacy_rights_record_is_ignored(self):
         movements = [
             _mvt("b2", "XNYS:AAPL", "BUY", 100, "18250"),
             _mvt("d1", "XNYS:AAPL", "SELL", 0, "300", sales_type="DERECHOS"),
         ]
         result = _make_svc(movements).compute_holdings()
         aapl = next(h for h in result["holdings"] if h["security_id"] == "XNYS:AAPL")
-        assert Decimal(aapl["total_shares"]) == Decimal("100"), (
-            "DERECHOS sale must NOT reduce share count"
-        )
+        assert Decimal(aapl["total_shares"]) == Decimal("100")
 
-    def test_derechos_proceeds_in_total_sales_eur(self):
+    def test_legacy_rights_proceeds_are_not_aggregated(self):
         movements = [
             _mvt("b3", "XNYS:AAPL", "BUY", 100, "18250"),
             _mvt("d2", "XNYS:AAPL", "SELL", 0, "500", sales_type="DERECHOS"),
         ]
         result = _make_svc(movements).compute_holdings()
         aapl = next(h for h in result["holdings"] if h["security_id"] == "XNYS:AAPL")
-        assert Decimal(aapl["total_sales_eur"]) == Decimal("500.00")
+        assert Decimal(aapl["total_sales_eur"]) == Decimal("0.00")
 
     def test_no_sales_type_defaults_to_acciones(self):
         movements = [

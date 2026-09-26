@@ -3,7 +3,7 @@
 Expected columns (6):
   Año | Empresa | Fecha venta | Acciones | Comisión | Total Venta
 
-Two 7-column variants are supported — Tipo may appear in either position:
+Two legacy 7-column variants are recognized only to reject rights rows:
 
   A) Tipo between Fecha venta and Acciones (user sample layout):
      Año | Empresa | Fecha venta | Tipo | Acciones | Comisión | Total Venta
@@ -11,7 +11,7 @@ Two 7-column variants are supported — Tipo may appear in either position:
   B) Tipo appended after Total Venta (design-doc layout):
      Año | Empresa | Fecha venta | Acciones | Comisión | Total Venta | Tipo
 
-Bilingual: Spanish or English headers and type values are both accepted (Amendment G).
+Bilingual: Spanish or English headers are accepted.
 Spanish locale: DD/MM/YYYY dates, decimal comma numbers.
 Delimiter auto-detected: tab, semicolon, comma.
 """
@@ -22,6 +22,7 @@ import unicodedata
 from decimal import Decimal
 from typing import Any, Dict, List, Set
 
+from ..rights_policy import RIGHTS_UNSUPPORTED_MESSAGE
 from .common import (
     normalize_company_name,
     parse_spanish_date,
@@ -47,16 +48,8 @@ _SHARES_ALIASES: Set[str] = {"acciones", "shares", "quantity"}
 _COMMISSION_ALIASES: Set[str] = {"comision", "commission", "fees"}
 _TOTAL_ALIASES: Set[str] = {"total venta", "total", "total proceeds", "proceeds"}
 
-_VALID_SALES_TYPES = {"ACCIONES", "DERECHOS"}
-
-# Bilingual sales type aliases (Amendment G §G.4.3).
-_SALES_TYPE_ALIASES: Dict[str, str] = {
-    "ACCIONES": "ACCIONES",
-    "DERECHOS": "DERECHOS",
-    "STOCKS": "ACCIONES",
-    "SHARES": "ACCIONES",
-    "RIGHTS": "DERECHOS",
-}
+_ORDINARY_SALE_TYPES = {"ACCIONES", "STOCKS", "SHARES"}
+_REMOVED_RIGHTS_TYPES = {"DERECHOS", "RIGHTS"}
 
 
 def _normalize_header(h: str) -> str:
@@ -66,25 +59,20 @@ def _normalize_header(h: str) -> str:
     return " ".join(stripped.split())
 
 
-def _normalize_sales_type(raw: str) -> str:
-    """Normalize a Tipo cell to 'ACCIONES' or 'DERECHOS'.
-
-    - Empty / whitespace → 'ACCIONES' (legacy default for 6-column files)
-    - Case-, whitespace-, and accent-insensitive; accepts Spanish and English aliases
-    - Non-empty, unrecognized value → raises ValueError (Amendment G §G.4.3)
-    """
+def _validate_legacy_type_cell(raw: str) -> None:
+    """Accept ordinary-sale labels and explicitly reject removed rights labels."""
     stripped = raw.strip()
     if not stripped:
-        return "ACCIONES"
+        return
     nfkd = unicodedata.normalize("NFKD", stripped)
     normalized = "".join(c for c in nfkd if not unicodedata.combining(c)).upper().strip()
     normalized = " ".join(normalized.split())
-    mapped = _SALES_TYPE_ALIASES.get(normalized)
-    if mapped is None:
+    if normalized in _REMOVED_RIGHTS_TYPES:
+        raise ValueError(RIGHTS_UNSUPPORTED_MESSAGE)
+    if normalized not in _ORDINARY_SALE_TYPES:
         raise ValueError(
-            f"Invalid Tipo value {raw!r}; must be one of: Acciones, Derechos, Stocks, Shares, Rights"
+            f"Invalid Tipo value {raw!r}; only ordinary share sales are supported"
         )
-    return mapped
 
 
 def parse_sales(content: bytes) -> List[Dict[str, Any]]:
@@ -99,8 +87,6 @@ def parse_sales(content: bytes) -> List[Dict[str, Any]]:
       - quantity: Decimal  (shares sold)
       - commission: Decimal
       - total_proceeds: Decimal
-      - sales_type: str  — 'ACCIONES' or 'DERECHOS'
-      - sales_type_raw: str  — original Tipo cell value
       - source_row: Dict[str, str]
       - warnings: List[Dict]
 
@@ -194,53 +180,34 @@ def parse_sales(content: bytes) -> List[Dict[str, Any]]:
             sale_date = parse_spanish_date(row[2])
 
             if variant == "7A":
-                sales_type_raw = row[3]
                 try:
-                    sales_type = _normalize_sales_type(sales_type_raw)
+                    _validate_legacy_type_cell(row[3])
                 except ValueError as exc:
                     raise ValueError(f"Row {row_index + 2}: {exc}") from exc
-                quantity = parse_spanish_decimal(row[4]) or Decimal("0")
+                quantity = parse_spanish_decimal(row[4])
                 commission = parse_spanish_decimal(row[5]) or Decimal("0")
                 total_proceeds = parse_spanish_decimal(row[6]) or Decimal("0")
             elif variant == "7B":
-                sales_type_raw = row[6]
                 try:
-                    sales_type = _normalize_sales_type(sales_type_raw)
+                    _validate_legacy_type_cell(row[6])
                 except ValueError as exc:
                     raise ValueError(f"Row {row_index + 2}: {exc}") from exc
-                quantity = parse_spanish_decimal(row[3]) or Decimal("0")
+                quantity = parse_spanish_decimal(row[3])
                 commission = parse_spanish_decimal(row[4]) or Decimal("0")
                 total_proceeds = parse_spanish_decimal(row[5]) or Decimal("0")
             else:
-                sales_type_raw = ""
-                sales_type = "ACCIONES"
-                quantity = parse_spanish_decimal(row[3]) or Decimal("0")
+                quantity = parse_spanish_decimal(row[3])
                 commission = parse_spanish_decimal(row[4]) or Decimal("0")
                 total_proceeds = parse_spanish_decimal(row[5]) or Decimal("0")
+            if quantity is None or not quantity.is_finite() or quantity <= 0:
+                raise ValueError(
+                    "Stock SELL rows require a positive finite share quantity; "
+                    "zero, missing, or malformed quantities cannot be imported"
+                )
         except (ValueError, IndexError) as exc:
             raise ValueError(f"Row {row_index + 2}: {exc}") from exc
 
         empresa_normalized = normalize_company_name(empresa_raw)
-
-        row_warnings: List[Dict[str, Any]] = []
-        if sales_type == "DERECHOS" and quantity > Decimal("0"):
-            row_warnings.append({
-                "type": "DERECHOS_WITH_QUANTITY",
-                "row_index": row_index,
-                "message": (
-                    "Rights sale with share quantity > 0. "
-                    "Rights sales do not affect share count; please verify."
-                ),
-            })
-        elif sales_type == "ACCIONES" and quantity == Decimal("0"):
-            row_warnings.append({
-                "type": "ACCIONES_ZERO_QUANTITY",
-                "row_index": row_index,
-                "message": (
-                    "Share sale with zero quantity. "
-                    "Verify this is not a rights transaction."
-                ),
-            })
 
         results.append({
             "row_index": row_index,
@@ -251,10 +218,8 @@ def parse_sales(content: bytes) -> List[Dict[str, Any]]:
             "quantity": quantity,
             "commission": commission,
             "total_proceeds": total_proceeds,
-            "sales_type": sales_type,
-            "sales_type_raw": sales_type_raw,
             "source_row": source_row,
-            "warnings": row_warnings,
+            "warnings": [],
         })
 
     return results

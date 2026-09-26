@@ -814,10 +814,7 @@ class TestPerSecurityTotals:
 
 
 # ---------------------------------------------------------------------------
-# Rights sales — ACCIONES / DERECHOS sales_type distinction
-# Regression coverage for danny-rights-sale-contract design.
-# Tests will fail until Livingston's implementation is merged; assertions are
-# intentionally un-weakened so the failures are explicit.
+# Legacy rights sales are inert; ordinary stock sales retain normal semantics.
 # ---------------------------------------------------------------------------
 
 def _make_movement_with_sales_type(
@@ -832,7 +829,7 @@ def _make_movement_with_sales_type(
 
 
 class TestRightsSaleHoldings:
-    """Holdings computation must honour the ACCIONES/DERECHOS distinction."""
+    """Legacy rights documents never affect holdings or sale economics."""
 
     def test_derechos_sale_does_not_decrement_shares(self):
         """BUY 100 + SELL 30 (DERECHOS) → total_shares remains 100."""
@@ -881,8 +878,8 @@ class TestRightsSaleHoldings:
         h = result["holdings"][0]
         assert Decimal(h["total_shares"]) == Decimal("70")
 
-    def test_total_sales_eur_includes_both_acciones_and_derechos(self):
-        """total_sales_eur sums net proceeds from both sale types."""
+    def test_total_sales_eur_excludes_legacy_rights(self):
+        """Only the ordinary stock sale contributes proceeds."""
         movements = [
             _make_movement_with_sales_type("t1", "XNYS:AAPL", "BUY", "100", "20000.00"),
             _make_movement_with_sales_type(
@@ -898,8 +895,7 @@ class TestRightsSaleHoldings:
         svc = HoldingsService(portfolio_svc, securities_svc)
         result = svc.compute_holdings()
         h = result["holdings"][0]
-        # (600 - 5) + (400 - 5) = 595 + 395 = 990
-        assert Decimal(h["total_sales_eur"]) == Decimal("990.00")
+        assert Decimal(h["total_sales_eur"]) == Decimal("595.00")
 
     def test_backward_compat_no_sales_type_defaults_to_acciones(self):
         """Legacy SELL without sales_type field defaults to ACCIONES (decrements shares)."""
@@ -914,8 +910,7 @@ class TestRightsSaleHoldings:
         # Must behave as ACCIONES: 100 - 30 = 70
         assert Decimal(h["total_shares"]) == Decimal("70")
 
-    def test_design_doc_example_exact_values(self):
-        """Exact example from design §4.3: BUY 100, SELL 30 ACCIONES, SELL 15 DERECHOS."""
+    def test_mixed_legacy_record_keeps_only_ordinary_sale_values(self):
         movements = [
             _make_movement_with_sales_type(
                 "t1", "XNYS:AAPL", "BUY", "100", "2000.00", commission_eur="20"
@@ -933,12 +928,10 @@ class TestRightsSaleHoldings:
         svc = HoldingsService(portfolio_svc, securities_svc)
         result = svc.compute_holdings()
         h = result["holdings"][0]
-        # total_shares = 100 - 30 = 70 (DERECHOS not subtracted)
         assert Decimal(h["total_shares"]) == Decimal("70")
         # total_invested_eur = net = gross 2000 + commission 20 = 2020
         assert Decimal(h["total_invested_eur"]) == Decimal("2020.00")
-        # total_sales_eur = (600-5) + (300-5) = 595 + 295 = 890
-        assert Decimal(h["total_sales_eur"]) == Decimal("890.00")
+        assert Decimal(h["total_sales_eur"]) == Decimal("595.00")
 
     def test_only_derechos_sales_leaves_shares_unchanged(self):
         """All SELLs are DERECHOS → total_shares equals total BUY quantity."""
@@ -1032,10 +1025,7 @@ class TestFifoAcceptance:
         assert Decimal(h["remaining_cost_basis_eur"]) == Decimal("1400.00")
         assert Decimal(h["total_sale_proceeds_eur"]) == Decimal("1080.00")
 
-    def test_s5_derechos_only(self):
-        """S5: BUY 100@€10 → SELL DERECHOS 20@€5.
-        remaining=1000 (unchanged), cost_sold=0, rights=100, realized=100.
-        """
+    def test_s5_legacy_rights_document_is_fully_inert(self):
         movements = [
             _make_movement("s5t1", "XNYS:AAPL", "BUY", "100", "1000.00"),
             _make_movement_with_sales_type(
@@ -1048,15 +1038,12 @@ class TestFifoAcceptance:
         h = result["holdings"][0]
         assert Decimal(h["remaining_cost_basis_eur"]) == Decimal("1000.00")
         assert Decimal(h["cost_basis_sold_eur"]) == Decimal("0.00")
-        assert Decimal(h["rights_proceeds_eur"]) == Decimal("100.00")
-        assert Decimal(h["total_sale_proceeds_eur"]) == Decimal("100.00")
-        assert Decimal(h["realized_result_eur"]) == Decimal("100.00")
+        assert "rights_proceeds_eur" not in h
+        assert Decimal(h["total_sale_proceeds_eur"]) == Decimal("0.00")
+        assert Decimal(h["realized_result_eur"]) == Decimal("0.00")
         assert Decimal(h["total_shares"]) == Decimal("100")
 
-    def test_s6_acciones_and_derechos(self):
-        """S6: BUY 100@€10 → SELL 30 ACCIONES@€15 → SELL DERECHOS 10@€5.
-        cost_sold=300, remaining=700, proceeds=500, rights=50, realized=200.
-        """
+    def test_s6_ordinary_sale_is_preserved_beside_inert_legacy_rights(self):
         movements = [
             _make_movement("s6t1", "XNYS:AAPL", "BUY", "100", "1000.00"),
             _make_movement_with_sales_type(
@@ -1072,9 +1059,9 @@ class TestFifoAcceptance:
         h = result["holdings"][0]
         assert Decimal(h["cost_basis_sold_eur"]) == Decimal("300.00")
         assert Decimal(h["remaining_cost_basis_eur"]) == Decimal("700.00")
-        assert Decimal(h["total_sale_proceeds_eur"]) == Decimal("500.00")
-        assert Decimal(h["rights_proceeds_eur"]) == Decimal("50.00")
-        assert Decimal(h["realized_result_eur"]) == Decimal("200.00")
+        assert Decimal(h["total_sale_proceeds_eur"]) == Decimal("450.00")
+        assert "rights_proceeds_eur" not in h
+        assert Decimal(h["realized_result_eur"]) == Decimal("150.00")
 
     def test_s7_incomplete_buy_then_sell(self):
         """S7: BUY 50 INCOMPLETE (2024-01-10) + BUY 50@€10 (2024-01-15) → SELL 70.
@@ -1224,7 +1211,7 @@ class TestFifoAcceptance:
         for field in (
             "total_purchase_outflow_eur", "cost_basis_sold_eur",
             "remaining_cost_basis_eur", "total_sale_proceeds_eur",
-            "rights_proceeds_eur", "realized_result_eur",
+            "realized_result_eur",
         ):
             assert field in h, f"Missing holding field: {field}"
 
@@ -1236,7 +1223,7 @@ class TestFifoAcceptance:
         for field in (
             "total_purchase_outflow_eur", "cost_basis_sold_eur",
             "remaining_cost_basis_eur", "total_sale_proceeds_eur",
-            "rights_proceeds_eur", "realized_result_eur",
+            "realized_result_eur",
             "has_incomplete_cost_basis",
         ):
             assert field in s, f"Missing summary field: {field}"

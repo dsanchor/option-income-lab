@@ -306,19 +306,19 @@ class TestManualMovementCreation:
             "quantity": "50",
             "gross": {"amount": "9000.00", "currency": "EUR", "eur_amount": "9000.00"},
         })
-        assert doc["sales_type"] == "ACCIONES"
+        assert "sales_type" not in doc
 
-    def test_sell_derechos_accepted(self):
+    def test_sell_derechos_rejected(self):
         svc, _ = _make_svc()
-        doc = svc.create_manual_movement({
-            "txn_type": "SELL",
-            "security_id": "XMAD:TEF",
-            "trade_date": "2026-02-01",
-            "quantity": "10",
-            "gross": {"amount": "5.00", "currency": "EUR", "eur_amount": "5.00"},
-            "sales_type": "DERECHOS",
-        })
-        assert doc["sales_type"] == "DERECHOS"
+        with pytest.raises(ValueError, match="no longer supported"):
+            svc.create_manual_movement({
+                "txn_type": "SELL",
+                "security_id": "XMAD:TEF",
+                "trade_date": "2026-02-01",
+                "quantity": "10",
+                "gross": {"amount": "5.00", "currency": "EUR", "eur_amount": "5.00"},
+                "sales_type": "DERECHOS",
+            })
 
     def test_invalid_txn_type_raises(self):
         svc, _ = _make_svc()
@@ -333,7 +333,7 @@ class TestManualMovementCreation:
 
     def test_invalid_sales_type_raises(self):
         svc, _ = _make_svc()
-        with pytest.raises(ValueError, match="sales_type"):
+        with pytest.raises(ValueError, match="no longer supported"):
             svc.create_manual_movement({
                 "txn_type": "SELL",
                 "security_id": "XNYS:AAPL",

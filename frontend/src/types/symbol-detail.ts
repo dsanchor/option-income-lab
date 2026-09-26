@@ -152,7 +152,7 @@ export interface RecentMovement {
   net_eur?: string | null;
   currency?: string | null;
   account_id?: string | null;
-  sales_type?: string | null;          // SELL only: ACCIONES | DERECHOS
+  sales_type?: string | null;          // Legacy compatibility: unsupported rows are excluded
   correction_status?: string | null;   // ACTIVE | SUPERSEDED | VOIDED
   import_source?: string | null;
   // NOTE: DIVIDEND withholding fields pending Danny's contract amendment

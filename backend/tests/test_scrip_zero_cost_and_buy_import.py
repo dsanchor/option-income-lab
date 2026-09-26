@@ -611,8 +611,7 @@ class TestSellNonRegression:
         assert _d(h["remaining_cost_basis_eur"]) == _d("0.00")
         assert _d(h["realized_result_eur"]) == _d("190.00")
 
-    def test_sell_derechos_proceeds_net_of_commission(self):
-        """DERECHOS sale: rights_proceeds_eur = gross - commission; shares unaffected."""
+    def test_legacy_rights_sale_is_ignored(self):
         svc = _make_svc([
             _buy("b1", "XNYS:AAPL", 100, "2000.00"),
             _sell("s1", "XNYS:AAPL", 10, "80.00", commission_eur="2.00",
@@ -620,5 +619,6 @@ class TestSellNonRegression:
         ])
         result = svc.compute_holdings()
         h = result["holdings"][0]
-        assert _d(h["rights_proceeds_eur"]) == _d("78.00")
-        assert _d(h["total_shares"]) == _d("100")  # DERECHOS does not decrement shares
+        assert "rights_proceeds_eur" not in h
+        assert _d(h["total_sale_proceeds_eur"]) == _d("0.00")
+        assert _d(h["total_shares"]) == _d("100")

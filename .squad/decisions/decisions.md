@@ -4946,3 +4946,59 @@ Complete consolidation of symbol-onboarding flows, market-data resolution, and p
 
 **Batch ready for close-out.**
 
+---
+
+## Rights-Associated Portfolio Movements Removed (2026-09-26)
+
+**Status:** APPROVED for release
+**Supersedes:** All earlier decisions that permitted creating, importing,
+displaying, aggregating, migrating, or reinterpreting rights-associated
+portfolio movements.
+
+### User directives
+
+- Remove every portal, API, correction, corporate-action, CSV-import, and
+  backup-restore path that can create rights-associated movements.
+- Keep legacy rights records physically stored but inert and excluded. Never
+  reinterpret them as cash dividends or ordinary stock sales.
+- Converted shares are represented only by `Dividend · Buy` /
+  `SHARE_ACQUISITION`.
+- Simplify Total Dividends to one value sourced exclusively from finite
+  canonical `total_net_eur`; no nested cards or fallback totals.
+- Keep the temporary/future Daily Market Intelligence idea parked in TODO only;
+  this release adds no product implementation.
+
+### Approved compatibility and rejection policy
+
+- Rights detection is fail-closed across case, accents, punctuation,
+  separators, whitespace, nested source aliases, malformed values, and
+  nonfinite values. Only proven-zero obsolete metadata may be sanitized.
+- Legacy rights records are excluded from movement readers, holdings/FIFO,
+  portfolio membership, symbol/account/stock/detail views, dividends,
+  Economics, totals, charts, filters, and logical backups.
+- Backups containing actual rights records reject. Ordinary records with
+  provably zero/false obsolete metadata may be sanitized safely.
+- Stock-sale CSV quantity must be positive and finite. Zero, missing, negative,
+  malformed, NaN, or infinite quantities reject rather than being inferred as
+  rights or converted into ordinary SELL movements.
+- Ordinary BUY/SELL, cash dividends with gross/net/fees/withholding,
+  transfers/FIFO, consolidations, fractional cash-out, and Dividend · Buy
+  remain supported.
+
+### Review chronology and release evidence
+
+- Livingston removed backend/domain creation paths and made legacy records
+  inert. Rusty removed frontend controls, labels, and derived totals.
+- Basher rejected the initial integration for dividend sanitization,
+  zero-quantity sales, and frontend fail-closed gaps.
+- Danny repaired backend detection, CSV quantity validation, and backup
+  boundaries. Linus unified frontend exclusion across all read surfaces.
+- Basher rejected the revision for accent/punctuation normalization, the
+  `cash_net` fallback, and orphan warning identifiers.
+- Saul closed those frontend blockers. Basher issued final **APPROVE**.
+- Final evidence: 973/973 focused backend tests; 1339/1341 frontend tests with
+  two known unrelated failures; 81/81 adversarial probes; TypeScript, scoped
+  lint/Ruff, Python compile, production build, conflict scan, and diff checks
+  passed. Residual rights identifiers are limited to active
+  rejection/exclusion/compatibility guards, tests, and this inert-policy
+  documentation.

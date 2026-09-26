@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { X, History, Link2, Trash2 } from "lucide-react";
 import type { LedgerMovement, OptionTxnType, WarningType } from "@/types/portfolio";
-import { OPTION_TXN_TYPES, SALES_TYPE_LABELS } from "@/types/portfolio";
+import { OPTION_TXN_TYPES } from "@/types/portfolio";
 import type { BrokerAccount } from "@/types/portfolio";
 import { getAccountName } from "@/lib/accountDisplay";
 import { correctMovement, getMovements, voidCorporateActionGroup } from "@/lib/portfolio-api";
@@ -27,11 +27,7 @@ const TXN_BADGE: Record<string, string> = {
 
 const WARNING_SHORT: Record<WarningType, string> = {
   NEGATIVE_INVENTORY: "Negative inventory",
-  RIGHTS_AMOUNT: "Rights amount pending",
   PROBABLE_DUPLICATE: "Probable duplicate",
-  DERECHOS_WITH_QUANTITY: "Rights sale with quantity",
-  ACCIONES_ZERO_QUANTITY: "Share sale, zero quantity",
-  INVALID_SALES_TYPE: "Invalid sale type",
 };
 
 const MOVEMENT_WARNING_LABELS: Record<string, string> = {
@@ -56,12 +52,6 @@ function formatEurAmount(amount: string | null | undefined): string {
   return `€${n.toLocaleString("es-ES", { minimumFractionDigits: 2 })}`;
 }
 
-function hasNonZeroAmount(amount: string | null | undefined): boolean {
-  if (!amount) return false;
-  const parsed = Number(amount);
-  return !Number.isNaN(parsed) && parsed !== 0;
-}
-
 export interface MovementDetailDialogProps {
   movement: LedgerMovement;
   accounts?: BrokerAccount[];
@@ -71,7 +61,6 @@ export interface MovementDetailDialogProps {
 
 const CA_LEG_BADGE: Record<string, string> = {
   CASH_DIVIDEND: "bg-accent-blue/15 text-accent-blue",
-  RIGHTS_SOLD: "bg-accent-red/15 text-accent-red",
   SHARE_ACQUISITION: "bg-accent-green/15 text-accent-green",
   CASH_TOP_UP: "bg-accent-orange/15 text-accent-orange",
   CONSOLIDATION_OUT: "bg-accent-red/15 text-accent-red",
@@ -80,7 +69,6 @@ const CA_LEG_BADGE: Record<string, string> = {
 };
 const CA_LEG_LABEL: Record<string, string> = {
   CASH_DIVIDEND: "Cash Dividend",
-  RIGHTS_SOLD: "Rights Sold",
   SHARE_ACQUISITION: "Share Acquisition",
   CASH_TOP_UP: "Cash Top-Up",
   CONSOLIDATION_OUT: "Consolidation Out",
@@ -91,7 +79,6 @@ const CA_EVENT_LABEL: Record<string, string> = {
   CASH_DIVIDEND: "Cash Dividend",
   DIVIDEND_WITH_SCRIP: "Dividend with Scrip",
   SCRIP_DIVIDEND: "Scrip Dividend",
-  RIGHTS_ISSUE: "Rights Issue",
   SHARE_CONSOLIDATION: "Share Consolidation",
 };
 
@@ -333,12 +320,6 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
                 mono
               />
             )}
-            {m.txn_type === "SELL" && (
-              <Field
-                label="Sale type"
-                value={m.sales_type != null ? (SALES_TYPE_LABELS[m.sales_type] ?? m.sales_type) : null}
-              />
-            )}
           </div>
 
           {/* Amounts */}
@@ -348,9 +329,6 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
               <Field label="Gross" value={formatEurAmount(m.gross?.eur_amount)} mono />
               <Field label="Fees" value={formatEurAmount(m.fees?.total_eur)} mono />
               <Field label="Net" value={formatEurAmount(m.net?.eur_amount)} mono />
-              {m.txn_type === "DIVIDEND" && hasNonZeroAmount(m.source_derechos_amount) && (
-                <Field label="Derechos" value={formatEurAmount(m.source_derechos_amount)} mono />
-              )}
               {m.withholding?.source && (
                 <Field
                   label={`WHT Source (${m.withholding.source.country ?? ""})`}
@@ -417,13 +395,6 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
                 </div>
               </form>
               {quickLinkError && <div className="text-xs text-accent-red">{quickLinkError}</div>}
-            </div>
-          )}
-
-          {/* Derechos note */}
-          {m.txn_type === "SELL" && m.sales_type === "DERECHOS" && (
-            <div className="rounded-[var(--radius)] border border-accent-blue/20 bg-accent-blue/5 px-4 py-2 text-xs text-text-muted">
-              ℹ Rights sale: proceeds are recorded but <strong className="text-text">share quantity is not reduced</strong> — rights entitlements are separate from ordinary share ownership.
             </div>
           )}
 

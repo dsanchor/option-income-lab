@@ -661,9 +661,7 @@ def _build_preview_movements(
         if txn_type == "BUY":
             holdings_delta[security_id] = holdings_delta.get(security_id, Decimal("0")) + qty
         elif txn_type == "SELL":
-            # DERECHOS sales do not affect share count
-            if (movement.get("sales_type") or "ACCIONES") == "ACCIONES":
-                holdings_delta[security_id] = holdings_delta.get(security_id, Decimal("0")) - qty
+            holdings_delta[security_id] = holdings_delta.get(security_id, Decimal("0")) - qty
         elif txn_type in OPTION_TXN_TYPES:
             pass
 
@@ -711,10 +709,6 @@ def _row_to_movement(
         commission = Decimal("0")
         txn_type = "DIVIDEND"
         cost_basis_status = "COMPLETE"
-        derechos = row.get("derechos", Decimal("0"))
-        source_derechos = str(derechos) if derechos > Decimal("0") else None
-        sales_type = None
-        sales_type_raw = None
     elif fmt == "purchases":
         trade_date = row.get("purchase_date", "")
         # CSV "Total (€)" is the trade consideration (price × qty) — gross.
@@ -727,9 +721,6 @@ def _row_to_movement(
         quantity = row.get("quantity", Decimal("0"))
         txn_type = "BUY"
         cost_basis_status = row.get("cost_basis_status", "COMPLETE")
-        source_derechos = None
-        sales_type = None
-        sales_type_raw = None
     elif fmt == "sales":
         trade_date = row.get("sale_date", "")
         gross = row.get("total_proceeds", Decimal("0"))
@@ -740,9 +731,6 @@ def _row_to_movement(
         quantity = row.get("quantity", Decimal("0"))
         txn_type = "SELL"
         cost_basis_status = "COMPLETE"
-        source_derechos = None
-        sales_type = row.get("sales_type", "ACCIONES")
-        sales_type_raw = row.get("sales_type_raw", "")
     else:  # options
         trade_date = row.get("trade_date", "")
         gross = row.get("gross_usd", Decimal("0"))
@@ -757,9 +745,6 @@ def _row_to_movement(
         wht_dest = Decimal("0")
         quantity = Decimal("0")
         txn_type = row.get("txn_type", "")
-        source_derechos = None
-        sales_type = None
-        sales_type_raw = None
         gross_currency = "USD"
         fees_currency = "USD"
         gross_eur_value = gross_eur
@@ -826,14 +811,6 @@ def _row_to_movement(
         "source_row": row.get("source_row", {}),
         "created_at": _now(),
     }
-
-    if source_derechos:
-        movement["source_derechos_amount"] = source_derechos
-
-    if sales_type is not None:
-        movement["sales_type"] = sales_type
-        movement["sales_type_raw"] = sales_type_raw or ""
-        movement["is_rights_sale"] = (sales_type == "DERECHOS")
 
     if fmt in {"purchases", "dividends", "sales"}:
         movement["cost_basis_status"] = cost_basis_status
@@ -931,7 +908,7 @@ def _serialize_parsed_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def _deserialize_parsed_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     decimal_fields = {
-        "gross", "net", "derechos", "wht_source", "wht_destination",
+        "gross", "net", "wht_source", "wht_destination",
         "price_per_share", "quantity", "total_cost", "commission",
         "total_proceeds", "gross_usd", "gross_eur", "commission_eur", "net_eur",
     }
@@ -1040,8 +1017,6 @@ def _build_preview_response(
                               (m.get("withholding", {}).get("source") or {}).get("amount_eur", "0.00"),
             "net_eur": m.get("net", {}).get("eur_amount"),
         }
-        if m.get("sales_type") is not None:
-            entry["sales_type"] = m["sales_type"]
         preview_movements.append(entry)
 
     return {

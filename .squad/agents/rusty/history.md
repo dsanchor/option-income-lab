@@ -115,3 +115,13 @@
 - Existing `dashboard_banner` Cosmos documents were not accessed or deleted; they are inert orphaned production data.
 - Preserved the bounded generic AutoRefresh poller and all non-banner dashboard, monitoring, reporting, plan, pricing, and portfolio behavior.
 - Removed the final active documentation reference from the architecture tree and retired banner-specific wording from Saul's active charter; remaining banner mentions are append-only historical `.squad` records, the superseding removal decision, and compatibility/removal regression fixtures.
+
+### 2026-09-26 — Rights movements removed from frontend
+- Removed rights sale selection, rights-issue corporate actions, correction controls, badges, details, warnings, and Economics/Dividends columns and copy.
+- Added a shared fail-closed compatibility boundary that excludes legacy rights sales, rights corporate-action legs/events, rights-bearing dividends, and rights warning rows while preserving ordinary BUY/SELL and `Dividend · Buy`.
+- Dividend and Economics totals are normalized to cash-only values; detailed dividend aggregates are rebuilt after excluding legacy rights-bearing positions.
+- Import previews block commit when an older backend returns unsupported rows instead of silently committing hidden data.
+
+### 2026-09-26 — Total Dividends card simplified
+- Economics/Dividends now presents `Total Dividends` as one localized net-dividends-received value with a matching accessible label.
+- Removed the nested breakdown structure; focused source-contract coverage prevents redundant subcards from returning.

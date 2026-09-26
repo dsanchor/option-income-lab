@@ -32,7 +32,7 @@ const TOLERANCE = 0.01;
  * 1. qty + price filled, tradeValue empty → auto-computes tradeValue
  * 2. qty + tradeValue filled, price empty → auto-computes unitPrice
  * 3. All three filled → cross-validate |qty × price − tradeValue| ≤ 0.01
- * 4. Only tradeValue filled (qty zero/empty) → valid (zero-cost / rights)
+ * 4. Only tradeValue filled (qty zero/empty) → valid for zero-cost inputs
  *
  * @param quantity       Parsed number (≥ 0) or null/undefined if empty
  * @param unitPrice      Parsed number (> 0) or null/undefined if empty

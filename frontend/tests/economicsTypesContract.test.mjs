@@ -70,7 +70,7 @@ describe("Economics type contracts", () => {
     }
   });
 
-  it("extends dividend report types with cash, derechos, and total net fields", () => {
+  it("keeps legacy dividend fields only for compatibility exclusion", () => {
     for (const field of [
       "cash_net?: number | null;",
       "derechos_net?: number | null;",

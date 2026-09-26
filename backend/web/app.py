@@ -661,7 +661,6 @@ def _build_economics_overview_report(
                 "options_net_eur": 0.0,
                 "dividends_net_eur": 0.0,
                 "dividends_cash_net_eur": 0.0,
-                "dividends_derechos_net_eur": 0.0,
                 "dividends_total_net_eur": 0.0,
                 "combined_net_eur": 0.0,
                 "option_positions": 0,
@@ -686,7 +685,6 @@ def _build_economics_overview_report(
                 "options_net_eur": 0.0,
                 "dividends_net_eur": 0.0,
                 "dividends_cash_net_eur": 0.0,
-                "dividends_derechos_net_eur": 0.0,
                 "dividends_total_net_eur": 0.0,
                 "combined_net_eur": 0.0,
                 "option_positions": 0,
@@ -695,10 +693,8 @@ def _build_economics_overview_report(
         )
         monthly_rows[month_key]["dividends_net_eur"] = row.get("net_eur") or 0.0
         monthly_rows[month_key]["dividends_cash_net_eur"] = row.get("cash_net") or row.get("net_eur") or 0.0
-        monthly_rows[month_key]["dividends_derechos_net_eur"] = row.get("derechos_net") or 0.0
         monthly_rows[month_key]["dividends_total_net_eur"] = row.get("total_net") or (
-            (row.get("cash_net") or row.get("net_eur") or 0.0)
-            + (row.get("derechos_net") or 0.0)
+            row.get("cash_net") or row.get("net_eur") or 0.0
         )
         monthly_rows[month_key]["combined_net_eur"] = _round2(
             (monthly_rows[month_key].get("options_net_eur") or 0.0)
@@ -717,7 +713,6 @@ def _build_economics_overview_report(
                 "options_net_eur": 0.0,
                 "dividends_net_eur": 0.0,
                 "dividends_cash_net_eur": 0.0,
-                "dividends_derechos_net_eur": 0.0,
                 "dividends_total_net_eur": 0.0,
                 "combined_net_eur": 0.0,
                 "option_positions": 0,
@@ -742,7 +737,6 @@ def _build_economics_overview_report(
                 "options_net_eur": 0.0,
                 "dividends_net_eur": 0.0,
                 "dividends_cash_net_eur": 0.0,
-                "dividends_derechos_net_eur": 0.0,
                 "dividends_total_net_eur": 0.0,
                 "combined_net_eur": 0.0,
                 "option_positions": 0,
@@ -751,10 +745,8 @@ def _build_economics_overview_report(
         )
         symbol_rows[symbol]["dividends_net_eur"] = row.get("net_eur") or 0.0
         symbol_rows[symbol]["dividends_cash_net_eur"] = row.get("cash_net") or row.get("net_eur") or 0.0
-        symbol_rows[symbol]["dividends_derechos_net_eur"] = row.get("derechos_net") or 0.0
         symbol_rows[symbol]["dividends_total_net_eur"] = row.get("total_net") or (
-            (row.get("cash_net") or row.get("net_eur") or 0.0)
-            + (row.get("derechos_net") or 0.0)
+            row.get("cash_net") or row.get("net_eur") or 0.0
         )
         symbol_rows[symbol]["combined_net_eur"] = _round2(
             (symbol_rows[symbol].get("options_net_eur") or 0.0)
@@ -780,10 +772,9 @@ def _build_economics_overview_report(
     options_net_eur = options_report.get("summary", {}).get("net_income_eur", 0.0)
     dividends_net_eur = dividends_report.get("summary", {}).get("total_net_eur", 0.0)
     dividends_cash_net_eur = dividends_report.get("summary", {}).get("cash_net", dividends_net_eur)
-    dividends_derechos_net_eur = dividends_report.get("summary", {}).get("derechos_net", 0.0)
     dividends_total_net_eur = dividends_report.get("summary", {}).get(
         "total_net",
-        (dividends_cash_net_eur or 0.0) + (dividends_derechos_net_eur or 0.0),
+        dividends_cash_net_eur or 0.0,
     )
 
     return {
@@ -791,7 +782,6 @@ def _build_economics_overview_report(
             "options_net_eur": options_net_eur,
             "dividends_net_eur": dividends_net_eur,
             "dividends_cash_net_eur": dividends_cash_net_eur,
-            "dividends_derechos_net_eur": dividends_derechos_net_eur,
             "dividends_total_net_eur": dividends_total_net_eur,
             "portfolio_yoc_pct": dividends_report.get("summary", {}).get("portfolio_yoc_pct"),
             "combined_net_eur": _round2((options_net_eur or 0.0) + (dividends_total_net_eur or 0.0)),
@@ -825,36 +815,30 @@ def _build_economics_overview_report(
 
 def _decorate_dividends_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
     cash_net = summary.get("cash_net", summary.get("cash_net_eur", summary.get("total_net_eur", 0.0))) or 0.0
-    derechos_net = summary.get("derechos_net", summary.get("derechos_eur", 0.0)) or 0.0
-    total_net = summary.get("total_net", summary.get("total_combined_net_eur", cash_net + derechos_net)) or 0.0
+    total_net = summary.get("total_net", summary.get("total_combined_net_eur", cash_net)) or 0.0
     return {
         **summary,
         "cash_net": cash_net,
-        "derechos_net": derechos_net,
         "total_net": total_net,
     }
 
 
 def _decorate_dividends_row(row: Dict[str, Any]) -> Dict[str, Any]:
     cash_net = row.get("cash_net", row.get("cash_net_eur", row.get("net_eur", 0.0))) or 0.0
-    derechos_net = row.get("derechos_net", row.get("derechos_eur", 0.0)) or 0.0
-    total_net = row.get("total_net", row.get("total_net_eur", cash_net + derechos_net)) or 0.0
+    total_net = row.get("total_net", row.get("total_net_eur", cash_net)) or 0.0
     return {
         **row,
         "cash_net": cash_net,
-        "derechos_net": derechos_net,
         "total_net": total_net,
     }
 
 
 def _decorate_dividends_cumulative_row(row: Dict[str, Any]) -> Dict[str, Any]:
     cash_net = row.get("cash_net", row.get("cumulative_cash_net_eur", row.get("cumulative_net_eur", 0.0))) or 0.0
-    derechos_net = row.get("derechos_net", row.get("cumulative_derechos_net_eur", row.get("derechos_eur", 0.0))) or 0.0
-    total_net = row.get("total_net", row.get("cumulative_total_net_eur", cash_net + derechos_net)) or 0.0
+    total_net = row.get("total_net", row.get("cumulative_total_net_eur", cash_net)) or 0.0
     return {
         **row,
         "cash_net": cash_net,
-        "derechos_net": derechos_net,
         "total_net": total_net,
     }
 
@@ -1850,7 +1834,7 @@ def _map_recent_movement(m: dict) -> dict:
     """Map a raw ledger_txn doc to the RecentMovement wire shape.
 
     Exposes fields needed for the Stocks history tab: type, date, quantity,
-    gross/fees/net amounts, account, sales_type (SELL), and audit provenance.
+    gross/fees/net amounts, account, and audit provenance.
     DIVIDEND-specific fields (withholding) are omitted pending Danny's amendment.
     """
     gross = m.get("gross") or {}
@@ -1866,8 +1850,6 @@ def _map_recent_movement(m: dict) -> dict:
         "net_eur": net.get("eur_amount"),
         "currency": gross.get("currency"),
         "account_id": m.get("account_id"),
-        # SELL-specific
-        "sales_type": m.get("sales_type"),
         # Audit
         "correction_status": m.get("correction_status"),
         "import_source": m.get("import_source"),

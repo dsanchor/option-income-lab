@@ -30,6 +30,12 @@ from .models import (
     OPTION_SELL_TXN_TYPES as _MODEL_OPTION_SELL_TYPES,
     OPTION_TXN_TYPES as _MODEL_OPTION_TXN_TYPES,
 )
+from .rights_policy import (
+    RIGHTS_UNSUPPORTED_MESSAGE,
+    contains_legacy_rights_data,
+    payload_requests_rights,
+    sanitize_legacy_movement,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -273,7 +279,6 @@ def _normalize_option_metadata(txn_type: str, data: Dict[str, Any]) -> Dict[str,
 # Leg type → txn_type mapping for corporate-action groups (Amendment H §H.3.3)
 _CA_LEG_TXN_TYPE = {
     "CASH_DIVIDEND": "DIVIDEND",
-    "RIGHTS_SOLD": "SELL",
     "SHARE_ACQUISITION": "BUY",
     "CASH_TOP_UP": "BUY",
     "CONSOLIDATION_OUT": "TRANSFER_OUT",
@@ -286,7 +291,6 @@ _CA_REQUIRED_LEGS: Dict[str, set] = {
     "CASH_DIVIDEND": {"CASH_DIVIDEND"},
     "DIVIDEND_WITH_SCRIP": {"CASH_DIVIDEND", "SHARE_ACQUISITION"},
     "SCRIP_DIVIDEND": {"SHARE_ACQUISITION"},
-    "RIGHTS_ISSUE": {"SHARE_ACQUISITION"},
     "SHARE_CONSOLIDATION": {"CONSOLIDATION_OUT", "CONSOLIDATION_IN"},
 }
 
@@ -365,7 +369,7 @@ def _normalize_share_acquisition_fmv(
 # Financial fields on a group leg that must not be patched individually.
 # Non-financial fields (trade_date, notes) remain individually correctable.
 _CA_FINANCIAL_FIELDS: frozenset = frozenset({
-    "gross", "fees", "withholding", "quantity", "fx", "sales_type", "cost_basis_status",
+    "gross", "fees", "withholding", "quantity", "fx", "cost_basis_status",
 })
 
 
@@ -376,12 +380,13 @@ def _validate_correction_fields(txn_type: str, correction_data: Dict[str, Any]) 
     All per-field structural checks (enum values, numeric ranges, required sub-fields,
     type applicability) are centralised here so correct_movement stays readable.
     """
+    if payload_requests_rights(correction_data) or "sales_type" in correction_data:
+        raise ValueError(RIGHTS_UNSUPPORTED_MESSAGE)
+
     # ── Type-specific field restrictions ──────────────────────────────────
     if txn_type in _STOCK_BUY_TYPES:
         if "withholding" in correction_data and correction_data["withholding"] is not None:
             raise ValueError("withholding is not applicable to BUY movements")
-        if correction_data.get("sales_type") is not None:
-            raise ValueError("sales_type is not applicable to BUY movements")
 
     if txn_type in _STOCK_SELL_TYPES:
         if correction_data.get("cost_basis_status") is not None:
@@ -390,16 +395,12 @@ def _validate_correction_fields(txn_type: str, correction_data: Dict[str, Any]) 
     if txn_type in _OPTION_BUY_TYPES | _OPTION_SELL_TYPES:
         if "withholding" in correction_data and correction_data["withholding"] is not None:
             raise ValueError("withholding is not applicable to option movements")
-        if correction_data.get("sales_type") is not None:
-            raise ValueError("sales_type is not applicable to option movements")
         if correction_data.get("cost_basis_status") is not None:
             raise ValueError("cost_basis_status is not applicable to option movements")
         if "quantity" in correction_data and correction_data["quantity"] not in (None, "0", 0, 0.0):
             raise ValueError("quantity must remain 0 for option movements")
 
     if txn_type == "DIVIDEND":
-        if correction_data.get("sales_type") is not None:
-            raise ValueError("sales_type is not applicable to DIVIDEND movements")
         if correction_data.get("cost_basis_status") is not None:
             raise ValueError("cost_basis_status is not applicable to DIVIDEND movements")
 
@@ -445,11 +446,6 @@ def _validate_correction_fields(txn_type: str, correction_data: Dict[str, Any]) 
             raise ValueError("fx.rate must be > 0")
         if "rate_source" in fx and fx["rate_source"] not in ("ECB", "BROKER", "MANUAL"):
             raise ValueError("fx.rate_source must be one of: ECB, BROKER, MANUAL")
-
-    # ── sales_type enum ───────────────────────────────────────────────────
-    if correction_data.get("sales_type") is not None:
-        if correction_data["sales_type"] not in ("ACCIONES", "DERECHOS"):
-            raise ValueError("sales_type must be ACCIONES or DERECHOS")
 
     # ── cost_basis_status enum ────────────────────────────────────────────
     if correction_data.get("cost_basis_status") is not None:
@@ -846,7 +842,7 @@ class CosmosPortfolioService:
             )
             if doc.get("doc_type") != "ledger_txn":
                 return None
-            return _clean(doc)
+            return sanitize_legacy_movement(_clean(doc))
         except CosmosResourceNotFoundError:
             return None
 
@@ -951,6 +947,8 @@ class CosmosPortfolioService:
         security_id = data.get("security_id", "")
         trade_date = data.get("trade_date", "")
         account_id = data.get("account_id", "_unassigned")
+        if payload_requests_rights(data) or "sales_type" in data:
+            raise ValueError(RIGHTS_UNSUPPORTED_MESSAGE)
 
         if not security_id:
             raise ValueError("security_id is required")
@@ -962,14 +960,6 @@ class CosmosPortfolioService:
                 f"PUT_SELL, or PUT_BUY for manual creation; got {txn_type!r}"
             )
 
-        # DERECHOS: validate quantity=0 semantics
-        sales_type = data.get("sales_type")
-        if txn_type == "SELL" and not sales_type:
-            sales_type = "ACCIONES"
-        if txn_type == "SELL" and sales_type not in ("ACCIONES", "DERECHOS"):
-            raise ValueError("sales_type must be ACCIONES or DERECHOS")
-        if txn_type in _OPTION_TXN_TYPES and data.get("sales_type") is not None:
-            raise ValueError("sales_type is not applicable to option movements")
         if txn_type in _OPTION_TXN_TYPES and data.get("cost_basis_status") is not None:
             raise ValueError("cost_basis_status is not applicable to option movements")
 
@@ -1027,9 +1017,6 @@ class CosmosPortfolioService:
         if wht:
             doc["withholding"] = _apply_wht_rate_derivation(wht, gross_eur)
         _ensure_ledger_detail_fields(doc)
-
-        if txn_type == "SELL":
-            doc["sales_type"] = sales_type
 
         cost_basis_status = data.get("cost_basis_status")
         if txn_type == "BUY" and cost_basis_status:
@@ -1136,7 +1123,6 @@ class CosmosPortfolioService:
             "gross",
             "fees",
             "fx",
-            "sales_type",
             "cost_basis_status",
             "notes",
             "option_position_id",
@@ -1209,6 +1195,10 @@ class CosmosPortfolioService:
         Returns {"ca_group_id": ..., "event_type": ..., "movements": [...]}.
         """
         self._require_portfolio()
+        if payload_requests_rights(request) or any(
+            payload_requests_rights(leg) for leg in request.get("legs") or []
+        ):
+            raise ValueError(RIGHTS_UNSUPPORTED_MESSAGE)
 
         event_type = request.get("event_type", "")
         if event_type not in _CA_REQUIRED_LEGS:
@@ -1252,10 +1242,10 @@ class CosmosPortfolioService:
         # behaves like a normal standalone movement: individually deletable via
         # delete_movement and correctable via correct_movement, instead of
         # being force-routed through the group correct/void/delete endpoints.
-        # Other event types (SCRIP_DIVIDEND, RIGHTS_ISSUE, ...) can also end up
+        # Other event types (for example SCRIP_DIVIDEND) can also end up
         # with a single provided leg, but they remain grouped: their leg set is
         # extensible (e.g. DIVIDEND_WITH_SCRIP's optional CASH_TOP_UP/
-        # RIGHTS_SOLD legs), so treating them as "not a group" would be
+        # optional legs), so treating them as "not a group" would be
         # incorrect in general.
         is_single_leg = event_type == "CASH_DIVIDEND"
         ca_group_id = None if is_single_leg else f"cag_{uuid4().hex}"
@@ -1278,13 +1268,6 @@ class CosmosPortfolioService:
             else:
                 quantity = str(leg.get("quantity") or "0")
                 cost_basis_status = leg.get("cost_basis_status")
-
-            if leg_type == "RIGHTS_SOLD":
-                sales_type = "DERECHOS"
-            elif leg_type == "FRACTIONAL_CASH_OUT":
-                sales_type = "ACCIONES"
-            else:
-                sales_type = None
 
             transfer_cost_basis_eur = leg.get("transfer_cost_basis_eur")
             if leg_type == "CONSOLIDATION_IN" and not transfer_cost_basis_eur:
@@ -1358,9 +1341,6 @@ class CosmosPortfolioService:
             if wht:
                 doc["withholding"] = _apply_wht_rate_derivation(wht, gross_eur)
             _ensure_ledger_detail_fields(doc)
-
-            if sales_type:
-                doc["sales_type"] = sales_type
 
             if txn_type == "BUY":
                 doc["cost_basis_status"] = cost_basis_status or "COMPLETE"
@@ -1483,6 +1463,10 @@ class CosmosPortfolioService:
           ValueError("integrity_error: ...")             — phase 2 failed; new docs deleted
         """
         self._require_portfolio()
+        if payload_requests_rights(request) or any(
+            payload_requests_rights(leg) for leg in request.get("legs") or []
+        ):
+            raise ValueError(RIGHTS_UNSUPPORTED_MESSAGE)
 
         correction_note = str(request.get("correction_note", "") or "").strip()
         if not correction_note:
@@ -1567,13 +1551,6 @@ class CosmosPortfolioService:
                 quantity = str(leg.get("quantity") or "0")
                 cost_basis_status = leg.get("cost_basis_status")
 
-            if leg_type == "RIGHTS_SOLD":
-                sales_type = "DERECHOS"
-            elif leg_type == "FRACTIONAL_CASH_OUT":
-                sales_type = "ACCIONES"
-            else:
-                sales_type = None
-
             transfer_cost_basis_eur = leg.get("transfer_cost_basis_eur")
             if leg_type == "CONSOLIDATION_IN" and not transfer_cost_basis_eur:
                 raise ValueError(
@@ -1647,9 +1624,6 @@ class CosmosPortfolioService:
             if wht:
                 doc["withholding"] = _apply_wht_rate_derivation(wht, gross_eur)
             _ensure_ledger_detail_fields(doc)
-
-            if sales_type:
-                doc["sales_type"] = sales_type
 
             if txn_type == "BUY":
                 doc["cost_basis_status"] = cost_basis_status or "COMPLETE"
@@ -1810,7 +1784,13 @@ class CosmosPortfolioService:
                 ),
                 reverse=True,
             )
-            items = all_items[offset: offset + limit]
+            visible_items = [
+                sanitized
+                for item in all_items
+                if (sanitized := sanitize_legacy_movement(item)) is not None
+            ]
+            total = len(visible_items)
+            items = visible_items[offset: offset + limit]
         except Exception as exc:
             logger.warning("Data query failed: %s", exc)
             items = []
@@ -1831,7 +1811,11 @@ class CosmosPortfolioService:
                 query=query,
                 enable_cross_partition_query=True,
             ))
-            return [_clean(d) for d in items]
+            return [
+                sanitized
+                for item in items
+                if (sanitized := sanitize_legacy_movement(_clean(item))) is not None
+            ]
         except Exception as exc:
             logger.warning("get_all_movements_for_holdings failed: %s", exc)
             return []
@@ -1845,13 +1829,17 @@ class CosmosPortfolioService:
         of correction or deletion status — means a position was owned at some point.
         """
         self._require_portfolio()
-        query = "SELECT c.security_id FROM c WHERE c.doc_type = 'ledger_txn'"
+        query = "SELECT * FROM c WHERE c.doc_type = 'ledger_txn'"
         try:
             items = list(self.portfolio_container.query_items(
                 query=query,
                 enable_cross_partition_query=True,
             ))
-            return {i.get("security_id") for i in items if i.get("security_id")}
+            return {
+                item.get("security_id")
+                for item in items
+                if item.get("security_id") and not contains_legacy_rights_data(item)
+            }
         except Exception as exc:
             logger.warning("get_ledger_security_ids_all failed: %s", exc)
             return set()
@@ -2063,9 +2051,7 @@ class CosmosPortfolioService:
             if txn_type == "BUY":
                 shares += qty
             elif txn_type == "SELL":
-                sale_type = m.get("sales_type") or "ACCIONES"
-                if sale_type == "ACCIONES":
-                    shares -= qty
+                shares -= qty
             elif txn_type == "TRANSFER_IN":
                 shares += qty
             elif txn_type == "TRANSFER_OUT":
@@ -2132,7 +2118,12 @@ class CosmosPortfolioService:
                 parameters=params,
                 partition_key=account_id,
             ))
-            return [_clean(d) for d in items if d.get("account_id") == account_id]
+            return [
+                sanitized
+                for item in items
+                if item.get("account_id") == account_id
+                and (sanitized := sanitize_legacy_movement(_clean(item))) is not None
+            ]
         except Exception as exc:
             logger.warning("_get_movements_up_to_date failed: %s", exc)
             return []
