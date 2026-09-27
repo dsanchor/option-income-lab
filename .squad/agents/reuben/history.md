@@ -159,3 +159,21 @@ Frontend: npx tsc --noEmit — 0 errors
 - Validation: Basher rejection probes 37/37; combined FMV, corporate-action,
   correction, and backup suites 344/344; explicit foreign create/correction
   probe passed; changed modules compiled successfully.
+
+## Legacy Scrip Cost-Metadata Safe Repair (2026-09-27)
+
+- Implemented a separate dry-run-first migration for ACTIVE legacy scrip
+  SHARE_ACQUISITION cost metadata; the Yahoo FMV backfill remains untouched.
+- Added deterministic classification for authoritative gross EUR, explicit
+  native zero, persisted movement FX, constrained canonical net evidence, and
+  status-only defects. Ambiguous, malformed, mixed-currency, invalid, and
+  correction-chain cases remain review-required.
+- Added SHA-bound apply confirmation, scoped filters, full-document backup
+  before write, ETag CAS, per-document evidence markers, idempotency, and
+  checksum/target-bound restore. No production services were accessed.
+- Added bounded Economics diagnostics with event, movement, share-leg, and
+  top-up IDs plus stable reason codes, without changing aggregate math.
+- Focused validation: 105 migration/Economics/holdings tests passed; Ruff,
+  Python compilation, CLI help, and scoped diff hygiene passed.
+- Basher's final combined gate approved the implementation after 370 targeted
+  backend tests and frontend, type, lint, and diff checks passed.

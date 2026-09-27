@@ -42,3 +42,21 @@
 - Scribe consolidated four inbox records into two canonical decisions,
   superseded the prior unimplemented Economics boundary, updated project and
   agent histories, cleared the inbox, and committed only `.squad` changes.
+
+## UK scrip normalization and legacy cost repair — 19:23:18Z
+
+- Rusty removed the duplicate standalone Scrip Dividends card, leaving Total
+  Dividends plus two secondary summary cards.
+- Linus traced UK Partial coverage to pence-denominated Yahoo quotes and
+  normalized `GBp`/`GBX` to GBP at the shared authoritative quote boundary used
+  by both backfill and Yahoo-on-save.
+- Danny accepted a separate fail-closed legacy cost-repair migration rather
+  than weakening Economics eligibility or extending the FMV backfill.
+- Reuben implemented bounded diagnostics and
+  `repair_legacy_scrip_costs`, including dry-run planning, backup-before-write,
+  CAS, restore, contradictory-amount rejection, and duplicate ACTIVE-leg
+  ambiguity safeguards.
+- Basher issued final **APPROVE** after 370 targeted backend tests and the
+  frontend, type, lint, and diff gates passed.
+- Scribe merged the inbox decision, updated project and contributor histories,
+  and committed only `.squad` records.

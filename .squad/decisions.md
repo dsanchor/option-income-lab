@@ -8914,3 +8914,41 @@ Value” and “Dividend · Buy Independent Share FMV and Yahoo Backfill”
 - Basher granted final approval on the exact final worktree after 255 backend
   and 129 frontend tests, TypeScript, five focused visual-parity checks, and
   diff hygiene all passed with no blockers.
+
+## UK Scrip Normalization and Legacy Cost Repair (2026-09-27)
+
+**Status:** IMPLEMENTED AND APPROVED
+**Owners:** Linus, Reuben
+**Design:** Danny
+**Requested by:** Copilot
+
+- UK Yahoo quotes are normalized through the shared authoritative quote
+  boundary: `GBp`/`GBX` pence values become GBP before share-FMV arithmetic.
+  Both the FMV backfill and Yahoo-on-save path consume that same normalized
+  contract, avoiding a divergent UK-only conversion.
+- Cost repair is a separate migration from Yahoo/share-FMV backfill.
+  `share_fmv` is neither read as accounting evidence nor modified.
+- Audit is read-only by default and emits deterministic JSON or CSV rows with
+  event/share-leg identity, current cost fields, correction-chain context,
+  classification, exact reason code, evidence, proposed diff, FIFO lot cost,
+  Economics impact, and a canonical plan SHA-256.
+- Apply is restricted to ACTIVE deterministic cases, requires the exact plan
+  SHA, explicit confirmation, and a filter or `--all-active`; it writes a
+  backup before any mutation and uses ETag CAS. Restore is independently
+  checksum-, target-, run-marker-, and CAS-bound.
+- Existing authoritative EUR contribution is preserved. Native zero is
+  canonical zero without FX. Positive native contribution may use only the
+  persisted movement FX, or an existing net whose native addition equation is
+  algebraically proven. New FX, FMV, notes, and inferred dividend value are
+  prohibited.
+- Contradictory native/EUR amounts and ambiguous duplicate ACTIVE share legs
+  fail closed as review-required; superseded or voided history is never
+  rewritten.
+- Economics now exposes at most 100 filtered, ACTIVE-deduplicated
+  `unvalued_scrip_events`, including event and involved movement IDs plus all
+  stable fail-closed reason codes. Aggregate values and eligibility are
+  unchanged.
+- Basher approved the final worktree after 370 targeted backend tests plus
+  frontend contract, TypeScript, lint, and diff-hygiene checks passed. The
+  Economics summary now contains Total Dividends and two secondary cards; the
+  duplicate standalone Scrip Dividends card was removed.

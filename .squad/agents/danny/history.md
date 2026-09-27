@@ -15,6 +15,15 @@
 
 ## Recent Learnings
 
+### 2026-09-27 — Legacy scrip cost repair accepted
+- Accepted a separate dry-run-first migration for ACTIVE legacy scrip
+  share-acquisition cost metadata. It must use only persisted accounting
+  evidence, never FMV, Yahoo, current prices, notes, or newly fetched FX.
+- Contradictory values, unknown contribution, mixed currencies, malformed
+  correction chains, and duplicate ACTIVE-leg ambiguity remain review-required;
+  Economics stays fail-closed until evidence is repaired or explicitly
+  corrected.
+
 ### 2026-09-27 — Scrip Economics and Yahoo-on-save contracts completed
 - The accepted Economics contract now values eligible scrip dividends once per
   corporate-action event as share FMV less share contribution, cash top-ups,

@@ -9,6 +9,7 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 
 ## Recent Updates
 
+📌 2026-09-27T19:23:18Z: Consolidated UK pence quote normalization, the final three-card scrip summary layout, Danny's accepted legacy-cost repair design, Reuben's diagnostics/migration implementation, and Basher's 370-test approval; cleared the inbox and committed only `.squad` records
 📌 2026-09-27T18:21:33Z: Consolidated the accepted scrip Economics and Yahoo FMV-on-save contracts into canonical decisions, superseded the prior unimplemented Economics boundary, cleared four inbox records, updated Danny/Linus/Rusty/Basher and project state, recorded final 255 backend + 129 frontend approval evidence, and committed only `.squad` records
 📌 2026-09-26T19:54:00Z: Consolidated the approved Economics/Dividends summary-card layout into the canonical decision log, deduplicated and cleared two inbox records, preserved existing Rusty/Basher histories, and added concise orchestration/session records; no product code/tests, commit, push, deployment, or production access
 📌 2026-09-26T16:10:01Z: Consolidated the approved repository-wide rights-movement removal and Total Dividends simplification into one superseding decision, cleared eight inbox records, added concise orchestration/session logs, verified release scope and hygiene, and prepared the approved branch for commit and push without deployment or production access
@@ -309,3 +310,10 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
   Dividend · Buy Economics card and event-level aggregation remain future
   scope; updated identity and all contributor histories accordingly.
 - Cleared the six merged inbox records and committed only `.squad` state.
+
+### 2026-09-27 — UK scrip repair approval consolidation
+- Merged and deduplicated the accepted repair contract into the canonical
+  decision, recorded shared UK pence normalization, final summary layout,
+  fail-closed migration safeguards, diagnostics, and Basher's approval.
+- Updated Rusty, Linus, Danny, Reuben, Basher, project identity, orchestration,
+  and session history; cleared the inbox and committed only `.squad` state.

@@ -15,6 +15,10 @@
 
 ## Recent Learnings
 
+- **2026-09-27:** UK Yahoo quotes denominated in pence now normalize `GBp` and
+  `GBX` to GBP through the shared authoritative quote normalization used by
+  both Dividend · Buy FMV backfill and Yahoo-on-save. This closes UK Partial
+  coverage without adding divergent path-specific conversion logic.
 - **2026-09-27:** Dividend Economics now aggregates at
   `ca_group_id`/movement-event grain after movement-ID deduplication. Scrip
   economic value is share FMV less share-leg contribution, cash top-ups, and

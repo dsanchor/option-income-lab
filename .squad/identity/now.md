@@ -1,11 +1,23 @@
 ---
-updated_at: 2026-09-27T18:21:33Z
-focus_area: Scrip economic value is included across Economics, and Yahoo Open plus historical ECB FMV can be resolved atomically when saving Dividend Buy. Final review approved.
+updated_at: 2026-09-27T19:23:18Z
+focus_area: UK pence quotes normalize through the shared FMV boundary, and safe diagnostics plus legacy scrip cost repair are implemented and approved.
 active_issues:
   - "⚠️ Cross-partition overview latency: Monitor `GET /api/symbols/overview` as ledger grows beyond current scale (N≤3 accounts). Currently 2 Cosmos queries; consider materialization if latency exceeds 500ms."
 ---
 
 # What We're Focused On
+
+**Implemented (UK normalization + legacy scrip repair):** Yahoo `GBp`/`GBX`
+quotes are normalized to GBP through the shared authoritative quote boundary
+used by both Dividend · Buy backfill and Yahoo-on-save. Economics exposes
+bounded, filtered diagnostics for unvalued scrip events without changing
+aggregate eligibility or math. The separate `repair_legacy_scrip_costs`
+migration is dry-run-first, SHA-confirmed, backup/CAS/restore protected, and
+fails closed on contradictory evidence, correction ambiguity, and duplicate
+ACTIVE share legs. The summary layout now shows Total Dividends plus two
+secondary cards, without a duplicate standalone Scrip Dividends card. Basher
+approved the final worktree after 370 targeted backend tests and frontend,
+type, lint, and diff checks passed.
 
 **Implemented (Scrip Economics + Yahoo FMV-on-save):** Dividend Economics now
 aggregates eligible scrip corporate actions at event grain. Scrip economic

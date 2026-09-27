@@ -16,6 +16,15 @@
 
 ## Recent Learnings
 
+### 2026-09-27 — UK scrip repair final gate approved
+- Approved the shared `GBp`/`GBX`-to-GBP normalization for backfill and
+  Yahoo-on-save, the duplicate Scrip Dividends card removal, bounded Economics
+  diagnostics, and the separate fail-closed legacy cost migration.
+- Verified contradictory amounts and ambiguous duplicate ACTIVE share legs do
+  not auto-repair. The final gate passed 370 targeted backend tests plus
+  frontend contracts, TypeScript, lint, and diff hygiene. Final verdict:
+  **APPROVE**.
+
 ### 2026-09-26 — Roll contract quantity final gate approved
 - Danny's revision closed all three prior blockers: legacy implicit-one now
   requires unversioned historical writer evidence with matching UTC ID/open

@@ -143,6 +143,12 @@
 - The dividend summary uses a wider Total Dividends card with cash/scrip breakdown, a separate Scrip Dividends card, Avg Monthly Total, and Cash Yield on Cost. Dividend Count was removed only from the KPI cards.
 - Legacy rights exclusion must subtract only legacy rights amounts while preserving valid combined scrip totals returned by the current API.
 
+### 2026-09-27 — Scrip summary layout finalization
+- Removed the duplicate standalone Scrip Dividends card from the Economics
+  summary. The final layout keeps Total Dividends as the primary card with two
+  secondary cards, preserving the combined cash+scrip breakdown and coverage
+  presentation.
+
 ### 2026-09-27 — Yahoo FMV resolved atomically on save
 - The corporate-action wizard sends only `share_fmv_instruction: { source: "YAHOO_OPEN" }`; price, currency, FX, and provenance remain backend-owned and no provider call or FMV calculation occurs in the browser.
 - Yahoo saves use one stable top-level `client_request_id` across retries, a one-request-in-flight guard, a disabled form, and the explicit “Fetching Yahoo Open and historical FX…” state.
