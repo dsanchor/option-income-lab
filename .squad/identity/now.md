@@ -1,11 +1,18 @@
 ---
-updated_at: 2026-09-27T19:23:18Z
-focus_area: UK pence quotes normalize through the shared FMV boundary, and safe diagnostics plus legacy scrip cost repair are implemented and approved.
+updated_at: 2026-09-27T19:51:10Z
+focus_area: Historical ECB full-history lookup is repaired and approved for the shared Dividend · Buy FMV path.
 active_issues:
   - "⚠️ Cross-partition overview latency: Monitor `GET /api/symbols/overview` as ledger grows beyond current scale (N≤3 accounts). Currently 2 Cosmos queries; consider materialization if latency exceeds 500ms."
 ---
 
 # What We're Focused On
+
+**Implemented (Historical ECB full-history repair):** An `XLON:RKT` dry run
+that produced nine `fx_unavailable` skips exposed the ECB full-history XML's
+single-line format. The bounded parser now handles that structure safely, with
+hardened cache/timeouts, complete 1999+ history, and actionable skip
+diagnostics. Basher approved after 102 focused tests and live historical-rate
+verification.
 
 **Implemented (UK normalization + legacy scrip repair):** Yahoo `GBp`/`GBX`
 quotes are normalized to GBP through the shared authoritative quote boundary

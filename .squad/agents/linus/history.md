@@ -15,6 +15,11 @@
 
 ## Recent Learnings
 
+- **2026-09-27:** Repaired historical ECB lookup after an `XLON:RKT` dry run
+  exposed nine `fx_unavailable` skips. The ECB full-history XML is single-line,
+  so bounded parsing must stream XML structure rather than rely on line
+  boundaries. The shared service now has hardened cache/timeouts, complete
+  1999+ coverage, and actionable skip diagnostics.
 - **2026-09-27:** UK Yahoo quotes denominated in pence now normalize `GBp` and
   `GBX` to GBP through the shared authoritative quote normalization used by
   both Dividend · Buy FMV backfill and Yahoo-on-save. This closes UK Partial

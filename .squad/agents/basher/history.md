@@ -16,6 +16,13 @@
 
 ## Recent Learnings
 
+### 2026-09-27 — Historical ECB full-history repair approved
+- Approved the bounded parser, cache/timeout hardening, full 1999+ ECB
+  coverage, and actionable `fx_unavailable` diagnostics after the `XLON:RKT`
+  dry run exposed nine skipped rows.
+- Validation passed 102 focused tests plus live historical-rate verification.
+  Final verdict: **APPROVE**.
+
 ### 2026-09-27 — UK scrip repair final gate approved
 - Approved the shared `GBp`/`GBX`-to-GBP normalization for backfill and
   Yahoo-on-save, the duplicate Scrip Dividends card removal, bounded Economics

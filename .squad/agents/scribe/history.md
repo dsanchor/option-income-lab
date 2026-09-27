@@ -9,6 +9,7 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 
 ## Recent Updates
 
+📌 2026-09-27T19:51:10Z: Recorded the approved historical ECB full-history repair prompted by nine `XLON:RKT` `fx_unavailable` dry-run skips; preserved Linus's bounded single-line XML parsing, cache/timeout, 1999+ coverage, and diagnostic changes plus Basher's 102-test/live verification; confirmed the inbox was empty and committed only `.squad` records
 📌 2026-09-27T19:23:18Z: Consolidated UK pence quote normalization, the final three-card scrip summary layout, Danny's accepted legacy-cost repair design, Reuben's diagnostics/migration implementation, and Basher's 370-test approval; cleared the inbox and committed only `.squad` records
 📌 2026-09-27T18:21:33Z: Consolidated the accepted scrip Economics and Yahoo FMV-on-save contracts into canonical decisions, superseded the prior unimplemented Economics boundary, cleared four inbox records, updated Danny/Linus/Rusty/Basher and project state, recorded final 255 backend + 129 frontend approval evidence, and committed only `.squad` records
 📌 2026-09-26T19:54:00Z: Consolidated the approved Economics/Dividends summary-card layout into the canonical decision log, deduplicated and cleared two inbox records, preserved existing Rusty/Basher histories, and added concise orchestration/session records; no product code/tests, commit, push, deployment, or production access

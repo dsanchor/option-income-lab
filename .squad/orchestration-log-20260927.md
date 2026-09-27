@@ -60,3 +60,14 @@
   frontend, type, lint, and diff gates passed.
 - Scribe merged the inbox decision, updated project and contributor histories,
   and committed only `.squad` records.
+
+## Historical ECB full-history repair — 19:51:10Z
+
+- A user dry-run for `XLON:RKT` exposed nine `fx_unavailable` skips.
+- Linus traced the failure to the ECB full-history XML being delivered as one
+  long line and repaired bounded XML parsing, cache behavior, request timeouts,
+  full 1999+ rate coverage, and actionable skip diagnostics.
+- Basher approved the repair after 102 focused tests and live historical-rate
+  verification.
+- Scribe found no decision inbox records to merge, updated the relevant
+  project and agent histories, and committed only `.squad` records.
