@@ -160,6 +160,7 @@ export interface LedgerMovement {
   import_source: ImportSource;
   created_at: string;
   cost_basis_status?: CostBasisStatus;
+  lot_average_price_eur?: string | null;
   /** Legacy compatibility fields used only to exclude unsupported rights rows. */
   source_derechos_amount?: string;
   sales_type?: "ACCIONES" | "DERECHOS" | null;

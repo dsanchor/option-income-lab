@@ -165,6 +165,12 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
     m.option_close_date
   );
   const hasUnlinkedOptionWarning = movementWarnings.includes("OPTION_MOVEMENT_UNLINKED");
+  const quantity = Number(m.quantity);
+  const showLotAveragePrice = (
+    m.txn_type === "BUY" &&
+    Number.isFinite(quantity) &&
+    quantity > 0
+  );
 
   async function handleQuickLinkSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -329,6 +335,13 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
               <Field label="Gross" value={formatEurAmount(m.gross?.eur_amount)} mono />
               <Field label="Fees" value={formatEurAmount(m.fees?.total_eur)} mono />
               <Field label="Net" value={formatEurAmount(m.net?.eur_amount)} mono />
+              {showLotAveragePrice && (
+                <Field
+                  label="Avg Price / Share"
+                  value={formatEurAmount(m.lot_average_price_eur)}
+                  mono
+                />
+              )}
               {m.withholding?.source && (
                 <Field
                   label={`WHT Source (${m.withholding.source.country ?? ""})`}

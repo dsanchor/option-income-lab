@@ -28,6 +28,14 @@ import { join, dirname } from "node:path";
 const __dir = dirname(fileURLToPath(import.meta.url));
 const SRC = join(__dir, "..", "src", "components", "StockTransactionsTable.tsx");
 const src = readFileSync(SRC, "utf8");
+const detailSrc = readFileSync(
+  join(__dir, "..", "src", "components", "MovementDetailDialog.tsx"),
+  "utf8",
+);
+const portfolioTypesSrc = readFileSync(
+  join(__dir, "..", "src", "types", "portfolio.ts"),
+  "utf8",
+);
 
 // ---------------------------------------------------------------------------
 // Inline mirrors (keep in sync with src/lib/dateHelpers.ts and the component)
@@ -695,5 +703,77 @@ describe("RG: Regression — existing behavior preserved", () => {
     assert.equal(filterByType(movements, "SELL").length,     1);
     assert.equal(filterByType(movements, "DIVIDEND").length, 1);
     assert.equal(filterByType(movements, "ALL").length,      3);
+  });
+});
+
+// ===========================================================================
+// LAP: Server-derived acquisition-lot average price
+// ===========================================================================
+
+describe("LAP: lot average price is consumed from the movements API", () => {
+  it("LAP-1: LedgerMovement exposes the additive nullable server field", () => {
+    assert.match(
+      portfolioTypesSrc,
+      /lot_average_price_eur\?\s*:\s*string\s*\|\s*null/,
+      "LAP-1 DEFECT: LedgerMovement must declare lot_average_price_eur?: string | null.",
+    );
+  });
+
+  it("LAP-2: Stocks table has the stable Avg Price / Share (€) header", () => {
+    assert.ok(
+      src.includes("Avg Price / Share (€)"),
+      "LAP-2 DEFECT: StockTransactionsTable must add the Avg Price / Share (€) column.",
+    );
+  });
+
+  it("LAP-3: Stocks table formats the server field for Buy and Dividend · Buy rows", () => {
+    assert.match(
+      src,
+      /fmt\(\s*m\.lot_average_price_eur\s*\)/,
+      "LAP-3 DEFECT: The table must render the server-provided lot_average_price_eur field.",
+    );
+    assert.ok(
+      src.includes("getMovementTypeLabel(m)"),
+      "LAP-3 DEFECT: Dividend · Buy labeling must remain driven by authoritative CA metadata.",
+    );
+  });
+
+  it("LAP-4: detail dialog shows the same server field for positive-quantity BUY rows", () => {
+    assert.ok(
+      detailSrc.includes('label="Avg Price / Share"'),
+      "LAP-4 DEFECT: MovementDetailDialog must expose an Avg Price / Share field.",
+    );
+    assert.match(
+      detailSrc,
+      /formatEurAmount\(\s*m\.lot_average_price_eur\s*\)/,
+      "LAP-4 DEFECT: The detail dialog must format the server-provided lot_average_price_eur.",
+    );
+    assert.match(
+      detailSrc,
+      /m\.txn_type\s*===\s*["']BUY["']/,
+      "LAP-4 DEFECT: Avg Price / Share detail visibility must be restricted to BUY movements.",
+    );
+  });
+
+  it("LAP-5: browser code does not divide movement net by quantity", () => {
+    const combined = `${src}\n${detailSrc}`;
+    const directNetQuantityDivision =
+      /(?:m\.)?net(?:\?\.)?(?:\.[\w]+)*\s*\/\s*(?:Number\(\s*)?m\.quantity|(?:Number\(\s*)?m\.quantity\)?\s*\/\s*(?:m\.)?net/;
+    assert.doesNotMatch(
+      combined,
+      directNetQuantityDivision,
+      "LAP-5 DEFECT: lot average price is backend-owned; frontend must not calculate net / quantity.",
+    );
+  });
+
+  it("LAP-6: existing filters, pagination, detail opening, and single table placement remain", () => {
+    assert.ok(src.includes("filterMovementsByType"), "Dividend filtering must remain intact.");
+    assert.ok(src.includes("PAGE_SIZE"), "Pagination must remain intact.");
+    assert.ok(src.includes("setSelected(m)"), "Row click-to-detail must remain intact.");
+    assert.equal(
+      (src.match(/<table\b/g) || []).length,
+      1,
+      "StockTransactionsTable must retain exactly one transaction table.",
+    );
   });
 });

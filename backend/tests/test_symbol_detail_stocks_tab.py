@@ -236,6 +236,7 @@ def _buy(fake, security_id: str, doc_id: str = "txn_buy_1",
          gross_eur: str = "5000.00",
          fees_eur: str = "9.95",
          net_eur: str = "5009.95",
+         cost_basis_status: str = "COMPLETE",
          correction_status: str = "ACTIVE",
          import_source: str | None = None,
          deleted: bool = False):
@@ -253,6 +254,7 @@ def _buy(fake, security_id: str, doc_id: str = "txn_buy_1",
         "fees": {"total": fees_eur, "currency": "EUR", "total_eur": fees_eur},
         "net": {"amount": net_eur, "currency": "EUR", "eur_amount": net_eur},
         "net_eur": net_eur,
+        "cost_basis_status": cost_basis_status,
         "correction_status": correction_status,
     }
     if import_source:
@@ -933,7 +935,9 @@ def _ca_leg(fake, security_id: str, doc_id: str,
              account_id: str = "_unassigned",
              quantity: str = None,
              gross_eur: str = "200.00",
+             net_eur: str | None = None,
              fees_eur: str = "0",
+             cost_basis_status: str | None = None,
              correction_status: str = "ACTIVE"):
     """Build and seed a corporate-action group leg movement."""
     ticker = security_id.split(":")[-1]
@@ -948,13 +952,19 @@ def _ca_leg(fake, security_id: str, doc_id: str,
         "quantity": quantity,
         "gross": {"amount": gross_eur, "currency": "EUR", "eur_amount": gross_eur},
         "fees": {"total": fees_eur, "currency": "EUR", "total_eur": fees_eur},
-        "net": {"amount": gross_eur, "currency": "EUR", "eur_amount": gross_eur},
+        "net": {
+            "amount": net_eur if net_eur is not None else gross_eur,
+            "currency": "EUR",
+            "eur_amount": net_eur if net_eur is not None else gross_eur,
+        },
         "correction_status": correction_status,
         "ca_group_id": ca_group_id,
         "ca_leg_type": ca_leg_type,
         "ca_event_type": ca_event_type,
         "ca_group_seq": ca_group_seq,
     }
+    if cost_basis_status is not None:
+        doc["cost_basis_status"] = cost_basis_status
     fake.portfolio_container._store[doc_id] = doc
     return doc
 
@@ -1050,6 +1060,185 @@ class TestMovementsEndpointForStocksTable:
         movements = resp.json()["movements"]
         sell = next((m for m in movements if m["id"] == "mvt_st_sell"), None)
         assert sell is None
+
+
+class TestMovementLotAveragePrice:
+    """Per-movement acquisition price returned by the full movements endpoint."""
+
+    @staticmethod
+    def _movement(response, movement_id: str):
+        assert response.status_code == 200, response.text
+        return next(
+            movement
+            for movement in response.json()["movements"]
+            if movement["id"] == movement_id
+        )
+
+    def test_complete_buy_uses_net_including_fees_not_gross(self, client):
+        c, fake = client
+        _buy(
+            fake,
+            "XNYS:NET",
+            doc_id="mvt_lot_net",
+            quantity="4",
+            gross_eur="100.00",
+            fees_eur="1.00",
+            net_eur="101.00",
+            cost_basis_status="COMPLETE",
+        )
+
+        response = c.get("/api/portfolio/movements?security_id=XNYS:NET")
+        movement = self._movement(response, "mvt_lot_net")
+
+        assert movement["lot_average_price_eur"] == "25.25"
+        assert movement["lot_average_price_eur"] != "25.00"
+
+    def test_fractional_quantity_rounds_half_up_to_two_decimals(self, client):
+        c, fake = client
+        _buy(
+            fake,
+            "XNYS:FRAC",
+            doc_id="mvt_lot_fractional",
+            quantity="3.2",
+            gross_eur="3.216",
+            fees_eur="0",
+            net_eur="3.216",
+            cost_basis_status="COMPLETE",
+        )
+
+        response = c.get("/api/portfolio/movements?security_id=XNYS:FRAC")
+        movement = self._movement(response, "mvt_lot_fractional")
+
+        assert movement["lot_average_price_eur"] == "1.01"
+
+    def test_zero_cost_dividend_buy_returns_explicit_zero(self, client):
+        c, fake = client
+        _ca_leg(
+            fake,
+            "XLON:SCRIP",
+            "mvt_lot_zero_scrip",
+            txn_type="BUY",
+            ca_leg_type="SHARE_ACQUISITION",
+            ca_group_id="cag_lot_zero",
+            ca_event_type="SCRIP_DIVIDEND",
+            quantity="2.5",
+            gross_eur="0",
+            net_eur="0",
+            cost_basis_status="ZERO_COST",
+        )
+
+        response = c.get("/api/portfolio/movements?security_id=XLON:SCRIP")
+        movement = self._movement(response, "mvt_lot_zero_scrip")
+
+        assert movement["lot_average_price_eur"] == "0.00"
+        assert movement["ca_leg_type"] == "SHARE_ACQUISITION"
+        assert movement["ca_event_type"] == "SCRIP_DIVIDEND"
+
+    def test_non_zero_cost_dividend_buy_uses_net_per_share(self, client):
+        c, fake = client
+        _ca_leg(
+            fake,
+            "XLON:SCRIP",
+            "mvt_lot_paid_scrip",
+            txn_type="BUY",
+            ca_leg_type="SHARE_ACQUISITION",
+            ca_group_id="cag_lot_paid",
+            quantity="3",
+            gross_eur="9.00",
+            fees_eur="1.00",
+            net_eur="10.00",
+            cost_basis_status="COMPLETE",
+        )
+
+        response = c.get("/api/portfolio/movements?security_id=XLON:SCRIP")
+        movement = self._movement(response, "mvt_lot_paid_scrip")
+
+        assert movement["lot_average_price_eur"] == "3.33"
+        assert movement["ca_group_id"] == "cag_lot_paid"
+        assert movement["ca_group_seq"] == 1
+
+    def test_incomplete_buy_returns_null(self, client):
+        c, fake = client
+        _buy(
+            fake,
+            "XNYS:INC",
+            doc_id="mvt_lot_incomplete",
+            quantity="5",
+            net_eur="25.00",
+            cost_basis_status="INCOMPLETE",
+        )
+
+        response = c.get("/api/portfolio/movements?security_id=XNYS:INC")
+        movement = self._movement(response, "mvt_lot_incomplete")
+
+        assert movement["lot_average_price_eur"] is None
+
+    def test_non_eligible_movements_return_null(self, client):
+        c, fake = client
+        _sell(fake, "XNYS:NEL", doc_id="mvt_lot_sell", quantity="2", net_eur="20")
+        _dividend(fake, "XNYS:NEL", doc_id="mvt_lot_cash_dividend")
+        _ca_leg(
+            fake,
+            "XNYS:NEL",
+            "mvt_lot_cash_top_up",
+            txn_type="BUY",
+            ca_leg_type="CASH_TOP_UP",
+            ca_group_id="cag_lot_non_share",
+            quantity="2",
+            net_eur="20",
+            cost_basis_status="COMPLETE",
+        )
+
+        response = c.get("/api/portfolio/movements?security_id=XNYS:NEL")
+        assert response.status_code == 200
+        data = response.json()
+        by_id = {movement["id"]: movement for movement in data["movements"]}
+
+        assert data["total_count"] == 3
+        assert by_id["mvt_lot_sell"]["lot_average_price_eur"] is None
+        assert by_id["mvt_lot_cash_dividend"]["lot_average_price_eur"] is None
+        assert by_id["mvt_lot_cash_top_up"]["lot_average_price_eur"] is None
+        assert by_id["mvt_lot_cash_top_up"]["ca_leg_type"] == "CASH_TOP_UP"
+
+    @pytest.mark.parametrize(
+        ("quantity", "net_eur"),
+        [
+            ("0", "10"),
+            ("-1", "10"),
+            (None, "10"),
+            ("not-a-number", "10"),
+            ("NaN", "10"),
+            ("Infinity", "10"),
+            ("2", None),
+            ("2", "not-a-number"),
+            ("2", "NaN"),
+            ("2", "Infinity"),
+            ("2", "-0.01"),
+        ],
+    )
+    def test_invalid_inputs_fail_closed_without_endpoint_failure(
+        self, client, quantity, net_eur
+    ):
+        c, fake = client
+        doc_id = "mvt_lot_invalid"
+        _buy(
+            fake,
+            "XNYS:BAD",
+            doc_id=doc_id,
+            quantity=quantity,
+            net_eur=net_eur,
+            cost_basis_status="COMPLETE",
+        )
+        doc = fake.portfolio_container._store[doc_id]
+        if quantity is None:
+            doc.pop("quantity")
+        if net_eur is None:
+            doc["net"].pop("eur_amount")
+
+        response = c.get("/api/portfolio/movements?security_id=XNYS:BAD")
+        movement = self._movement(response, doc_id)
+
+        assert movement["lot_average_price_eur"] is None
 
 
 class TestMovementsEndpointCaGroupFields:

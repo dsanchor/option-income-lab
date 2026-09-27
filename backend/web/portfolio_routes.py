@@ -26,7 +26,12 @@ from src.portfolio.cosmos_securities import (
     _CollisionError,
     security_id_to_ticker,
 )
-from src.portfolio.holdings_service import HoldingsService, _resolve_security_names
+from src.portfolio.holdings_service import (
+    HoldingsService,
+    _fmt2,
+    _resolve_security_names,
+    acquisition_lot_unit_cost,
+)
 from src.portfolio.import_service import (
     ImportService,
     StateError,
@@ -579,6 +584,10 @@ async def get_movements(
         response_movements = []
         for movement in movements:
             cleaned = _clean(movement)
+            lot_average_price = acquisition_lot_unit_cost(cleaned)
+            cleaned["lot_average_price_eur"] = (
+                _fmt2(lot_average_price) if lot_average_price is not None else None
+            )
             movement_warnings = _movement_warning_codes(cleaned)
             if movement_warnings:
                 cleaned["movement_warnings"] = movement_warnings

@@ -59,6 +59,41 @@ def _fmt6(v: Decimal) -> str:
     return str(v.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP))
 
 
+def acquisition_lot_unit_cost(movement: Dict[str, Any]) -> Optional[Decimal]:
+    """Return the strict, unrounded unit cost for an eligible BUY movement."""
+    if movement.get("txn_type") != "BUY":
+        return None
+    ca_leg_type = movement.get("ca_leg_type")
+    if ca_leg_type is not None and ca_leg_type != "SHARE_ACQUISITION":
+        return None
+
+    try:
+        quantity = Decimal(str(movement.get("quantity")))
+    except (ArithmeticError, TypeError, ValueError):
+        return None
+    if not quantity.is_finite() or quantity <= _ZERO:
+        return None
+
+    cost_basis_status = movement.get("cost_basis_status", "COMPLETE")
+    if cost_basis_status == "INCOMPLETE":
+        return None
+    if cost_basis_status == "ZERO_COST":
+        return _ZERO
+    if cost_basis_status != "COMPLETE":
+        return None
+
+    net = movement.get("net")
+    if not isinstance(net, dict) or "eur_amount" not in net:
+        return None
+    try:
+        net_eur = Decimal(str(net["eur_amount"]))
+    except (ArithmeticError, TypeError, ValueError):
+        return None
+    if not net_eur.is_finite() or net_eur < _ZERO:
+        return None
+    return net_eur / quantity
+
+
 @dataclass
 class _Lot:
     """A single FIFO acquisition lot."""
@@ -215,10 +250,7 @@ class HoldingsService:
                     # COMPLETE or ZERO_COST — enter pool.
                     # BUY cost = net.eur_amount (total cash outflow = gross + commission).
                     lot_cost = net_eur  # 0 for ZERO_COST
-                    if qty > _ZERO:
-                        unit_cost = lot_cost / qty
-                    else:
-                        unit_cost = _ZERO
+                    unit_cost = acquisition_lot_unit_cost(m)
                     lot = _Lot(
                         lot_id=movement_id,
                         trade_date=trade_date,

@@ -251,6 +251,7 @@ export default function StockTransactionsTable({ securityId }: Props) {
                 <th className="px-4 py-2 font-medium">Date</th>
                 <th className="px-4 py-2 font-medium">Type</th>
                 <th className="px-4 py-2 font-medium text-right">Qty</th>
+                <th className="px-4 py-2 font-medium text-right">Avg Price / Share (€)</th>
                 <th className="px-4 py-2 font-medium text-right">Gross (€)</th>
                 {hasFees && <th className="px-4 py-2 font-medium text-right">Fees (€)</th>}
                 {hasWht && <th className="px-4 py-2 font-medium text-right">WHT (€)</th>}
@@ -292,6 +293,9 @@ export default function StockTransactionsTable({ securityId }: Props) {
                       {m.quantity != null && Number(m.quantity) !== 0
                         ? Number(m.quantity).toLocaleString("en-US", { maximumFractionDigits: 6 })
                         : "—"}
+                    </td>
+                    <td className="px-4 py-2 text-right font-mono text-text">
+                      {fmt(m.lot_average_price_eur)}
                     </td>
                     <td className="px-4 py-2 text-right font-mono text-text">{fmt(m.gross?.eur_amount)}</td>
                     {hasFees && (
