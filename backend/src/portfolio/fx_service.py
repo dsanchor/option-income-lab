@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Dict, Optional, Tuple
+from io import BytesIO
+from xml.etree import ElementTree
 
 import requests
 
@@ -24,11 +25,15 @@ logger = logging.getLogger(__name__)
 
 # Full ECB reference-rate history; no auth required.
 _ECB_HIST_XML = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist.xml"
+_ECB_TIMEOUT = (5, 20)
+_ECB_MAX_BYTES = 32 * 1024 * 1024
+_ECB_USER_AGENT = "option-income-lab/1.0"
 
 # Lightweight daily cache: maps (iso_date, currency) → rate_str
-_rate_cache: Dict[Tuple[str, str], str] = {}
+_rate_cache: dict[tuple[str, str], str] = {}
 _cache_lock = threading.Lock()
-_cache_fetched_date: Optional[str] = None  # track when the cache was last filled
+_refresh_lock = threading.Lock()
+_cache_fetched_date: str | None = None  # track when the cache was last filled
 
 
 class FxUnavailableError(Exception):
@@ -44,7 +49,7 @@ class FxRateNotFoundError(Exception):
 
 
 def _today_iso() -> str:
-    return date.today().isoformat()
+    return datetime.now(timezone.utc).date().isoformat()
 
 
 def _fetch_and_cache() -> None:
@@ -59,38 +64,51 @@ def _fetch_and_cache() -> None:
     """
     global _cache_fetched_date
     try:
-        response = requests.get(_ECB_HIST_XML, timeout=20)
+        response = requests.get(
+            _ECB_HIST_XML,
+            headers={"User-Agent": _ECB_USER_AGENT},
+            timeout=_ECB_TIMEOUT,
+        )
         response.raise_for_status()
     except requests.RequestException as exc:
         raise FxUnavailableError(f"ECB API unreachable: {exc}") from exc
 
-    xml_text = response.text
-    # Simple streaming parse — avoid xml.etree dependency version issues
-    # Pattern: <Cube time="YYYY-MM-DD"> ... <Cube currency="XXX" rate="N.NNN"/>
-    import re
-    date_pattern = re.compile(r'<Cube\s+time=["\'](\d{4}-\d{2}-\d{2})["\']')
-    rate_pattern = re.compile(r'<Cube\s+currency=["\']([A-Z]+)["\']\s+rate=["\']([0-9.]+)["\']')
+    content = response.content
+    if not isinstance(content, bytes):
+        content = response.text.encode("utf-8")
+    if not content or len(content) > _ECB_MAX_BYTES:
+        raise FxUnavailableError("ECB history response has an invalid size")
 
-    current_date: Optional[str] = None
-    new_entries: Dict[Tuple[str, str], str] = {}
-
-    for line in xml_text.splitlines():
-        dm = date_pattern.search(line)
-        if dm:
-            current_date = dm.group(1)
-            # No `continue` here: ECB XML is single-line per date block, so the
-            # rate <Cube> elements appear on the same line as the time attribute.
-        if current_date:
-            for rm in rate_pattern.finditer(line):
-                currency = rm.group(1).upper()
-                ecb_rate = Decimal(rm.group(2))  # foreign per 1 EUR
-                if ecb_rate > Decimal("0"):
-                    eur_per_foreign = (Decimal("1") / ecb_rate)
-                    new_entries[(current_date, currency)] = str(
-                        eur_per_foreign.quantize(Decimal("0.000000001"))
+    new_entries: dict[tuple[str, str], str] = {}
+    try:
+        for _event, element in ElementTree.iterparse(
+            BytesIO(content), events=("end",)
+        ):
+            rate_date = element.attrib.get("time")
+            if not rate_date or not element.tag.endswith("Cube"):
+                continue
+            date.fromisoformat(rate_date)
+            for child in element:
+                currency = child.attrib.get("currency", "").upper()
+                raw_rate = child.attrib.get("rate")
+                if not currency or raw_rate is None:
+                    continue
+                ecb_rate = Decimal(raw_rate)  # foreign currency per 1 EUR
+                if ecb_rate > 0:
+                    new_entries[(rate_date, currency)] = str(
+                        (Decimal(1) / ecb_rate).quantize(
+                            Decimal("0.000000001")
+                        )
                     )
+            element.clear()
+    except (ElementTree.ParseError, ValueError, ArithmeticError) as exc:
+        raise FxUnavailableError("ECB history response could not be parsed") from exc
+
+    if not new_entries:
+        raise FxUnavailableError("ECB history response contained no reference rates")
 
     with _cache_lock:
+        _rate_cache.clear()
         _rate_cache.update(new_entries)
         _cache_fetched_date = _today_iso()
     logger.debug("ECB rates loaded: %d entries", len(new_entries))
@@ -102,14 +120,18 @@ def _ensure_cache_fresh() -> None:
     with _cache_lock:
         if _cache_fetched_date == today and _rate_cache:
             return
-    _fetch_and_cache()
+    with _refresh_lock:
+        with _cache_lock:
+            if _cache_fetched_date == today and _rate_cache:
+                return
+        _fetch_and_cache()
 
 
 def get_historical_fx_rate(
     from_currency: str,
     to_currency: str = "EUR",
-    rate_date: Optional[str] = None,
-) -> Tuple[str, str]:
+    rate_date: str | None = None,
+) -> tuple[str, str]:
     """Return ``(EUR-per-unit rate, effective ECB date)``.
 
     Args:
@@ -129,16 +151,19 @@ def get_historical_fx_rate(
     to_currency = to_currency.strip().upper()
 
     if to_currency != "EUR":
-        raise ValueError(f"Only EUR is supported as to_currency in Phase 2; got {to_currency!r}")
+        raise ValueError(
+            f"Only EUR is supported as to_currency in Phase 2; got {to_currency!r}"
+        )
 
     if rate_date is None:
         rate_date = _today_iso()
     else:
-        # Validate format
         try:
-            date.fromisoformat(rate_date)
+            target = date.fromisoformat(rate_date)
         except ValueError:
             raise ValueError(f"rate_date must be YYYY-MM-DD, got {rate_date!r}")
+        if target > datetime.now(timezone.utc).date():
+            raise FxRateNotFoundError(from_currency, rate_date)
 
     if from_currency == "EUR":
         return "1.000000000", rate_date
@@ -171,8 +196,8 @@ def get_historical_fx_rate(
 def get_fx_rate_with_effective_date(
     from_currency: str,
     to_currency: str = "EUR",
-    rate_date: Optional[str] = None,
-) -> Tuple[str, str]:
+    rate_date: str | None = None,
+) -> tuple[str, str]:
     """Compatibility alias for callers that need the ECB observation date."""
     return get_historical_fx_rate(from_currency, to_currency, rate_date)
 
@@ -180,8 +205,8 @@ def get_fx_rate_with_effective_date(
 def get_historical_fx_observation(
     from_currency: str,
     to_currency: str = "EUR",
-    rate_date: Optional[str] = None,
-) -> Tuple[str, str]:
+    rate_date: str | None = None,
+) -> tuple[str, str]:
     """Explicit observation-oriented alias used by migration tooling."""
     return get_historical_fx_rate(from_currency, to_currency, rate_date)
 
@@ -189,7 +214,7 @@ def get_historical_fx_observation(
 def get_fx_rate(
     from_currency: str,
     to_currency: str = "EUR",
-    rate_date: Optional[str] = None,
+    rate_date: str | None = None,
 ) -> str:
     """Return only the rate, preserving the established portfolio API."""
     rate, _effective_date = get_historical_fx_rate(

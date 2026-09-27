@@ -228,6 +228,20 @@ def _proposal(
         return None, reason
 
 
+def _fx_detail_code(exc: YahooFmvError) -> str:
+    if exc.error == "fx_timeout":
+        return "timeout"
+    for code in (
+        "rate_not_found",
+        "ecb_unavailable",
+        "invalid_rate",
+        "fallback_out_of_policy",
+    ):
+        if f"({code})" in exc.detail:
+            return code
+    return "lookup_failed"
+
+
 def build_plan(
     portfolio_container,
     symbols_container,
@@ -292,7 +306,33 @@ def build_plan(
                 reason = "invalid_open"
             else:
                 reason = "failed"
-            skips.append({"id": doc.get("id"), "reason": reason})
+            skip = {"id": doc.get("id"), "reason": reason}
+            if reason == "fx_unavailable":
+                native_currency = None
+                try:
+                    security = _read_security(symbols_container, security_id)
+                    native_currency = (
+                        str((security or {}).get("listing_currency") or "")
+                        .strip()
+                        .upper()
+                        or None
+                    )
+                except Exception as security_exc:  # noqa: BLE001
+                    logger.debug(
+                        "Security lookup failed while enriching FX skip: %s",
+                        type(security_exc).__name__,
+                    )
+                skip.update(
+                    {
+                        "movement_id": doc.get("id"),
+                        "security_id": security_id,
+                        "trade_date": doc.get("trade_date"),
+                        "valuation_date": doc.get("trade_date"),
+                        "native_currency": native_currency,
+                        "detail_code": _fx_detail_code(exc),
+                    }
+                )
+            skips.append(skip)
             continue
         actions.append(
             {

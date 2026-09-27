@@ -149,8 +149,8 @@ def test_historical_fx_returns_effective_prior_ecb_date_with_five_day_limit(monk
 
 def test_ecb_rate_is_inverted_to_eur_per_native_unit(monkeypatch):
     response = MagicMock()
-    response.text = (
-        '<Cube time="2026-09-25"><Cube currency="GBP" rate="0.875000"/></Cube>'
+    response.content = (
+        b'<Cube time="2026-09-25"><Cube currency="GBP" rate="0.875000"/></Cube>'
     )
     response.raise_for_status.return_value = None
     monkeypatch.setattr(fx_service.requests, "get", lambda *args, **kwargs: response)
@@ -160,3 +160,53 @@ def test_ecb_rate_is_inverted_to_eur_per_native_unit(monkeypatch):
     )
     assert Decimal(rate) == Decimal("1.142857143")
     assert effective == "2026-09-25"
+
+
+def test_ecb_compact_full_history_parses_realistic_old_gbp_dates(monkeypatch):
+    response = MagicMock()
+    response.content = (
+        b'<?xml version="1.0"?><Envelope><Cube>'
+        b'<Cube time="2026-09-25"><Cube currency="GBP" rate="0.86045"/></Cube>'
+        b'<Cube time="2001-09-14"><Cube currency="GBP" rate="0.6247"/></Cube>'
+        b'<Cube time="2001-09-13"><Cube currency="GBP" rate="0.6251"/></Cube>'
+        b"</Cube></Envelope>"
+    )
+    response.raise_for_status.return_value = None
+    calls = []
+
+    def fetch(*args, **kwargs):
+        calls.append((args, kwargs))
+        return response
+
+    monkeypatch.setattr(fx_service.requests, "get", fetch)
+
+    rate, effective = fx_service.get_historical_fx_rate(
+        "GBP", rate_date="2001-09-14"
+    )
+    cached = fx_service.get_historical_fx_rate("GBP", rate_date="2001-09-14")
+
+    assert Decimal(rate) == Decimal("1.600768369")
+    assert effective == "2001-09-14"
+    assert cached == (rate, effective)
+    assert len(calls) == 1
+    assert calls[0][1]["timeout"] == (5, 20)
+    assert calls[0][1]["headers"]["User-Agent"] == "option-income-lab/1.0"
+
+
+def test_old_gbp_weekend_uses_last_prior_publication(monkeypatch):
+    monkeypatch.setattr(fx_service, "_ensure_cache_fresh", lambda: None)
+    fx_service._rate_cache[("2001-09-14", "GBP")] = "1.600768369"
+
+    assert fx_service.get_historical_fx_rate(
+        "GBP", rate_date="2001-09-16"
+    ) == ("1.600768369", "2001-09-14")
+
+
+def test_pre_ecb_and_future_dates_fail_closed(monkeypatch):
+    monkeypatch.setattr(fx_service, "_ensure_cache_fresh", lambda: None)
+    fx_service._rate_cache[("1999-01-04", "GBP")] = "1.406271973"
+
+    with pytest.raises(fx_service.FxRateNotFoundError):
+        fx_service.get_historical_fx_rate("GBP", rate_date="1998-12-31")
+    with pytest.raises(fx_service.FxRateNotFoundError):
+        fx_service.get_historical_fx_rate("GBP", rate_date="2099-01-01")

@@ -1,11 +1,10 @@
+import shutil
 from copy import deepcopy
 from pathlib import Path
-import shutil
 
 import pytest
 
 from scripts import backfill_dividend_buy_share_fmv as backfill
-
 
 TARGET = backfill.TargetIdentity(
     "https://example.documents.azure.com", "db", "portfolio", "symbols"
@@ -181,6 +180,40 @@ def test_plan_classifies_market_failures_without_partial_fmv(
     )
     assert plan["actions"] == []
     assert plan["counts"][reason] == 1
+
+
+def test_fx_unavailable_skip_has_actionable_safe_context():
+    from src.portfolio.fx_service import FxRateNotFoundError
+
+    def unavailable(*args, **kwargs):
+        raise FxRateNotFoundError("GBP", "2001-09-16")
+
+    plan = _plan(
+        MemoryContainer([_doc(trade_date="2001-09-16")]),
+        force=True,
+        fetcher=Fetcher(
+            {
+                "status": "ok",
+                "open": "5.25",
+                "market_session_date": "2001-09-17",
+                "currency": "GBP",
+            }
+        ),
+        fx=unavailable,
+    )
+
+    assert plan["skips"] == [
+        {
+            "id": "buy",
+            "reason": "fx_unavailable",
+            "movement_id": "buy",
+            "security_id": "XLON:ULVR",
+            "trade_date": "2001-09-16",
+            "valuation_date": "2001-09-16",
+            "native_currency": "GBP",
+            "detail_code": "rate_not_found",
+        }
+    ]
 
 
 def test_existing_fmv_is_idempotently_skipped_and_force_records_previous_value():
