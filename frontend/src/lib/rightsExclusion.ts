@@ -45,8 +45,14 @@ export function isUnsupportedRightsWarning(warning: unknown): boolean {
 }
 
 export function getCanonicalTotalNetEur(
-  summary: { total_net_eur?: unknown },
+  summary: { total_dividends_eur?: unknown; total_net_eur?: unknown },
 ): number | undefined {
+  if (
+    typeof summary.total_dividends_eur === "number" &&
+    Number.isFinite(summary.total_dividends_eur)
+  ) {
+    return summary.total_dividends_eur;
+  }
   return typeof summary.total_net_eur === "number" && Number.isFinite(summary.total_net_eur)
     ? summary.total_net_eur
     : undefined;
@@ -87,15 +93,22 @@ export function excludeUnsupportedRightsFromDividends(
     net_eur: number;
     cash_net?: number | null;
     total_net?: number | null;
+    total_dividends_eur?: number;
     dividend_count: number;
-  }>(row: T, removed: DividendPosition[]): T => ({
-    ...row,
-    gross_eur: row.gross_eur - sum(removed, (item) => item.gross_eur),
-    net_eur: row.net_eur - sum(removed, (item) => item.net_eur),
-    cash_net: cashNet(row) - sum(removed, cashNet),
-    total_net: cashNet(row) - sum(removed, cashNet),
-    dividend_count: Math.max(0, row.dividend_count - removed.length),
-  });
+  }>(row: T, removed: DividendPosition[]): T => {
+    const removedCash = sum(removed, cashNet);
+    const totalDividends =
+      typeof row.total_dividends_eur === "number" ? row.total_dividends_eur : cashNet(row);
+    return {
+      ...row,
+      gross_eur: row.gross_eur - sum(removed, (item) => item.gross_eur),
+      net_eur: row.net_eur - sum(removed, (item) => item.net_eur),
+      cash_net: cashNet(row) - removedCash,
+      total_net: totalDividends - removedCash,
+      total_dividends_eur: totalDividends - removedCash,
+      dividend_count: Math.max(0, row.dividend_count - removed.length),
+    };
+  };
 
   const monthly = report.monthly
     .map((row) => subtract(row, removedByMonth.get(row.month) ?? []))
@@ -112,7 +125,7 @@ export function excludeUnsupportedRightsFromDividends(
     .map((row) => {
       const month = monthly.find((item) => item.month === row.month);
       if (!month) return null;
-      cumulative += cashNet(month);
+      cumulative += month.total_dividends_eur ?? month.total_net ?? cashNet(month);
       return {
         ...row,
         cumulative_net_eur: cumulative,
@@ -128,6 +141,11 @@ export function excludeUnsupportedRightsFromDividends(
   const totalFees = sum(positions, (position) => position.fees_eur);
   const totalWithholding = sum(positions, (position) => position.withholding_total_eur);
   const totalNet = sum(positions, cashNet);
+  const removedCash = sum(excluded, cashNet);
+  const totalDividends =
+    typeof report.summary.total_dividends_eur === "number"
+      ? report.summary.total_dividends_eur - removedCash
+      : totalNet;
 
   return {
     ...report,
@@ -138,7 +156,8 @@ export function excludeUnsupportedRightsFromDividends(
       total_withholding_eur: totalWithholding,
       total_net_eur: totalNet,
       cash_net: totalNet,
-      total_net: totalNet,
+      total_net: totalDividends,
+      total_dividends_eur: totalDividends,
       total_dividends: positions.length,
       total_accounts: new Set(positions.map((position) => position.account_id).filter(Boolean)).size,
       effective_withholding_pct: totalGross > 0 ? (totalWithholding / totalGross) * 100 : 0,
@@ -162,7 +181,12 @@ export function excludeUnsupportedRightsFromDividends(
 export function excludeUnsupportedRightsFromEconomicsOverview(
   report: EconomicsAggregatedReport,
 ): EconomicsAggregatedReport {
-  const summaryDividendNet = report.summary.dividends_cash_net_eur ?? report.summary.dividends_net_eur;
+  const legacySummaryRights = report.summary.dividends_derechos_net_eur;
+  if (legacySummaryRights == null) return report;
+
+  const summaryDividendNet =
+    (report.summary.dividends_total_net_eur ?? report.summary.dividends_net_eur) -
+    legacySummaryRights;
   return {
     ...report,
     summary: {
@@ -172,7 +196,9 @@ export function excludeUnsupportedRightsFromEconomicsOverview(
       combined_net_eur: report.summary.options_net_eur + summaryDividendNet,
     },
     monthly: report.monthly.map((row) => {
-      const dividendNet = row.dividends_cash_net_eur ?? row.dividends_net_eur;
+      const dividendNet =
+        (row.dividends_total_net_eur ?? row.dividends_net_eur) -
+        (row.dividends_derechos_net_eur ?? 0);
       return {
         ...row,
         dividends_net_eur: dividendNet,
@@ -181,7 +207,9 @@ export function excludeUnsupportedRightsFromEconomicsOverview(
       };
     }),
     by_symbol: report.by_symbol.map((row) => {
-      const dividendNet = row.dividends_cash_net_eur ?? row.dividends_net_eur;
+      const dividendNet =
+        (row.dividends_total_net_eur ?? row.dividends_net_eur) -
+        (row.dividends_derechos_net_eur ?? 0);
       return {
         ...row,
         dividends_net_eur: dividendNet,

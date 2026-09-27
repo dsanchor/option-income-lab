@@ -55,6 +55,8 @@ const addMovementSrc = src("src/components/AddMovementDialog.tsx");
 const addPositionSrc = src("src/components/AddPositionForm.tsx");
 const optionBadgesSrc = src("src/components/OptionLinkageBadges.tsx");
 const movementDetailSrc = src("src/components/MovementDetailDialog.tsx");
+const dividendsSrc = src("src/components/DividendsView.tsx");
+const economicsOverviewSrc = src("src/components/EconomicsOverviewView.tsx");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -97,6 +99,33 @@ describe("EP: Economics primitives baseline (ground truth)", () => {
       economicsSrc.includes("import StatCard"),
       "EP-1: EconomicsView must import StatCard — the shared KPI component."
     );
+  });
+
+  describe("SD: Scrip dividend Economics parity", () => {
+    it("SD-1: dividends and overview retain shared surface/card token vocabulary", () => {
+      for (const source of [dividendsSrc, economicsOverviewSrc]) {
+        assert.ok(source.includes("surface"), "Economics views must retain surface cards.");
+        assert.ok(source.includes("font-mono"), "Economics values must remain monospaced.");
+        assert.ok(source.includes("text-text-muted"), "Economics labels must use semantic tokens.");
+      }
+    });
+
+    it("SD-2: partial scrip coverage uses the existing pill-radius badge vocabulary", () => {
+      for (const source of [dividendsSrc, economicsOverviewSrc]) {
+        assert.ok(source.includes("Partial"), "Both Economics surfaces must expose Partial state.");
+        assert.ok(
+          source.includes("rounded-[var(--radius-pill)]"),
+          "Partial badges must use the shared pill radius token.",
+        );
+      }
+    });
+
+    it("SD-3: accepted cash, scrip, and total labels are consistent across Economics", () => {
+      assert.ok(dividendsSrc.includes("Cash Dividends (Net)"));
+      assert.ok(dividendsSrc.includes("Scrip Dividends (Economic Value)"));
+      assert.ok(dividendsSrc.includes("Total Dividends"));
+      assert.ok(economicsOverviewSrc.includes("Dividends Total"));
+    });
   });
 
   it("EP-2: StatCard carries the 'surface' utility class", () => {

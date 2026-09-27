@@ -643,10 +643,36 @@ def _build_economics_overview_report(
     month_filter: Optional[List[int]] = None,
     symbol_filter: Optional[List[str]] = None,
     account_filter: Optional[List[str]] = None,
+    currency_filter: Optional[List[str]] = None,
     source: str = "both",
 ) -> Dict[str, Any]:
     monthly_rows: Dict[str, Dict[str, Any]] = {}
     symbol_rows: Dict[str, Dict[str, Any]] = {}
+
+    def value_or_default(value: Any, default: Any) -> Any:
+        return default if value is None else value
+
+    def empty_row(key: str, value: str) -> Dict[str, Any]:
+        return {
+            key: value,
+            "options_net_eur": 0.0,
+            "dividends_net_eur": 0.0,
+            "dividends_cash_net_eur": 0.0,
+            "dividends_scrip_eur": 0.0,
+            "dividends_total_net_eur": 0.0,
+            "dividends_total_is_partial": False,
+            "dividends_total_net_is_partial": False,
+            "total_dividends_is_partial": False,
+            "dividends_scrip_valuation_status": "NOT_APPLICABLE",
+            "scrip_valuation_status": "NOT_APPLICABLE",
+            "scrip_events_total": 0,
+            "scrip_events_valued": 0,
+            "scrip_events_unvalued": 0,
+            "combined_net_eur": 0.0,
+            "combined_net_is_partial": False,
+            "option_positions": 0,
+            "dividend_events": 0,
+        }
 
     for row in options_report.get("monthly", []):
         group_year = row.get("year")
@@ -654,105 +680,129 @@ def _build_economics_overview_report(
         if not isinstance(group_year, int) or not isinstance(group_month, int):
             continue
         month_key = f"{group_year:04d}-{group_month:02d}"
-        monthly_rows.setdefault(
-            month_key,
-            {
-                "month": month_key,
-                "options_net_eur": 0.0,
-                "dividends_net_eur": 0.0,
-                "dividends_cash_net_eur": 0.0,
-                "dividends_total_net_eur": 0.0,
-                "combined_net_eur": 0.0,
-                "option_positions": 0,
-                "dividend_events": 0,
-            },
+        monthly_rows.setdefault(month_key, empty_row("month", month_key))
+        monthly_rows[month_key]["options_net_eur"] = value_or_default(
+            row.get("net_income_eur"), 0.0
         )
-        monthly_rows[month_key]["options_net_eur"] = row.get("net_income_eur") or 0.0
         monthly_rows[month_key]["combined_net_eur"] = _round2(
-            (monthly_rows[month_key].get("options_net_eur") or 0.0)
-            + (monthly_rows[month_key].get("dividends_total_net_eur") or 0.0)
+            value_or_default(monthly_rows[month_key].get("options_net_eur"), 0.0)
+            + value_or_default(
+                monthly_rows[month_key].get("dividends_total_net_eur"), 0.0
+            )
         )
-        monthly_rows[month_key]["option_positions"] = row.get("positions_count") or 0
+        monthly_rows[month_key]["option_positions"] = value_or_default(
+            row.get("positions_count"), 0
+        )
 
     for row in dividends_report.get("monthly", []):
         month_key = str(row.get("month") or "").strip()
         if not month_key:
             continue
-        monthly_rows.setdefault(
-            month_key,
-            {
-                "month": month_key,
-                "options_net_eur": 0.0,
-                "dividends_net_eur": 0.0,
-                "dividends_cash_net_eur": 0.0,
-                "dividends_total_net_eur": 0.0,
-                "combined_net_eur": 0.0,
-                "option_positions": 0,
-                "dividend_events": 0,
-            },
+        monthly_rows.setdefault(month_key, empty_row("month", month_key))
+        cash_net = value_or_default(
+            row.get("cash_net"), value_or_default(row.get("net_eur"), 0.0)
         )
-        monthly_rows[month_key]["dividends_net_eur"] = row.get("net_eur") or 0.0
-        monthly_rows[month_key]["dividends_cash_net_eur"] = row.get("cash_net") or row.get("net_eur") or 0.0
-        monthly_rows[month_key]["dividends_total_net_eur"] = row.get("total_net") or (
-            row.get("cash_net") or row.get("net_eur") or 0.0
+        total_net = value_or_default(
+            row.get("total_dividends_eur"),
+            value_or_default(row.get("total_net"), cash_net),
         )
+        monthly_rows[month_key]["dividends_net_eur"] = value_or_default(
+            row.get("net_eur"), 0.0
+        )
+        monthly_rows[month_key]["dividends_cash_net_eur"] = cash_net
+        monthly_rows[month_key]["dividends_scrip_eur"] = row.get(
+            "scrip_dividends_eur"
+        )
+        monthly_rows[month_key]["dividends_total_net_eur"] = total_net
+        partial = bool(row.get("total_dividends_is_partial", False))
+        monthly_rows[month_key]["dividends_total_net_is_partial"] = partial
+        monthly_rows[month_key]["dividends_total_is_partial"] = partial
+        monthly_rows[month_key]["total_dividends_is_partial"] = partial
+        scrip_status = row.get(
+            "scrip_valuation_status", "NOT_APPLICABLE"
+        )
+        monthly_rows[month_key]["dividends_scrip_valuation_status"] = scrip_status
+        monthly_rows[month_key]["scrip_valuation_status"] = scrip_status
+        for field in (
+            "scrip_events_total",
+            "scrip_events_valued",
+            "scrip_events_unvalued",
+        ):
+            monthly_rows[month_key][field] = value_or_default(row.get(field), 0)
         monthly_rows[month_key]["combined_net_eur"] = _round2(
-            (monthly_rows[month_key].get("options_net_eur") or 0.0)
-            + (monthly_rows[month_key].get("dividends_total_net_eur") or 0.0)
+            value_or_default(monthly_rows[month_key].get("options_net_eur"), 0.0)
+            + value_or_default(
+                monthly_rows[month_key].get("dividends_total_net_eur"), 0.0
+            )
         )
-        monthly_rows[month_key]["dividend_events"] = row.get("dividend_count") or 0
+        monthly_rows[month_key]["combined_net_is_partial"] = partial
+        monthly_rows[month_key]["dividend_events"] = value_or_default(
+            row.get("dividend_count"), 0
+        )
 
     for row in options_report.get("by_symbol", []):
         symbol = str(row.get("symbol") or "").strip().upper()
         if not symbol:
             continue
-        symbol_rows.setdefault(
-            symbol,
-            {
-                "symbol": symbol,
-                "options_net_eur": 0.0,
-                "dividends_net_eur": 0.0,
-                "dividends_cash_net_eur": 0.0,
-                "dividends_total_net_eur": 0.0,
-                "combined_net_eur": 0.0,
-                "option_positions": 0,
-                "dividend_events": 0,
-            },
+        symbol_rows.setdefault(symbol, empty_row("symbol", symbol))
+        symbol_rows[symbol]["options_net_eur"] = value_or_default(
+            row.get("net_income_eur"), 0.0
         )
-        symbol_rows[symbol]["options_net_eur"] = row.get("net_income_eur") or 0.0
         symbol_rows[symbol]["combined_net_eur"] = _round2(
-            (symbol_rows[symbol].get("options_net_eur") or 0.0)
-            + (symbol_rows[symbol].get("dividends_total_net_eur") or 0.0)
+            value_or_default(symbol_rows[symbol].get("options_net_eur"), 0.0)
+            + value_or_default(
+                symbol_rows[symbol].get("dividends_total_net_eur"), 0.0
+            )
         )
-        symbol_rows[symbol]["option_positions"] = row.get("positions_count") or 0
+        symbol_rows[symbol]["option_positions"] = value_or_default(
+            row.get("positions_count"), 0
+        )
 
     for row in dividends_report.get("by_symbol", []):
         symbol = str(row.get("symbol") or "").strip().upper()
         if not symbol:
             continue
-        symbol_rows.setdefault(
-            symbol,
-            {
-                "symbol": symbol,
-                "options_net_eur": 0.0,
-                "dividends_net_eur": 0.0,
-                "dividends_cash_net_eur": 0.0,
-                "dividends_total_net_eur": 0.0,
-                "combined_net_eur": 0.0,
-                "option_positions": 0,
-                "dividend_events": 0,
-            },
+        symbol_rows.setdefault(symbol, empty_row("symbol", symbol))
+        cash_net = value_or_default(
+            row.get("cash_net"), value_or_default(row.get("net_eur"), 0.0)
         )
-        symbol_rows[symbol]["dividends_net_eur"] = row.get("net_eur") or 0.0
-        symbol_rows[symbol]["dividends_cash_net_eur"] = row.get("cash_net") or row.get("net_eur") or 0.0
-        symbol_rows[symbol]["dividends_total_net_eur"] = row.get("total_net") or (
-            row.get("cash_net") or row.get("net_eur") or 0.0
+        total_net = value_or_default(
+            row.get("total_dividends_eur"),
+            value_or_default(row.get("total_net"), cash_net),
         )
+        symbol_rows[symbol]["dividends_net_eur"] = value_or_default(
+            row.get("net_eur"), 0.0
+        )
+        symbol_rows[symbol]["dividends_cash_net_eur"] = cash_net
+        symbol_rows[symbol]["dividends_scrip_eur"] = row.get(
+            "scrip_dividends_eur"
+        )
+        symbol_rows[symbol]["dividends_total_net_eur"] = total_net
+        partial = bool(row.get("total_dividends_is_partial", False))
+        symbol_rows[symbol]["dividends_total_net_is_partial"] = partial
+        symbol_rows[symbol]["dividends_total_is_partial"] = partial
+        symbol_rows[symbol]["total_dividends_is_partial"] = partial
+        scrip_status = row.get(
+            "scrip_valuation_status", "NOT_APPLICABLE"
+        )
+        symbol_rows[symbol]["dividends_scrip_valuation_status"] = scrip_status
+        symbol_rows[symbol]["scrip_valuation_status"] = scrip_status
+        for field in (
+            "scrip_events_total",
+            "scrip_events_valued",
+            "scrip_events_unvalued",
+        ):
+            symbol_rows[symbol][field] = value_or_default(row.get(field), 0)
         symbol_rows[symbol]["combined_net_eur"] = _round2(
-            (symbol_rows[symbol].get("options_net_eur") or 0.0)
-            + (symbol_rows[symbol].get("dividends_total_net_eur") or 0.0)
+            value_or_default(symbol_rows[symbol].get("options_net_eur"), 0.0)
+            + value_or_default(
+                symbol_rows[symbol].get("dividends_total_net_eur"), 0.0
+            )
         )
-        symbol_rows[symbol]["dividend_events"] = row.get("dividend_count") or 0
+        symbol_rows[symbol]["combined_net_is_partial"] = partial
+        symbol_rows[symbol]["dividend_events"] = value_or_default(
+            row.get("dividend_count"), 0
+        )
 
     filtered_symbols = {
         row["symbol"]
@@ -768,26 +818,55 @@ def _build_economics_overview_report(
     available_years.update(dividends_report.get("filters", {}).get("years", []))
     available_symbols = set(options_report.get("filters", {}).get("symbols", []))
     available_symbols.update(dividends_report.get("filters", {}).get("symbols", []))
-
-    options_net_eur = options_report.get("summary", {}).get("net_income_eur", 0.0)
-    dividends_net_eur = dividends_report.get("summary", {}).get("total_net_eur", 0.0)
-    dividends_cash_net_eur = dividends_report.get("summary", {}).get("cash_net", dividends_net_eur)
-    dividends_total_net_eur = dividends_report.get("summary", {}).get(
-        "total_net",
-        dividends_cash_net_eur or 0.0,
+    available_currencies = set(
+        dividends_report.get("filters", {}).get("currencies", [])
     )
+
+    options_net_eur = value_or_default(
+        options_report.get("summary", {}).get("net_income_eur"), 0.0
+    )
+    dividends_summary = dividends_report.get("summary", {})
+    dividends_net_eur = value_or_default(dividends_summary.get("total_net_eur"), 0.0)
+    dividends_cash_net_eur = value_or_default(
+        dividends_summary.get("cash_net"), dividends_net_eur
+    )
+    dividends_total_net_eur = value_or_default(
+        dividends_summary.get("total_dividends_eur"),
+        value_or_default(dividends_summary.get("total_net"), dividends_cash_net_eur),
+    )
+    dividends_partial = bool(dividends_summary.get("total_dividends_is_partial", False))
 
     return {
         "summary": {
             "options_net_eur": options_net_eur,
             "dividends_net_eur": dividends_net_eur,
             "dividends_cash_net_eur": dividends_cash_net_eur,
+            "dividends_scrip_eur": dividends_summary.get("scrip_dividends_eur"),
             "dividends_total_net_eur": dividends_total_net_eur,
-            "portfolio_yoc_pct": dividends_report.get("summary", {}).get("portfolio_yoc_pct"),
-            "combined_net_eur": _round2((options_net_eur or 0.0) + (dividends_total_net_eur or 0.0)),
+            "dividends_total_is_partial": dividends_partial,
+            "dividends_total_net_is_partial": dividends_partial,
+            "total_dividends_is_partial": dividends_partial,
+            "dividends_scrip_valuation_status": dividends_summary.get(
+                "scrip_valuation_status", "NOT_APPLICABLE"
+            ),
+            "scrip_valuation_status": dividends_summary.get(
+                "scrip_valuation_status", "NOT_APPLICABLE"
+            ),
+            "scrip_events_total": value_or_default(
+                dividends_summary.get("scrip_events_total"), 0
+            ),
+            "scrip_events_valued": value_or_default(
+                dividends_summary.get("scrip_events_valued"), 0
+            ),
+            "scrip_events_unvalued": value_or_default(
+                dividends_summary.get("scrip_events_unvalued"), 0
+            ),
+            "portfolio_yoc_pct": dividends_summary.get("portfolio_yoc_pct"),
+            "combined_net_eur": _round2(options_net_eur + dividends_total_net_eur),
+            "combined_net_is_partial": dividends_partial,
             "total_option_positions": options_report.get("summary", {}).get("total_positions", 0),
             "options_coverage": options_report.get("summary", {}).get("coverage", {}),
-            "total_dividend_events": dividends_report.get("summary", {}).get("total_dividends", 0),
+            "total_dividend_events": dividends_summary.get("total_dividends", 0),
             "total_symbols": len(filtered_symbols),
         },
         "monthly": [monthly_rows[key] for key in sorted(monthly_rows)],
@@ -795,12 +874,14 @@ def _build_economics_overview_report(
         "filters": {
             "years": sorted(available_years, reverse=True),
             "symbols": sorted(available_symbols),
+            "currencies": sorted(available_currencies),
         },
         "applied_filters": {
             "year": year,
             "months": month_filter,
             "symbols": symbol_filter,
             "account_ids": account_filter,
+            "currencies": currency_filter,
             "source": source,
         },
         "meta": {
@@ -814,8 +895,17 @@ def _build_economics_overview_report(
 
 
 def _decorate_dividends_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
-    cash_net = summary.get("cash_net", summary.get("cash_net_eur", summary.get("total_net_eur", 0.0))) or 0.0
-    total_net = summary.get("total_net", summary.get("total_combined_net_eur", cash_net)) or 0.0
+    cash_net = summary.get(
+        "cash_net", summary.get("cash_net_eur", summary.get("total_net_eur", 0.0))
+    )
+    if cash_net is None:
+        cash_net = 0.0
+    total_net = summary.get(
+        "total_dividends_eur",
+        summary.get("total_net", summary.get("total_combined_net_eur", cash_net)),
+    )
+    if total_net is None:
+        total_net = cash_net
     return {
         **summary,
         "cash_net": cash_net,
@@ -824,8 +914,14 @@ def _decorate_dividends_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _decorate_dividends_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    cash_net = row.get("cash_net", row.get("cash_net_eur", row.get("net_eur", 0.0))) or 0.0
-    total_net = row.get("total_net", row.get("total_net_eur", cash_net)) or 0.0
+    cash_net = row.get("cash_net", row.get("cash_net_eur", row.get("net_eur", 0.0)))
+    if cash_net is None:
+        cash_net = 0.0
+    total_net = row.get(
+        "total_dividends_eur", row.get("total_net", row.get("total_net_eur", cash_net))
+    )
+    if total_net is None:
+        total_net = cash_net
     return {
         **row,
         "cash_net": cash_net,
@@ -834,8 +930,18 @@ def _decorate_dividends_row(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _decorate_dividends_cumulative_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    cash_net = row.get("cash_net", row.get("cumulative_cash_net_eur", row.get("cumulative_net_eur", 0.0))) or 0.0
-    total_net = row.get("total_net", row.get("cumulative_total_net_eur", cash_net)) or 0.0
+    cash_net = row.get(
+        "cash_net",
+        row.get("cumulative_cash_net_eur", row.get("cumulative_net_eur", 0.0)),
+    )
+    if cash_net is None:
+        cash_net = 0.0
+    total_net = row.get(
+        "total_dividends_eur",
+        row.get("total_net", row.get("cumulative_total_net_eur", cash_net)),
+    )
+    if total_net is None:
+        total_net = cash_net
     return {
         **row,
         "cash_net": cash_net,
@@ -1663,7 +1769,8 @@ async def api_dividends_economics(request: Request,
                                   year: Optional[int] = Query(default=None),
                                   month: Optional[str] = Query(default=None),
                                   symbol: Optional[str] = Query(default=None),
-                                  account_id: Optional[str] = Query(default=None)):
+                                  account_id: Optional[str] = Query(default=None),
+                                  currency: Optional[str] = Query(default=None)):
     try:
         cosmos = _get_cosmos(request)
         portfolio_container = getattr(cosmos, "portfolio_container", None)
@@ -1690,6 +1797,11 @@ async def api_dividends_economics(request: Request,
             account_list = [a.strip() for a in account_id.split(",") if a.strip()]
             if not account_list:
                 account_list = None
+        currency_list = None
+        if currency:
+            currency_list = [c.strip().upper() for c in currency.split(",") if c.strip()]
+            if not currency_list:
+                currency_list = None
 
         from src.portfolio.cosmos_portfolio import CosmosPortfolioService
         from src.portfolio.cosmos_securities import CosmosSecuritiesService
@@ -1706,6 +1818,7 @@ async def api_dividends_economics(request: Request,
                 month_filter=month_list,
                 symbol_filter=symbol_list,
                 account_filter=account_list,
+                currency_filter=currency_list,
             ),
             movements,
             symbol_filter=symbol_list,
@@ -1725,7 +1838,8 @@ async def api_economics_overview(request: Request,
                                  month: Optional[str] = Query(default=None),
                                  symbol: Optional[str] = Query(default=None),
                                  source: Optional[str] = Query(default=None),
-                                 account_id: Optional[str] = Query(default=None)):
+                                 account_id: Optional[str] = Query(default=None),
+                                 currency: Optional[str] = Query(default=None)):
     try:
         cosmos = _get_cosmos(request)
         portfolio_container = getattr(cosmos, "portfolio_container", None)
@@ -1751,6 +1865,11 @@ async def api_economics_overview(request: Request,
             account_list = [a.strip() for a in account_id.split(",") if a.strip()]
             if not account_list:
                 account_list = None
+        currency_list = None
+        if currency:
+            currency_list = [c.strip().upper() for c in currency.split(",") if c.strip()]
+            if not currency_list:
+                currency_list = None
 
         normalized_source = source.strip().lower() if source else "both"
         if normalized_source not in {"options", "dividends", "both"}:
@@ -1791,6 +1910,7 @@ async def api_economics_overview(request: Request,
                     month_filter=month_list,
                     symbol_filter=symbol_list,
                     account_filter=account_list,
+                    currency_filter=currency_list,
                 ),
                 movements,
                 symbol_filter=symbol_list,
@@ -1806,6 +1926,7 @@ async def api_economics_overview(request: Request,
                 month_filter=month_list,
                 symbol_filter=symbol_list,
                 account_filter=account_list,
+                currency_filter=currency_list,
                 source=normalized_source,
             )
         )

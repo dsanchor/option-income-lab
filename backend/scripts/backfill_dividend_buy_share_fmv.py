@@ -18,7 +18,7 @@ import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -26,21 +26,19 @@ from uuid import NAMESPACE_URL, uuid5
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.portfolio.cosmos_securities import (
-    security_id_to_doc_id,
-    security_id_to_ticker,
+from src.portfolio.fx_service import get_historical_fx_rate
+from src.portfolio.share_fmv_service import (
+    SCRIPT_VERSION,
+    ShareFmvService,
+    YahooFmvError,
+    build_yahoo_share_fmv,
+    observe_yahoo_open,
+    read_security,
 )
-from src.portfolio.fx_service import (
-    FxRateNotFoundError,
-    FxUnavailableError,
-    get_historical_fx_rate,
-)
-from src.portfolio.provider_symbols import resolve_yfinance_symbol
 from src.yfinance_fetcher import YFinanceFetcher
 
 logger = logging.getLogger("backfill_dividend_buy_share_fmv")
 
-SCRIPT_VERSION = "dividend-buy-fmv-v1"
 APPLY_CONFIRMATION = "BACKFILL_DIVIDEND_BUY_FMV"
 OVERWRITE_CONFIRMATION = "OVERWRITE_EXISTING_FMV"
 DEFAULT_BACKUP_DIR = Path(__file__).parent / "migration_backups"
@@ -162,17 +160,7 @@ def _query_ledger(container) -> list[dict]:
 
 
 def _read_security(symbols_container, security_id: str) -> dict | None:
-    if not security_id:
-        return None
-    try:
-        return symbols_container.read_item(
-            item=security_id_to_doc_id(security_id),
-            partition_key=security_id_to_ticker(security_id),
-        )
-    except Exception as exc:
-        if exc.__class__.__name__ == "CosmosResourceNotFoundError":
-            return None
-        raise
+    return read_security(symbols_container, security_id)
 
 
 def _normalise_observation(raw: Any) -> dict[str, Any]:
@@ -187,18 +175,16 @@ def _normalise_observation(raw: Any) -> dict[str, Any]:
 
 
 def _observe_open(fetcher: Any, symbol: str, requested_date: str) -> dict[str, Any]:
-    method = getattr(fetcher, "get_daily_open", None) or getattr(
-        fetcher, "get_historical_open", None
-    )
-    if method is None:
-        raise BackfillError("Yahoo fetcher does not support directed daily Open", 2)
     try:
         return _normalise_observation(
-            method(symbol, requested_date, max_calendar_days=7)
+            observe_yahoo_open(
+                fetcher,
+                symbol,
+                requested_date,
+                timeout_seconds=15,
+            )
         )
-    except TypeError:
-        return _normalise_observation(method(symbol, requested_date, 7))
-    except Exception:  # noqa: BLE001
+    except YahooFmvError:
         return {"status": "provider_error"}
 
 
@@ -209,93 +195,37 @@ def _proposal(
     observation: dict,
     fx_getter: Callable[..., tuple[str, str]],
 ) -> tuple[dict | None, str | None]:
-    requested_date = _iso_date(doc.get("trade_date"))
-    status = observation.get("status")
-    if status == "no_market_session":
-        return None, "no_market_session"
-    if status == "invalid_open":
-        return None, "invalid_open"
-    if status == "currency_unavailable":
-        return None, "currency_mismatch"
-    if status != "ok":
-        return None, "failed"
-
-    session_date = _iso_date(observation.get("market_session_date"))
-    if not session_date:
-        return None, "no_market_session"
-    delta = (date.fromisoformat(session_date) - date.fromisoformat(requested_date)).days
-    if delta < 0 or delta > 7:
-        return None, "no_market_session"
-
-    listing_currency = str(security.get("listing_currency") or "").strip().upper()
-    observed_currency = str(observation.get("currency") or "").strip().upper()
-    if not listing_currency or observed_currency != listing_currency:
-        return None, "currency_mismatch"
-
-    price = _decimal(observation.get("open"))
-    quantity = _decimal(doc.get("quantity"))
-    if price is None or price <= 0 or quantity is None or quantity <= 0:
-        return None, "invalid_open"
-
     try:
-        if listing_currency == "EUR":
-            fx_rate, fx_date, fx_source = (
-                Decimal(1),
-                requested_date,
-                "IDENTITY",
-            )
-        else:
-            try:
-                raw_rate, fx_date = fx_getter(
-                    listing_currency, "EUR", rate_date=requested_date
-                )
-            except TypeError:
-                raw_rate, fx_date = fx_getter(
-                    listing_currency, "EUR", requested_date
-                )
-            fx_rate = _decimal(raw_rate)
-            fx_date = _iso_date(fx_date)
-            fx_source = "ECB"
-            if fx_rate is None or fx_rate <= 0 or not fx_date:
-                return None, "fx_unavailable"
-            fx_age = (date.fromisoformat(requested_date) - date.fromisoformat(fx_date)).days
-            if fx_age < 0 or fx_age > 5:
-                return None, "fx_unavailable"
-    except (FxUnavailableError, FxRateNotFoundError, ValueError, TypeError):
-        return None, "fx_unavailable"
-
-    price_q = price.quantize(_Q6, rounding=ROUND_HALF_UP)
-    amount_q = (price_q * quantity).quantize(_Q6, rounding=ROUND_HALF_UP)
-    rate_q = fx_rate.quantize(_Q9, rounding=ROUND_HALF_UP)
-    price_eur_q = (price_q * rate_q).quantize(_Q6, rounding=ROUND_HALF_UP)
-    amount_eur_q = (amount_q * rate_q).quantize(_Q6, rounding=ROUND_HALF_UP)
-    if min(price_q, amount_q, price_eur_q, amount_eur_q, rate_q) <= 0:
-        return None, "invalid_open"
-
-    share_fmv = {
-        "valuation_date": requested_date,
-        "amount": format(amount_q, "f"),
-        "currency": listing_currency,
-        "eur_amount": format(amount_eur_q, "f"),
-        "price_per_share": format(price_q, "f"),
-        "price_per_share_eur": format(price_eur_q, "f"),
-        "source": "YAHOO_OPEN",
-        "confidence": "MARKET_ESTIMATE",
-        "fx": {
-            "rate": format(rate_q, "f"),
-            "date": fx_date,
-            "source": fx_source,
-        },
-        "provenance": {
-            "provider": "yfinance",
-            "provider_symbol": provider_symbol,
-            "price_field": "OPEN",
-            "requested_date": requested_date,
-            "market_session_date": session_date,
-            "script_version": SCRIPT_VERSION,
-        },
-    }
-    return share_fmv, None
+        return (
+            build_yahoo_share_fmv(
+                quantity=doc.get("quantity"),
+                trade_date=doc.get("trade_date"),
+                security=security,
+                provider_symbol=provider_symbol,
+                observation=observation,
+                fx_getter=fx_getter,
+                fetched_at="1970-01-01T00:00:00+00:00",
+                run_id=str(
+                    uuid5(
+                        NAMESPACE_URL,
+                        f"{SCRIPT_VERSION}:{doc.get('account_id')}:{doc.get('id')}",
+                    )
+                ),
+            ),
+            None,
+        )
+    except YahooFmvError as exc:
+        reason = {
+            ("yahoo", "yahoo_fmv_unavailable"): (
+                "no_market_session"
+                if observation.get("status") == "no_market_session"
+                else "invalid_open"
+            ),
+            ("currency", "yahoo_fmv_unavailable"): "currency_mismatch",
+            ("fx", "fx_unavailable"): "fx_unavailable",
+            ("fx", "fx_timeout"): "fx_unavailable",
+        }.get((exc.stage, exc.error), "failed")
+        return None, reason
 
 
 def build_plan(
@@ -325,32 +255,43 @@ def build_plan(
 
     actions: list[dict] = []
     skips: list[dict] = []
-    securities: dict[str, dict | None] = {}
+    resolver = ShareFmvService(
+        symbols_container,
+        fetcher=fetcher,
+        fx_getter=fx_getter,
+    )
     for doc in documents:
         if doc.get("share_fmv") is not None and not force:
             skips.append({"id": doc.get("id"), "reason": "already_set"})
             continue
 
         security_id = str(doc.get("security_id") or "")
-        if security_id not in securities:
-            securities[security_id] = _read_security(symbols_container, security_id)
-        security = securities[security_id]
-        if not security:
-            skips.append({"id": doc.get("id"), "reason": "unresolved_symbol"})
-            continue
-
-        ticker = str(security.get("ticker") or security_id_to_ticker(security_id))
-        mic = security.get("exchange_mic")
-        provider_symbol = resolve_yfinance_symbol(ticker, mic, security)
-        if not provider_symbol:
-            skips.append({"id": doc.get("id"), "reason": "unresolved_symbol"})
-            continue
-
-        observation = _observe_open(fetcher, provider_symbol, doc["trade_date"])
-        proposed, reason = _proposal(
-            doc, security, provider_symbol, observation, fx_getter
-        )
-        if reason:
+        try:
+            proposed = resolver.resolve(
+                security_id=security_id,
+                quantity=doc.get("quantity"),
+                trade_date=doc["trade_date"],
+                fetched_at="1970-01-01T00:00:00+00:00",
+                run_id=str(
+                    uuid5(
+                        NAMESPACE_URL,
+                        f"{SCRIPT_VERSION}:{doc.get('account_id')}:{doc.get('id')}",
+                    )
+                ),
+            )
+        except YahooFmvError as exc:
+            if exc.stage in {"security", "symbol"}:
+                reason = "unresolved_symbol"
+            elif exc.stage == "currency":
+                reason = "currency_mismatch"
+            elif exc.stage == "fx":
+                reason = "fx_unavailable"
+            elif "session" in exc.detail.lower():
+                reason = "no_market_session"
+            elif "open" in exc.detail.lower():
+                reason = "invalid_open"
+            else:
+                reason = "failed"
             skips.append({"id": doc.get("id"), "reason": reason})
             continue
         actions.append(

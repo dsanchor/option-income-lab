@@ -57,6 +57,51 @@ describe("Economics type contracts", () => {
     }
   });
 
+  it("defines authoritative scrip value, coverage, combined totals, and currency filters", () => {
+    for (const field of [
+      'export type ScripValuationStatus =',
+      '"COMPLETE"',
+      '"PARTIAL"',
+      '"UNAVAILABLE"',
+      '"NOT_APPLICABLE"',
+      "scrip_dividends_eur: number | null;",
+      "total_dividends_eur: number;",
+      "total_dividends_is_partial: boolean;",
+      "scrip_valuation_status: ScripValuationStatus;",
+      "scrip_events_total: number;",
+      "scrip_events_valued: number;",
+      "scrip_events_unvalued: number;",
+      "scrip_fmv_eur: number | null;",
+      "scrip_personal_contribution_eur: number | null;",
+      "scrip_attributable_fees_eur: number | null;",
+      "cumulative_cash_net_eur: number;",
+      "cumulative_total_net_eur: number;",
+      "currencies: string[];",
+    ]) {
+      assert.ok(
+        economicsTypes.includes(field),
+        `Expected economics.ts to include "${field}".`
+      );
+    }
+  });
+
+  it("adds scrip and partial coverage fields to overview contracts", () => {
+    for (const field of [
+      "dividends_scrip_eur",
+      "dividends_total_net_eur",
+      "total_dividends_is_partial",
+      "scrip_valuation_status",
+      "scrip_events_total",
+      "scrip_events_valued",
+      "scrip_events_unvalued",
+    ]) {
+      assert.ok(
+        economicsTypes.includes(field),
+        `Expected overview types to include "${field}".`
+      );
+    }
+  });
+
   it("includes paper-position fields in the options economics contract", () => {
     for (const field of [
       "excluded_paper_positions: number;",
@@ -74,8 +119,6 @@ describe("Economics type contracts", () => {
     for (const field of [
       "cash_net?: number | null;",
       "derechos_net?: number | null;",
-      "total_net?: number | null;",
-      "cumulative_total_net_eur?: number | null;",
     ]) {
       assert.ok(
         economicsTypes.includes(field),

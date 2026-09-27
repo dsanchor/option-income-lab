@@ -14,9 +14,12 @@ const primaryEnd = summary.indexOf("</section>", primaryStart);
 const primary = summary.slice(primaryStart, primaryEnd);
 const siblingsStart = summary.indexOf('data-testid="dividends-sibling-cards"');
 const siblings = summary.slice(siblingsStart);
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 test("groups the canonical dividend totals inside the accessible primary card", () => {
   assert.match(summary, /const netDividendsReceived = getNetDividendsReceived\(summary\)/);
+  assert.match(summary, /summary\.cash_net/);
+  assert.match(summary, /summary\.scrip_dividends_eur/);
   assert.match(summary, /totalGross = Number\.isFinite\(summary\.total_gross_eur\)/);
   assert.match(summary, /totalWithholding = Number\.isFinite\(summary\.total_withholding_eur\)/);
   assert.match(summary, /effectiveWithholding = Number\.isFinite\(summary\.effective_withholding_pct\)/);
@@ -25,11 +28,13 @@ test("groups the canonical dividend totals inside the accessible primary card", 
 
   for (const label of [
     "Total Dividends",
+    "Cash Dividends (Net)",
+    "Scrip Dividends (Economic Value)",
     "Total Gross",
     "Total Withholding",
     "Effective Withholding",
   ]) {
-    assert.match(primary, new RegExp(label));
+    assert.match(primary, new RegExp(escapeRegex(label)));
   }
 
   assert.match(primary, /totalGross == null \? "—" : eur\(totalGross\)/);
@@ -38,10 +43,11 @@ test("groups the canonical dividend totals inside the accessible primary card", 
     primary,
     /effectiveWithholding == null \? "—" : `\$\{effectiveWithholding\.toFixed\(2\)\}%`/,
   );
-  assert.doesNotMatch(primary, /<StatCard|cash_net|Cash Net|Rights/);
+  assert.match(primary, /Partial/);
+  assert.doesNotMatch(primary, /<StatCard|Rights/);
 });
 
-test("keeps exactly three existing metrics as sibling cards in their existing order", () => {
+test("shows scrip, total average, and cash YoC as the three sibling cards", () => {
   const cardsStart = summary.indexOf("const cards = [");
   const cardsEnd = summary.indexOf("];", cardsStart);
   const cards = summary.slice(cardsStart, cardsEnd);
@@ -50,9 +56,9 @@ test("keeps exactly three existing metrics as sibling cards in their existing or
   assert.equal((cards.match(/label:/g) ?? []).length, 3);
 
   const labels = [
-    "Dividend Count",
-    "Avg Monthly Net (last 12mo)",
-    "Portfolio Yield on Cost",
+    "Scrip Dividends",
+    "Avg Monthly Total (last 12mo)",
+    "Cash Yield on Cost",
   ];
   let previous = -1;
   for (const label of labels) {
@@ -60,12 +66,17 @@ test("keeps exactly three existing metrics as sibling cards in their existing or
     assert.ok(index > previous, `Expected ${label} after the prior sibling metric`);
     previous = index;
   }
+  assert.match(
+    cards,
+    /Fair value of shares less personal contributions and attributable fees/,
+  );
+  assert.doesNotMatch(cards, /Dividend Count|Avg Monthly Net|Portfolio Yield on Cost/);
 });
 
 test("uses responsive equal-height grids without nested card components", () => {
   assert.match(
     summary,
-    /grid items-stretch gap-4 lg:grid-cols-\[minmax\(0,1fr\)_minmax\(0,1\.5fr\)\]/,
+    /grid items-stretch gap-4 lg:grid-cols-\[minmax\(0,1\.5fr\)_minmax\(0,1fr\)\]/,
   );
   assert.match(summary, /grid grid-cols-1 items-stretch gap-4 sm:grid-cols-3/);
   assert.match(primary, /h-full/);

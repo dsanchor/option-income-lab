@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { RefreshCw, ChevronDown, ChevronRight } from "lucide-react";
 import { createCorporateAction, correctCorporateActionGroup, getFxRate } from "@/lib/portfolio-api";
 import type {
@@ -8,10 +8,13 @@ import type {
   CaEventType,
   CaLegType,
   CorporateActionCreateRequest,
+  CorporateActionCreateResponse,
   CorporateActionCorrectRequest,
+  CorporateActionCorrectResponse,
   CorporateActionLegRequest,
   CostBasisStatus,
   LedgerMovement,
+  ShareFmv,
   ShareFmvSource,
   ShareFmvFxSource,
 } from "@/types/portfolio";
@@ -112,6 +115,10 @@ export interface CaFormState {
   sa_notes: string;
   sa_fmv_enabled: boolean;
   sa_fmv_initially_present: boolean;
+  sa_fmv_initial_quantity: string;
+  sa_fmv_initial_payment_date: string;
+  sa_fmv_yahoo_refresh_requested: boolean;
+  sa_fmv_persisted: ShareFmv | null;
   sa_fmv_valuation_date: string;
   sa_fmv_currency: string;
   sa_fmv_amount: string;
@@ -178,6 +185,10 @@ const defaultState = (): CaFormState => ({
   sa_notes: "",
   sa_fmv_enabled: false,
   sa_fmv_initially_present: false,
+  sa_fmv_initial_quantity: "",
+  sa_fmv_initial_payment_date: "",
+  sa_fmv_yahoo_refresh_requested: false,
+  sa_fmv_persisted: null,
   sa_fmv_valuation_date: "",
   sa_fmv_currency: "EUR",
   sa_fmv_amount: "",
@@ -255,6 +266,10 @@ export function buildCaInitialState(legs: LedgerMovement[], representative: Ledg
     const fmv = saLeg.share_fmv;
     state.sa_fmv_enabled = Boolean(fmv);
     state.sa_fmv_initially_present = Boolean(fmv);
+    state.sa_fmv_initial_quantity = saLeg.quantity ?? "";
+    state.sa_fmv_initial_payment_date = saLeg.trade_date ?? "";
+    state.sa_fmv_yahoo_refresh_requested = false;
+    state.sa_fmv_persisted = fmv ?? null;
     state.sa_fmv_valuation_date = fmv?.valuation_date ?? "";
     state.sa_fmv_currency = fmv?.currency ?? "EUR";
     state.sa_fmv_amount = fmv?.amount ?? "";
@@ -603,6 +618,10 @@ function buildLegs(form: CaFormState): CorporateActionLegRequest[] {
 
   // SHARE_ACQUISITION leg
   if (ev === "DIVIDEND_WITH_SCRIP" || ev === "SCRIP_DIVIDEND") {
+    const requestYahooFmv =
+      form.sa_fmv_enabled &&
+      form.sa_fmv_source === "YAHOO_OPEN" &&
+      form.sa_fmv_yahoo_refresh_requested;
     legs.push({
       leg_type: "SHARE_ACQUISITION",
       trade_date: form.payment_date,
@@ -617,8 +636,11 @@ function buildLegs(form: CaFormState): CorporateActionLegRequest[] {
         form.currency,
         form.sa_fees_eur,
       ),
-      share_fmv: form.sa_fmv_enabled
-        ? buildManualShareFmv({
+      share_fmv: !form.sa_fmv_enabled
+        ? (form.sa_fmv_initially_present ? null : undefined)
+        : form.sa_fmv_source === "YAHOO_OPEN"
+          ? undefined
+          : buildManualShareFmv({
             enabled: true,
             valuationDate: form.sa_fmv_valuation_date,
             currency: form.sa_fmv_currency,
@@ -629,8 +651,8 @@ function buildLegs(form: CaFormState): CorporateActionLegRequest[] {
             fxRate: form.sa_fmv_fx_rate,
             fxDate: form.sa_fmv_fx_date,
             fxSource: form.sa_fmv_fx_source,
-          })
-        : (form.sa_fmv_initially_present ? null : undefined),
+          }),
+      share_fmv_instruction: requestYahooFmv ? { source: "YAHOO_OPEN" } : undefined,
       fx: makeFx(form.fx_rate, form.currency),
       notes: form.sa_notes || undefined,
     });
@@ -713,8 +735,24 @@ function validate(form: CaFormState): string | null {
       fxSource: form.sa_fmv_fx_source,
     });
     if (fmvError) return fmvError;
-    if (form.sa_fmv_enabled && form.sa_fmv_valuation_date !== form.payment_date) {
+    if (
+      form.sa_fmv_enabled &&
+      form.sa_fmv_source !== "YAHOO_OPEN" &&
+      form.sa_fmv_valuation_date !== form.payment_date
+    ) {
       return "Fair-value valuation date must match the payment date.";
+    }
+    if (
+      form.sa_fmv_enabled &&
+      form.sa_fmv_persisted?.source === "YAHOO_OPEN" &&
+      form.sa_fmv_source === "YAHOO_OPEN" &&
+      !form.sa_fmv_yahoo_refresh_requested &&
+      (
+        form.sa_quantity !== form.sa_fmv_initial_quantity ||
+        form.payment_date !== form.sa_fmv_initial_payment_date
+      )
+    ) {
+      return "Refresh, replace, or clear the Yahoo valuation after changing quantity or payment date.";
     }
   }
   if (ev === "SHARE_CONSOLIDATION") {
@@ -827,7 +865,7 @@ function ConsolidationSummaryPreview({ form }: { form: CaFormState }) {
 export interface CorporateActionFormProps {
   accounts: BrokerAccount[];
   securities: SecurityMaster[];
-  onSuccess: () => void;
+  onSuccess: (response?: CorporateActionCreateResponse | CorporateActionCorrectResponse) => void;
   /** "correct" mode: uses the group correction endpoint instead of create. */
   mode?: "create" | "correct";
   /** Required when mode === "correct". */
@@ -864,7 +902,14 @@ export default function CorporateActionForm({
   });
   const [correctionNote, setCorrectionNote] = useState("");
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{
+    message: string;
+    stage?: string;
+    retryable?: boolean;
+  } | null>(null);
+  const [resolvedShareFmv, setResolvedShareFmv] = useState<ShareFmv | null>(null);
+  const [clientRequestId] = useState(() => crypto.randomUUID());
+  const requestInFlight = useRef(false);
 
   const set = useCallback((patch: Partial<CaFormState>) => setForm((f) => ({ ...f, ...patch })), []);
 
@@ -886,16 +931,19 @@ export default function CorporateActionForm({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (requestInFlight.current) return;
     const errMsg = validate(form);
-    if (errMsg) { setError(errMsg); return; }
+    if (errMsg) { setError({ message: errMsg }); return; }
     if (isCorrect && !correctionNote.trim()) {
-      setError("A correction note is required.");
+      setError({ message: "A correction note is required." });
       return;
     }
 
+    requestInFlight.current = true;
     setSaving(true);
     setError(null);
     try {
+      let response: CorporateActionCreateResponse | CorporateActionCorrectResponse;
       if (isCorrect && caGroupId) {
         const request: CorporateActionCorrectRequest = {
           account_id: form.account_id || "_unassigned",
@@ -904,9 +952,10 @@ export default function CorporateActionForm({
           security_id: form.security_id || undefined,
           payment_date: form.payment_date || undefined,
           notes: form.notes || undefined,
+          client_request_id: clientRequestId,
           legs: buildLegs(form),
         };
-        await correctCorporateActionGroup(caGroupId, request);
+        response = await correctCorporateActionGroup(caGroupId, request);
       } else {
         const request: CorporateActionCreateRequest = {
           event_type: form.event_type,
@@ -915,21 +964,45 @@ export default function CorporateActionForm({
           payment_date: form.payment_date,
           ex_dividend_date: form.ex_dividend_date || undefined,
           notes: form.notes || undefined,
+          client_request_id: clientRequestId,
           legs: buildLegs(form),
         };
-        await createCorporateAction(request);
+        response = await createCorporateAction(request);
       }
-      onSuccess();
+      const resolved = response.movements.find(
+        (movement) => movement.ca_leg_type === "SHARE_ACQUISITION",
+      )?.share_fmv ?? null;
+      setResolvedShareFmv(resolved);
+      onSuccess(response);
     } catch (err) {
-      const e = err as { data?: { detail?: string } };
-      setError(e.data?.detail ?? (err instanceof Error ? err.message : isCorrect ? "Group correction failed." : "Failed to create corporate action."));
+      const apiError = err as {
+        data?: {
+          detail?: string;
+          error?: string;
+          stage?: string;
+          retryable?: boolean;
+        };
+      };
+      setError({
+        message:
+          apiError.data?.detail ??
+          (err instanceof Error
+            ? err.message
+            : isCorrect
+              ? "Group correction failed."
+              : "Failed to create corporate action."),
+        stage: apiError.data?.stage,
+        retryable: apiError.data?.retryable,
+      });
     } finally {
+      requestInFlight.current = false;
       setSaving(false);
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-4" aria-busy={saving}>
+      <fieldset disabled={saving} className="space-y-4 disabled:cursor-wait">
       {/* ── Correction note (correction mode only) ── */}
       {isCorrect && (
         <div>
@@ -1385,24 +1458,29 @@ export default function CorporateActionForm({
                     <label className={labelCls}>Source *</label>
                     <select
                       value={form.sa_fmv_source}
-                      onChange={(e) => set({ sa_fmv_source: e.target.value as ShareFmvSource })}
+                      onChange={(e) => {
+                        const source = e.target.value as ShareFmvSource;
+                        set({
+                          sa_fmv_source: source,
+                          sa_fmv_yahoo_refresh_requested: source === "YAHOO_OPEN",
+                        });
+                      }}
                       className={inputCls}
                     >
                       <option value="OFFICIAL_NOTICE">Official notice</option>
                       <option value="BROKER">Broker</option>
                       <option value="MANUAL">Manual</option>
-                      {form.sa_fmv_source === "YAHOO_OPEN" && (
-                        <option value="YAHOO_OPEN" disabled>Yahoo Open (inherited)</option>
-                      )}
+                      <option value="YAHOO_OPEN">Yahoo Finance — Open on/after payment date</option>
                     </select>
                   </div>
+                  {form.sa_fmv_source !== "YAHOO_OPEN" && (
+                    <>
                   <div>
                     <label className={labelCls}>Valuation date *</label>
                     <input
                       type="date"
                       value={form.sa_fmv_valuation_date}
                       onChange={(e) => set({ sa_fmv_valuation_date: e.target.value })}
-                      disabled={form.sa_fmv_source === "YAHOO_OPEN"}
                       className={inputCls}
                     />
                   </div>
@@ -1412,7 +1490,6 @@ export default function CorporateActionForm({
                       type="text"
                       value={form.sa_fmv_currency}
                       onChange={(e) => set({ sa_fmv_currency: e.target.value.toUpperCase() })}
-                      disabled={form.sa_fmv_source === "YAHOO_OPEN"}
                       maxLength={3}
                       placeholder="EUR"
                       className={inputCls}
@@ -1426,7 +1503,6 @@ export default function CorporateActionForm({
                       min="0"
                       value={form.sa_fmv_amount}
                       onChange={(e) => set({ sa_fmv_amount: e.target.value })}
-                      disabled={form.sa_fmv_source === "YAHOO_OPEN"}
                       placeholder="Optional if price per share is entered"
                       className={inputCls}
                     />
@@ -1439,7 +1515,6 @@ export default function CorporateActionForm({
                       min="0"
                       value={form.sa_fmv_price_per_share}
                       onChange={(e) => set({ sa_fmv_price_per_share: e.target.value })}
-                      disabled={form.sa_fmv_source === "YAHOO_OPEN"}
                       placeholder="Optional if total is entered"
                       className={inputCls}
                     />
@@ -1450,7 +1525,6 @@ export default function CorporateActionForm({
                       type="text"
                       value={form.sa_fmv_reference}
                       onChange={(e) => set({ sa_fmv_reference: e.target.value })}
-                      disabled={form.sa_fmv_source === "YAHOO_OPEN"}
                       placeholder="Notice, statement, or note"
                       className={inputCls}
                     />
@@ -1465,7 +1539,6 @@ export default function CorporateActionForm({
                           min="0"
                           value={form.sa_fmv_fx_rate}
                           onChange={(e) => set({ sa_fmv_fx_rate: e.target.value })}
-                          disabled={form.sa_fmv_source === "YAHOO_OPEN"}
                           placeholder="0.000000000"
                           className={inputCls}
                         />
@@ -1476,7 +1549,6 @@ export default function CorporateActionForm({
                           type="date"
                           value={form.sa_fmv_fx_date}
                           onChange={(e) => set({ sa_fmv_fx_date: e.target.value })}
-                          disabled={form.sa_fmv_source === "YAHOO_OPEN"}
                           className={inputCls}
                         />
                       </div>
@@ -1487,7 +1559,6 @@ export default function CorporateActionForm({
                           onChange={(e) => set({
                             sa_fmv_fx_source: e.target.value as Exclude<ShareFmvFxSource, "IDENTITY">,
                           })}
-                          disabled={form.sa_fmv_source === "YAHOO_OPEN"}
                           className={inputCls}
                         >
                           <option value="ECB">ECB</option>
@@ -1497,10 +1568,44 @@ export default function CorporateActionForm({
                       </div>
                     </>
                   )}
+                    </>
+                  )}
                   {form.sa_fmv_source === "YAHOO_OPEN" && (
-                    <p className="sm:col-span-2 text-xs text-text-muted">
-                      This Yahoo valuation will be inherited unchanged. Choose a manual source to replace it, or clear the checkbox to remove it.
-                    </p>
+                    <div className="sm:col-span-2 space-y-2 rounded-[var(--radius)] border border-border bg-bg-input/40 p-3">
+                      {form.sa_fmv_persisted?.source === "YAHOO_OPEN" && (
+                        <div className="grid grid-cols-1 gap-1 text-xs text-text-muted sm:grid-cols-2">
+                          <span>Valuation date: <span className="font-mono text-text">{form.sa_fmv_persisted.valuation_date}</span></span>
+                          <span>Market session: <span className="font-mono text-text">{form.sa_fmv_persisted.provenance?.market_session_date ?? "—"}</span></span>
+                          <span>Price/share: <span className="font-mono text-text">{form.sa_fmv_persisted.price_per_share} {form.sa_fmv_persisted.currency}</span></span>
+                          <span>Price/share EUR: <span className="font-mono text-text">€{form.sa_fmv_persisted.price_per_share_eur}</span></span>
+                          <span>Total native: <span className="font-mono text-text">{form.sa_fmv_persisted.amount} {form.sa_fmv_persisted.currency}</span></span>
+                          <span>Total EUR: <span className="font-mono text-text">€{form.sa_fmv_persisted.eur_amount}</span></span>
+                          <span>FX: <span className="font-mono text-text">{form.sa_fmv_persisted.fx.rate} ({form.sa_fmv_persisted.fx.source})</span></span>
+                          <span>FX date: <span className="font-mono text-text">{form.sa_fmv_persisted.fx.date}</span></span>
+                          <span>Provider: <span className="text-text">{form.sa_fmv_persisted.provenance?.provider ?? "—"}</span></span>
+                          <span>Provider symbol: <span className="font-mono text-text">{form.sa_fmv_persisted.provenance?.provider_symbol ?? "—"}</span></span>
+                          <span>Price field: <span className="text-text">{form.sa_fmv_persisted.provenance?.price_field ?? "—"}</span></span>
+                          <span>Requested date: <span className="font-mono text-text">{form.sa_fmv_persisted.provenance?.requested_date ?? "—"}</span></span>
+                          <span>Fetched at: <span className="font-mono text-text">{form.sa_fmv_persisted.provenance?.fetched_at ?? "—"}</span></span>
+                          <span>Version: <span className="font-mono text-text">{form.sa_fmv_persisted.provenance?.script_version ?? "—"}</span></span>
+                          <span>Run ID: <span className="font-mono text-text">{form.sa_fmv_persisted.provenance?.run_id ?? "—"}</span></span>
+                        </div>
+                      )}
+                      <p className="text-xs text-text-muted">
+                        {form.sa_fmv_yahoo_refresh_requested
+                          ? "Se resolverá al guardar. No se enviarán precio, moneda ni FX desde el navegador."
+                          : "This persisted Yahoo valuation will be inherited unchanged unless you request a refresh."}
+                      </p>
+                      {form.sa_fmv_persisted?.source === "YAHOO_OPEN" && !form.sa_fmv_yahoo_refresh_requested && (
+                        <button
+                          type="button"
+                          onClick={() => set({ sa_fmv_yahoo_refresh_requested: true })}
+                          className="rounded-[var(--radius)] border border-border px-3 py-1 text-xs text-text hover:bg-bg-hover"
+                        >
+                          Refresh Yahoo valuation on save
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
@@ -1665,6 +1770,19 @@ export default function CorporateActionForm({
           </>
         )}
       </div>
+      </fieldset>
+
+      {resolvedShareFmv && (
+        <div className="rounded-[var(--radius)] border border-accent-green/40 bg-accent-green/10 px-3 py-2 text-sm">
+          <div className="font-medium text-accent-green">Yahoo fair value resolved</div>
+          <div className="mt-1 grid grid-cols-1 gap-1 text-xs text-text-muted sm:grid-cols-2">
+            <span>Date: <span className="font-mono text-text">{resolvedShareFmv.valuation_date}</span></span>
+            <span>Source: <span className="text-text">{resolvedShareFmv.source}</span></span>
+            <span>Total: <span className="font-mono text-text">{resolvedShareFmv.amount} {resolvedShareFmv.currency}</span></span>
+            <span>EUR: <span className="font-mono text-text">€{resolvedShareFmv.eur_amount}</span></span>
+          </div>
+        </div>
+      )}
 
       {/* ── Error ── */}
       {error && (
@@ -1672,7 +1790,22 @@ export default function CorporateActionForm({
           role="alert"
           className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-3 py-2 text-sm text-accent-red"
         >
-          {error}
+          <div className="font-medium">{error.message}</div>
+          {error.stage && (
+            <div className="mt-1 text-xs">
+              Stage: <span className="font-mono">{error.stage}</span>
+            </div>
+          )}
+          {error.retryable && (
+            <button
+              type="button"
+              onClick={(event) => event.currentTarget.form?.requestSubmit()}
+              disabled={saving}
+              className="mt-2 rounded-[var(--radius)] border border-accent-red/40 px-3 py-1 text-xs font-medium hover:bg-accent-red/10 disabled:opacity-50"
+            >
+              Retry
+            </button>
+          )}
         </div>
       )}
 
@@ -1684,7 +1817,9 @@ export default function CorporateActionForm({
           className="rounded-[var(--radius)] bg-accent-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
         >
           {saving
-            ? isCorrect ? "Replacing…" : "Recording…"
+            ? form.sa_fmv_enabled && form.sa_fmv_source === "YAHOO_OPEN"
+              ? "Fetching Yahoo Open and historical FX…"
+              : isCorrect ? "Replacing…" : "Recording…"
             : isCorrect ? "Replace entire group" : "Record corporate action"}
         </button>
       </div>

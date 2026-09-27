@@ -542,6 +542,7 @@ export interface CorporateActionLegRequest {
   fx?: { rate: string; rate_source: FxRateSource };
   cost_basis_status?: CostBasisStatus;       // SHARE_ACQUISITION only
   share_fmv?: ShareFmvInput | null;          // SHARE_ACQUISITION only
+  share_fmv_instruction?: { source: "YAHOO_OPEN" }; // server resolves on save
   notes?: string;
   transfer_cost_basis_eur?: string;          // CONSOLIDATION_IN only
 }
@@ -554,6 +555,7 @@ export interface CorporateActionCreateRequest {
   payment_date: string;                      // REQUIRED; YYYY-MM-DD
   ex_dividend_date?: string;                 // optional
   notes?: string;                            // applied to all legs unless leg.notes set
+  client_request_id?: string;
   legs: CorporateActionLegRequest[];
 }
 
@@ -583,6 +585,7 @@ export interface CorporateActionCorrectRequest {
   security_id?: string;                 // inferred from original if omitted
   payment_date?: string;                // inferred from original if omitted
   notes?: string;
+  client_request_id?: string;
   legs: CorporateActionLegRequest[];
 }
 

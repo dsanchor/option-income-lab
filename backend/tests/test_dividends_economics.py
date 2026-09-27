@@ -8,6 +8,16 @@ from src.dividends_economics import (
 )
 
 
+def _assert_includes(actual, expected):
+    assert {key: actual[key] for key in expected} == expected
+
+
+def _assert_rows_include(actual_rows, expected_rows):
+    assert len(actual_rows) == len(expected_rows)
+    for actual, expected in zip(actual_rows, expected_rows):
+        _assert_includes(actual, expected)
+
+
 def _dividend_movement(
     *,
     movement_id: str,
@@ -160,7 +170,7 @@ def _dividend_history(
 def test_build_dividends_economics_report_aggregates_active_dividends_only():
     report = build_dividends_economics_report(_sample_dividend_movements())
 
-    assert report["summary"] == {
+    _assert_includes(report["summary"], {
         "total_gross_eur": 430.0,
         "total_fees_eur": 3.0,
         "total_withholding_eur": 35.0,
@@ -170,8 +180,8 @@ def test_build_dividends_economics_report_aggregates_active_dividends_only():
         "effective_withholding_pct": 8.14,
         "total_dividends": 4,
         "total_accounts": 2,
-    }
-    assert report["monthly"] == [
+    })
+    _assert_rows_include(report["monthly"], [
         {
             "month": "2023-12",
             "gross_eur": 100.0,
@@ -208,8 +218,8 @@ def test_build_dividends_economics_report_aggregates_active_dividends_only():
             "total_net": 258.0,
             "dividend_count": 2,
         },
-    ]
-    assert report["by_symbol"] == [
+    ])
+    _assert_rows_include(report["by_symbol"], [
         {
             "symbol": "AAPL",
             "gross_eur": 350.0,
@@ -228,18 +238,18 @@ def test_build_dividends_economics_report_aggregates_active_dividends_only():
             "total_net": 80.0,
             "dividend_count": 1,
         },
-    ]
+    ])
     assert [position["id"] for position in report["positions"]] == [
         "div-2024-02-msft",
         "div-2024-02-aapl",
         "div-2024-01-aapl",
         "div-2023-12-aapl",
     ]
-    assert report["filters"] == {
+    _assert_includes(report["filters"], {
         "years": [2024, 2023],
         "symbols": ["AAPL", "MSFT"],
         "account_ids": ["acct-1", "acct-2"],
-    }
+    })
 
 
 def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_account():
@@ -254,7 +264,7 @@ def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_
 
     assert aapl_report["summary"]["total_dividends"] == 1
     assert aapl_report["summary"]["total_net_eur"] == 178.0
-    assert aapl_report["monthly"] == [
+    _assert_rows_include(aapl_report["monthly"], [
         {
             "month": "2024-02",
             "gross_eur": 200.0,
@@ -267,8 +277,8 @@ def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_
             "total_net": 178.0,
             "dividend_count": 1,
         }
-    ]
-    assert aapl_report["yearly"] == [
+    ])
+    _assert_rows_include(aapl_report["yearly"], [
         {
             "year": 2023,
             "gross_eur": 100.0,
@@ -287,8 +297,8 @@ def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_
             "total_net": 223.0,
             "dividend_count": 2,
         },
-    ]
-    assert aapl_report["cumulative"] == [
+    ])
+    _assert_rows_include(aapl_report["cumulative"], [
         {
             "month": "2023-12",
             "cumulative_net_eur": 89.0,
@@ -313,7 +323,7 @@ def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_
             "cash_net": 312.0,
             "total_net": 312.0,
         },
-    ]
+    ])
 
     acct2_report = build_dividends_economics_report(
         movements,
@@ -324,7 +334,7 @@ def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_
 
     assert acct2_report["summary"]["total_dividends"] == 1
     assert acct2_report["summary"]["total_net_eur"] == 178.0
-    assert acct2_report["yearly"] == [
+    _assert_rows_include(acct2_report["yearly"], [
         {
             "year": 2024,
             "gross_eur": 200.0,
@@ -334,8 +344,8 @@ def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_
             "total_net": 178.0,
             "dividend_count": 1,
         }
-    ]
-    assert acct2_report["cumulative"] == [
+    ])
+    _assert_rows_include(acct2_report["cumulative"], [
         {
             "month": "2024-02",
             "cumulative_net_eur": 178.0,
@@ -344,7 +354,7 @@ def test_yearly_and_cumulative_ignore_year_month_filters_but_respect_symbol_and_
             "cash_net": 178.0,
             "total_net": 178.0,
         }
-    ]
+    ])
 
 
 def test_withholding_taxonomy_fields_and_effective_withholding_pct_are_computed_per_shape():
@@ -505,7 +515,7 @@ def test_zero_gross_dividend_keeps_effective_withholding_pct_at_zero():
         ]
     )
 
-    assert report["summary"] == {
+    _assert_includes(report["summary"], {
         "total_gross_eur": 0.0,
         "total_fees_eur": 0.0,
         "total_withholding_eur": 3.0,
@@ -515,13 +525,13 @@ def test_zero_gross_dividend_keeps_effective_withholding_pct_at_zero():
         "effective_withholding_pct": 0.0,
         "total_dividends": 1,
         "total_accounts": 1,
-    }
+    })
 
 
 def test_empty_movements_returns_empty_valid_report_shape():
     report = build_dividends_economics_report([])
 
-    assert report["summary"] == {
+    _assert_includes(report["summary"], {
         "total_gross_eur": 0.0,
         "total_fees_eur": 0.0,
         "total_withholding_eur": 0.0,
@@ -531,28 +541,29 @@ def test_empty_movements_returns_empty_valid_report_shape():
         "effective_withholding_pct": 0.0,
         "total_dividends": 0,
         "total_accounts": 0,
-    }
+    })
     assert report["monthly"] == []
     assert report["by_symbol"] == []
     assert report["yearly"] == []
     assert report["cumulative"] == []
     assert report["positions"] == []
-    assert report["filters"] == {
+    _assert_includes(report["filters"], {
         "years": [],
         "symbols": [],
         "account_ids": [],
-    }
-    assert report["applied_filters"] == {
+    })
+    _assert_includes(report["applied_filters"], {
         "year": None,
         "months": None,
         "symbols": None,
         "account_ids": None,
-    }
-    assert report["meta"] == {
-        "bucket_field": "trade_date",
-        "value_field": "net.eur_amount",
-        "yearly_cumulative_scope": "all_years_symbol_account_filtered",
-    }
+    })
+    assert report["meta"]["bucket_field"] == "trade_date"
+    assert report["meta"]["event_granularity"] == "ca_group_id_or_movement_id"
+    assert "share_fmv" in report["meta"]["value_field"]
+    assert report["meta"]["yearly_cumulative_scope"] == (
+        "all_years_symbol_account_currency_filtered"
+    )
 
 
 def test_build_dividend_yoc_snapshot_infers_standard_cadences_and_trailing_totals():

@@ -130,22 +130,41 @@ export type EconomicsSortKey =
   | "status"
   | "opened_at";
 
-export interface DividendsSummary {
+export type ScripValuationStatus =
+  | "COMPLETE"
+  | "PARTIAL"
+  | "UNAVAILABLE"
+  | "NOT_APPLICABLE";
+
+export interface ScripDividendCoverage {
+  scrip_dividends_eur: number | null;
+  total_dividends_eur: number;
+  total_dividends_is_partial: boolean;
+  scrip_valuation_status: ScripValuationStatus;
+  scrip_events_total: number;
+  scrip_events_valued: number;
+  scrip_events_unvalued: number;
+}
+
+export interface DividendsSummary extends ScripDividendCoverage {
   total_gross_eur: number;
   total_fees_eur: number;
   total_withholding_eur: number;
   total_net_eur: number;
-  cash_net?: number | null;
+  cash_net: number;
   /** Legacy response compatibility; stripped before rendering. */
   derechos_net?: number | null;
-  total_net?: number | null;
+  total_net: number;
   effective_withholding_pct: number;
   total_dividends: number;
   total_accounts: number;
   portfolio_yoc_pct?: number | null;
+  scrip_fmv_eur: number | null;
+  scrip_personal_contribution_eur: number | null;
+  scrip_attributable_fees_eur: number | null;
 }
 
-export interface DividendsMonthlyRow {
+export interface DividendsMonthlyRow extends ScripDividendCoverage {
   month: string;
   gross_eur: number;
   fees_eur: number;
@@ -153,22 +172,22 @@ export interface DividendsMonthlyRow {
   withholding_destination_eur: number;
   withholding_total_eur: number;
   net_eur: number;
-  cash_net?: number | null;
+  cash_net: number;
   /** Legacy response compatibility; stripped before rendering. */
   derechos_net?: number | null;
-  total_net?: number | null;
+  total_net: number;
   dividend_count: number;
 }
 
-export interface DividendsBySymbolRow {
+export interface DividendsBySymbolRow extends ScripDividendCoverage {
   symbol: string;
   gross_eur: number;
   withholding_total_eur: number;
   net_eur: number;
-  cash_net?: number | null;
+  cash_net: number;
   /** Legacy response compatibility; stripped before rendering. */
   derechos_net?: number | null;
-  total_net?: number | null;
+  total_net: number;
   dividend_count: number;
   yoc_pct?: number | null;
   yoc_basis?: "annualized" | "insufficient_history" | null;
@@ -177,29 +196,29 @@ export interface DividendsBySymbolRow {
   yoc_cost_basis_eur?: number | null;
 }
 
-export interface DividendsYearlyRow {
+export interface DividendsYearlyRow extends ScripDividendCoverage {
   year: number;
   gross_eur: number;
   withholding_eur: number;
   net_eur: number;
-  cash_net?: number | null;
+  cash_net: number;
   /** Legacy response compatibility; stripped before rendering. */
   derechos_net?: number | null;
-  total_net?: number | null;
+  total_net: number;
   dividend_count: number;
 }
 
-export interface DividendsCumulativeRow {
+export interface DividendsCumulativeRow extends ScripDividendCoverage {
   month: string;
   cumulative_net_eur: number;
-  cash_net?: number | null;
+  cash_net: number;
   /** Legacy response compatibility; stripped before rendering. */
   derechos_net?: number | null;
-  total_net?: number | null;
-  cumulative_cash_net_eur?: number | null;
+  total_net: number;
+  cumulative_cash_net_eur: number;
   /** Legacy response compatibility; stripped before rendering. */
   cumulative_derechos_net_eur?: number | null;
-  cumulative_total_net_eur?: number | null;
+  cumulative_total_net_eur: number;
 }
 
 export interface DividendPosition {
@@ -237,6 +256,7 @@ export interface DividendsFilters {
   years: number[];
   symbols: string[];
   account_ids: string[];
+  currencies: string[];
 }
 
 export interface DividendsAppliedFilters {
@@ -244,11 +264,13 @@ export interface DividendsAppliedFilters {
   months: number[] | null;
   symbols: string[] | null;
   account_ids: string[] | null;
+  currencies: string[] | null;
 }
 
 export interface DividendsMeta {
   bucket_field: string;
   value_field: string;
+  event_granularity?: string;
 }
 
 export interface DividendsReport {
@@ -268,9 +290,17 @@ export type EconomicsAggregatedSource = "options" | "dividends" | "both";
 export interface EconomicsAggregatedSummary {
   options_net_eur: number;
   dividends_net_eur: number;
-  dividends_cash_net_eur?: number;
+  dividends_cash_net_eur: number;
+  dividends_scrip_eur?: number | null;
   dividends_derechos_net_eur?: number;
   dividends_total_net_eur?: number;
+  dividends_total_is_partial?: boolean;
+  total_dividends_is_partial?: boolean;
+  dividends_scrip_valuation_status?: ScripValuationStatus;
+  scrip_valuation_status?: ScripValuationStatus;
+  scrip_events_total?: number;
+  scrip_events_valued?: number;
+  scrip_events_unvalued?: number;
   combined_net_eur: number;
   total_option_positions: number;
   options_coverage: EconomicsCoverage;
@@ -283,9 +313,17 @@ export interface EconomicsAggregatedMonthlyRow {
   month: string;
   options_net_eur: number;
   dividends_net_eur: number;
-  dividends_cash_net_eur?: number;
+  dividends_cash_net_eur: number;
+  dividends_scrip_eur?: number | null;
   dividends_derechos_net_eur?: number;
   dividends_total_net_eur?: number;
+  dividends_total_is_partial?: boolean;
+  total_dividends_is_partial?: boolean;
+  dividends_scrip_valuation_status?: ScripValuationStatus;
+  scrip_valuation_status?: ScripValuationStatus;
+  scrip_events_total?: number;
+  scrip_events_valued?: number;
+  scrip_events_unvalued?: number;
   combined_net_eur: number;
   option_positions: number;
   dividend_events: number;
@@ -295,9 +333,17 @@ export interface EconomicsAggregatedBySymbolRow {
   symbol: string;
   options_net_eur: number;
   dividends_net_eur: number;
-  dividends_cash_net_eur?: number;
+  dividends_cash_net_eur: number;
+  dividends_scrip_eur?: number | null;
   dividends_derechos_net_eur?: number;
   dividends_total_net_eur?: number;
+  dividends_total_is_partial?: boolean;
+  total_dividends_is_partial?: boolean;
+  dividends_scrip_valuation_status?: ScripValuationStatus;
+  scrip_valuation_status?: ScripValuationStatus;
+  scrip_events_total?: number;
+  scrip_events_valued?: number;
+  scrip_events_unvalued?: number;
   combined_net_eur: number;
   option_positions: number;
   dividend_events: number;

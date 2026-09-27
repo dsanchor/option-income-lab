@@ -33,6 +33,7 @@ import type {
   DividendsReport,
   DividendsSummary,
   DividendsYearlyRow,
+  ScripDividendCoverage,
 } from "@/types/economics";
 import {
   excludeUnsupportedRightsFromDividends,
@@ -66,7 +67,7 @@ const eur = (value: number | null | undefined) =>
     currency: "EUR",
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(Number(value || 0));
+  }).format(Number(value ?? 0));
 
 const nativeCurrency = (value: number | null | undefined, currencyCode: string | null | undefined) =>
   new Intl.NumberFormat("en-US", {
@@ -74,7 +75,7 @@ const nativeCurrency = (value: number | null | undefined, currencyCode: string |
     currency: currencyCode || "EUR",
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(Number(value || 0));
+  }).format(Number(value ?? 0));
 
 const signedColor = (value: number) => (value >= 0 ? "text-accent-green" : "text-accent-red");
 const amountOrZero = (value: number | null | undefined) => Number(value ?? 0);
@@ -90,6 +91,25 @@ function formatMonthLabel(value: string) {
 function parseYearMonth(value: string) {
   const [year, month] = value.split("-");
   return { year: Number(year), month: Number(month) };
+}
+
+function readInitialDividendFilters() {
+  const fallbackYear = String(new Date().getFullYear());
+  if (typeof window === "undefined") {
+    return {
+      year: fallbackYear,
+      months: [] as string[],
+      symbols: [] as string[],
+      accountIds: [] as string[],
+    };
+  }
+  const params = new URLSearchParams(window.location.search);
+  return {
+    year: params.get("year") ?? fallbackYear,
+    months: params.get("month")?.split(",").filter(Boolean) ?? [],
+    symbols: params.get("symbol")?.split(",").filter(Boolean) ?? [],
+    accountIds: params.get("account_id")?.split(",").filter(Boolean) ?? [],
+  };
 }
 
 function compareValues(a: unknown, b: unknown): number {
@@ -110,6 +130,7 @@ type DividendsNetRow = {
   net_eur: number;
   cash_net?: number | null;
   total_net?: number | null;
+  total_dividends_eur?: number;
 };
 
 function getCashNet(row: DividendsNetRow) {
@@ -117,13 +138,39 @@ function getCashNet(row: DividendsNetRow) {
 }
 
 function getTotalNet(row: DividendsNetRow) {
-  return getCashNet(row);
+  return amountOrZero(row.total_dividends_eur ?? row.total_net ?? row.net_eur);
 }
 
 function getCumulativeTotalNet(row: DividendsCumulativeRow) {
   return amountOrZero(
-    row.cumulative_cash_net_eur ?? row.cumulative_total_net_eur ?? row.cumulative_net_eur,
+    row.cumulative_total_net_eur ?? row.total_net ?? row.cumulative_net_eur,
   );
+}
+
+function scripCoverageTitle(row: Pick<
+  ScripDividendCoverage,
+  "scrip_valuation_status" | "scrip_events_total" | "scrip_events_valued" | "scrip_events_unvalued"
+>) {
+  if (row.scrip_valuation_status === "NOT_APPLICABLE") return "No scrip dividend events in scope";
+  return `${row.scrip_events_valued} of ${row.scrip_events_total} scrip events valued${
+    row.scrip_events_unvalued ? `; ${row.scrip_events_unvalued} unavailable` : ""
+  }`;
+}
+
+function PartialBadge({ coverage }: { coverage: ScripDividendCoverage }) {
+  if (!coverage.total_dividends_is_partial) return null;
+  return (
+    <span
+      className="rounded-[var(--radius-pill)] border border-accent-orange/40 bg-accent-orange/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-orange"
+      title={scripCoverageTitle(coverage)}
+    >
+      Partial
+    </span>
+  );
+}
+
+function NullableAmount({ value }: { value: number | null | undefined }) {
+  return value == null || !Number.isFinite(value) ? <span className="text-text-muted">—</span> : <>{eur(value)}</>;
 }
 
 function resolveDividendSortValue(
@@ -161,6 +208,8 @@ function ChartTooltip({
 
 function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: DividendsMonthlyRow[] }) {
   const netDividendsReceived = getNetDividendsReceived(summary);
+  const cashDividends = summary.cash_net ?? summary.total_net_eur;
+  const scripDividends = summary.scrip_dividends_eur;
   const totalGross = Number.isFinite(summary.total_gross_eur) ? summary.total_gross_eur : undefined;
   const totalWithholding = Number.isFinite(summary.total_withholding_eur)
     ? summary.total_withholding_eur
@@ -170,9 +219,18 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
     : undefined;
   const avgLast12 = averageLastNExcludingZero(monthly.map((row) => getTotalNet(row)), 12);
   const cards = [
-    { label: "Dividend Count", value: summary.total_dividends ?? 0, suffix: "", decimals: 0, tone: "purple" as const },
     {
-      label: "Avg Monthly Net (last 12mo)",
+      label: "Scrip Dividends",
+      value: scripDividends ?? undefined,
+      prefix: "€",
+      suffix: "",
+      decimals: 2,
+      tone: ((scripDividends ?? 0) >= 0 ? "purple" : "red") as "purple" | "red",
+      hint: "Fair value of shares less personal contributions and attributable fees",
+      tooltip: scripCoverageTitle(summary),
+    },
+    {
+      label: "Avg Monthly Total (last 12mo)",
       value: avgLast12 ?? undefined,
       prefix: "€",
       suffix: "",
@@ -181,7 +239,7 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
       hint: "Months with no activity are excluded from the average",
     },
     {
-      label: "Portfolio Yield on Cost",
+      label: "Cash Yield on Cost",
       value: summary.portfolio_yoc_pct ?? undefined,
       prefix: "",
       suffix: "%",
@@ -193,7 +251,7 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
 
   return (
     <div
-      className="grid items-stretch gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]"
+      className="grid items-stretch gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]"
       data-testid="dividends-summary-grid"
     >
       <Reveal index={0} className="h-full">
@@ -207,8 +265,11 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
             style={{ background: "var(--grad-green)" }}
             aria-hidden
           />
-          <div id="total-dividends-label" className="text-xs uppercase tracking-wide text-text-muted">
-            Total Dividends
+          <div className="flex items-center gap-2">
+            <div id="total-dividends-label" className="text-xs uppercase tracking-wide text-text-muted">
+              Total Dividends
+            </div>
+            <PartialBadge coverage={summary} />
           </div>
           <div
             className={`mt-2 font-mono text-3xl font-semibold tracking-tight ${
@@ -220,7 +281,33 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
           >
             {netDividendsReceived == null ? "—" : eur(netDividendsReceived)}
           </div>
-          <dl className="mt-5 grid grid-cols-1 divide-y divide-border border-t border-border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+          <dl className="mt-5 grid grid-cols-1 divide-y divide-border border-t border-border sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+            <div className="py-3 sm:px-3 sm:first:pl-0">
+              <dt
+                className="text-[11px] uppercase tracking-wide text-text-muted"
+                aria-label="Cash Dividends Net"
+              >
+                Cash Dividends (Net)
+              </dt>
+              <dd className={`mt-1 font-mono text-sm font-medium ${signedColor(cashDividends)}`}>
+                {eur(cashDividends)}
+              </dd>
+            </div>
+            <div className="py-3 sm:px-3 sm:last:pr-0" title={scripCoverageTitle(summary)}>
+              <dt
+                className="text-[11px] uppercase tracking-wide text-text-muted"
+                aria-label="Scrip Dividends Economic Value"
+              >
+                Scrip Dividends (Economic Value)
+              </dt>
+              <dd className={`mt-1 font-mono text-sm font-medium ${
+                scripDividends == null ? "text-text-muted" : signedColor(scripDividends)
+              }`}>
+                <NullableAmount value={scripDividends} />
+              </dd>
+            </div>
+          </dl>
+          <dl className="grid grid-cols-1 divide-y divide-border border-t border-border sm:grid-cols-3 sm:divide-x sm:divide-y-0">
             <div className="py-3 sm:px-3 sm:first:pl-0">
               <dt className="text-[11px] uppercase tracking-wide text-text-muted">Total Gross</dt>
               <dd className={`mt-1 font-mono text-sm font-medium ${
@@ -249,7 +336,7 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
         </section>
       </Reveal>
       <div
-        className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-3"
+        className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-3 lg:grid-cols-1"
         data-testid="dividends-sibling-cards"
       >
         {cards.map((card, index) => (
@@ -262,6 +349,7 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
               decimals={card.decimals}
               tone={card.tone}
               hint={"hint" in card ? card.hint : undefined}
+              tooltip={"tooltip" in card ? card.tooltip : undefined}
             />
           </Reveal>
         ))}
@@ -280,20 +368,22 @@ function MonthlySection({ rows }: { rows: DividendsMonthlyRow[] }) {
         </span>
       </div>
       <div className="overflow-x-auto border-t border-border">
-        <table className="w-full min-w-[980px] text-sm">
+        <table className="w-full min-w-[1160px] text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
               <th className="px-3 py-2 font-medium">Month</th>
               <th className="px-3 py-2 text-right font-medium">Gross</th>
               <th className="px-3 py-2 text-right font-medium">Withholding</th>
-              <th className="px-3 py-2 text-right font-medium">Total Net</th>
+              <th className="px-3 py-2 text-right font-medium">Cash Dividends</th>
+              <th className="px-3 py-2 text-right font-medium">Scrip Dividends</th>
+              <th className="px-3 py-2 text-right font-medium">Total Dividends</th>
               <th className="px-3 py-2 text-right font-medium">Dividend Count</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-text-muted">
+                <td colSpan={7} className="px-3 py-6 text-center text-text-muted">
                   No dividends match the selected filters.
                 </td>
               </tr>
@@ -303,7 +393,18 @@ function MonthlySection({ rows }: { rows: DividendsMonthlyRow[] }) {
                 <td className="px-3 py-2">{formatMonthLabel(row.month)}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.gross_eur)}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_total_eur)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(getTotalNet(row))}`}>{eur(getTotalNet(row))}</td>
+                <td className={`px-3 py-2 text-right font-mono ${signedColor(getCashNet(row))}`}>{eur(getCashNet(row))}</td>
+                <td className={`px-3 py-2 text-right font-mono ${
+                  row.scrip_dividends_eur == null ? "text-text-muted" : signedColor(row.scrip_dividends_eur)
+                }`} title={scripCoverageTitle(row)}>
+                  <NullableAmount value={row.scrip_dividends_eur} />
+                </td>
+                <td className={`px-3 py-2 text-right font-mono ${signedColor(getTotalNet(row))}`}>
+                  <span className="inline-flex items-center justify-end gap-2">
+                    {eur(getTotalNet(row))}
+                    <PartialBadge coverage={row} />
+                  </span>
+                </td>
                 <td className="px-3 py-2 text-right font-mono">{row.dividend_count}</td>
               </tr>
             ))}
@@ -316,16 +417,18 @@ function MonthlySection({ rows }: { rows: DividendsMonthlyRow[] }) {
 
 type DividendsBySymbolKey = keyof Pick<
   DividendsBySymbolRow,
-  "symbol" | "gross_eur" | "withholding_total_eur" | "net_eur" | "total_net" | "dividend_count" | "yoc_pct"
+  "symbol" | "gross_eur" | "withholding_total_eur" | "net_eur" | "scrip_dividends_eur" | "total_net" | "dividend_count" | "yoc_pct"
 >;
 
 const BY_SYMBOL_COLS: { key: DividendsBySymbolKey; label: string; num?: boolean }[] = [
   { key: "symbol", label: "Symbol" },
   { key: "gross_eur", label: "Gross", num: true },
   { key: "withholding_total_eur", label: "Withholding", num: true },
-  { key: "total_net", label: "Total Net", num: true },
+  { key: "net_eur", label: "Cash Dividends", num: true },
+  { key: "scrip_dividends_eur", label: "Scrip Dividends", num: true },
+  { key: "total_net", label: "Total Dividends", num: true },
   { key: "dividend_count", label: "Dividend Count", num: true },
-  { key: "yoc_pct", label: "YoC", num: true },
+  { key: "yoc_pct", label: "Cash YoC", num: true },
 ];
 
 function yocLabel(row: Pick<DividendsBySymbolRow, "yoc_pct" | "yoc_basis" | "yoc_dividend_frequency">) {
@@ -376,7 +479,7 @@ function BySymbolSection({ rows }: { rows: DividendsBySymbolRow[] }) {
         </span>
       </div>
       <div className="overflow-x-auto border-t border-border">
-        <table className="w-full min-w-[820px] text-sm">
+        <table className="w-full min-w-[1080px] text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
               {BY_SYMBOL_COLS.map((column) => (
@@ -394,7 +497,7 @@ function BySymbolSection({ rows }: { rows: DividendsBySymbolRow[] }) {
           <tbody>
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-3 py-6 text-center text-text-muted">
+                <td colSpan={8} className="px-3 py-6 text-center text-text-muted">
                   No symbol-level dividends available.
                 </td>
               </tr>
@@ -406,7 +509,18 @@ function BySymbolSection({ rows }: { rows: DividendsBySymbolRow[] }) {
                 <td className="px-3 py-2 font-semibold">{row.symbol}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.gross_eur)}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_total_eur)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(getTotalNet(row))}`}>{eur(getTotalNet(row))}</td>
+                <td className={`px-3 py-2 text-right font-mono ${signedColor(getCashNet(row))}`}>{eur(getCashNet(row))}</td>
+                <td className={`px-3 py-2 text-right font-mono ${
+                  row.scrip_dividends_eur == null ? "text-text-muted" : signedColor(row.scrip_dividends_eur)
+                }`} title={scripCoverageTitle(row)}>
+                  <NullableAmount value={row.scrip_dividends_eur} />
+                </td>
+                <td className={`px-3 py-2 text-right font-mono ${signedColor(getTotalNet(row))}`}>
+                  <span className="inline-flex items-center justify-end gap-2">
+                    {eur(getTotalNet(row))}
+                    <PartialBadge coverage={row} />
+                  </span>
+                </td>
                 <td className="px-3 py-2 text-right font-mono">{row.dividend_count}</td>
                 <td className="px-3 py-2 text-right font-mono text-text-muted" title={yoc.title}>
                   {yoc.text}
@@ -423,14 +537,16 @@ function BySymbolSection({ rows }: { rows: DividendsBySymbolRow[] }) {
 
 type DividendsYearlyKey = keyof Pick<
   DividendsYearlyRow,
-  "year" | "gross_eur" | "withholding_eur" | "net_eur" | "total_net" | "dividend_count"
+  "year" | "gross_eur" | "withholding_eur" | "net_eur" | "scrip_dividends_eur" | "total_net" | "dividend_count"
 >;
 
 const BY_YEAR_COLS: { key: DividendsYearlyKey; label: string; num?: boolean }[] = [
   { key: "year", label: "Year" },
   { key: "gross_eur", label: "Gross", num: true },
   { key: "withholding_eur", label: "Withholding", num: true },
-  { key: "total_net", label: "Total Net", num: true },
+  { key: "net_eur", label: "Cash Dividends", num: true },
+  { key: "scrip_dividends_eur", label: "Scrip Dividends", num: true },
+  { key: "total_net", label: "Total Dividends", num: true },
   { key: "dividend_count", label: "Dividend Count", num: true },
 ];
 
@@ -466,7 +582,7 @@ function ByYearSection({ rows }: { rows: DividendsYearlyRow[] }) {
         </span>
       </div>
       <div className="overflow-x-auto border-t border-border">
-        <table className="w-full min-w-[820px] text-sm">
+        <table className="w-full min-w-[980px] text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
               {BY_YEAR_COLS.map((column) => (
@@ -484,7 +600,7 @@ function ByYearSection({ rows }: { rows: DividendsYearlyRow[] }) {
           <tbody>
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-text-muted">
+                <td colSpan={7} className="px-3 py-6 text-center text-text-muted">
                   No yearly dividend comparison data available.
                 </td>
               </tr>
@@ -494,7 +610,18 @@ function ByYearSection({ rows }: { rows: DividendsYearlyRow[] }) {
                 <td className="px-3 py-2 font-semibold">{row.year}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.gross_eur)}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_eur)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(getTotalNet(row))}`}>{eur(getTotalNet(row))}</td>
+                <td className={`px-3 py-2 text-right font-mono ${signedColor(getCashNet(row))}`}>{eur(getCashNet(row))}</td>
+                <td className={`px-3 py-2 text-right font-mono ${
+                  row.scrip_dividends_eur == null ? "text-text-muted" : signedColor(row.scrip_dividends_eur)
+                }`} title={scripCoverageTitle(row)}>
+                  <NullableAmount value={row.scrip_dividends_eur} />
+                </td>
+                <td className={`px-3 py-2 text-right font-mono ${signedColor(getTotalNet(row))}`}>
+                  <span className="inline-flex items-center justify-end gap-2">
+                    {eur(getTotalNet(row))}
+                    <PartialBadge coverage={row} />
+                  </span>
+                </td>
                 <td className="px-3 py-2 text-right font-mono">{row.dividend_count}</td>
               </tr>
             ))}
@@ -514,6 +641,9 @@ type YoyGrowthRow = {
   priorYearNet: number;
   pctChange: number | null;
   isPartialYear: boolean;
+  thisYearIsPartial: boolean;
+  priorYearIsPartial: boolean;
+  coverageTitle: string;
 };
 
 /** Number of fully-elapsed calendar months in `year` as of `now` (0-12). */
@@ -532,6 +662,13 @@ function sumNetThroughMonth(rows: DividendsMonthlyRow[], year: number, monthLimi
     .reduce((total, row) => total + getTotalNet(row), 0);
 }
 
+function rowsThroughMonth(rows: DividendsMonthlyRow[], year: number, monthLimit: number) {
+  return rows.filter((row) => {
+    const { year: rowYear, month } = parseYearMonth(row.month);
+    return rowYear === year && month <= monthLimit;
+  });
+}
+
 /**
  * Builds year-over-year total dividend growth rows (most recent year first).
  * The current calendar year is necessarily partial, so every comparison uses
@@ -547,9 +684,24 @@ function computeYoyGrowth(rows: DividendsMonthlyRow[]): YoyGrowthRow[] {
     if (!years.includes(priorYear)) continue;
     const monthsCompared = Math.min(completeMonthsForYear(year, now), completeMonthsForYear(priorYear, now));
     if (monthsCompared <= 0) continue;
-    const thisYearNet = sumNetThroughMonth(rows, year, monthsCompared);
-    const priorYearNet = sumNetThroughMonth(rows, priorYear, monthsCompared);
-    const pctChange = priorYearNet !== 0 ? ((thisYearNet - priorYearNet) / Math.abs(priorYearNet)) * 100 : null;
+    const thisYearRows = rowsThroughMonth(rows, year, monthsCompared);
+    const priorYearRows = rowsThroughMonth(rows, priorYear, monthsCompared);
+    const thisYearNet = sumNetThroughMonth(thisYearRows, year, monthsCompared);
+    const priorYearNet = sumNetThroughMonth(priorYearRows, priorYear, monthsCompared);
+    const thisYearIsPartial = thisYearRows.some((row) => row.total_dividends_is_partial);
+    const priorYearIsPartial = priorYearRows.some((row) => row.total_dividends_is_partial);
+    const pctChange =
+      !thisYearIsPartial && !priorYearIsPartial && priorYearNet !== 0
+        ? ((thisYearNet - priorYearNet) / Math.abs(priorYearNet)) * 100
+        : null;
+    const valued = [...thisYearRows, ...priorYearRows].reduce(
+      (total, row) => total + row.scrip_events_valued,
+      0,
+    );
+    const events = [...thisYearRows, ...priorYearRows].reduce(
+      (total, row) => total + row.scrip_events_total,
+      0,
+    );
     result.push({
       year,
       priorYear,
@@ -558,6 +710,9 @@ function computeYoyGrowth(rows: DividendsMonthlyRow[]): YoyGrowthRow[] {
       priorYearNet,
       pctChange,
       isPartialYear: monthsCompared < 12,
+      thisYearIsPartial,
+      priorYearIsPartial,
+      coverageTitle: `${valued} of ${events} scrip events valued across both periods`,
     });
   }
   return result;
@@ -603,6 +758,14 @@ function YoyGrowthSection({ rows }: { rows: DividendsMonthlyRow[] }) {
                   {row.isPartialYear && (
                     <span className="ml-2 rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-[10px] font-normal uppercase tracking-wide text-text-muted">
                       YTD
+                    </span>
+                  )}
+                  {(row.thisYearIsPartial || row.priorYearIsPartial) && (
+                    <span
+                      className="ml-2 rounded-[var(--radius-pill)] border border-accent-orange/40 bg-accent-orange/10 px-2 py-0.5 text-[10px] font-normal uppercase tracking-wide text-accent-orange"
+                      title={row.coverageTitle}
+                    >
+                      Partial
                     </span>
                   )}
                 </td>
@@ -772,7 +935,7 @@ type DividendSortKey =
   | "symbol"
   | "gross_eur"
   | "withholding_total_eur"
-  | "total_net";
+  | "net_eur";
 
 const POSITION_COLS: {
   key:
@@ -796,7 +959,7 @@ const POSITION_COLS: {
   { key: "withholding_source_eur", label: "Withholding Src", num: true },
   { key: "withholding_destination_eur", label: "Withholding Dest", num: true },
   { key: "withholding_total_eur", label: "Withholding Total", num: true, sortable: true },
-  { key: "total_net", label: "Total EUR", num: true, sortable: true },
+  { key: "net_eur", label: "Cash Net EUR", num: true, sortable: true },
 ];
 
 function DividendsDetail({ rows, accounts }: { rows: DividendPosition[]; accounts: BrokerAccount[] }) {
@@ -868,7 +1031,7 @@ function DividendsDetail({ rows, accounts }: { rows: DividendPosition[]; account
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_source_eur)}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_destination_eur)}</td>
                 <td className="px-3 py-2 text-right font-mono">{eur(row.withholding_total_eur)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(getTotalNet(row))}`}>{eur(getTotalNet(row))}</td>
+                <td className={`px-3 py-2 text-right font-mono ${signedColor(getCashNet(row))}`}>{eur(getCashNet(row))}</td>
               </tr>
             ))}
           </tbody>
@@ -879,26 +1042,17 @@ function DividendsDetail({ rows, accounts }: { rows: DividendPosition[]; account
 }
 
 export default function DividendsView() {
-  const [year, setYear] = useState<string>("");
-  const [months, setMonths] = useState<string[]>([]);
-  const [symbols, setSymbols] = useState<string[]>([]);
-  const [accountIds, setAccountIds] = useState<string[]>([]);
+  const [initialFilters] = useState(readInitialDividendFilters);
+  const [year, setYear] = useState<string>(initialFilters.year);
+  const [months, setMonths] = useState<string[]>(initialFilters.months);
+  const [symbols, setSymbols] = useState<string[]>(initialFilters.symbols);
+  const [accountIds, setAccountIds] = useState<string[]>(initialFilters.accountIds);
   const [data, setData] = useState<DividendsReport | null>(null);
   const [comparisonData, setComparisonData] = useState<DividendsReport | null>(null);
   const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
   const [selectedYoyYears, setSelectedYoyYears] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [initialized, setInitialized] = useState(false);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    setYear(params.get("year") ?? String(new Date().getFullYear()));
-    setMonths(params.get("month") ? params.get("month")!.split(",").filter(Boolean) : []);
-    setSymbols(params.get("symbol") ? params.get("symbol")!.split(",").filter(Boolean) : []);
-    setAccountIds(params.get("account_id") ? params.get("account_id")!.split(",").filter(Boolean) : []);
-    setInitialized(true);
-  }, []);
 
   useEffect(() => {
     listAccounts()
@@ -945,9 +1099,11 @@ export default function DividendsView() {
   }, [accountIds, months, symbols, year]);
 
   useEffect(() => {
-    if (!initialized) return;
-    fetchData();
-  }, [fetchData, initialized]);
+    const timeoutId = window.setTimeout(() => {
+      void fetchData();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [fetchData]);
 
   const yearOptions = data?.filters.years ?? [];
   const symbolOptions = (data?.filters.symbols ?? []).map((symbol) => ({ value: symbol, label: symbol }));
@@ -965,10 +1121,13 @@ export default function DividendsView() {
   );
 
   useEffect(() => {
-    setSelectedYoyYears((prev) => {
-      const stillValid = prev.size > 0 && Array.from(prev).every((y) => availableYoyYears.includes(y));
-      return stillValid ? prev : new Set(availableYoyYears);
-    });
+    const timeoutId = window.setTimeout(() => {
+      setSelectedYoyYears((prev) => {
+        const stillValid = prev.size > 0 && Array.from(prev).every((y) => availableYoyYears.includes(y));
+        return stillValid ? prev : new Set(availableYoyYears);
+      });
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [availableYoyYears]);
 
   function toggleYoyYear(yearValue: number) {

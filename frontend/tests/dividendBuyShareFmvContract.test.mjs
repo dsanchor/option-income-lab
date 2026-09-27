@@ -37,7 +37,7 @@ describe("Dividend · Buy share FMV types and request semantics", () => {
     assert.match(form, /sa_fmv_initially_present/);
     assert.match(
       form,
-      /share_fmv:\s*form\.sa_fmv_enabled[\s\S]*\?\s*buildManualShareFmv[\s\S]*:\s*[^,\n]*null/
+      /share_fmv:\s*!form\.sa_fmv_enabled[\s\S]*sa_fmv_initially_present\s*\?\s*null\s*:\s*undefined[\s\S]*buildManualShareFmv/
     );
   });
 

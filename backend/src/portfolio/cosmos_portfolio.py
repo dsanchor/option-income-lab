@@ -18,11 +18,13 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
+from copy import deepcopy
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal, DecimalException
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from azure.core import MatchConditions
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 
 from .models import (
@@ -42,6 +44,12 @@ from .rights_policy import (
     contains_legacy_rights_data,
     payload_requests_rights,
     sanitize_legacy_movement,
+)
+from .share_fmv_service import (
+    ShareFmvService,
+    YahooFmvError,
+    canonical_request_hash,
+    validate_yahoo_request,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,6 +89,14 @@ class InsufficientSharesError(Exception):
         self.available = available
         self.requested = requested
         super().__init__(f"Insufficient shares: available={available}, requested={requested}")
+
+
+class IdempotencyConflictError(Exception):
+    """Raised when a client request UUID is reused with different content."""
+
+
+class CorporateActionTransactionError(Exception):
+    """Raised when an atomic corporate-action transaction cannot commit."""
 
 
 def _clean(doc: dict) -> dict:
@@ -554,12 +570,14 @@ class CosmosPortfolioService:
         portfolio_container,
         import_sessions_container,
         symbols_container=None,
+        share_fmv_service=None,
     ) -> None:
         self.portfolio_container = portfolio_container
         self.import_sessions_container = import_sessions_container
         # Optional — used for best-effort ensure_symbol_config calls.
         # When None, ensure calls are logged as warnings and skipped.
         self.symbols_container = symbols_container
+        self.share_fmv_service = share_fmv_service
 
     @property
     def portfolio_available(self) -> bool:
@@ -1210,6 +1228,106 @@ class CosmosPortfolioService:
             "replacement": _clean(replacement),
         }
 
+    @staticmethod
+    def _corporate_action_idempotency_id(client_request_id: str) -> str:
+        return f"ca_request_{client_request_id.replace('-', '')}"
+
+    def _read_corporate_action_idempotency(
+        self,
+        account_id: str,
+        client_request_id: str,
+        request_hash: str,
+    ) -> Optional[Dict[str, Any]]:
+        doc_id = self._corporate_action_idempotency_id(client_request_id)
+        try:
+            record = self.portfolio_container.read_item(
+                item=doc_id, partition_key=account_id
+            )
+        except Exception as exc:
+            if exc.__class__.__name__ == "CosmosResourceNotFoundError":
+                return None
+            raise
+        if record.get("request_hash") != request_hash:
+            raise IdempotencyConflictError(
+                "client_request_id was already used with different request content"
+            )
+        response = record.get("response")
+        if not isinstance(response, dict):
+            raise CorporateActionTransactionError(
+                "idempotency record does not contain a valid response"
+            )
+        return deepcopy(response)
+
+    def _share_fmv_resolver(self) -> ShareFmvService:
+        if self.share_fmv_service is None:
+            self.share_fmv_service = ShareFmvService(self.symbols_container)
+        return self.share_fmv_service
+
+    def _resolve_yahoo_leg(
+        self,
+        leg: Dict[str, Any],
+        *,
+        security_id: str,
+        quantity: str,
+        trade_date: str,
+        client_request_id: str,
+    ) -> Dict[str, Any]:
+        resolved = self._share_fmv_resolver().resolve(
+            security_id=security_id,
+            quantity=quantity,
+            trade_date=trade_date,
+            run_id=client_request_id,
+        )
+        return resolved
+
+    def _execute_corporate_action_batch(
+        self,
+        *,
+        account_id: str,
+        create_docs: List[Dict[str, Any]],
+        response: Dict[str, Any],
+        client_request_id: str,
+        request_hash: str,
+        replace_docs: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        execute_batch = getattr(self.portfolio_container, "execute_item_batch", None)
+        if not callable(execute_batch):
+            raise CorporateActionTransactionError(
+                "Cosmos transactional batch is unavailable"
+            )
+        operations: list = [("create", (doc,)) for doc in create_docs]
+        for original in replace_docs or []:
+            options: Dict[str, Any] = {}
+            if original.get("_etag"):
+                options = {
+                    "etag": original["_etag"],
+                    "match_condition": MatchConditions.IfNotModified,
+                }
+            operation = ("replace", (original["id"], original), options)
+            operations.append(operation)
+        idempotency_doc = {
+            "id": self._corporate_action_idempotency_id(client_request_id),
+            "account_id": account_id,
+            "doc_type": "corporate_action_idempotency",
+            "client_request_id": client_request_id,
+            "request_hash": request_hash,
+            "response": response,
+            "created_at": self._now(),
+        }
+        operations.append(("create", (idempotency_doc,)))
+        try:
+            execute_batch(batch_operations=operations, partition_key=account_id)
+        except Exception as exc:
+            replay = self._read_corporate_action_idempotency(
+                account_id, client_request_id, request_hash
+            )
+            if replay is not None:
+                return replay
+            raise CorporateActionTransactionError(
+                "corporate-action transaction conflicted or failed"
+            ) from exc
+        return response
+
     def create_corporate_action(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Create a corporate-action group as linked ledger_txn documents.
 
@@ -1224,6 +1342,8 @@ class CosmosPortfolioService:
             payload_requests_rights(leg) for leg in request.get("legs") or []
         ):
             raise ValueError(RIGHTS_UNSUPPORTED_MESSAGE)
+        client_request_id = validate_yahoo_request(request)
+        request_hash = canonical_request_hash(request) if client_request_id else None
 
         event_type = request.get("event_type", "")
         if event_type not in _CA_REQUIRED_LEGS:
@@ -1236,6 +1356,12 @@ class CosmosPortfolioService:
             raise ValueError("security_id is required")
 
         account_id = request.get("account_id", "_unassigned")
+        if client_request_id:
+            replay = self._read_corporate_action_idempotency(
+                account_id, client_request_id, request_hash
+            )
+            if replay is not None:
+                return replay
         payment_date = request.get("payment_date", "")
         if not payment_date:
             raise ValueError("payment_date is required")
@@ -1259,6 +1385,16 @@ class CosmosPortfolioService:
         if invalid_legs:
             raise ValueError(f"Unknown leg_type(s): {sorted(invalid_legs)}")
         for leg in legs:
+            if "share_fmv_instruction" in leg and leg.get(
+                "share_fmv_instruction"
+            ) is not None and (
+                event_type not in {"SCRIP_DIVIDEND", "DIVIDEND_WITH_SCRIP"}
+                or leg.get("leg_type") != "SHARE_ACQUISITION"
+            ):
+                raise ValueError(
+                    "share_fmv_instruction is only valid on SHARE_ACQUISITION legs of "
+                    "SCRIP_DIVIDEND or DIVIDEND_WITH_SCRIP"
+                )
             if leg.get("share_fmv") is not None and (
                 event_type not in {"SCRIP_DIVIDEND", "DIVIDEND_WITH_SCRIP"}
                 or leg.get("leg_type") != "SHARE_ACQUISITION"
@@ -1403,6 +1539,17 @@ class CosmosPortfolioService:
                     quantity=quantity,
                     trade_date=trade_date,
                 )
+            elif (
+                leg_type == "SHARE_ACQUISITION"
+                and leg.get("share_fmv_instruction") is not None
+            ):
+                doc["share_fmv"] = self._resolve_yahoo_leg(
+                    leg,
+                    security_id=security_id,
+                    quantity=quantity,
+                    trade_date=trade_date,
+                    client_request_id=client_request_id,
+                )
 
             if leg_type == "CONSOLIDATION_IN":
                 doc["transfer_cost_basis_eur"] = str(transfer_cost_basis_eur)
@@ -1413,7 +1560,21 @@ class CosmosPortfolioService:
 
             docs_to_write.append(doc)
 
-        # All validation passed — write all legs.
+        response = {
+            "ca_group_id": ca_group_id,
+            "event_type": event_type,
+            "movements": [_clean(doc) for doc in docs_to_write],
+        }
+        if client_request_id:
+            return self._execute_corporate_action_batch(
+                account_id=account_id,
+                create_docs=docs_to_write,
+                response=response,
+                client_request_id=client_request_id,
+                request_hash=request_hash,
+            )
+
+        # Legacy non-Yahoo path retained for compatibility.
         created_movements = []
         for doc in docs_to_write:
             written = self.portfolio_container.upsert_item(doc)
@@ -1429,11 +1590,7 @@ class CosmosPortfolioService:
                 "ensure_symbol_config failed for corporate_action %s: %s", security_id, exc
             )
 
-        return {
-            "ca_group_id": ca_group_id,
-            "event_type": event_type,
-            "movements": created_movements,
-        }
+        return {**response, "movements": created_movements}
 
     def void_corporate_action_group(
         self, ca_group_id: str, account_id: str, reason: str = ""
@@ -1526,6 +1683,8 @@ class CosmosPortfolioService:
             payload_requests_rights(leg) for leg in request.get("legs") or []
         ):
             raise ValueError(RIGHTS_UNSUPPORTED_MESSAGE)
+        client_request_id = validate_yahoo_request(request)
+        request_hash = canonical_request_hash(request) if client_request_id else None
 
         correction_note = str(request.get("correction_note", "") or "").strip()
         if not correction_note:
@@ -1534,6 +1693,12 @@ class CosmosPortfolioService:
         account_id = str(request.get("account_id", "") or "").strip()
         if not account_id:
             raise ValueError("account_id is required")
+        if client_request_id:
+            replay = self._read_corporate_action_idempotency(
+                account_id, client_request_id, request_hash
+            )
+            if replay is not None:
+                return replay
 
         # ── 1. Load all active original legs ────────────────────────────────
         orig_conditions = [
@@ -1552,6 +1717,13 @@ class CosmosPortfolioService:
         if not original_legs:
             raise ValueError(
                 f"no_active_legs: No active legs found for ca_group_id {ca_group_id!r}"
+            )
+        if any(
+            str(original.get("account_id") or "").strip() != account_id
+            for original in original_legs
+        ):
+            raise ValueError(
+                "account_id does not match every active leg in the corporate-action group"
             )
 
         # ── 2. Validate replacement request ─────────────────────────────────
@@ -1719,7 +1891,15 @@ class CosmosPortfolioService:
             if txn_type == "BUY":
                 doc["cost_basis_status"] = cost_basis_status or "COMPLETE"
             if leg_type == "SHARE_ACQUISITION":
-                if "share_fmv" in leg:
+                if leg.get("share_fmv_instruction") is not None:
+                    doc["share_fmv"] = self._resolve_yahoo_leg(
+                        leg,
+                        security_id=security_id,
+                        quantity=quantity,
+                        trade_date=trade_date,
+                        client_request_id=client_request_id,
+                    )
+                elif "share_fmv" in leg:
                     if leg["share_fmv"] is not None:
                         doc["share_fmv"] = normalize_share_fmv(
                             leg["share_fmv"],
@@ -1768,6 +1948,30 @@ class CosmosPortfolioService:
                 doc["notes"] = leg_notes
 
             docs_to_write.append(doc)
+
+        response = {
+            "original_ca_group_id": ca_group_id,
+            "ca_group_id": new_ca_group_id,
+            "event_type": event_type,
+            "correction_note": correction_note,
+            "movements": [_clean(doc) for doc in docs_to_write],
+        }
+        if client_request_id:
+            superseded_originals = []
+            for original in original_legs:
+                updated = deepcopy(original)
+                updated["correction_status"] = "SUPERSEDED"
+                updated["superseded_by_ca_group_id"] = new_ca_group_id
+                updated["updated_at"] = now
+                superseded_originals.append(updated)
+            return self._execute_corporate_action_batch(
+                account_id=account_id,
+                create_docs=docs_to_write,
+                replace_docs=superseded_originals,
+                response=response,
+                client_request_id=client_request_id,
+                request_hash=request_hash,
+            )
 
         # ── Phase 1: Write replacement legs ─────────────────────────────────
         created_new: List[Dict[str, Any]] = []
@@ -1822,13 +2026,7 @@ class CosmosPortfolioService:
                 f"{phase2_exc}. Replacement legs deleted; original group intact."
             ) from phase2_exc
 
-        return {
-            "original_ca_group_id": ca_group_id,
-            "ca_group_id": new_ca_group_id,
-            "event_type": event_type,
-            "correction_note": correction_note,
-            "movements": created_new,
-        }
+        return {**response, "movements": created_new}
 
     def get_movements(
         self,

@@ -24,6 +24,7 @@ import type {
   EconomicsAggregatedMonthlyRow,
   EconomicsAggregatedReport,
   EconomicsAggregatedSummary,
+  ScripValuationStatus,
 } from "@/types/economics";
 import { excludeUnsupportedRightsFromEconomicsOverview } from "@/lib/rightsExclusion";
 
@@ -48,9 +49,55 @@ const eur = (value: number | null | undefined) =>
     currency: "EUR",
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(Number(value || 0));
+  }).format(Number(value ?? 0));
 
 const signedColor = (value: number) => (value >= 0 ? "text-accent-green" : "text-accent-red");
+
+type OverviewDividendCoverage = {
+  dividends_total_is_partial?: boolean;
+  total_dividends_is_partial?: boolean;
+  dividends_scrip_valuation_status?: ScripValuationStatus;
+  scrip_valuation_status?: ScripValuationStatus;
+  scrip_events_total?: number;
+  scrip_events_valued?: number;
+  scrip_events_unvalued?: number;
+};
+
+function dividendsTotal(row: { dividends_total_net_eur?: number; dividends_net_eur: number }) {
+  return row.dividends_total_net_eur ?? row.dividends_net_eur;
+}
+
+function dividendsCash(row: { dividends_cash_net_eur?: number; dividends_net_eur: number }) {
+  return row.dividends_cash_net_eur ?? row.dividends_net_eur;
+}
+
+function isPartial(row: OverviewDividendCoverage) {
+  return row.dividends_total_is_partial ?? row.total_dividends_is_partial ?? false;
+}
+
+function overviewCoverageTitle(row: OverviewDividendCoverage) {
+  const status = row.dividends_scrip_valuation_status ?? row.scrip_valuation_status;
+  if (status === "NOT_APPLICABLE") return "No scrip dividend events in scope";
+  return `${row.scrip_events_valued ?? 0} of ${row.scrip_events_total ?? 0} scrip events valued${
+    row.scrip_events_unvalued ? `; ${row.scrip_events_unvalued} unavailable` : ""
+  }`;
+}
+
+function PartialBadge({ coverage }: { coverage: OverviewDividendCoverage }) {
+  if (!isPartial(coverage)) return null;
+  return (
+    <span
+      className="rounded-[var(--radius-pill)] border border-accent-orange/40 bg-accent-orange/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-orange"
+      title={overviewCoverageTitle(coverage)}
+    >
+      Partial
+    </span>
+  );
+}
+
+function NullableAmount({ value }: { value: number | null | undefined }) {
+  return value == null || !Number.isFinite(value) ? <span className="text-text-muted">—</span> : <>{eur(value)}</>;
+}
 
 function formatMonthLabel(value: string) {
   const [year, month] = value.split("-");
@@ -121,11 +168,29 @@ function SummaryRow({ summary, monthly }: { summary: EconomicsAggregatedSummary;
       hint: `Coverage: ${coverageDisplay} linked`,
     },
     {
-      label: "Dividends Net Cash Flow",
-      value: summary.dividends_net_eur ?? 0,
+      label: "Dividends Cash (Net)",
+      value: dividendsCash(summary),
       prefix: "€",
       decimals: 2,
-      tone: ((summary.dividends_net_eur ?? 0) >= 0 ? "green" : "red") as "green" | "red",
+      tone: (dividendsCash(summary) >= 0 ? "green" : "red") as "green" | "red",
+    },
+    {
+      label: "Scrip Dividends",
+      value: summary.dividends_scrip_eur ?? undefined,
+      prefix: "€",
+      decimals: 2,
+      tone: ((summary.dividends_scrip_eur ?? 0) >= 0 ? "purple" : "red") as "purple" | "red",
+      hint: "Economic value",
+      tooltip: overviewCoverageTitle(summary),
+    },
+    {
+      label: "Dividends Total",
+      value: dividendsTotal(summary),
+      prefix: "€",
+      decimals: 2,
+      tone: (dividendsTotal(summary) >= 0 ? "green" : "red") as "green" | "red",
+      partial: isPartial(summary),
+      tooltip: overviewCoverageTitle(summary),
     },
     {
       label: "Combined Cash Flow",
@@ -133,9 +198,11 @@ function SummaryRow({ summary, monthly }: { summary: EconomicsAggregatedSummary;
       prefix: "€",
       decimals: 2,
       tone: ((summary.combined_net_eur ?? 0) >= 0 ? "purple" : "red") as "purple" | "red",
+      partial: isPartial(summary),
+      tooltip: overviewCoverageTitle(summary),
     },
     {
-      label: "Avg Monthly Net (last 12mo)",
+      label: "Avg Monthly Total (last 12mo)",
       value: avgLast12 ?? undefined,
       prefix: "€",
       decimals: 2,
@@ -143,7 +210,7 @@ function SummaryRow({ summary, monthly }: { summary: EconomicsAggregatedSummary;
       hint: "Months with no activity are excluded from the average",
     },
     {
-      label: "Portfolio Yield on Cost",
+      label: "Cash Yield on Cost",
       value: yoc ?? undefined,
       suffix: "%",
       decimals: 2,
@@ -153,9 +220,9 @@ function SummaryRow({ summary, monthly }: { summary: EconomicsAggregatedSummary;
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4 xl:grid-cols-5">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       {cards.map((card, index) => (
-        <Reveal key={card.label} index={index} className="h-full">
+        <Reveal key={card.label} index={index} className="relative h-full">
           <StatCard
             label={card.label}
             value={"value" in card ? card.value : undefined}
@@ -164,7 +231,13 @@ function SummaryRow({ summary, monthly }: { summary: EconomicsAggregatedSummary;
             suffix={"suffix" in card ? card.suffix : undefined}
             tone={card.tone}
             hint={"hint" in card ? card.hint : undefined}
+            tooltip={"tooltip" in card ? card.tooltip : undefined}
           />
+          {"partial" in card && card.partial && (
+            <span className="absolute right-4 top-4 z-10">
+              <PartialBadge coverage={summary} />
+            </span>
+          )}
         </Reveal>
       ))}
     </div>
@@ -203,7 +276,7 @@ function OverviewBarChart({
   fill,
 }: {
   rows: EconomicsAggregatedMonthlyRow[];
-  dataKey: "options_net_eur" | "dividends_net_eur";
+  dataKey: "options_net_eur" | "dividends_total_net_eur";
   title: string;
   fill: string;
 }) {
@@ -211,7 +284,7 @@ function OverviewBarChart({
 
   const chartData = rows.map((row) => ({
     label: formatMonthLabel(row.month),
-    value: row[dataKey],
+    value: dataKey === "dividends_total_net_eur" ? dividendsTotal(row) : row.options_net_eur,
   }));
 
   return (
@@ -258,12 +331,14 @@ function MonthlySection({ rows }: { rows: EconomicsAggregatedMonthlyRow[] }) {
         </span>
       </div>
       <div className="overflow-x-auto border-t border-border">
-        <table className="w-full min-w-[760px] text-sm">
+        <table className="w-full min-w-[1120px] text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
               <th className="px-3 py-2 font-medium">Month</th>
               <th className="px-3 py-2 text-right font-medium">Options Net (EUR)</th>
-              <th className="px-3 py-2 text-right font-medium">Dividends Net (EUR)</th>
+              <th className="px-3 py-2 text-right font-medium">Dividends Cash (EUR)</th>
+              <th className="px-3 py-2 text-right font-medium">Scrip Dividends (EUR)</th>
+              <th className="px-3 py-2 text-right font-medium">Dividends Total (EUR)</th>
               <th className="px-3 py-2 text-right font-medium">Combined Net (EUR)</th>
               <th className="px-3 py-2 text-right font-medium">Option Positions</th>
               <th className="px-3 py-2 text-right font-medium">Dividend Events</th>
@@ -272,7 +347,7 @@ function MonthlySection({ rows }: { rows: EconomicsAggregatedMonthlyRow[] }) {
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-3 py-6 text-center text-text-muted">
+                <td colSpan={8} className="px-3 py-6 text-center text-text-muted">
                   No economics rows match the selected filters.
                 </td>
               </tr>
@@ -281,8 +356,24 @@ function MonthlySection({ rows }: { rows: EconomicsAggregatedMonthlyRow[] }) {
               <tr key={row.month} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
                 <td className="px-3 py-2">{formatMonthLabel(row.month)}</td>
                 <td className={`px-3 py-2 text-right font-mono ${signedColor(row.options_net_eur)}`}>{eur(row.options_net_eur)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(row.dividends_net_eur)}`}>{eur(row.dividends_net_eur)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(row.combined_net_eur)}`}>{eur(row.combined_net_eur)}</td>
+                <td className={`px-3 py-2 text-right font-mono ${signedColor(dividendsCash(row))}`}>{eur(dividendsCash(row))}</td>
+                <td className={`px-3 py-2 text-right font-mono ${
+                  row.dividends_scrip_eur == null ? "text-text-muted" : signedColor(row.dividends_scrip_eur)
+                }`} title={overviewCoverageTitle(row)}>
+                  <NullableAmount value={row.dividends_scrip_eur} />
+                </td>
+                <td className={`px-3 py-2 text-right font-mono ${signedColor(dividendsTotal(row))}`}>
+                  <span className="inline-flex items-center justify-end gap-2">
+                    {eur(dividendsTotal(row))}
+                    <PartialBadge coverage={row} />
+                  </span>
+                </td>
+                <td className={`px-3 py-2 text-right font-mono ${signedColor(row.combined_net_eur)}`}>
+                  <span className="inline-flex items-center justify-end gap-2">
+                    {eur(row.combined_net_eur)}
+                    <PartialBadge coverage={row} />
+                  </span>
+                </td>
                 <td className="px-3 py-2 text-right font-mono">{row.option_positions}</td>
                 <td className="px-3 py-2 text-right font-mono">{row.dividend_events}</td>
               </tr>
@@ -296,13 +387,15 @@ function MonthlySection({ rows }: { rows: EconomicsAggregatedMonthlyRow[] }) {
 
 type BySymbolKey = keyof Pick<
   EconomicsAggregatedBySymbolRow,
-  "symbol" | "options_net_eur" | "dividends_net_eur" | "combined_net_eur" | "option_positions" | "dividend_events"
+  "symbol" | "options_net_eur" | "dividends_net_eur" | "dividends_cash_net_eur" | "dividends_scrip_eur" | "dividends_total_net_eur" | "combined_net_eur" | "option_positions" | "dividend_events"
 >;
 
 const BY_SYMBOL_COLS: { key: BySymbolKey; label: string; num?: boolean }[] = [
   { key: "symbol", label: "Symbol" },
   { key: "options_net_eur", label: "Options Net (EUR)", num: true },
-  { key: "dividends_net_eur", label: "Dividends Net (EUR)", num: true },
+  { key: "dividends_cash_net_eur", label: "Dividends Cash (EUR)", num: true },
+  { key: "dividends_scrip_eur", label: "Scrip Dividends (EUR)", num: true },
+  { key: "dividends_total_net_eur", label: "Dividends Total (EUR)", num: true },
   { key: "combined_net_eur", label: "Combined Net (EUR)", num: true },
   { key: "option_positions", label: "Option Positions", num: true },
   { key: "dividend_events", label: "Dividend Events", num: true },
@@ -315,6 +408,12 @@ function compareValues(left: unknown, right: unknown): number {
   return String(a).localeCompare(String(b));
 }
 
+function overviewSortValue(row: EconomicsAggregatedBySymbolRow, key: BySymbolKey) {
+  if (key === "dividends_cash_net_eur") return dividendsCash(row);
+  if (key === "dividends_total_net_eur") return dividendsTotal(row);
+  return row[key];
+}
+
 function BySymbolSection({ rows }: { rows: EconomicsAggregatedBySymbolRow[] }) {
   const [sortKey, setSortKey] = useState<BySymbolKey>("combined_net_eur");
   const [dir, setDir] = useState<"asc" | "desc">("desc");
@@ -322,7 +421,7 @@ function BySymbolSection({ rows }: { rows: EconomicsAggregatedBySymbolRow[] }) {
   const sorted = useMemo(
     () =>
       [...rows].sort((left, right) => {
-        const comparison = compareValues(left[sortKey], right[sortKey]);
+        const comparison = compareValues(overviewSortValue(left, sortKey), overviewSortValue(right, sortKey));
         return dir === "asc" ? comparison : -comparison;
       }),
     [dir, rows, sortKey],
@@ -345,7 +444,7 @@ function BySymbolSection({ rows }: { rows: EconomicsAggregatedBySymbolRow[] }) {
         </span>
       </div>
       <div className="overflow-x-auto border-t border-border">
-        <table className="w-full min-w-[820px] text-sm">
+        <table className="w-full min-w-[1120px] text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
               {BY_SYMBOL_COLS.map((column) => (
@@ -363,7 +462,7 @@ function BySymbolSection({ rows }: { rows: EconomicsAggregatedBySymbolRow[] }) {
           <tbody>
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-3 py-6 text-center text-text-muted">
+                <td colSpan={8} className="px-3 py-6 text-center text-text-muted">
                   No symbol-level economics available.
                 </td>
               </tr>
@@ -372,8 +471,24 @@ function BySymbolSection({ rows }: { rows: EconomicsAggregatedBySymbolRow[] }) {
               <tr key={row.symbol} className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40">
                 <td className="px-3 py-2 font-semibold">{row.symbol}</td>
                 <td className={`px-3 py-2 text-right font-mono ${signedColor(row.options_net_eur)}`}>{eur(row.options_net_eur)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(row.dividends_net_eur)}`}>{eur(row.dividends_net_eur)}</td>
-                <td className={`px-3 py-2 text-right font-mono ${signedColor(row.combined_net_eur)}`}>{eur(row.combined_net_eur)}</td>
+                <td className={`px-3 py-2 text-right font-mono ${signedColor(dividendsCash(row))}`}>{eur(dividendsCash(row))}</td>
+                <td className={`px-3 py-2 text-right font-mono ${
+                  row.dividends_scrip_eur == null ? "text-text-muted" : signedColor(row.dividends_scrip_eur)
+                }`} title={overviewCoverageTitle(row)}>
+                  <NullableAmount value={row.dividends_scrip_eur} />
+                </td>
+                <td className={`px-3 py-2 text-right font-mono ${signedColor(dividendsTotal(row))}`}>
+                  <span className="inline-flex items-center justify-end gap-2">
+                    {eur(dividendsTotal(row))}
+                    <PartialBadge coverage={row} />
+                  </span>
+                </td>
+                <td className={`px-3 py-2 text-right font-mono ${signedColor(row.combined_net_eur)}`}>
+                  <span className="inline-flex items-center justify-end gap-2">
+                    {eur(row.combined_net_eur)}
+                    <PartialBadge coverage={row} />
+                  </span>
+                </td>
                 <td className="px-3 py-2 text-right font-mono">{row.option_positions}</td>
                 <td className="px-3 py-2 text-right font-mono">{row.dividend_events}</td>
               </tr>
@@ -420,22 +535,7 @@ export default function EconomicsOverviewView() {
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
       const report = excludeUnsupportedRightsFromEconomicsOverview(body as EconomicsAggregatedReport);
-      const withTotals: EconomicsAggregatedReport = {
-        ...report,
-        summary: {
-          ...report.summary,
-          dividends_net_eur: report.summary.dividends_total_net_eur ?? report.summary.dividends_net_eur,
-        },
-        monthly: report.monthly.map((row) => ({
-          ...row,
-          dividends_net_eur: row.dividends_total_net_eur ?? row.dividends_net_eur,
-        })),
-        by_symbol: report.by_symbol.map((row) => ({
-          ...row,
-          dividends_net_eur: row.dividends_total_net_eur ?? row.dividends_net_eur,
-        })),
-      };
-      setData(withTotals);
+      setData(report);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load economics overview.");
     } finally {
@@ -460,7 +560,7 @@ export default function EconomicsOverviewView() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Economics Overview</h1>
         <p className="mt-1 text-sm text-text-muted">
-          EUR-based options and dividends cash-flow trends across your current filter scope.
+          EUR-based options cash flow and total dividend income across your current filter scope.
         </p>
       </div>
 
@@ -547,7 +647,7 @@ export default function EconomicsOverviewView() {
             <h2 className="mb-4 text-base font-semibold">Charts</h2>
             <div className="grid gap-6 lg:grid-cols-2">
               <OverviewBarChart rows={data.monthly} dataKey="options_net_eur" title="Monthly Options Net (EUR)" fill="#5b61ff" />
-              <OverviewBarChart rows={data.monthly} dataKey="dividends_net_eur" title="Monthly Dividends Net (EUR)" fill="#00c493" />
+              <OverviewBarChart rows={data.monthly} dataKey="dividends_total_net_eur" title="Monthly Dividends Total (EUR)" fill="#00c493" />
             </div>
           </div>
         </>

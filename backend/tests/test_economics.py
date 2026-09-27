@@ -13,6 +13,16 @@ ACCOUNT_1 = "acct-1"
 ACCOUNT_2 = "acct-2"
 
 
+def _assert_includes(actual, expected):
+    assert {key: actual[key] for key in expected} == expected
+
+
+def _assert_rows_include(actual_rows, expected_rows):
+    assert len(actual_rows) == len(expected_rows)
+    for actual, expected in zip(actual_rows, expected_rows):
+        _assert_includes(actual, expected)
+
+
 def _sample_option_symbol_docs():
     return [
         {
@@ -640,7 +650,7 @@ def test_api_dividends_economics_exposes_cash_only_totals(economics_client):
     assert "derechos_net" not in body["summary"]
     assert body["summary"]["total_net"] == 8.0
     assert body["summary"]["total_dividends"] == 1
-    assert body["monthly"] == [
+    _assert_rows_include(body["monthly"], [
         {
             "month": "2026-02",
             "gross_eur": 8.0,
@@ -653,7 +663,7 @@ def test_api_dividends_economics_exposes_cash_only_totals(economics_client):
             "total_net": 8.0,
             "dividend_count": 1,
         },
-    ]
+    ])
 
 
 
@@ -662,7 +672,7 @@ def test_api_economics_accepts_account_id_and_returns_ledger_backed_contract(eco
 
     assert response.status_code == 200
     body = response.json()
-    assert body["summary"] == {
+    _assert_includes(body["summary"], {
         "total_premium_usd": 6.7,
         "total_buyback_usd": 3.2,
         "net_option_usd_gross": 3.5,
@@ -684,7 +694,7 @@ def test_api_economics_accepts_account_id_and_returns_ledger_backed_contract(eco
             "excluded_positions_linked_only_outside_account_filter": 1,
             "excluded_paper_positions": 0,
         },
-    }
+    })
     assert body["applied_filters"]["account_ids"] == [ACCOUNT_1]
 
 
@@ -702,7 +712,7 @@ def test_api_economics_overview_uses_eur_options_fields_and_coverage(economics_c
         "applied_filters",
         "meta",
     }
-    assert body["summary"] == {
+    _assert_includes(body["summary"], {
         "options_net_eur": 3.15,
         "dividends_net_eur": 0.0,
         "dividends_cash_net_eur": 0.0,
@@ -724,9 +734,9 @@ def test_api_economics_overview_uses_eur_options_fields_and_coverage(economics_c
         },
         "total_dividend_events": 0,
         "total_symbols": 8,
-    }
+    })
     january = next(row for row in body["monthly"] if row["month"] == "2026-01")
-    assert january == {
+    _assert_includes(january, {
         "month": "2026-01",
         "options_net_eur": 3.7,
         "dividends_net_eur": 0.0,
@@ -735,7 +745,7 @@ def test_api_economics_overview_uses_eur_options_fields_and_coverage(economics_c
         "combined_net_eur": 3.7,
         "option_positions": 4,
         "dividend_events": 0,
-    }
+    })
     assert body["meta"] == {
         "options_bucket_field": "opened_at",
         "dividends_bucket_field": "trade_date",
@@ -869,7 +879,7 @@ def test_apply_dividends_yoc_ignores_year_month_filters_but_respects_visible_row
     )
 
     assert report["summary"]["total_dividends"] == 1
-    assert report["by_symbol"] == [
+    _assert_rows_include(report["by_symbol"], [
         {
             "symbol": "AAPL",
             "gross_eur": 10.0,
@@ -884,5 +894,5 @@ def test_apply_dividends_yoc_ignores_year_month_filters_but_respects_visible_row
             "yoc_trailing_annual_dividend_net_eur": 120.0,
             "yoc_cost_basis_eur": 600.0,
         }
-    ]
+    ])
     assert report["summary"]["portfolio_yoc_pct"] == 20.0

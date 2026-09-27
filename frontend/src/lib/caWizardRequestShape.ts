@@ -168,6 +168,7 @@ function positiveDecimal(raw: string): boolean {
 
 export function manualShareFmvValidationError(fields: ManualShareFmvFields): string | null {
   if (!fields.enabled) return null;
+  if (fields.source === "YAHOO_OPEN") return null;
   if (!fields.valuationDate) return "Fair-value valuation date is required.";
   if (!/^[A-Z]{3}$/.test(fields.currency.trim().toUpperCase())) {
     return "Fair-value currency must be a three-letter ISO code.";

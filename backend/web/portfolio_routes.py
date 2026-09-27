@@ -18,6 +18,8 @@ from fastapi.responses import JSONResponse
 
 from src.portfolio.cosmos_portfolio import (
     CosmosPortfolioService,
+    CorporateActionTransactionError,
+    IdempotencyConflictError,
     StorageUnavailableError,
     InsufficientSharesError,
 )
@@ -50,6 +52,7 @@ from src.portfolio.fx_service import (
     get_fx_rate,
 )
 from src.portfolio.models import OPTION_TXN_TYPES
+from src.portfolio.share_fmv_service import YahooFmvError
 
 logger = logging.getLogger(__name__)
 
@@ -111,8 +114,20 @@ def _storage_503(detail: str) -> JSONResponse:
     )
 
 
-def _err(code: str, detail: str, status: int) -> JSONResponse:
-    return JSONResponse({"error": code, "detail": detail}, status_code=status)
+def _err(
+    code: str,
+    detail: str,
+    status: int,
+    *,
+    stage: str | None = None,
+    retryable: bool | None = None,
+) -> JSONResponse:
+    body: Dict[str, Any] = {"error": code, "detail": detail}
+    if stage is not None:
+        body["stage"] = stage
+    if retryable is not None:
+        body["retryable"] = retryable
+    return JSONResponse(body, status_code=status)
 
 
 # ===========================================================================
@@ -1760,6 +1775,18 @@ async def create_corporate_action(request: Request):
         svc = _get_portfolio_svc(request)
         result = svc.create_corporate_action(body)
         return JSONResponse(result, status_code=201)
+    except YahooFmvError as exc:
+        return _err(
+            exc.error,
+            exc.detail,
+            exc.status_code,
+            stage=exc.stage,
+            retryable=exc.retryable,
+        )
+    except IdempotencyConflictError as exc:
+        return _err("idempotency_conflict", str(exc), 409)
+    except CorporateActionTransactionError as exc:
+        return _err("idempotency_conflict", str(exc), 409)
     except StorageUnavailableError as exc:
         return _storage_503(str(exc))
     except RuntimeError as exc:
@@ -1869,6 +1896,18 @@ async def correct_corporate_action_group(request: Request, ca_group_id: str):
         svc = _get_portfolio_svc(request)
         result = svc.correct_corporate_action_group(ca_group_id, body)
         return JSONResponse(result, status_code=201)
+    except YahooFmvError as exc:
+        return _err(
+            exc.error,
+            exc.detail,
+            exc.status_code,
+            stage=exc.stage,
+            retryable=exc.retryable,
+        )
+    except IdempotencyConflictError as exc:
+        return _err("idempotency_conflict", str(exc), 409)
+    except CorporateActionTransactionError as exc:
+        return _err("idempotency_conflict", str(exc), 409)
     except StorageUnavailableError as exc:
         return _storage_503(str(exc))
     except RuntimeError as exc:

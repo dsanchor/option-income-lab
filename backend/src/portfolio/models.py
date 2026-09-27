@@ -802,6 +802,7 @@ class CorporateActionLegCreate(BaseModel):
     withholding: Optional[Any] = None
     fx: Optional[Dict[str, str]] = None
     share_fmv: Optional[Dict[str, Any]] = None
+    share_fmv_instruction: Optional[Dict[str, str]] = None
     cost_basis_status: Optional[str] = None
     notes: Optional[str] = None
     transfer_cost_basis_eur: Optional[str] = None   # required for CONSOLIDATION_IN
@@ -833,6 +834,7 @@ class CorporateActionCorrectRequest(BaseModel):
     security_id: Optional[str] = None              # inferred from original when omitted
     payment_date: Optional[str] = None             # inferred from original when omitted
     notes: Optional[str] = None
+    client_request_id: Optional[str] = None
     legs: List[CorporateActionLegCreate]
 
     @field_validator("correction_note")
@@ -867,6 +869,7 @@ class CorporateActionCreateRequest(BaseModel):
     payment_date: str
     ex_dividend_date: Optional[str] = None
     notes: Optional[str] = None
+    client_request_id: Optional[str] = None
     legs: List[CorporateActionLegCreate]
 
     @field_validator("event_type")
