@@ -136,3 +136,16 @@
 - Manual FMV requests allow only official notice, broker, or manual sources; non-EUR valuation requires its own FX rate, date, and source. Yahoo values are display/inheritance-only in group correction.
 - Group correction prefill reads FMV only from `share_fmv`, supports explicit removal with `null`, and preserves an unchanged Yahoo valuation by omitting it.
 - Movement detail presents distinct FIFO Cost and Fair Value blocks, including full Yahoo provenance, while corporate-action leg summaries label share-acquisition gross as Contribution.
+
+### 2026-09-27 — Economics combined cash+scrip dividend frontend
+- Economics now treats backend-authored `total_dividends_eur`/`dividends_total_net_eur` as authoritative for summary, averages, tables, charts, YoY, cumulative history, and overview combined values; the client never reconstructs the financial formula.
+- Scrip values remain nullable. `PARTIAL` coverage is shown with a badge and valued/total event tooltip, while unavailable scrip renders `—`; zero and negative values remain legitimate.
+- The dividend summary uses a wider Total Dividends card with cash/scrip breakdown, a separate Scrip Dividends card, Avg Monthly Total, and Cash Yield on Cost. Dividend Count was removed only from the KPI cards.
+- Legacy rights exclusion must subtract only legacy rights amounts while preserving valid combined scrip totals returned by the current API.
+
+### 2026-09-27 — Yahoo FMV resolved atomically on save
+- The corporate-action wizard sends only `share_fmv_instruction: { source: "YAHOO_OPEN" }`; price, currency, FX, and provenance remain backend-owned and no provider call or FMV calculation occurs in the browser.
+- Yahoo saves use one stable top-level `client_request_id` across retries, a one-request-in-flight guard, a disabled form, and the explicit “Fetching Yahoo Open and historical FX…” state.
+- Staged backend errors retain the form and expose Retry only when `retryable=true`; Retry reuses the same request UUID.
+- Correction distinguishes unchanged inherited Yahoo FMV from refresh, manual replacement, and explicit clear. Quantity/payment-date changes require refresh, replacement, or clear, and persisted Yahoo provenance is shown read-only.
+- Successful create/correct responses consume the returned `movements[].share_fmv` as the post-save authority before normal parent refresh handling.

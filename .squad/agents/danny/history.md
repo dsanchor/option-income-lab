@@ -15,6 +15,20 @@
 
 ## Recent Learnings
 
+### 2026-09-27 — Scrip Economics and Yahoo-on-save contracts completed
+- The accepted Economics contract now values eligible scrip dividends once per
+  corporate-action event as share FMV less share contribution, cash top-ups,
+  and attributable fees. Cash fiscal totals and YoC remain cash-only, while
+  combined totals drive averages, tables, charts, cumulative history, YoY, and
+  overview with explicit partial/unavailable coverage.
+- The accepted Yahoo amendment now lets create/correction request only a
+  server-owned `YAHOO_OPEN` instruction. Endpoints and backfill share one
+  Security Master/Yahoo Open/historical ECB service, resolve before writes, and
+  commit atomically with stable request idempotency and zero partial state.
+- Basher granted final approval on the exact final worktree after 255 backend
+  and 129 frontend tests, TypeScript, visual-parity checks, and diff hygiene
+  passed.
+
 ### 2026-09-27 — Dividend · Buy independent share FMV contract
 - Accepted a strict separation between investor contribution/FIFO cost and
   optional share fair value: `gross` remains contribution, `net` remains

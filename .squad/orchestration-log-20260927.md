@@ -26,3 +26,19 @@
   rejection/revision chronology, updated contributor histories and project
   identity, and committed only `.squad` records. Economics remains future
   scope.
+
+## Scrip Economics and Yahoo FMV-on-save finalization — 18:21:33Z
+
+- Danny accepted event-level cash+scrip Economics and the amendment allowing a
+  server-only Yahoo Open valuation instruction during Dividend · Buy save.
+- Linus implemented movement deduplication/event grouping, scrip economic
+  value and coverage propagation, the shared Yahoo/ECB FMV service, atomic
+  create/correction, idempotency, and backfill reuse.
+- Rusty implemented combined cards, tables, charts, cumulative/YoY and
+  overview presentation, Partial coverage, Dividend Count card removal, and
+  Yahoo selection/loading/retry/correction UX.
+- Basher approved the exact final worktree after 255 backend and 129 frontend
+  tests, TypeScript, five focused visual-parity checks, and diff hygiene passed.
+- Scribe consolidated four inbox records into two canonical decisions,
+  superseded the prior unimplemented Economics boundary, updated project and
+  agent histories, cleared the inbox, and committed only `.squad` changes.

@@ -8845,3 +8845,72 @@ surface adoption, TypeScript, changed-file lint, and diff hygiene.
   two unrelated stale option-chain assertions; the frontend gate had 181
   passes with one unrelated existing Economics PP-6 assertion. The 7 new
   frontend FMV tests, TypeScript, and diff hygiene passed.
+
+## Scrip Dividend Economic Value in Economics (2026-09-27)
+
+**Status:** IMPLEMENTED AND APPROVED
+**Contract:** Danny
+**Implementation:** Linus and Rusty
+**Reviewer:** Basher
+**Supersedes:** The unimplemented Economics scope in “Dividend · Buy Economic
+Value” and “Dividend · Buy Independent Share FMV and Yahoo Backfill”
+
+- Dividend Economics now reports cash net, scrip economic value, and their
+  authoritative combined total. Scrip value is calculated once per
+  `ca_group_id` event after movement-ID deduplication as share FMV less
+  share-leg contribution, `CASH_TOP_UP` principal, and attributable fees.
+- Only ACTIVE eligible dividend corporate-action legs participate. Ordinary
+  BUYs, isolated top-ups, transfers, sales, legacy rights, invalid identities,
+  and malformed or incomplete valuation inputs fail closed.
+- Cash fiscal totals and Yield on Cost remain cash-only. Combined totals,
+  monthly averages, tables, charts, cumulative history, YoY, and Economics
+  overview use the backend-authored cash-plus-scrip value and preserve valid
+  zero and negative amounts.
+- Coverage is explicit: `COMPLETE`, `PARTIAL`, `UNAVAILABLE`, or
+  `NOT_APPLICABLE`, with valued/total event counts. Unknown event values never
+  become zero; partial combined totals are labelled and partial/unavailable
+  periods do not produce misleading YoY percentages.
+- Account, symbol, date, and currency filtering includes or excludes a matched
+  corporate-action event atomically. Event bucketing uses the share-acquisition
+  trade date, not valuation or FX dates.
+- The UI shows a wider Total Dividends card with Cash and Scrip breakdown, a
+  separate Scrip Dividends card, Avg Monthly Total, and Cash Yield on Cost.
+  Dividend Count was removed from KPI cards while compatibility counts remain
+  available in API/table contexts. Monthly, annual, symbol, overview, chart,
+  cumulative, and YoY surfaces use the authoritative combined fields.
+- Basher approved the Economics contract after 46 targeted backend and 24
+  targeted frontend tests passed, with TypeScript and diff hygiene clean.
+
+## Yahoo FMV Resolution on Dividend · Buy Save (2026-09-27)
+
+**Status:** IMPLEMENTED AND APPROVED
+**Contract:** Danny
+**Implementation:** Linus and Rusty
+**Reviewer:** Basher
+
+- Eligible Dividend · Buy create/correction requests may send only
+  `share_fmv_instruction: {"source": "YAHOO_OPEN"}`. Client-authored Yahoo
+  prices, currency, FX, and provenance remain forbidden; manual FMV sources
+  keep their existing contract.
+- The endpoints and backfill use one shared domain service for Security Master
+  resolution, provider-symbol mapping, unadjusted Yahoo daily Open on the exact
+  or next session within seven calendar days, listing-currency verification,
+  historical ECB conversion, Decimal normalization, and complete provenance.
+- Yahoo/ECB resolution and all validation finish before writes. Create and
+  correction then commit every leg, supersession, and successful idempotency
+  record in one account-partition transactional batch. Any validation,
+  provider, FX, timeout, conflict, or write failure leaves no partial state.
+- `(account_id, client_request_id)` binds a stable UUID to the canonical
+  request. Confirmed replay returns the same response without refetching;
+  mismatched reuse conflicts; a pre-commit failure may retry with the same ID
+  and perform a fresh valuation.
+- The form offers “Yahoo Finance — Open on/after payment date”, hides manual
+  valuation inputs, sends instruction-only data, blocks duplicate saves, shows
+  “Fetching Yahoo Open and historical FX…”, retains staged retryable errors,
+  and reuses the same request UUID on Retry.
+- Correction distinguishes unchanged inherited Yahoo FMV, refresh, manual
+  replacement, and explicit clear. Successful responses use the returned
+  `movements[].share_fmv` as authority before the normal refresh.
+- Basher granted final approval on the exact final worktree after 255 backend
+  and 129 frontend tests, TypeScript, five focused visual-parity checks, and
+  diff hygiene all passed with no blockers.

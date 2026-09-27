@@ -706,3 +706,48 @@
   The complete directed backend gate is 444 passed with only 2 unrelated stale
   option-chain assertions; the frontend gate is 181 passed with only the known
   unrelated Economics PP-6 assertion. TypeScript and diff hygiene pass.
+
+### 2026-09-27 — Scrip dividends Economics accepted contract
+- Added 21 backend acceptance tests for event grouping/deduplication, pure and
+  mixed scrip, share contribution, CASH_TOP_UP plus fees, multi-leg events,
+  inactive/deleted corrections, eligibility exclusions, strict FMV/Decimal
+  coverage, ZERO_COST, negative/zero values, filters/bucketing, aggregate and
+  cumulative fields, partial coverage, overview propagation, and explicit
+  zero/negative fallback safety.
+- Added/updated frontend contracts for types, cards/labels/layout, Partial
+  coverage, Cash Yield on Cost, Cash/Scrip/Total columns, combined charts and
+  cumulative/YoY use, Dividend Count card removal, and absence of client-side
+  scrip formulas.
+- **APPROVE.** Targeted backend Economics suites pass 46/46; targeted frontend
+  contracts pass 24/24; TypeScript and diff hygiene pass. The full
+  `economicsParity` file retains its pre-existing unrelated PP paper-action
+  failure; the new scrip parity checks pass. Blockers: none.
+
+### 2026-09-27 — Combined Economics + Yahoo FMV-on-save final gate
+- Added 29 Yahoo-on-save backend tests covering strict instruction/request
+  shape, reserved `YAHOO_OPEN`, shared script/endpoint service identity,
+  provider-symbol/Open/session/currency/ECB policy, complete provenance,
+  configurable Yahoo/FX timeouts and safe HTTP mapping, all-phase zero-write
+  failures, transactional create/correction, concurrent replay, retry after
+  failure, idempotency conflict, inheritance/refresh, canonical response, and
+  unchanged Economics consumption of persisted FMV.
+- Added 8 frontend contracts covering instruction-only request shape, stable
+  UUID retries, single in-flight Save, accepted Yahoo label, hidden manual
+  price/FX inputs, read-only preview, explicit loading/stage error/Retry UX,
+  correction inheritance/refresh/clear, and response `movements[].share_fmv`
+  authority. Updated the prior manual-FMV test for the additive Yahoo branch.
+- **APPROVE.** Combined gate: 255/255 backend tests and 129/129 frontend tests
+  pass; TypeScript and diff hygiene pass. This gate includes the accepted
+  Economics+scrip suite and Yahoo-on-save create/correction/service/UI paths.
+  Blockers: none.
+
+### 2026-09-27 — Post-Rusty exact-worktree re-gate
+- **APPROVE.** Re-ran the combined gate after Rusty's final frontend writes:
+  255/255 backend and 129/129 frontend tests pass; TypeScript, five focused
+  scrip visual-parity checks, and diff hygiene pass.
+- Independently rechecked combined cards/tables/charts/cumulative/YoY, partial
+  badges and null rendering, removal of the Dividend Count card while retaining
+  compatibility table counts, Cash Yield on Cost, overview Cash/Scrip/Total,
+  instruction-only `YAHOO_OPEN`, stable request UUID, single in-flight Save,
+  response FMV authority, loading text, staged Retry, and correction refresh.
+  Definitive blockers: none.

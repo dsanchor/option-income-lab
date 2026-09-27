@@ -15,6 +15,19 @@
 
 ## Recent Learnings
 
+- **2026-09-27:** Dividend Economics now aggregates at
+  `ca_group_id`/movement-event grain after movement-ID deduplication. Scrip
+  economic value is share FMV less share-leg contribution, cash top-ups, and
+  attributable fees; cash fiscal totals and YoC remain cash-only. Coverage is
+  explicit (`COMPLETE`/`PARTIAL`/`UNAVAILABLE`/`NOT_APPLICABLE`), combined
+  totals preserve zero/negative values, and account/symbol/currency filters
+  include matched corporate-action events atomically.
+- **2026-09-27:** Dividend · Buy create/correction can now request server-only
+  `YAHOO_OPEN` valuation by instruction. Endpoints and the backfill share one
+  Security Master → provider-symbol → exact/next-session Open → historical ECB
+  service, while client-authored Yahoo FMV remains reserved. Yahoo saves resolve
+  before writes and commit legs, supersessions, and idempotency record in one
+  account-partition transactional batch; failed lookup leaves no partial state.
 - **2026-09-27:** Dividend · Buy Yahoo FMV backfill now resolves symbols only
   through the shared resolver, observes unadjusted daily Open on the exact/next
   session within seven calendar days, verifies listing currency, and converts

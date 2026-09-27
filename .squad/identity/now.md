@@ -1,25 +1,28 @@
 ---
-updated_at: 2026-09-27T07:38:08Z
-focus_area: Dividend Buy independent share FMV and safe Yahoo/ECB backfill implemented and approved. Economics aggregation remains future scope.
+updated_at: 2026-09-27T18:21:33Z
+focus_area: Scrip economic value is included across Economics, and Yahoo Open plus historical ECB FMV can be resolved atomically when saving Dividend Buy. Final review approved.
 active_issues:
   - "⚠️ Cross-partition overview latency: Monitor `GET /api/symbols/overview` as ledger grows beyond current scale (N≤3 accounts). Currently 2 Cosmos queries; consider materialization if latency exceeds 500ms."
 ---
 
 # What We're Focused On
 
-**Implemented (Dividend · Buy Share FMV + Backfill):** Dividend share
-acquisitions now keep investor contribution/FIFO cost separate from optional
-`share_fmv` valuation metadata. Manual capture, atomic corrections, logical
-backup, separate frontend display, directed Yahoo daily-Open lookup, historical
-ECB effective-date conversion, deterministic dry-run/apply safeguards, CAS,
-backup, force, and restore are implemented. After Basher rejected three backend
-defects, Reuben independently fixed supported-currency validation, native
-`net.amount`, and explicit-null backup handling. Final review approved 64
-FMV-specific backend tests, 7 new frontend tests, and all former blocker probes.
+**Implemented (Scrip Economics + Yahoo FMV-on-save):** Dividend Economics now
+aggregates eligible scrip corporate actions at event grain. Scrip economic
+value is share FMV less personal contribution, cash top-ups, and attributable
+fees; cash fiscal totals and Cash Yield on Cost remain cash-only. Combined
+cash+scrip totals drive averages, tables, charts, cumulative history, YoY, and
+overview, with explicit Partial/Unavailable coverage and preserved zero or
+negative values. Dividend Count was removed from KPI cards.
 
-**Future Scope (Economics):** `share_fmv` is not aggregated into income, KPIs,
-YoY, fiscal reporting, or an Economics card. The proposed event-level Dividend
-· Buy economic-value measure remains unimplemented.
+Dividend · Buy create/correction can request server-owned `YAHOO_OPEN`
+valuation. The endpoints and backfill share Security Master/provider-symbol,
+exact-or-next-session Open, listing-currency, historical ECB, Decimal, and
+provenance logic. Valuation completes before one account-partition
+transactional write, with stable request idempotency, zero partial state on
+failure, and loading/retry/correction UX. Basher's exact-final-worktree gate
+approved 255 backend and 129 frontend tests, TypeScript, visual parity, and
+diff hygiene.
 
 **Implemented (Lot Average Price):** Symbol Detail Stocks movements now expose
 and render backend-authored `lot_average_price_eur` for ordinary Buy and
@@ -27,14 +30,6 @@ Dividend · Buy share-acquisition rows. The strict net-inclusive Decimal
 contract, ZERO_COST handling, null fail-closed behavior, non-share corporate
 action exclusion, and HALF_UP display rounding passed 106 backend and 125
 frontend targeted tests and received final review approval.
-
-**Proposed (Dividend · Buy Economic Value):** Keep cash dividends as the
-cash-only income measure and add a separate event-level economic value for
-shares received, net of investor-funded cash top-ups and attributable fees.
-The proposal requires auditable valuation/FX provenance and explicit coverage
-for unavailable events. Independent `share_fmv` capture/backfill now supplies
-valuation metadata, but the Economics aggregation/card remains a design
-proposal and has not been implemented.
 
 **Released (Phase 2):** Portfolio accounts, transfers, reassignment, FX, filters — commit `08809eb` with 478 tests passing; both API and frontend revisions deployed and healthy on 2026-09-06T11:59:49Z.
 
