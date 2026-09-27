@@ -18,15 +18,14 @@ mock `src.portfolio.fx_service.get_fx_rate` to avoid network dependency.
 
 from __future__ import annotations
 
-import pytest
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch
+
+import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest_portfolio_p2 import FakeCosmos
-
-# Exception classes from fx_service
 from src.portfolio.fx_service import FxRateNotFoundError, FxUnavailableError
+from tests.conftest_portfolio_p2 import FakeCosmos
 
 
 @pytest.fixture
@@ -300,11 +299,12 @@ class TestEcbXmlSingleLineFormat:
 
     def _invoke_fetch_and_cache(self, xml_text: str) -> None:
         """Patch requests.get and call _fetch_and_cache() directly."""
+        from unittest import mock
+
         import src.portfolio.fx_service as svc
-        import unittest.mock as mock
 
         mock_resp = mock.MagicMock()
-        mock_resp.text = xml_text
+        mock_resp.content = xml_text.encode()
         mock_resp.raise_for_status = mock.MagicMock()
 
         with mock.patch("src.portfolio.fx_service.requests.get", return_value=mock_resp):

@@ -353,7 +353,7 @@ def build_yahoo_share_fmv(
         except FxRateNotFoundError as exc:
             raise YahooFmvError(
                 "fx_unavailable",
-                "No eligible historical ECB FX rate was found",
+                "No eligible historical ECB FX rate was found (rate_not_found)",
                 "fx",
                 True,
                 503,
@@ -361,7 +361,7 @@ def build_yahoo_share_fmv(
         except (FxUnavailableError, ValueError) as exc:
             raise YahooFmvError(
                 "fx_unavailable",
-                "Historical ECB FX lookup failed",
+                "Historical ECB FX lookup failed (ecb_unavailable)",
                 "fx",
                 True,
                 503,
@@ -372,7 +372,7 @@ def build_yahoo_share_fmv(
         if fx_rate is None or fx_rate <= 0 or fx_date is None:
             raise YahooFmvError(
                 "fx_unavailable",
-                "Historical ECB FX rate is invalid",
+                "Historical ECB FX rate is invalid (invalid_rate)",
                 "fx",
                 True,
                 503,
@@ -381,7 +381,8 @@ def build_yahoo_share_fmv(
         if fx_age < 0 or fx_age > 5:
             raise YahooFmvError(
                 "fx_unavailable",
-                "Historical ECB FX rate is outside the five-day fallback window",
+                "Historical ECB FX rate is outside the five-day fallback window "
+                "(fallback_out_of_policy)",
                 "fx",
                 True,
                 503,
