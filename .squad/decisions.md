@@ -8675,3 +8675,78 @@ surface adoption, TypeScript, changed-file lint, and diff hygiene.
   independent structural probe, TypeScript, changed-test ESLint, production
   build, and diff-hygiene checks passed. The three component ESLint findings
   and generated-CSS build warning are pre-existing and non-blocking.
+
+## Symbol Movement Lot Average Price (2026-09-27)
+
+**Status:** IMPLEMENTED AND APPROVED
+**Owner:** Linus
+**Contract:** Danny
+**Reviewer:** Basher
+
+- Symbol Detail Stocks transaction history exposes the additive, non-persisted
+  API field `lot_average_price_eur: string | null` for ordinary BUY and
+  Dividend · Buy share-acquisition rows.
+- The authoritative per-movement acquisition-lot value is strict Decimal
+  `net.eur_amount / quantity`, because BUY net includes acquisition fees. It is
+  not the holding average or a FIFO residual average.
+- COMPLETE cost basis divides finite, non-negative net by finite positive
+  quantity; ZERO_COST returns `"0.00"`; INCOMPLETE or malformed input returns
+  `null`. The API display rounds to two EUR decimals with `ROUND_HALF_UP`.
+- SELL, cash DIVIDEND, transfers, options, and corporate-action legs other than
+  `SHARE_ACQUISITION` return `null`. In particular, `CASH_TOP_UP` is never
+  eligible even if represented by a BUY movement.
+- One backend helper supplies the unrounded FIFO BUY-lot unit cost and movement
+  response enrichment. The frontend only formats the server field in the table
+  and detail dialog; it does not reproduce the financial calculation.
+- Basher initially rejected the implementation because `CASH_TOP_UP` received
+  an average price. After the helper was corrected to reject non-share
+  corporate-action legs, Basher approved it.
+- Final validation passed 106/106 targeted backend tests and 125/125 targeted
+  frontend tests, including FIFO, unified Symbol Detail, filtering, sorting,
+  pagination, detail opening, and single-table regressions.
+
+## Dividend · Buy Economic Value (2026-09-27)
+
+**Status:** PROPOSED — NOT IMPLEMENTED
+**Owners:** Danny and Linus
+
+- Preserve **Cash dividends received (net EUR)** as the existing cash-only
+  income measure. Add a distinct analytical measure at corporate-action event
+  grain (`ca_group_id`) so non-cash dividend value is not lost or double
+  counted.
+- The proposed reconciliation is:
+
+  ```text
+  non_cash_dividend_value_eur =
+      share_fair_value_eur
+    - cash_top_up_outflow_eur
+    - attributable_share_and_top_up_fees_eur
+
+  total_dividend_economic_value_eur =
+      cash_dividend_net_eur
+    + non_cash_dividend_value_eur
+  ```
+
+- `total_net_eur` remains cash-only. The economic measure is additive and
+  explicitly named; it does not change FIFO, tax classification, or the
+  acquisition cost-basis contract.
+- Select exactly one share-valuation source with auditable provenance:
+  explicit official/broker FMV, explicit user value, deterministic market
+  value, then unavailable. A BUY net or generic acquisition cost is not
+  automatically fair value, and zero-cost scrip does not imply zero economic
+  value.
+- Store valuation date, native price/value and currency, FX rate/date/source,
+  valuation source, confidence, and estimate status. Convert share value and
+  top-up independently when dates or currencies differ.
+- `CASH_DIVIDEND` contributes its cash amount once; `SHARE_ACQUISITION`
+  contributes quantity and one eligible fair value; `CASH_TOP_UP` is an
+  investor contribution deducted with attributable fees and never supplies
+  share value. Only ACTIVE legs contribute.
+- Missing price, valid quantity, or FX remains `null`, never zero. Aggregates
+  expose completeness and coverage; partial annual values must be labelled
+  partial, and YoY comparison should disclose valuation-source mix or use a
+  like-for-like basis.
+- Proposed phased delivery: first use already captured explicit broker/user
+  fair values plus top-up subtraction, provenance, and coverage; later add
+  market-close fallback and historical review/backfill; finally add bulk
+  corrections and policy/reporting controls.

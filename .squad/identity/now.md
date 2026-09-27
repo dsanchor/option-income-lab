@@ -1,11 +1,25 @@
 ---
-updated_at: 2026-09-06T20:57:09Z
-focus_area: Portfolio Movement Workflows Released (2026-09-06). Next Priority: Dividend Portfolio — Phase 1 MVP (awaiting user authorization)
+updated_at: 2026-09-27T05:28:55Z
+focus_area: Lot average price implemented and approved. Dividend · Buy economic valuation proposed, not implemented.
 active_issues:
   - "⚠️ Cross-partition overview latency: Monitor `GET /api/symbols/overview` as ledger grows beyond current scale (N≤3 accounts). Currently 2 Cosmos queries; consider materialization if latency exceeds 500ms."
 ---
 
 # What We're Focused On
+
+**Implemented (Lot Average Price):** Symbol Detail Stocks movements now expose
+and render backend-authored `lot_average_price_eur` for ordinary Buy and
+Dividend · Buy share-acquisition rows. The strict net-inclusive Decimal
+contract, ZERO_COST handling, null fail-closed behavior, non-share corporate
+action exclusion, and HALF_UP display rounding passed 106 backend and 125
+frontend targeted tests and received final review approval.
+
+**Proposed (Dividend · Buy Economic Value):** Keep cash dividends as the
+cash-only income measure and add a separate event-level economic value for
+shares received, net of investor-funded cash top-ups and attributable fees.
+The proposal requires auditable valuation/FX provenance and explicit coverage
+for unavailable events. It remains a design proposal and has not been
+implemented.
 
 **Released (Phase 2):** Portfolio accounts, transfers, reassignment, FX, filters — commit `08809eb` with 478 tests passing; both API and frontend revisions deployed and healthy on 2026-09-06T11:59:49Z.
 

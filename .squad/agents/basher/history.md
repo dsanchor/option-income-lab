@@ -649,3 +649,26 @@
   component's three ESLint errors reproduce on HEAD, and the generated-CSS
   build warning is existing. Blockers: zero. No source/tests, commit, push,
   deployment, or production access was performed.
+
+### 2026-09-27 — Symbol movement lot average price rejected
+- Added backend and frontend contract coverage for net-inclusive COMPLETE BUY,
+  fractional HALF_UP rounding, ZERO_COST and paid Dividend · Buy, INCOMPLETE and
+  malformed inputs, non-eligible movements, server-field consumption, and
+  filtering/pagination/detail regressions.
+- **REJECT.** A BUY corporate-action `CASH_TOP_UP` leg incorrectly receives
+  `lot_average_price_eur="10.00"` instead of `null`; the shared helper checks
+  `txn_type` but does not exclude non-share corporate-action legs.
+- Validation: frontend 125/125 passed; targeted backend 105/106 passed, with
+  only the new non-share-leg contract failing.
+
+### 2026-09-27 — Symbol movement lot average price approved
+- **APPROVE.** The shared strict Decimal helper now excludes non-share
+  corporate-action legs while retaining ordinary BUY and Dividend · Buy
+  eligibility, net-inclusive cost, ZERO_COST zero, INCOMPLETE/invalid null, and
+  HALF_UP display rounding.
+- Confirmed the movements endpoint derives the additive field without
+  persistence, FIFO reuses the same unrounded helper, and the frontend consumes
+  the server value without division while preserving filters, pagination,
+  detail opening, and the single Stocks table.
+- Validation passed: 106/106 targeted backend tests, 125/125 targeted frontend
+  tests, and diff hygiene.

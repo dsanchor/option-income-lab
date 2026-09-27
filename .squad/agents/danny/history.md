@@ -262,3 +262,14 @@
   source, dependency, virtual-environment, or unrelated cache files.
 - Scoped F401 is clean. Full-file Ruff improved from the 25-finding HEAD
   baseline to 15 pre-existing findings, with no new lint finding.
+
+### 2026-09-27 — Lot price contract and dividend economic-value proposal
+- Defined and accepted the per-movement lot average price as backend-authored
+  Decimal BUY net divided by positive quantity, with explicit ZERO_COST,
+  INCOMPLETE, rounding, and non-share corporate-action rules.
+- Proposed keeping cash dividends cash-only while adding a separate
+  event-grain Dividend · Buy economic value for shares received net of
+  investor-funded top-ups and attributable fees.
+- Required explicit valuation and FX provenance, no cost/FMV conflation,
+  no-double-counting by corporate-action leg, and coverage-aware partial and
+  YoY presentation. Economic valuation remains proposed, not implemented.

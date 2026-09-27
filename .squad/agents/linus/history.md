@@ -15,6 +15,17 @@
 
 ## Recent Learnings
 
+- **2026-09-27:** Symbol movement lot average price is backend-authored from
+  strict Decimal `BUY net.eur_amount / positive quantity`, with ZERO_COST
+  represented as `0.00`, invalid/incomplete/non-share rows failing closed to
+  null, and two-decimal HALF_UP serialization. The same unrounded helper now
+  supplies FIFO BUY lot unit cost, while the browser only formats the API field.
+- **2026-09-27:** Proposed Dividend · Buy economic valuation at `ca_group_id`
+  grain: cash net plus one provenance-qualified share FMV, less investor
+  `CASH_TOP_UP` principal and attributable fees. Price/FX source, dates,
+  confidence, correction state, and coverage remain explicit; incomplete
+  annual values stay partial/unavailable rather than becoming zero. This is an
+  analytical proposal only and does not alter FIFO or tax accounting.
 - **2026-09-26:** Frontend legacy-rights exclusion now uses one fail-closed
   normalizer across movement lists, import preview, semantic filters, symbol
   and stock tables, detail/search reads, dividends, economics totals, counts,

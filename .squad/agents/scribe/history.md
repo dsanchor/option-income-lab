@@ -288,3 +288,13 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 - Added concise orchestration/session records, verified routing whitespace,
   and prepared the approved product, test, documentation, and squad changes
   for commit and push without rerunning cache-generating validation.
+
+### 2026-09-27 — Lot price and dividend economic-value consolidation
+- Merged the accepted lot-average-price contract, implementation/review
+  chronology, and proposed Dividend · Buy economic-value design into the
+  canonical decision log and cleared the four inbox records.
+- Recorded five agent interactions, updated contributor histories, and marked
+  lot average price implemented while keeping economic valuation explicitly
+  proposed and unimplemented.
+- Staged and committed only `.squad` records; no production or test files were
+  included.
