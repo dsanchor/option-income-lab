@@ -27,6 +27,7 @@ from uuid import NAMESPACE_URL, uuid5
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.portfolio.fx_service import get_historical_fx_rate
+from src.portfolio.models import normalize_share_fmv
 from src.portfolio.share_fmv_service import (
     SCRIPT_VERSION,
     ShareFmvService,
@@ -242,6 +243,47 @@ def _fx_detail_code(exc: YahooFmvError) -> str:
     return "lookup_failed"
 
 
+def _diagnostic_skip(
+    doc: dict,
+    security_id: str,
+    reason: str,
+    exc: YahooFmvError,
+) -> dict[str, Any]:
+    context = exc.context or {}
+    skip = {
+        "id": doc.get("id"),
+        "reason": reason,
+        "movement_id": doc.get("id"),
+        "security_id": security_id,
+        "trade_date": doc.get("trade_date"),
+        "detail_code": exc.detail_code,
+    }
+    if reason == "currency_mismatch":
+        skip.update(
+            {
+                "provider_symbol": context.get("provider_symbol"),
+                "yahoo_currency_raw": context.get("yahoo_currency_raw"),
+                "yahoo_currency_normalized": context.get(
+                    "yahoo_currency_normalized"
+                ),
+                "security_master_listing_currency": context.get(
+                    "security_master_listing_currency"
+                ),
+            }
+        )
+    elif reason == "no_market_session":
+        skip.update(
+            {
+                "requested_date": context.get("requested_date")
+                or doc.get("trade_date"),
+                "provider_symbol": context.get("provider_symbol"),
+                "max_calendar_days": context.get("max_calendar_days", 7),
+                "window_end_date": context.get("window_end_date"),
+            }
+        )
+    return skip
+
+
 def build_plan(
     portfolio_container,
     symbols_container,
@@ -306,7 +348,7 @@ def build_plan(
                 reason = "invalid_open"
             else:
                 reason = "failed"
-            skip = {"id": doc.get("id"), "reason": reason}
+            skip = _diagnostic_skip(doc, security_id, reason, exc)
             if reason == "fx_unavailable":
                 native_currency = None
                 try:
@@ -322,16 +364,9 @@ def build_plan(
                         "Security lookup failed while enriching FX skip: %s",
                         type(security_exc).__name__,
                     )
-                skip.update(
-                    {
-                        "movement_id": doc.get("id"),
-                        "security_id": security_id,
-                        "trade_date": doc.get("trade_date"),
-                        "valuation_date": doc.get("trade_date"),
-                        "native_currency": native_currency,
-                        "detail_code": _fx_detail_code(exc),
-                    }
-                )
+                skip["valuation_date"] = doc.get("trade_date")
+                skip["native_currency"] = native_currency
+                skip["detail_code"] = _fx_detail_code(exc)
             skips.append(skip)
             continue
         actions.append(
@@ -459,12 +494,24 @@ def apply_plan(
                 results["already_set"] += 1
                 continue
 
+            applied_at = clock()
+            if applied_at.tzinfo is None or applied_at.utcoffset() != timezone.utc.utcoffset(
+                applied_at
+            ):
+                results["failed"] += 1
+                continue
             share_fmv = json.loads(json.dumps(action["share_fmv"]))
-            share_fmv["provenance"]["fetched_at"] = clock().isoformat()
+            share_fmv["provenance"]["fetched_at"] = applied_at.isoformat()
             share_fmv["provenance"]["run_id"] = backup["run_id"]
+            share_fmv = normalize_share_fmv(
+                share_fmv,
+                quantity=raw.get("quantity"),
+                trade_date=raw.get("trade_date"),
+                allow_yahoo=True,
+            )
             body = _clean(raw)
             body["share_fmv"] = share_fmv
-            body["updated_at"] = clock().isoformat()
+            body["updated_at"] = applied_at.isoformat()
             if not _etag_replace(portfolio_container, raw, body):
                 results["cas_conflict"] += 1
                 continue

@@ -14,6 +14,7 @@ Document shape:
 from __future__ import annotations
 
 import logging
+import re
 import unicodedata
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -78,6 +79,14 @@ class CosmosSecuritiesService:
         """
         ticker = str(data["ticker"]).strip().upper()
         mic = str(data["exchange_mic"]).strip().upper()
+        listing_currency = str(data.get("listing_currency") or "").strip().upper()
+        if not listing_currency and mic in {"XNYS", "XNAS", "XASE"}:
+            listing_currency = "USD"
+        if not re.fullmatch(r"[A-Z]{3}", listing_currency):
+            raise ValueError(
+                "listing_currency is required for non-US listings and must be "
+                "a 3-letter ISO 4217 code"
+            )
         security_id = make_security_id(mic, ticker)
         doc_id = security_id_to_doc_id(security_id)
 
@@ -118,7 +127,7 @@ class CosmosSecuritiesService:
             "company_name": str(data["company_name"]).strip(),
             "exchange_mic": mic,
             "asset_class": str(data.get("asset_class", "Equity")),
-            "listing_currency": str(data.get("listing_currency", "USD")).upper(),
+            "listing_currency": listing_currency,
             "status": "ACTIVE",
             "aliases": aliases,
             "created_at": now,

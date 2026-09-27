@@ -198,6 +198,8 @@ async def create_security(request: Request):
             {"error": "collision", "existing": exc.existing},
             status_code=409,
         )
+    except ValueError as exc:
+        return _err("validation_error", str(exc), 400)
     except RuntimeError as exc:
         return _storage_503(str(exc))
     except Exception as exc:
@@ -463,6 +465,8 @@ async def inline_create_security(request: Request, session_id: str):
             {"error": "collision", "existing": exc.existing},
             status_code=409,
         )
+    except ValueError as exc:
+        return _err("validation_error", str(exc), 400)
     except StorageUnavailableError as exc:
         return _storage_503(str(exc))
     except RuntimeError as exc:

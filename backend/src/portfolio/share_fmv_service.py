@@ -9,7 +9,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID, uuid4
@@ -38,6 +38,8 @@ class YahooFmvError(RuntimeError):
     stage: str
     retryable: bool
     status_code: int
+    detail_code: str = "unspecified"
+    context: dict[str, Any] | None = None
 
     def __str__(self) -> str:
         return self.detail
@@ -244,14 +246,35 @@ def build_yahoo_share_fmv(
         raise ValueError("trade_date must be YYYY-MM-DD")
 
     status = observation.get("status")
+    window_context = {
+        "requested_date": requested_date,
+        "provider_symbol": provider_symbol,
+        "max_calendar_days": 7,
+        "window_end_date": (
+            date.fromisoformat(requested_date) + timedelta(days=7)
+        ).isoformat(),
+    }
     unavailable = {
-        "no_market_session": "No Yahoo market session was found on or after the payment date",
-        "invalid_open": "Yahoo returned an invalid Open price",
-        "currency_unavailable": "Yahoo listing currency is unavailable",
+        "no_market_session": (
+            "No Yahoo market session was found on or after the payment date",
+            "no_market_session_in_window",
+        ),
+        "invalid_open": ("Yahoo returned an invalid Open price", "invalid_open"),
+        "currency_unavailable": (
+            "Yahoo listing currency is unavailable",
+            "provider_currency_missing",
+        ),
     }
     if status in unavailable:
+        detail, detail_code = unavailable[status]
         raise YahooFmvError(
-            "yahoo_fmv_unavailable", unavailable[status], "yahoo", False, 422
+            "yahoo_fmv_unavailable",
+            detail,
+            "yahoo",
+            False,
+            422,
+            detail_code,
+            window_context,
         )
     if status != "ok":
         raise YahooFmvError(
@@ -270,6 +293,8 @@ def build_yahoo_share_fmv(
             "yahoo",
             False,
             422,
+            "invalid_market_session_date",
+            window_context,
         )
     delta = (date.fromisoformat(session_date) - date.fromisoformat(requested_date)).days
     if delta < 0 or delta > 7:
@@ -279,6 +304,8 @@ def build_yahoo_share_fmv(
             "yahoo",
             False,
             422,
+            "market_session_outside_window",
+            {**window_context, "market_session_date": session_date},
         )
 
     listing_currency = str(security.get("listing_currency") or "").strip().upper()
@@ -294,14 +321,32 @@ def build_yahoo_share_fmv(
             "yahoo",
             False,
             422,
+            "invalid_open_or_currency",
+            {
+                **window_context,
+                "yahoo_currency_raw": observed_currency or None,
+                "security_master_listing_currency": listing_currency or None,
+            },
         ) from exc
     if not listing_currency or normalized_currency != listing_currency:
+        detail_code = (
+            "security_master_listing_currency_missing"
+            if not listing_currency
+            else "security_master_listing_currency_mismatch"
+        )
         raise YahooFmvError(
             "yahoo_fmv_unavailable",
             "Yahoo currency does not match the Security Master listing currency",
             "currency",
             False,
             422,
+            detail_code,
+            {
+                **window_context,
+                "yahoo_currency_raw": observed_currency,
+                "yahoo_currency_normalized": normalized_currency,
+                "security_master_listing_currency": listing_currency or None,
+            },
         )
 
     qty = _decimal(quantity)
@@ -475,6 +520,7 @@ class ShareFmvService:
                 "security",
                 True,
                 503,
+                "security_master_lookup_failed",
             ) from exc
         if not security:
             raise YahooFmvError(
@@ -483,6 +529,7 @@ class ShareFmvService:
                 "security",
                 False,
                 422,
+                "security_master_not_found",
             )
         ticker = str(security.get("ticker") or security_id_to_ticker(security_id))
         provider_symbol = resolve_yfinance_symbol(
@@ -495,6 +542,7 @@ class ShareFmvService:
                 "symbol",
                 False,
                 422,
+                "provider_symbol_unresolved",
             )
         observation = observe_yahoo_open(
             self.fetcher,
@@ -511,6 +559,12 @@ class ShareFmvService:
                 "yahoo",
                 True,
                 504,
+                "total_timeout",
+                {
+                    "requested_date": trade_date,
+                    "provider_symbol": provider_symbol,
+                    "max_calendar_days": 7,
+                },
             )
         return build_yahoo_share_fmv(
             quantity=quantity,

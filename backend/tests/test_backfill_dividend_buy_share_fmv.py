@@ -1,5 +1,6 @@
 import shutil
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -182,6 +183,73 @@ def test_plan_classifies_market_failures_without_partial_fmv(
     assert plan["counts"][reason] == 1
 
 
+def test_currency_mismatch_skip_exposes_provider_and_security_master_currencies():
+    plan = _plan(
+        MemoryContainer([_doc()]),
+        force=True,
+        fetcher=Fetcher(
+            {
+                "status": "ok",
+                "open": "4500",
+                "market_session_date": "2026-09-28",
+                "currency": "GBp",
+            }
+        ),
+    )
+    assert plan["actions"]
+
+    mismatch = backfill.build_plan(
+        MemoryContainer([_doc()]),
+        SymbolContainer(_security(listing_currency="USD")),
+        target=TARGET,
+        force=True,
+        fetcher=Fetcher(
+            {
+                "status": "ok",
+                "open": "4500",
+                "market_session_date": "2026-09-28",
+                "currency": "GBp",
+            }
+        ),
+    )
+    assert mismatch["skips"] == [
+        {
+            "id": "buy",
+            "reason": "currency_mismatch",
+            "movement_id": "buy",
+            "security_id": "XLON:ULVR",
+            "trade_date": "2026-09-26",
+            "detail_code": "security_master_listing_currency_mismatch",
+            "provider_symbol": "ULVR.L",
+            "yahoo_currency_raw": "GBp",
+            "yahoo_currency_normalized": "GBP",
+            "security_master_listing_currency": "USD",
+        }
+    ]
+
+
+def test_no_market_session_skip_exposes_requested_provider_window():
+    plan = _plan(
+        MemoryContainer([_doc()]),
+        force=True,
+        fetcher=Fetcher({"status": "no_market_session"}),
+    )
+    assert plan["skips"] == [
+        {
+            "id": "buy",
+            "reason": "no_market_session",
+            "movement_id": "buy",
+            "security_id": "XLON:ULVR",
+            "trade_date": "2026-09-26",
+            "detail_code": "no_market_session_in_window",
+            "requested_date": "2026-09-26",
+            "provider_symbol": "ULVR.L",
+            "max_calendar_days": 7,
+            "window_end_date": "2026-10-03",
+        }
+    ]
+
+
 def test_fx_unavailable_skip_has_actionable_safe_context():
     from src.portfolio.fx_service import FxRateNotFoundError
 
@@ -288,6 +356,32 @@ def test_apply_backs_up_before_cas_write_and_restore_round_trips(monkeypatch):
         "failed": 0,
     }
     assert "share_fmv" not in portfolio.docs["buy"]
+
+
+def test_apply_replaces_deterministic_placeholder_with_actual_utc_without_mutating_plan():
+    portfolio = MemoryContainer([_doc()])
+    plan = _plan(portfolio)
+    original_plan = deepcopy(plan)
+    applied_at = datetime(2026, 9, 27, 20, 9, 18, tzinfo=timezone.utc)
+
+    results, backup_path = backfill.apply_plan(
+        portfolio,
+        plan,
+        backup_dir=ARTIFACTS,
+        now=lambda: applied_at,
+    )
+
+    assert results["updated"] == 1
+    assert backup_path and backup_path.exists()
+    assert plan == original_plan
+    assert plan["sha256"] == original_plan["sha256"]
+    assert (
+        plan["actions"][0]["share_fmv"]["provenance"]["fetched_at"]
+        == "1970-01-01T00:00:00+00:00"
+    )
+    persisted = portfolio.docs["buy"]
+    assert persisted["share_fmv"]["provenance"]["fetched_at"] == applied_at.isoformat()
+    assert persisted["updated_at"] == applied_at.isoformat()
 
 
 def test_cas_conflict_is_reported_without_retry(monkeypatch):

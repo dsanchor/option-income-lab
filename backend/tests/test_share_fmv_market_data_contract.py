@@ -6,6 +6,7 @@ import pytest
 
 from src.portfolio import fx_service
 from src.portfolio.share_fmv_service import YahooFmvError, build_yahoo_share_fmv
+from src.symbol_pricing import normalize_quote_price
 from src.yfinance_fetcher import YFinanceFetcher
 
 
@@ -132,6 +133,43 @@ def test_daily_open_preserves_yahoo_minor_unit_currency():
     with patch("src.yfinance_fetcher.yf.Ticker", return_value=ticker):
         result = YFinanceFetcher().get_daily_open("TEST.L", "2026-09-28")
     assert result["currency"] == "GBp"
+
+
+@pytest.mark.parametrize(
+    ("provider_currency", "raw_price", "expected_price", "expected_currency", "unit"),
+    [
+        ("GBp", "4500", Decimal(45), "GBP", "minor"),
+        ("GBX", "4500", Decimal(45), "GBP", "minor"),
+        ("ILA", "1234", Decimal("12.34"), "ILS", "minor"),
+        ("ZAc", "9876", Decimal("98.76"), "ZAR", "minor"),
+        ("GBP", "45", Decimal(45), "GBP", "major"),
+        ("ILS", "12.34", Decimal("12.34"), "ILS", "major"),
+        ("ZAR", "98.76", Decimal("98.76"), "ZAR", "major"),
+    ],
+)
+def test_supported_provider_currency_units_are_normalized_exactly_once(
+    provider_currency, raw_price, expected_price, expected_currency, unit
+):
+    assert normalize_quote_price(raw_price, provider_currency) == (
+        expected_price,
+        expected_currency,
+        unit,
+        provider_currency,
+    )
+
+
+def test_daily_open_no_session_includes_safe_request_window():
+    ticker = MagicMock()
+    ticker.history.return_value = pd.DataFrame()
+    with patch("src.yfinance_fetcher.yf.Ticker", return_value=ticker):
+        result = YFinanceFetcher().get_daily_open("ULVR.L", "2026-09-26")
+    assert result == {
+        "status": "no_market_session",
+        "requested_date": "2026-09-26",
+        "provider_symbol": "ULVR.L",
+        "max_calendar_days": 7,
+        "window_end_date": "2026-10-03",
+    }
 
 
 def test_historical_fx_returns_effective_prior_ecb_date_with_five_day_limit(monkeypatch):

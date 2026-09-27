@@ -110,6 +110,18 @@ class TestSecurityIdHelpers:
         assert security_id_to_ticker("XMAD:TEF") == "TEF"
 
 
+def test_create_security_requires_explicit_iso_listing_currency():
+    svc = _make_svc()
+    with pytest.raises(ValueError, match="required for non-US listings"):
+        svc.create_security(
+            {
+                "ticker": "ULVR",
+                "company_name": "Unilever",
+                "exchange_mic": "XLON",
+            }
+        )
+
+
 # ---------------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------------

@@ -119,6 +119,14 @@ class YFinanceFetcher:
             raise ValueError("max_calendar_days must be non-negative")
 
         end = start + timedelta(days=max_calendar_days + 1)
+        diagnostics = {
+            "requested_date": start.isoformat(),
+            "provider_symbol": symbol,
+            "max_calendar_days": max_calendar_days,
+            "window_end_date": (
+                start + timedelta(days=max_calendar_days)
+            ).isoformat(),
+        }
         try:
             self._rate_limit()
             ticker = yf.Ticker(symbol)
@@ -138,7 +146,7 @@ class YFinanceFetcher:
             return {"status": "provider_error"}
 
         if history is None or history.empty:
-            return {"status": "no_market_session"}
+            return {"status": "no_market_session", **diagnostics}
 
         rows = []
         for index, row in history.sort_index().iterrows():
@@ -152,7 +160,7 @@ class YFinanceFetcher:
             if start <= session_date <= start + timedelta(days=max_calendar_days):
                 rows.append((session_date, row))
         if not rows:
-            return {"status": "no_market_session"}
+            return {"status": "no_market_session", **diagnostics}
 
         session_date, row = rows[0]
         raw_open = row.get("Open")
