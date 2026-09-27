@@ -2,11 +2,11 @@ ai:
   provider: "${AI_PROVIDER}"  # azure | gemini (empty = azure)
   model_deployment: "${MODEL_DEPLOYMENT}"  # default model for all roles
   models:  # optional per-function overrides — each falls back to model_deployment
-    monitor_assessment: "gpt-5.4"
-    monitor_roll: "gpt-5.4"
+    monitor_assessment: "gpt-5.6-luna"
+    monitor_roll: "gpt-5.6-luna"
     supervisor: "gpt-5.4-mini"
     alpha: "gpt-5.4-mini"
-    analysis: "gpt-5.4"
+    analysis: "gpt-5.6-luna"
     buy_tracker: "gpt-5.4-mini"
     summary: "gpt-5.4-mini"
     report: "gpt-5.4-mini"

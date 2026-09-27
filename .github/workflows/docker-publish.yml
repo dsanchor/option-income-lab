@@ -7,6 +7,10 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'stock-options-manager-rg' }}
+  AZURE_API_APP: ${{ vars.AZURE_API_APP || 'ca-stock-options-manager-api' }}
+  AZURE_FRONT_APP: ${{ vars.AZURE_FRONT_APP || 'ca-stock-options-manager-front' }}
+  AZURE_BACKUP_JOB: ${{ vars.AZURE_BACKUP_JOB || 'ca-stock-options-manager-backup' }}
 
 jobs:
   build-and-push:
@@ -85,8 +89,8 @@ jobs:
         id: deploy-api
         run: |
           REVISION=$(az containerapp update \
-            --name ca-stock-options-manager-api \
-            --resource-group stock-options-manager-rg \
+            --name "$AZURE_API_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
             --image ghcr.io/dsanchor/option-income-lab-api:${{ steps.tag.outputs.tag }} \
             --query "properties.latestRevisionName" -o tsv)
           if [ -z "$REVISION" ]; then
@@ -103,8 +107,8 @@ jobs:
           PROV="Unknown"; HEALTH="Unknown"; ACTIVE="false"
           for i in $(seq 1 30); do
             JSON=$(az containerapp revision show \
-              --name ca-stock-options-manager-api \
-              --resource-group stock-options-manager-rg \
+              --name "$AZURE_API_APP" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
               --revision "$REVISION" \
               -o json 2>/dev/null || echo "{}")
             PROV=$(echo "$JSON" | jq -r '.properties.runningState // "Unknown"')
@@ -132,8 +136,8 @@ jobs:
         id: deploy-front
         run: |
           REVISION=$(az containerapp update \
-            --name ca-stock-options-manager-front \
-            --resource-group stock-options-manager-rg \
+            --name "$AZURE_FRONT_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
             --image ghcr.io/dsanchor/option-income-lab-front:${{ steps.tag.outputs.tag }} \
             --query "properties.latestRevisionName" -o tsv)
           if [ -z "$REVISION" ]; then
@@ -150,8 +154,8 @@ jobs:
           PROV="Unknown"; HEALTH="Unknown"; ACTIVE="false"
           for i in $(seq 1 30); do
             JSON=$(az containerapp revision show \
-              --name ca-stock-options-manager-front \
-              --resource-group stock-options-manager-rg \
+              --name "$AZURE_FRONT_APP" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
               --revision "$REVISION" \
               -o json 2>/dev/null || echo "{}")
             PROV=$(echo "$JSON" | jq -r '.properties.runningState // "Unknown"')
@@ -178,8 +182,8 @@ jobs:
       - name: Update backup Job image when configured
         run: |
           set -euo pipefail
-          JOB_NAME="ca-stock-options-manager-backup"
-          RESOURCE_GROUP="stock-options-manager-rg"
+          JOB_NAME="$AZURE_BACKUP_JOB"
+          RESOURCE_GROUP="$AZURE_RESOURCE_GROUP"
           IMAGE="ghcr.io/dsanchor/option-income-lab-api:${{ steps.tag.outputs.tag }}"
           if ! az containerapp job show \
             --name "$JOB_NAME" \

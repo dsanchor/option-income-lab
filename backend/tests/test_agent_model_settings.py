@@ -5,14 +5,12 @@ from pathlib import Path
 
 import pytest
 from azure.cosmos.exceptions import CosmosHttpResponseError
-from starlette.testclient import TestClient
-
 from src.agent_runner import AgentRunner
 from src.ai_functions import AI_FUNCTIONS
 from src.config import Config
 from src.cosmos_db import CosmosDBService
 from src.llm import LlmConfig
-
+from starlette.testclient import TestClient
 
 EXPECTED_FUNCTIONS = {
     "monitor_assessment", "monitor_roll", "supervisor", "alpha", "analysis",
@@ -119,7 +117,7 @@ def test_agent_runner_selects_provider_by_function(monkeypatch):
 
 
 def test_function_models_resolve_when_no_explicit_model_provided(monkeypatch):
-    """Regression: contract validation should use function-specific models, not global default."""
+    """Contract validation uses function models rather than the global default."""
     created = []
 
     def fake_client(model, llm):

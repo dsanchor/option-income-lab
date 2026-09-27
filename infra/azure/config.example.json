@@ -1,0 +1,136 @@
+{
+  "$schema": "./schema/provision-config.schema.json",
+  "schemaVersion": 1,
+  "subscriptionId": "00000000-0000-0000-0000-000000000000",
+  "tenantId": "00000000-0000-0000-0000-000000000000",
+  "location": "swedencentral",
+  "resourceGroupName": "stock-options-manager-rg",
+  "suffix": "dsr2026",
+  "names": {
+    "logAnalytics": "log-stock-options-manager",
+    "containerAppsEnvironment": "cae-stock-options-manager",
+    "apiApp": "ca-stock-options-manager-api",
+    "frontendApp": "ca-stock-options-manager-front",
+    "cosmosAccount": "cosmos-stock-options",
+    "foundryAccount": "ai-stock-options-manager-dsr2026",
+    "foundryProject": "default",
+    "backupStorage": "oilbackupdsr2026",
+    "backupContainer": "user-data-backups",
+    "backupIdentity": "stock-options-manager-backup-mi",
+    "backupJob": "ca-stock-options-manager-backup"
+  },
+  "tags": {
+    "application": "option-income-lab",
+    "environment": "production",
+    "managed-by": "infra/azure/provision.sh"
+  },
+  "images": {
+    "api": "ghcr.io/dsanchor/option-income-lab-api:sha-0000000",
+    "frontend": "ghcr.io/dsanchor/option-income-lab-front:sha-0000000"
+  },
+  "models": {
+    "deployments": [
+      {
+        "deploymentName": "gpt-5.4-mini",
+        "model": "gpt-5.4-mini",
+        "version": "2026-03-17",
+        "sku": "GlobalStandard",
+        "capacity": 699
+      },
+      {
+        "deploymentName": "gpt-5.6-luna",
+        "model": "gpt-5.6-luna",
+        "version": "2026-07-09",
+        "sku": "GlobalStandard",
+        "capacity": 1000
+      },
+      {
+        "deploymentName": "gpt-5.6-sol",
+        "model": "gpt-5.6-sol",
+        "version": "2026-07-09",
+        "sku": "GlobalStandard",
+        "capacity": 1000
+      }
+    ],
+    "routing": {
+      "default": "gpt-5.4-mini",
+      "roles": {
+        "monitor_assessment": "gpt-5.6-luna",
+        "monitor_roll": "gpt-5.6-luna",
+        "analysis": "gpt-5.6-luna",
+        "buy_tracker": "gpt-5.4-mini",
+        "supervisor": "gpt-5.4-mini",
+        "alpha": "gpt-5.4-mini",
+        "summary": "gpt-5.4-mini",
+        "report": "gpt-5.4-mini",
+        "technical_analysis": "gpt-5.4-mini",
+        "plan_monitor": "gpt-5.4-mini",
+        "chat": "gpt-5.4-mini",
+        "symbol_chat": "gpt-5.4-mini",
+        "activity_chat": "gpt-5.4-mini",
+        "dps_insights": "gpt-5.4-mini"
+      }
+    }
+  },
+  "cosmos": {
+    "databaseName": "stock-options-manager",
+    "containers": [
+      {"name": "symbols", "partitionKey": "/symbol", "ttl": null, "indexing": "symbols"},
+      {"name": "telemetry", "partitionKey": "/metric_type", "ttl": 2592000, "indexing": "default"},
+      {"name": "settings", "partitionKey": "/id", "ttl": null, "indexing": "default"},
+      {"name": "dgi_screener", "partitionKey": "/symbol", "ttl": null, "indexing": "default"},
+      {"name": "calendar", "partitionKey": "/symbol", "ttl": null, "indexing": "default"},
+      {"name": "agent_traces", "partitionKey": "/symbol", "ttl": 7776000, "indexing": "default"},
+      {"name": "portfolio", "partitionKey": "/account_id", "ttl": null, "indexing": "default"},
+      {"name": "import_sessions", "partitionKey": "/session_id", "ttl": -1, "indexing": "default"}
+    ]
+  },
+  "apps": {
+    "api": {
+      "ingress": {"external": false, "targetPort": 8000},
+      "minReplicas": 1,
+      "maxReplicas": 1,
+      "cpu": 1.0,
+      "memory": "2Gi",
+      "healthPath": "/healthz"
+    },
+    "frontend": {
+      "targetPort": 3000,
+      "minReplicas": 1,
+      "maxReplicas": 1,
+      "cpu": 0.5,
+      "memory": "1Gi"
+    }
+  },
+  "backup": {
+    "schedule": "15 23 * * *",
+    "timezone": "Europe/Madrid",
+    "localTime": "00:15",
+    "dailyRetentionDays": 35,
+    "monthlyAnchorRetentionDays": 370,
+    "runRetentionDays": 90,
+    "softDeleteDays": 14
+  },
+  "frontendAuth": {
+    "enabled": true,
+    "unauthenticatedClientAction": "RedirectToLoginPage",
+    "clientIdEnvironmentVariable": "AZURE_ENTRA_CLIENT_ID",
+    "clientSecretEnvironmentVariable": "AZURE_ENTRA_CLIENT_SECRET"
+  },
+  "optionalSecrets": {
+    "telegramBotTokenEnvironmentVariable": "TELEGRAM_BOT_TOKEN",
+    "telegramChatIdEnvironmentVariable": "TELEGRAM_CHAT_ID"
+  },
+  "diagnostics": {"enabled": true},
+  "locks": {"enabled": true},
+  "providers": [
+    "Microsoft.App",
+    "Microsoft.DocumentDB",
+    "Microsoft.CognitiveServices",
+    "Microsoft.Storage",
+    "Microsoft.ManagedIdentity",
+    "Microsoft.OperationalInsights",
+    "Microsoft.Insights",
+    "Microsoft.Authorization"
+  ]
+}

@@ -2,6 +2,69 @@
 
 [← Back to README](../README.md)
 
+## Self-contained Azure provisioner
+
+`infra/azure/provision.sh` is the authoritative path for creating or adopting
+the complete production stack in one resource group. It deploys Log Analytics,
+Container Apps, serverless Cosmos DB with all eight containers, a Foundry
+account/project and the three approved model deployments, private backup
+storage/job/RBAC, diagnostics, and final delete locks.
+
+Copy `infra/azure/config.example.json`, replace the placeholder subscription,
+tenant, suffix, and immutable public GHCR image references, then run:
+
+```bash
+# Offline: validates tools, strict JSON, names, routing, and invariants.
+infra/azure/provision.sh --config infra/azure/config.production.json --mode dry-run
+
+# Read-only Azure validation: account, providers, drift, public images,
+# exact Foundry catalog versions/SKUs, and quota.
+infra/azure/provision.sh --config infra/azure/config.production.json --mode preflight
+
+# Read-only ARM what-if. Review and retain the printed SHA-256 fingerprint.
+infra/azure/provision.sh --config infra/azure/config.production.json --mode what-if
+
+# Apply only the exact reviewed plan.
+export AZURE_ENTRA_CLIENT_ID='<existing-app-client-id>'
+export AZURE_ENTRA_CLIENT_SECRET='<client-secret>'
+infra/azure/provision.sh \
+  --config infra/azure/config.production.json \
+  --mode apply \
+  --approve-plan '<fingerprint>'
+```
+
+`--bootstrap-entra` can create/reuse the provisioner-owned Entra application
+when the operator has tenant permission. `--register-providers` explicitly
+opts into registering only missing providers. `--bootstrap-github-oidc`
+optionally creates the image-deployment identity after the stack succeeds.
+None of these mutations occur in `dry-run`, `preflight`, or `what-if`.
+
+The frontend is fail-closed: it remains internal until its real FQDN has been
+used for the Entra callback, Easy Auth is read back and validated, and only
+then is ingress made external. The API always has internal ingress and the
+frontend uses its actual internal FQDN through `API_BASE_URL`.
+
+Both GHCR packages **must be public** and use `:sha-<commit>` or
+`@sha256:<digest>`. The design intentionally has no ACR, registry credentials,
+PAT, `AcrPull`, or image-pull identity. Cosmos and Foundry continue to use keys
+in this iteration, but Bicep obtains them with `listKeys()` and stores them
+only as Container Apps secrets consumed with `secretRef`.
+
+After the first workflow publication, set each package visibility to public in
+GitHub Packages before running Azure `preflight`; repository visibility alone
+does not always make an existing package public.
+
+> **Future TODO — not pre-assigned:** migrate Cosmos and Foundry runtime access
+> to `DefaultAzureCredential`, add minimum data-plane roles and smoke tests,
+> then remove `COSMOSDB_KEY` and `AZURE_OPENAI_API_KEY`. The current templates
+> deliberately create no API/frontend UAMI and no Cosmos/Foundry runtime RBAC.
+
+`backend/scripts/provision_cosmosdb.sh` and
+`backend/scripts/configure-backup.sh` are legacy, component-only utilities.
+They are superseded for new environments by the self-contained provisioner;
+notably, the legacy Cosmos script prints a key and must not be used as the
+security reference for a new deployment.
+
 ## Automated CI/CD (GitHub Actions → Azure Container Apps)
 
 The workflow at `.github/workflows/docker-publish.yml` runs two jobs:
@@ -28,13 +91,15 @@ Concurrency group `deploy-production` (with `cancel-in-progress: false`) ensures
 
 ### Optional GitHub Variables
 
-The resource group and app names are hardcoded in the workflow (single-environment deployment). No GitHub Variables are required. If you later need multi-environment support, extract the following to repository Variables:
+The workflow defaults match `config.example.json`. Set these repository or
+`production` environment variables when the provisioned names differ:
 
 | Name | Default |
 |------|---------|
 | `AZURE_RESOURCE_GROUP` | `stock-options-manager-rg` |
 | `AZURE_API_APP` | `ca-stock-options-manager-api` |
 | `AZURE_FRONT_APP` | `ca-stock-options-manager-front` |
+| `AZURE_BACKUP_JOB` | `ca-stock-options-manager-backup` |
 
 ### One-Time Azure OIDC Setup
 
@@ -92,7 +157,7 @@ Only the `deploy` job, which runs with `environment: production`, can authentica
 
 > **Note:** GitHub generates the OIDC subject using the repository's immutable numeric ID, not the display name. If the repository is renamed or transferred, the owner-slug portion changes but the numeric IDs remain stable. The subject above is the immutable-ID form that is registered as the federated credential.
 
-#### 4. Assign the Least-Privilege RBAC Role
+#### 4. Assign least-privilege resource-scoped roles
 
 ```bash
 SP_OBJECT_ID=$(az ad sp list \
@@ -103,10 +168,25 @@ az role assignment create \
   --assignee-object-id "$SP_OBJECT_ID" \
   --assignee-principal-type ServicePrincipal \
   --role "Container Apps Contributor" \
-  --scope "/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/stock-options-manager-rg"
+  --scope "/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/stock-options-manager-rg/providers/Microsoft.App/containerApps/ca-stock-options-manager-api"
+
+az role assignment create \
+  --assignee-object-id "$SP_OBJECT_ID" \
+  --assignee-principal-type ServicePrincipal \
+  --role "Container Apps Contributor" \
+  --scope "/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/stock-options-manager-rg/providers/Microsoft.App/containerApps/ca-stock-options-manager-front"
+
+az role assignment create \
+  --assignee-object-id "$SP_OBJECT_ID" \
+  --assignee-principal-type ServicePrincipal \
+  --role "Container Apps Jobs Contributor" \
+  --scope "/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/stock-options-manager-rg/providers/Microsoft.App/jobs/ca-stock-options-manager-backup"
 ```
 
-**Role:** `Container Apps Contributor` (not `Contributor`) — sufficient for `az containerapp update` and `az containerapp revision list`. This is the minimum required scope: resource-group level on `stock-options-manager-rg`.
+Do not grant this publishing principal `Contributor`, `Owner`, resource-group
+scope, secret-reading access, or permissions over Cosmos, Foundry, Storage, or
+RBAC. `provision.sh --bootstrap-github-oidc` applies the same resource-scoped
+assignments.
 
 #### 5. Set the GitHub Secrets
 
@@ -124,22 +204,13 @@ gh secret set AZURE_TENANT_ID     --env production --body "<your-tenant-id>"
 gh secret set AZURE_SUBSCRIPTION_ID --env production --body "<your-subscription-id>"
 ```
 
-### GHCR Pull Credentials Caveat
+### Public GHCR invariant
 
-The deploy workflow does **not** configure GHCR registry credentials on the Container Apps. It assumes both `ca-stock-options-manager-api` and `ca-stock-options-manager-front` were already created with a GHCR pull credential set (e.g., a GitHub PAT with `read:packages`).
-
-If a Container App is recreated or the GHCR credential expires, `az containerapp update` will succeed but the new revision will fail to pull the image. In that case, reconfigure the registry credential:
-
-```bash
-az containerapp registry set \
-  --name <APP_NAME> \
-  --resource-group stock-options-manager-rg \
-  --server ghcr.io \
-  --username <GITHUB_USERNAME> \
-  --password <GHCR_PAT>
-```
-
-Use a PAT with `read:packages` scope. After reconfiguring, re-run the workflow.
+The API and frontend packages must remain public. The provisioned Container
+Apps and backup Job have no `registries` block, pull secret, PAT, ACR, or pull
+identity. If a package becomes private, provisioning and deployment health
+checks fail closed. Restoring public visibility is the supported remediation;
+adding registry credentials requires a new design decision.
 
 ### CI/CD Amendments
 
@@ -183,8 +254,8 @@ Prerequisites:
 - The immutable backend image already published (`:sha-<commit>` or digest).
 - The API Container App contains the Cosmos secret named `cosmosdb-key`, or
   `COSMOSDB_KEY` is set only in the invoking shell.
-- For a private GHCR package when creating the Job, set `GHCR_USERNAME` and
-  `GHCR_PAT` in the invoking shell. Do not put either value in source or output.
+- The backend GHCR package is public and immutable. Private packages and
+  registry credentials are not supported.
 
 Preview the plan:
 
@@ -342,8 +413,8 @@ updates or deletes existing user records.
 - **403 from Blob:** confirm the Job identity has `Storage Blob Data
   Contributor` on the exact container resource ID, `AZURE_CLIENT_ID` equals
   that UAMI's client ID, and allow for RBAC propagation.
-- **Image pull failure:** configure the Job's GHCR credentials or make the
-  package readable. The deploy workflow intentionally does not create secrets.
+- **Image pull failure:** confirm the immutable GHCR package is public. Do not
+  add a PAT, registry secret, ACR, or image-pull identity.
 - **Cosmos authentication failure:** verify the Job has the configured
   `cosmosdb-key` secret and `COSMOSDB_KEY=secretref:cosmosdb-key`.
 - **Job runs but no archive appears:** inspect the sanitized run status.
@@ -382,7 +453,7 @@ IMAGE="${IMAGE:-ghcr.io/dsanchor/option-income-lab:latest}"
 
 # ── Credentials (fill these in) ─────────────────────────────────────────────
 AI_PROVIDER="${AI_PROVIDER:-azure}"          # azure | gemini
-MODEL_DEPLOYMENT="${MODEL_DEPLOYMENT:-gpt-5.1}"
+MODEL_DEPLOYMENT="${MODEL_DEPLOYMENT:-gpt-5.4-mini}"
 AZURE_AI_PROJECT_ENDPOINT="${AZURE_AI_PROJECT_ENDPOINT:-your-project-endpoint}"
 AZURE_OPENAI_API_KEY="${AZURE_OPENAI_API_KEY:-your-api-key-here}"
 GOOGLE_API_KEY="${GOOGLE_API_KEY:-}"         # required when AI_PROVIDER=gemini
@@ -586,7 +657,8 @@ az containerapp create \
   -o none
 ```
 
-> **Note:** If your GHCR package is private, add `--registry-username <github-username> --registry-password <github-pat>` with a PAT that has `read:packages` scope.
+> **Legacy/manual example only:** production GHCR packages must be public and
+> immutable. Registry usernames, PATs, ACR, and pull identities are unsupported.
 
 ```bash
 # Verify — get the app URL
@@ -681,8 +753,9 @@ az containerapp show --name "$WEB_APP" --resource-group "$RESOURCE_GROUP" \
   --query "properties.configuration.ingress.fqdn" -o tsv
 ```
 
-> **Note:** For private GHCR packages add `--registry-server ghcr.io --registry-username <user>
-> --registry-password <pat>` (PAT with `read:packages`) to each `create`.
+> **Legacy/manual example only:** new environments must use the self-contained
+> provisioner above. Private GHCR packages and registry credentials are not
+> supported by the accepted production design.
 
 To update either component after a new image is pushed by CI:
 
