@@ -1831,6 +1831,15 @@ async def correct_corporate_action_group(request: Request, ca_group_id: str):
             "fees": {"total": "...", "currency": "...", "total_eur": "..."},
             "withholding": {... or null},
             "fx": {... or null},
+            "share_fmv": {
+              "valuation_date": "YYYY-MM-DD",
+              "currency": "EUR|...",
+              "amount": "...",            # or price_per_share
+              "price_per_share": "...",   # or amount
+              "source": "OFFICIAL_NOTICE|BROKER|MANUAL",
+              "reference": "<str|null>",
+              "fx": {...},                # required outside EUR
+            },
             "cost_basis_status": "COMPLETE|ZERO_COST|INCOMPLETE|null",
             "notes": "<str|null>"
           }

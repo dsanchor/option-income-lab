@@ -112,7 +112,9 @@ def mock_ohlcv():
         "Close": closes,
         "Volume": [1_000_000 + i * 1000 for i in range(n)],
     })
-    df.index = pd.date_range(end=datetime.now(), periods=n, freq="B")
+    # Use a fixed business-day endpoint: pandas 3 can return 249 entries when
+    # a weekend datetime with a time component is used as the end of 250 B days.
+    df.index = pd.date_range(end="2026-09-25", periods=n, freq="B")
     return df
 
 

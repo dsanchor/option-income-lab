@@ -7,6 +7,7 @@ from copy import deepcopy
 from hashlib import sha256
 from typing import Any
 
+from src.portfolio.models import normalize_share_fmv
 from src.portfolio.rights_policy import (
     RIGHTS_UNSUPPORTED_MESSAGE,
     contains_legacy_rights_data,
@@ -82,6 +83,7 @@ LEDGER_FIELDS = frozenset({
     "id", "account_id", "doc_type", "txn_type", "security_id", "ticker",
     "symbol", "trade_date", "settlement_date", "quantity", "gross", "fees",
     "net", "withholding", "fx", "cost_basis_status",
+    "share_fmv",
     "import_source", "batch_id", "session_id", "idempotency_hash",
     "source_row_index", "source_row", "correction_status", "corrects_movement_id",
     "superseded_by", "reassigned_from", "reassigned_to", "transfer_group_id",
@@ -375,7 +377,43 @@ def project_ledger(doc: dict[str, Any], include_source_row: bool) -> dict[str, A
             issue="invalid_identity",
             fields=("doc_type", "account_id", "id"),
         )
+    _validate_ledger_share_fmv(result)
     return result
+
+
+def _validate_ledger_share_fmv(record: dict[str, Any]) -> None:
+    if record.get("share_fmv") is None:
+        return
+    identity = f"{record.get('account_id')}|{record.get('id')}"
+    if (
+        record.get("txn_type") != "BUY"
+        or record.get("ca_leg_type") != "SHARE_ACQUISITION"
+        or record.get("ca_event_type")
+        not in {"SCRIP_DIVIDEND", "DIVIDEND_WITH_SCRIP"}
+    ):
+        raise SchemaError(
+            "share_fmv is not eligible for this ledger movement",
+            section="ledger_movements",
+            logical_identity=identity,
+            issue="invalid_share_fmv_eligibility",
+            fields=("share_fmv",),
+        )
+    try:
+        normalize_share_fmv(
+            record["share_fmv"],
+            quantity=record.get("quantity"),
+            trade_date=record.get("trade_date"),
+            allow_yahoo=True,
+            persisted=True,
+        )
+    except ValueError as exc:
+        raise SchemaError(
+            f"Invalid share_fmv: {exc}",
+            section="ledger_movements",
+            logical_identity=identity,
+            issue="invalid_share_fmv",
+            fields=("share_fmv",),
+        ) from exc
 
 
 def project_action_plan(doc: dict[str, Any]) -> dict[str, Any]:
@@ -478,6 +516,8 @@ def validate_record(section: str, record: dict[str, Any]) -> None:
             logical_identity=f"{record.get('account_id')}|{record.get('id')}",
             issue="unsupported_rights_movement",
         )
+    if section == "ledger_movements":
+        _validate_ledger_share_fmv(record)
     unknown = set(record) - FIELDS[section]
     if unknown:
         raise SchemaError(f"{section} contains unknown fields: {sorted(unknown)}")

@@ -12,12 +12,16 @@ import type {
   CorporateActionLegRequest,
   CostBasisStatus,
   LedgerMovement,
+  ShareFmvSource,
+  ShareFmvFxSource,
 } from "@/types/portfolio";
 import type { SecurityMaster } from "@/types/portfolio";
 import { formatAccountName } from "@/lib/accountDisplay";
 import {
+  buildManualShareFmv,
+  manualShareFmvValidationError,
   shareAcquisitionCostBasisStatus,
-  shareAcquisitionFmvValidationError,
+  shareAcquisitionCostValidationError,
 } from "@/lib/caWizardRequestShape";
 
 const inputCls =
@@ -100,10 +104,23 @@ export interface CaFormState {
 
   // SHARE_ACQUISITION leg (DIVIDEND_WITH_SCRIP, SCRIP_DIVIDEND)
   sa_quantity: string;
-  sa_gross: string;          // FMV; "0" accepted for pure scrip
+  sa_gross: string;          // investor contribution, excluding fees
   sa_gross_eur: string;
+  sa_fees: string;
+  sa_fees_eur: string;
   sa_cost_basis: CostBasisStatus;
   sa_notes: string;
+  sa_fmv_enabled: boolean;
+  sa_fmv_initially_present: boolean;
+  sa_fmv_valuation_date: string;
+  sa_fmv_currency: string;
+  sa_fmv_amount: string;
+  sa_fmv_price_per_share: string;
+  sa_fmv_source: ShareFmvSource;
+  sa_fmv_reference: string;
+  sa_fmv_fx_rate: string;
+  sa_fmv_fx_date: string;
+  sa_fmv_fx_source: Exclude<ShareFmvFxSource, "IDENTITY">;
 
   // Optional: CASH_TOP_UP leg (DIVIDEND_WITH_SCRIP only)
   ctu_enabled: boolean;
@@ -119,6 +136,20 @@ export interface CaFormState {
   fco_gross: string;                      // cash proceeds in listing currency
   fco_gross_eur: string;                  // cash proceeds in EUR
   fco_fees: string;                       // fees on fractional disposal
+}
+
+function makeShareAcquisitionFees(
+  total: string,
+  currency: string,
+  eurAmount: string,
+) {
+  const native = total.trim();
+  const normalizedCurrency = currency.trim().toUpperCase();
+  return {
+    total: native,
+    currency: normalizedCurrency,
+    total_eur: normalizedCurrency === "EUR" ? native : eurAmount.trim(),
+  };
 }
 
 const defaultState = (): CaFormState => ({
@@ -141,8 +172,21 @@ const defaultState = (): CaFormState => ({
   sa_quantity: "",
   sa_gross: "",
   sa_gross_eur: "",
+  sa_fees: "0",
+  sa_fees_eur: "0",
   sa_cost_basis: "INCOMPLETE",
   sa_notes: "",
+  sa_fmv_enabled: false,
+  sa_fmv_initially_present: false,
+  sa_fmv_valuation_date: "",
+  sa_fmv_currency: "EUR",
+  sa_fmv_amount: "",
+  sa_fmv_price_per_share: "",
+  sa_fmv_source: "OFFICIAL_NOTICE",
+  sa_fmv_reference: "",
+  sa_fmv_fx_rate: "",
+  sa_fmv_fx_date: "",
+  sa_fmv_fx_source: "ECB",
   ctu_enabled: false,
   ctu_gross: "",
   ctu_gross_eur: "",
@@ -204,8 +248,24 @@ export function buildCaInitialState(legs: LedgerMovement[], representative: Ledg
     state.sa_quantity = saLeg.quantity ?? "";
     state.sa_gross = saLeg.gross?.amount ?? "";
     state.sa_gross_eur = saLeg.gross?.eur_amount ?? "";
+    state.sa_fees = saLeg.fees?.total ?? "0";
+    state.sa_fees_eur = saLeg.fees?.total_eur ?? "0";
     state.sa_cost_basis = (saLeg.cost_basis_status as CostBasisStatus) ?? "INCOMPLETE";
     state.sa_notes = "";
+    const fmv = saLeg.share_fmv;
+    state.sa_fmv_enabled = Boolean(fmv);
+    state.sa_fmv_initially_present = Boolean(fmv);
+    state.sa_fmv_valuation_date = fmv?.valuation_date ?? "";
+    state.sa_fmv_currency = fmv?.currency ?? "EUR";
+    state.sa_fmv_amount = fmv?.amount ?? "";
+    state.sa_fmv_price_per_share = fmv?.price_per_share ?? "";
+    state.sa_fmv_source = fmv?.source ?? "OFFICIAL_NOTICE";
+    state.sa_fmv_reference = fmv?.provenance?.reference ?? "";
+    state.sa_fmv_fx_rate = fmv?.fx?.source === "IDENTITY" ? "" : (fmv?.fx?.rate ?? "");
+    state.sa_fmv_fx_date = fmv?.fx?.source === "IDENTITY" ? "" : (fmv?.fx?.date ?? "");
+    state.sa_fmv_fx_source = fmv?.fx?.source && fmv.fx.source !== "IDENTITY"
+      ? fmv.fx.source
+      : "ECB";
   }
 
   if (ctuLeg) {
@@ -552,11 +612,25 @@ function buildLegs(form: CaFormState): CorporateActionLegRequest[] {
         form.currency,
         form.sa_gross_eur,
       ),
-      cost_basis_status: shareAcquisitionCostBasisStatus(
-        form.sa_gross,
-        form.sa_gross_eur,
+      fees: makeShareAcquisitionFees(
+        form.sa_fees,
         form.currency,
+        form.sa_fees_eur,
       ),
+      share_fmv: form.sa_fmv_enabled
+        ? buildManualShareFmv({
+            enabled: true,
+            valuationDate: form.sa_fmv_valuation_date,
+            currency: form.sa_fmv_currency,
+            amount: form.sa_fmv_amount,
+            pricePerShare: form.sa_fmv_price_per_share,
+            source: form.sa_fmv_source,
+            reference: form.sa_fmv_reference,
+            fxRate: form.sa_fmv_fx_rate,
+            fxDate: form.sa_fmv_fx_date,
+            fxSource: form.sa_fmv_fx_source,
+          })
+        : (form.sa_fmv_initially_present ? null : undefined),
       fx: makeFx(form.fx_rate, form.currency),
       notes: form.sa_notes || undefined,
     });
@@ -615,12 +689,33 @@ function validate(form: CaFormState): string | null {
   }
   if (ev === "DIVIDEND_WITH_SCRIP" || ev === "SCRIP_DIVIDEND") {
     if (!form.sa_quantity) return "Share acquisition quantity is required.";
-    const fmvError = shareAcquisitionFmvValidationError(
+    if (!Number.isFinite(Number(form.sa_quantity)) || Number(form.sa_quantity) <= 0) {
+      return "Share acquisition quantity must be greater than zero.";
+    }
+    const costError = shareAcquisitionCostValidationError(
       form.sa_gross,
       form.sa_gross_eur,
       form.currency,
+      form.sa_fees,
+      form.sa_fees_eur,
     );
+    if (costError) return costError;
+    const fmvError = manualShareFmvValidationError({
+      enabled: form.sa_fmv_enabled,
+      valuationDate: form.sa_fmv_valuation_date,
+      currency: form.sa_fmv_currency,
+      amount: form.sa_fmv_amount,
+      pricePerShare: form.sa_fmv_price_per_share,
+      source: form.sa_fmv_source,
+      reference: form.sa_fmv_reference,
+      fxRate: form.sa_fmv_fx_rate,
+      fxDate: form.sa_fmv_fx_date,
+      fxSource: form.sa_fmv_fx_source,
+    });
     if (fmvError) return fmvError;
+    if (form.sa_fmv_enabled && form.sa_fmv_valuation_date !== form.payment_date) {
+      return "Fair-value valuation date must match the payment date.";
+    }
   }
   if (ev === "SHARE_CONSOLIDATION") {
     if (!form.co_quantity || parseFloat(form.co_quantity) <= 0) {
@@ -753,11 +848,17 @@ export default function CorporateActionForm({
     const initial = { ...defaultState(), ...initialState };
     if (initial.currency === "EUR") {
       initial.sa_gross_eur = initial.sa_gross;
+      initial.sa_fees_eur = initial.sa_fees;
+    }
+    if (mode === "create" && !initial.sa_fmv_valuation_date) {
+      initial.sa_fmv_valuation_date = initial.payment_date;
     }
     initial.sa_cost_basis = shareAcquisitionCostBasisStatus(
       initial.sa_gross,
       initial.sa_gross_eur,
       initial.currency,
+      initial.sa_fees,
+      initial.sa_fees_eur,
     );
     return initial;
   });
@@ -917,7 +1018,16 @@ export default function CorporateActionForm({
           <input
             type="date"
             value={form.payment_date}
-            onChange={(e) => set({ payment_date: e.target.value })}
+            onChange={(e) => {
+              const paymentDate = e.target.value;
+              set({
+                payment_date: paymentDate,
+                sa_fmv_valuation_date:
+                  !form.sa_fmv_valuation_date || form.sa_fmv_valuation_date === form.payment_date
+                    ? paymentDate
+                    : form.sa_fmv_valuation_date,
+              });
+            }}
             className={inputCls}
             required
           />
@@ -945,13 +1055,19 @@ export default function CorporateActionForm({
               const sa_gross_eur = currency === "EUR"
                 ? form.sa_gross
                 : form.sa_gross_eur;
+              const sa_fees_eur = currency === "EUR"
+                ? form.sa_fees
+                : form.sa_fees_eur;
               set({
                 currency,
                 sa_gross_eur,
+                sa_fees_eur,
                 sa_cost_basis: shareAcquisitionCostBasisStatus(
                   form.sa_gross,
                   sa_gross_eur,
                   currency,
+                  form.sa_fees,
+                  sa_fees_eur,
                 ),
               });
             }}
@@ -1115,19 +1231,19 @@ export default function CorporateActionForm({
                 />
               </div>
               <div>
-                <label className={labelCls}>Cost basis (derived from FMV)</label>
+                <label className={labelCls}>FIFO cost status (server-derived)</label>
                 <select
                   value={form.sa_cost_basis}
                   disabled
                   className={inputCls}
                 >
-                  <option value="INCOMPLETE">INCOMPLETE (scrip FMV pending)</option>
-                  <option value="ZERO_COST">ZERO_COST (pure scrip)</option>
-                  <option value="COMPLETE">COMPLETE (known FMV)</option>
+                  <option value="INCOMPLETE">INCOMPLETE (contribution/FX missing)</option>
+                  <option value="ZERO_COST">ZERO_COST (zero contribution and fees)</option>
+                  <option value="COMPLETE">COMPLETE (known FIFO cost)</option>
                 </select>
               </div>
               <div>
-                <label className={labelCls}>Gross / FMV (0 for pure scrip)</label>
+                <label className={labelCls}>Personal contribution</label>
                 <input
                   type="number"
                   step="any"
@@ -1145,6 +1261,8 @@ export default function CorporateActionForm({
                         sa_gross,
                         sa_gross_eur,
                         form.currency,
+                        form.sa_fees,
+                        form.sa_fees_eur,
                       ),
                     });
                   }}
@@ -1154,7 +1272,7 @@ export default function CorporateActionForm({
               </div>
               {form.currency !== "EUR" && (
                 <div>
-                  <label className={labelCls}>Gross EUR</label>
+                  <label className={labelCls}>Contribution EUR</label>
                   <input
                     type="number"
                     step="any"
@@ -1168,6 +1286,62 @@ export default function CorporateActionForm({
                           form.sa_gross,
                           sa_gross_eur,
                           form.currency,
+                          form.sa_fees,
+                          form.sa_fees_eur,
+                        ),
+                      });
+                    }}
+                    placeholder="0.00"
+                    className={inputCls}
+                  />
+                </div>
+              )}
+              <div>
+                <label className={labelCls}>Attributable fees</label>
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  value={form.sa_fees}
+                  onChange={(e) => {
+                    const sa_fees = e.target.value;
+                    const sa_fees_eur = form.currency === "EUR"
+                      ? sa_fees
+                      : form.sa_fees_eur;
+                    set({
+                      sa_fees,
+                      sa_fees_eur,
+                      sa_cost_basis: shareAcquisitionCostBasisStatus(
+                        form.sa_gross,
+                        form.sa_gross_eur,
+                        form.currency,
+                        sa_fees,
+                        sa_fees_eur,
+                      ),
+                    });
+                  }}
+                  placeholder="0.00"
+                  className={inputCls}
+                />
+              </div>
+              {form.currency !== "EUR" && (
+                <div>
+                  <label className={labelCls}>Fees EUR</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={form.sa_fees_eur}
+                    onChange={(e) => {
+                      const sa_fees_eur = e.target.value;
+                      set({
+                        sa_fees_eur,
+                        sa_cost_basis: shareAcquisitionCostBasisStatus(
+                          form.sa_gross,
+                          form.sa_gross_eur,
+                          form.currency,
+                          form.sa_fees,
+                          sa_fees_eur,
                         ),
                       });
                     }}
@@ -1177,7 +1351,7 @@ export default function CorporateActionForm({
                 </div>
               )}
               <div className="sm:col-span-2">
-                <label className={labelCls}>Notes (e.g. FMV per share)</label>
+                <label className={labelCls}>Notes</label>
                 <input
                   type="text"
                   value={form.sa_notes}
@@ -1186,6 +1360,150 @@ export default function CorporateActionForm({
                   className={inputCls}
                 />
               </div>
+            </div>
+
+            <div className="mt-4 border-t border-border/60 pt-3">
+              <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-text">
+                <input
+                  type="checkbox"
+                  checked={form.sa_fmv_enabled}
+                  onChange={(e) => set({
+                    sa_fmv_enabled: e.target.checked,
+                    sa_fmv_valuation_date: form.sa_fmv_valuation_date || form.payment_date,
+                  })}
+                  className="rounded border-border"
+                />
+                Add fair value of the shares
+              </label>
+              <p className="mt-1 text-xs text-text-muted">
+                Optional valuation metadata. It does not affect FIFO cost or dividend income.
+              </p>
+
+              {form.sa_fmv_enabled && (
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className={labelCls}>Source *</label>
+                    <select
+                      value={form.sa_fmv_source}
+                      onChange={(e) => set({ sa_fmv_source: e.target.value as ShareFmvSource })}
+                      className={inputCls}
+                    >
+                      <option value="OFFICIAL_NOTICE">Official notice</option>
+                      <option value="BROKER">Broker</option>
+                      <option value="MANUAL">Manual</option>
+                      {form.sa_fmv_source === "YAHOO_OPEN" && (
+                        <option value="YAHOO_OPEN" disabled>Yahoo Open (inherited)</option>
+                      )}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={labelCls}>Valuation date *</label>
+                    <input
+                      type="date"
+                      value={form.sa_fmv_valuation_date}
+                      onChange={(e) => set({ sa_fmv_valuation_date: e.target.value })}
+                      disabled={form.sa_fmv_source === "YAHOO_OPEN"}
+                      className={inputCls}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>FMV currency *</label>
+                    <input
+                      type="text"
+                      value={form.sa_fmv_currency}
+                      onChange={(e) => set({ sa_fmv_currency: e.target.value.toUpperCase() })}
+                      disabled={form.sa_fmv_source === "YAHOO_OPEN"}
+                      maxLength={3}
+                      placeholder="EUR"
+                      className={inputCls}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Total fair value</label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={form.sa_fmv_amount}
+                      onChange={(e) => set({ sa_fmv_amount: e.target.value })}
+                      disabled={form.sa_fmv_source === "YAHOO_OPEN"}
+                      placeholder="Optional if price per share is entered"
+                      className={inputCls}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Fair value per share</label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={form.sa_fmv_price_per_share}
+                      onChange={(e) => set({ sa_fmv_price_per_share: e.target.value })}
+                      disabled={form.sa_fmv_source === "YAHOO_OPEN"}
+                      placeholder="Optional if total is entered"
+                      className={inputCls}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Reference</label>
+                    <input
+                      type="text"
+                      value={form.sa_fmv_reference}
+                      onChange={(e) => set({ sa_fmv_reference: e.target.value })}
+                      disabled={form.sa_fmv_source === "YAHOO_OPEN"}
+                      placeholder="Notice, statement, or note"
+                      className={inputCls}
+                    />
+                  </div>
+                  {form.sa_fmv_currency !== "EUR" && (
+                    <>
+                      <div>
+                        <label className={labelCls}>FMV currency/EUR rate *</label>
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={form.sa_fmv_fx_rate}
+                          onChange={(e) => set({ sa_fmv_fx_rate: e.target.value })}
+                          disabled={form.sa_fmv_source === "YAHOO_OPEN"}
+                          placeholder="0.000000000"
+                          className={inputCls}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelCls}>FX date *</label>
+                        <input
+                          type="date"
+                          value={form.sa_fmv_fx_date}
+                          onChange={(e) => set({ sa_fmv_fx_date: e.target.value })}
+                          disabled={form.sa_fmv_source === "YAHOO_OPEN"}
+                          className={inputCls}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelCls}>FX source *</label>
+                        <select
+                          value={form.sa_fmv_fx_source}
+                          onChange={(e) => set({
+                            sa_fmv_fx_source: e.target.value as Exclude<ShareFmvFxSource, "IDENTITY">,
+                          })}
+                          disabled={form.sa_fmv_source === "YAHOO_OPEN"}
+                          className={inputCls}
+                        >
+                          <option value="ECB">ECB</option>
+                          <option value="BROKER">Broker</option>
+                          <option value="MANUAL">Manual</option>
+                        </select>
+                      </div>
+                    </>
+                  )}
+                  {form.sa_fmv_source === "YAHOO_OPEN" && (
+                    <p className="sm:col-span-2 text-xs text-text-muted">
+                      This Yahoo valuation will be inherited unchanged. Choose a manual source to replace it, or clear the checkbox to remove it.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </LegSection>
         )}

@@ -5,7 +5,9 @@ OHLCV price data for the DGI Screener pipeline.
 """
 
 import logging
+import math
 import time
+from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
@@ -94,6 +96,97 @@ class YFinanceFetcher:
         """
         logger.info("Fetching data for %s", symbol)
         return self._fetch_with_retry(symbol)
+
+    def get_daily_open(
+        self,
+        symbol: str,
+        requested_date: str,
+        max_calendar_days: int = 7,
+    ) -> Dict[str, Any]:
+        """Observe Yahoo's unadjusted Open on/after a requested calendar date.
+
+        The result always contains ``status``. Successful observations use
+        ``{"status": "ok", "open": str, "market_session_date": str,
+        "currency": str}``. Failures are classified as ``no_market_session``,
+        ``invalid_open``, ``currency_unavailable`` or ``provider_error``.
+        No alternate price field or prior session is ever used.
+        """
+        try:
+            start = date.fromisoformat(requested_date)
+        except (TypeError, ValueError):
+            raise ValueError(f"requested_date must be YYYY-MM-DD, got {requested_date!r}")
+        if max_calendar_days < 0:
+            raise ValueError("max_calendar_days must be non-negative")
+
+        end = start + timedelta(days=max_calendar_days + 1)
+        try:
+            self._rate_limit()
+            ticker = yf.Ticker(symbol)
+            history = ticker.history(
+                start=start.isoformat(),
+                end=end.isoformat(),
+                auto_adjust=False,
+                actions=False,
+            )
+            try:
+                info = ticker.info or {}
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("%s: currency lookup failed: %s", symbol, exc)
+                return {"status": "currency_unavailable"}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s: directed daily history failed: %s", symbol, exc)
+            return {"status": "provider_error"}
+
+        if history is None or history.empty:
+            return {"status": "no_market_session"}
+
+        rows = []
+        for index, row in history.sort_index().iterrows():
+            try:
+                session_date = (
+                    index.date() if isinstance(index, (datetime, pd.Timestamp))
+                    else date.fromisoformat(str(index)[:10])
+                )
+            except (TypeError, ValueError):
+                continue
+            if start <= session_date <= start + timedelta(days=max_calendar_days):
+                rows.append((session_date, row))
+        if not rows:
+            return {"status": "no_market_session"}
+
+        session_date, row = rows[0]
+        raw_open = row.get("Open")
+        try:
+            open_value = float(raw_open)
+        except (TypeError, ValueError):
+            return {
+                "status": "invalid_open",
+                "market_session_date": session_date.isoformat(),
+            }
+        if not math.isfinite(open_value) or open_value <= 0:
+            return {
+                "status": "invalid_open",
+                "market_session_date": session_date.isoformat(),
+            }
+
+        currency = str(info.get("currency") or "").strip().upper()
+        if not currency:
+            return {
+                "status": "currency_unavailable",
+                "market_session_date": session_date.isoformat(),
+            }
+        return {
+            "status": "ok",
+            "open": str(raw_open),
+            "market_session_date": session_date.isoformat(),
+            "currency": currency,
+        }
+
+    def get_historical_open(
+        self, symbol: str, requested_date: str, max_calendar_days: int = 7
+    ) -> Dict[str, Any]:
+        """Alias naming the historical nature of :meth:`get_daily_open`."""
+        return self.get_daily_open(symbol, requested_date, max_calendar_days)
 
     def get_batch_data(
         self,

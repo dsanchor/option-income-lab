@@ -35,19 +35,37 @@ _DECIMAL_FIELDS = frozenset({
     "amount", "eur_amount", "total", "total_eur", "quantity", "contracts",
     "strike", "option_strike", "rate", "rate_pct", "premium", "buyback_cost",
     "transfer_fee", "transfer_cost_basis_eur", "transfer_cost_basis_derived_eur",
+    "price_per_share", "price_per_share_eur",
     "gross", "net", "fees", "withholding",
 })
 
 
-def normalize(value: Any, field_name: str | None = None) -> Any:
+def normalize(
+    value: Any,
+    field_name: str | None = None,
+    *,
+    preserve_decimal_strings: bool = False,
+) -> Any:
+    preserve_decimal_strings = preserve_decimal_strings or field_name == "share_fmv"
     if isinstance(value, dict):
         return {
-            str(key): normalize(item, str(key))
+            str(key): normalize(
+                item,
+                str(key),
+                preserve_decimal_strings=preserve_decimal_strings,
+            )
             for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
             if key not in COSMOS_SYSTEM_KEYS
         }
     if isinstance(value, (list, tuple)):
-        return [normalize(item, field_name) for item in value]
+        return [
+            normalize(
+                item,
+                field_name,
+                preserve_decimal_strings=preserve_decimal_strings,
+            )
+            for item in value
+        ]
     if isinstance(value, datetime):
         return _utc_string(value)
     if isinstance(value, date):
@@ -67,7 +85,8 @@ def normalize(value: Any, field_name: str | None = None) -> Any:
                 pass
         try:
             if (
-                field_name in _DECIMAL_FIELDS
+                not preserve_decimal_strings
+                and field_name in _DECIMAL_FIELDS
                 and re.fullmatch(r"-?(?:0|[1-9]\d*)(?:\.\d+)?", value)
             ):
                 return _decimal_string(Decimal(value))

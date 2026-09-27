@@ -482,6 +482,29 @@ class HoldingsService:
         }
 
 
+def compute_holdings(movements: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compute holdings from an in-memory ledger without persistence side effects."""
+
+    class _Portfolio:
+        @staticmethod
+        def get_all_movements_for_holdings() -> List[Dict[str, Any]]:
+            return [dict(movement) for movement in movements]
+
+    class _Securities:
+        class _Container:
+            @staticmethod
+            def read_item(*_args: Any, **_kwargs: Any) -> Dict[str, Any]:
+                return {}
+
+        container = _Container()
+
+        @staticmethod
+        def get_security(_security_id: str) -> None:
+            return None
+
+    return HoldingsService(_Portfolio(), _Securities()).compute_holdings()
+
+
 def _resolve_security_names(
     security_ids: List[str],
     securities_svc: CosmosSecuritiesService,

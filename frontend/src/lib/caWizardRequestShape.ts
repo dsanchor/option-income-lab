@@ -15,7 +15,15 @@
  *   - amount_eur is the primary input; rate_pct will be derived server-side
  */
 
-import type { CaEventType, CaLegType, CostBasisStatus } from "@/types/portfolio";
+import type {
+  CaEventType,
+  CaLegType,
+  CostBasisStatus,
+  ManualShareFmvSource,
+  ShareFmvSource,
+  ShareFmvInput,
+  ShareFmvFxSource,
+} from "@/types/portfolio";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -58,33 +66,60 @@ export function isValidCaLegType(v: string): v is CaLegType {
 }
 
 /**
- * Derive the share-acquisition basis state from the authoritative EUR FMV.
- * Blank means unknown, explicit zero is a real zero-cost lot, and a positive
- * value is a complete acquisition basis.
+ * Preview the server-derived share-acquisition basis state from the investor's
+ * contribution and attributable fees. FMV is intentionally not an input.
  */
 export function shareAcquisitionCostBasisStatus(
   grossAmount: string,
   grossEurAmount: string,
   currency: string,
+  feesAmount = "",
+  feesEurAmount = "",
 ): CostBasisStatus {
-  const authoritativeAmount = currency.trim().toUpperCase() === "EUR"
+  const contribution = currency.trim().toUpperCase() === "EUR"
     ? grossAmount
     : grossEurAmount;
-  if (authoritativeAmount.trim() === "") return "INCOMPLETE";
+  const fees = currency.trim().toUpperCase() === "EUR"
+    ? feesAmount
+    : feesEurAmount;
+  if (contribution.trim() === "" || fees.trim() === "") return "INCOMPLETE";
 
-  const value = Number(authoritativeAmount);
-  if (!Number.isFinite(value) || value < 0) return "INCOMPLETE";
-  return value === 0 ? "ZERO_COST" : "COMPLETE";
+  const contributionValue = Number(contribution);
+  const feesValue = Number(fees);
+  const nativeContributionValue = Number(grossAmount);
+  const nativeFeesValue = Number(feesAmount);
+  if (
+    !Number.isFinite(contributionValue)
+    || contributionValue < 0
+    || !Number.isFinite(feesValue)
+    || feesValue < 0
+    || !Number.isFinite(nativeContributionValue)
+    || nativeContributionValue < 0
+    || !Number.isFinite(nativeFeesValue)
+    || nativeFeesValue < 0
+  ) return "INCOMPLETE";
+  if (
+    currency.trim().toUpperCase() !== "EUR"
+    && (
+      (nativeContributionValue > 0 && contributionValue === 0)
+      || (nativeFeesValue > 0 && feesValue === 0)
+    )
+  ) return "INCOMPLETE";
+  return contributionValue + feesValue === 0 ? "ZERO_COST" : "COMPLETE";
 }
 
-export function shareAcquisitionFmvValidationError(
+export function shareAcquisitionCostValidationError(
   grossAmount: string,
   grossEurAmount: string,
   currency: string,
+  feesAmount: string,
+  feesEurAmount: string,
 ): string | null {
   const fields = [
-    ["Share FMV", grossAmount],
-    ["Share FMV (€)", grossEurAmount],
+    ["Personal contribution", grossAmount],
+    ["Personal contribution (€)", grossEurAmount],
+    ["Attributable fees", feesAmount],
+    ["Attributable fees (€)", feesEurAmount],
   ] as const;
   for (const [label, raw] of fields) {
     if (raw.trim() === "") continue;
@@ -100,9 +135,79 @@ export function shareAcquisitionFmvValidationError(
     && grossEurAmount.trim() !== ""
     && Number(grossAmount) !== Number(grossEurAmount)
   ) {
-    return "Share FMV and Share FMV (€) must match for EUR.";
+    return "Personal contribution and its EUR amount must match for EUR.";
+  }
+  if (
+    currency.trim().toUpperCase() === "EUR"
+    && feesAmount.trim() !== ""
+    && feesEurAmount.trim() !== ""
+    && Number(feesAmount) !== Number(feesEurAmount)
+  ) {
+    return "Attributable fees and their EUR amount must match for EUR.";
   }
   return null;
+}
+
+export interface ManualShareFmvFields {
+  enabled: boolean;
+  valuationDate: string;
+  currency: string;
+  amount: string;
+  pricePerShare: string;
+  source: ShareFmvSource;
+  reference: string;
+  fxRate: string;
+  fxDate: string;
+  fxSource: Exclude<ShareFmvFxSource, "IDENTITY">;
+}
+
+function positiveDecimal(raw: string): boolean {
+  const value = Number(raw);
+  return raw.trim() !== "" && Number.isFinite(value) && value > 0;
+}
+
+export function manualShareFmvValidationError(fields: ManualShareFmvFields): string | null {
+  if (!fields.enabled) return null;
+  if (!fields.valuationDate) return "Fair-value valuation date is required.";
+  if (!/^[A-Z]{3}$/.test(fields.currency.trim().toUpperCase())) {
+    return "Fair-value currency must be a three-letter ISO code.";
+  }
+  if (!positiveDecimal(fields.amount) && !positiveDecimal(fields.pricePerShare)) {
+    return "Enter a positive fair-value total or price per share.";
+  }
+  for (const [label, raw] of [
+    ["Fair-value total", fields.amount],
+    ["Fair-value price per share", fields.pricePerShare],
+  ] as const) {
+    if (raw.trim() !== "" && !positiveDecimal(raw)) {
+      return `${label} must be a finite positive number.`;
+    }
+  }
+  if (fields.currency.trim().toUpperCase() !== "EUR") {
+    if (!positiveDecimal(fields.fxRate)) return "A positive fair-value FX rate is required.";
+    if (!fields.fxDate) return "Fair-value FX date is required.";
+  }
+  return null;
+}
+
+export function buildManualShareFmv(fields: ManualShareFmvFields): ShareFmvInput | undefined {
+  if (!fields.enabled || fields.source === "YAHOO_OPEN") return undefined;
+  const currency = fields.currency.trim().toUpperCase();
+  return {
+    valuation_date: fields.valuationDate,
+    currency,
+    source: fields.source as ManualShareFmvSource,
+    amount: fields.amount.trim() || undefined,
+    price_per_share: fields.pricePerShare.trim() || undefined,
+    reference: fields.reference.trim() || undefined,
+    fx: currency === "EUR"
+      ? undefined
+      : {
+          rate: fields.fxRate.trim(),
+          date: fields.fxDate,
+          source: fields.fxSource,
+        },
+  };
 }
 
 /**

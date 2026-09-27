@@ -45,11 +45,22 @@ function Field({ label, value, mono = false }: { label: string; value: string | 
   );
 }
 
-function formatEurAmount(amount: string | null | undefined): string {
+function formatEurAmount(
+  amount: string | null | undefined,
+  currency?: string | null,
+): string {
   if (!amount) return "—";
   const n = Number(amount);
   if (isNaN(n)) return amount;
-  return `€${n.toLocaleString("es-ES", { minimumFractionDigits: 2 })}`;
+  const eur = `€${n.toLocaleString("es-ES", { minimumFractionDigits: 2 })}`;
+  return currency && currency !== "EUR" ? `${eur} (${currency})` : eur;
+}
+
+function formatMoney(amount: string | null | undefined, currency: string | null | undefined): string {
+  if (!amount) return "—";
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return `${amount} ${currency ?? ""}`.trim();
+  return `${n.toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} ${currency ?? ""}`.trim();
 }
 
 export interface MovementDetailDialogProps {
@@ -171,6 +182,7 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
     Number.isFinite(quantity) &&
     quantity > 0
   );
+  const isShareAcquisition = m.ca_leg_type === "SHARE_ACQUISITION";
 
   async function handleQuickLinkSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -328,36 +340,92 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
             )}
           </div>
 
-          {/* Amounts */}
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-2">Amounts</div>
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 rounded-[var(--radius)] border border-border bg-bg-card/50 p-3">
-              <Field label="Gross" value={formatEurAmount(m.gross?.eur_amount)} mono />
-              <Field label="Fees" value={formatEurAmount(m.fees?.total_eur)} mono />
-              <Field label="Net" value={formatEurAmount(m.net?.eur_amount)} mono />
-              {showLotAveragePrice && (
-                <Field
-                  label="Avg Price / Share"
-                  value={formatEurAmount(m.lot_average_price_eur)}
-                  mono
-                />
-              )}
-              {m.withholding?.source && (
-                <Field
-                  label={`WHT Source (${m.withholding.source.country ?? ""})`}
-                  value={formatEurAmount(m.withholding.source.amount_eur)}
-                  mono
-                />
-              )}
-              {m.withholding?.destination && (
-                <Field
-                  label={`WHT Dest`}
-                  value={formatEurAmount(m.withholding.destination.amount_eur)}
-                  mono
-                />
-              )}
+          {isShareAcquisition ? (
+            <>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-2">FIFO Cost</div>
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 rounded-[var(--radius)] border border-border bg-bg-card/50 p-3">
+                  <Field label="Personal contribution" value={formatEurAmount(m.gross?.eur_amount, m.gross?.currency)} mono />
+                  <Field label="Attributable fees" value={formatEurAmount(m.fees?.total_eur, m.fees?.currency)} mono />
+                  <Field label="FIFO cost" value={formatEurAmount(m.net?.eur_amount, m.net?.currency)} mono />
+                  {showLotAveragePrice && (
+                    <Field label="Avg Price / Share" value={formatEurAmount(m.lot_average_price_eur)} mono />
+                  )}
+                  <Field label="Status" value={m.cost_basis_status ?? null} />
+                </div>
+              </div>
+
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-2">
+                  Fair Value of the Shares
+                </div>
+                {m.share_fmv ? (
+                  <div className="space-y-4 rounded-[var(--radius)] border border-border bg-bg-card/50 p-3">
+                    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+                      <Field label="Total (native)" value={formatMoney(m.share_fmv.amount, m.share_fmv.currency)} mono />
+                      <Field label="Total (EUR)" value={formatEurAmount(m.share_fmv.eur_amount)} mono />
+                      <Field label="Valuation date" value={m.share_fmv.valuation_date} mono />
+                      <Field
+                        label="Price / Share (native)"
+                        value={formatMoney(m.share_fmv.price_per_share, m.share_fmv.currency)}
+                        mono
+                      />
+                      <Field label="Price / Share (EUR)" value={formatEurAmount(m.share_fmv.price_per_share_eur)} mono />
+                      <Field label="Source" value={m.share_fmv.source} />
+                      <Field label="Confidence" value={m.share_fmv.confidence} />
+                      <Field label="FX rate" value={m.share_fmv.fx?.rate ?? null} mono />
+                      <Field label="FX date" value={m.share_fmv.fx?.date ?? null} mono />
+                      <Field label="FX source" value={m.share_fmv.fx?.source ?? null} />
+                      {m.share_fmv.provenance?.reference && (
+                        <Field label="Reference" value={m.share_fmv.provenance.reference} />
+                      )}
+                    </div>
+                    {m.share_fmv.source === "YAHOO_OPEN" && m.share_fmv.provenance && (
+                      <div>
+                        <div className="mb-2 text-xs font-medium text-text-muted">Yahoo provenance</div>
+                        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+                          <Field label="Provider" value={m.share_fmv.provenance.provider ?? null} />
+                          <Field label="Provider symbol" value={m.share_fmv.provenance.provider_symbol ?? null} mono />
+                          <Field label="Price field" value={m.share_fmv.provenance.price_field ?? null} />
+                          <Field label="Requested date" value={m.share_fmv.provenance.requested_date ?? null} mono />
+                          <Field label="Market session" value={m.share_fmv.provenance.market_session_date ?? null} mono />
+                          <Field label="Fetched at" value={m.share_fmv.provenance.fetched_at ?? null} mono />
+                          <Field label="Script version" value={m.share_fmv.provenance.script_version ?? null} mono />
+                          <Field label="Run ID" value={m.share_fmv.provenance.run_id ?? null} mono />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="rounded-[var(--radius)] border border-border bg-bg-card/50 p-3 text-sm italic text-text-muted">
+                    Not recorded
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-2">Amounts</div>
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 rounded-[var(--radius)] border border-border bg-bg-card/50 p-3">
+                <Field label="Gross" value={formatEurAmount(m.gross?.eur_amount, m.gross?.currency)} mono />
+                <Field label="Fees" value={formatEurAmount(m.fees?.total_eur, m.fees?.currency)} mono />
+                <Field label="Net" value={formatEurAmount(m.net?.eur_amount, m.net?.currency)} mono />
+                {showLotAveragePrice && (
+                  <Field label="Avg Price / Share" value={formatEurAmount(m.lot_average_price_eur)} mono />
+                )}
+                {m.withholding?.source && (
+                  <Field
+                    label={`WHT Source (${m.withholding.source.country ?? ""})`}
+                    value={formatEurAmount(m.withholding.source.amount_eur)}
+                    mono
+                  />
+                )}
+                {m.withholding?.destination && (
+                  <Field label="WHT Dest" value={formatEurAmount(m.withholding.destination.amount_eur)} mono />
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* FX */}
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
@@ -550,6 +618,7 @@ export default function MovementDetailDialog({ movement: m, accounts = [], onClo
                             <span className="text-text">× {Number(leg.quantity).toLocaleString("en-US", { maximumFractionDigits: 4 })}</span>
                           )}
                           <span className="ml-auto font-mono text-text">
+                            {leg.ca_leg_type === "SHARE_ACQUISITION" ? "Contribution " : ""}
                             €{Number(leg.gross?.eur_amount || "0").toLocaleString("es-ES", { minimumFractionDigits: 2 })}
                           </span>
                           {leg.correction_status && leg.correction_status !== "ACTIVE" && (

@@ -7,13 +7,13 @@ precision; JSON serialisation uses string representation.
 
 from __future__ import annotations
 
-from decimal import Decimal
+import re
+from datetime import datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
-
 
 # ---------------------------------------------------------------------------
 # Frozen enums (contract §Frozen Enums)
@@ -542,6 +542,256 @@ class CaEventType(str, Enum):
     SHARE_CONSOLIDATION = "SHARE_CONSOLIDATION"
 
 
+_FMV_SOURCES = {
+    "OFFICIAL_NOTICE": "AUTHORITATIVE",
+    "BROKER": "AUTHORITATIVE",
+    "MANUAL": "USER_ASSERTED",
+    "YAHOO_OPEN": "MARKET_ESTIMATE",
+}
+_FMV_FX_SOURCES = frozenset({"IDENTITY", "ECB", "BROKER", "MANUAL"})
+_PORTFOLIO_SUPPORTED_CURRENCIES = frozenset({
+    "AUD", "BGN", "BRL", "CAD", "CHF", "CNY", "CZK", "DKK", "EUR", "GBP",
+    "HKD", "HUF", "IDR", "ILS", "INR", "ISK", "JPY", "KRW", "MXN", "MYR",
+    "NOK", "NZD", "PHP", "PLN", "RON", "SEK", "SGD", "THB", "TRY", "USD",
+    "ZAR",
+})
+_FMV_Q6 = Decimal("0.000001")
+_FMV_Q9 = Decimal("0.000000001")
+
+
+def _fmv_decimal(
+    value: Any, field: str, *, require_string: bool = True
+) -> Decimal:
+    if (
+        isinstance(value, bool)
+        or value is None
+        or (require_string and not isinstance(value, str))
+        or not str(value).strip()
+    ):
+        raise ValueError(f"share_fmv.{field} must be a positive decimal string")
+    raw = str(value).strip()
+    if not re.fullmatch(r"(?:0|[1-9]\d*)(?:\.\d+)?", raw):
+        raise ValueError(f"share_fmv.{field} must be a positive decimal string")
+    try:
+        parsed = Decimal(raw)
+    except InvalidOperation as exc:
+        raise ValueError(f"share_fmv.{field} must be a positive decimal string") from exc
+    if not parsed.is_finite() or parsed <= 0:
+        raise ValueError(f"share_fmv.{field} must be finite and greater than zero")
+    return parsed
+
+
+def _fmv_date(value: Any, field: str) -> str:
+    from datetime import date
+
+    if not isinstance(value, str):
+        raise ValueError(f"share_fmv.{field} must be YYYY-MM-DD")
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"share_fmv.{field} must be YYYY-MM-DD") from exc
+    canonical = parsed.isoformat()
+    if canonical != value:
+        raise ValueError(f"share_fmv.{field} must be YYYY-MM-DD")
+    return canonical
+
+
+def normalize_share_fmv(
+    value: Any,
+    *,
+    quantity: Any,
+    trade_date: str,
+    allow_yahoo: bool = False,
+    persisted: bool = False,
+) -> Dict[str, Any]:
+    """Validate and canonicalize independent fair value metadata."""
+    if not isinstance(value, dict) or not value:
+        raise ValueError("share_fmv must be a non-empty object or null")
+    allowed_fields = {
+        "valuation_date", "amount", "currency", "eur_amount",
+        "price_per_share", "price_per_share_eur", "source", "confidence",
+        "fx", "reference", "provenance",
+    }
+    unknown_fields = set(value) - allowed_fields
+    if unknown_fields:
+        raise ValueError(f"share_fmv contains unknown fields: {sorted(unknown_fields)}")
+
+    qty = _fmv_decimal(quantity, "quantity", require_string=False)
+    valuation_date = _fmv_date(value.get("valuation_date"), "valuation_date")
+    if valuation_date != trade_date:
+        raise ValueError("share_fmv.valuation_date must equal the share leg trade_date")
+
+    currency_raw = value.get("currency")
+    currency = str(currency_raw).strip().upper() if currency_raw is not None else ""
+    if currency not in _PORTFOLIO_SUPPORTED_CURRENCIES:
+        raise ValueError(
+            "share_fmv.currency must be a supported ISO-4217 code"
+        )
+
+    source = str(value.get("source") or "").strip().upper()
+    if source not in _FMV_SOURCES:
+        raise ValueError(f"share_fmv.source must be one of {sorted(_FMV_SOURCES)}")
+    if source == "YAHOO_OPEN" and not allow_yahoo:
+        raise ValueError("share_fmv.source=YAHOO_OPEN is reserved for internal backfill")
+    confidence = _FMV_SOURCES[source]
+    supplied_confidence = value.get("confidence")
+    if supplied_confidence is not None and supplied_confidence != confidence:
+        raise ValueError("share_fmv.confidence is incompatible with share_fmv.source")
+
+    fx = value.get("fx")
+    if fx is None and currency == "EUR":
+        fx = {
+            "rate": "1",
+            "date": valuation_date,
+            "source": "IDENTITY",
+        }
+    if not isinstance(fx, dict):
+        raise ValueError("share_fmv.fx is required for non-EUR currency")
+    fx_source = str(fx.get("source") or "").strip().upper()
+    fx_date = _fmv_date(fx.get("date"), "fx.date")
+    rate = _fmv_decimal(fx.get("rate"), "fx.rate")
+    if fx_source not in _FMV_FX_SOURCES:
+        raise ValueError(f"share_fmv.fx.source must be one of {sorted(_FMV_FX_SOURCES)}")
+    if currency == "EUR":
+        if rate != Decimal("1") or fx_date != valuation_date or fx_source != "IDENTITY":
+            raise ValueError(
+                "EUR share_fmv requires IDENTITY FX at valuation_date with rate 1"
+            )
+    else:
+        if fx_source == "IDENTITY":
+            raise ValueError("non-EUR share_fmv cannot use IDENTITY FX")
+        if source == "YAHOO_OPEN" and fx_source != "ECB":
+            raise ValueError("YAHOO_OPEN share_fmv requires ECB FX")
+
+    amount_in = value.get("amount")
+    unit_in = value.get("price_per_share")
+    if amount_in is None and unit_in is None:
+        raise ValueError("share_fmv requires amount or price_per_share")
+    amount = _fmv_decimal(amount_in, "amount") if amount_in is not None else None
+    unit = (
+        _fmv_decimal(unit_in, "price_per_share")
+        if unit_in is not None else None
+    )
+    if amount is not None and unit is not None:
+        if amount.quantize(_FMV_Q6, rounding=ROUND_HALF_UP) != (
+            unit * qty
+        ).quantize(_FMV_Q6, rounding=ROUND_HALF_UP):
+            raise ValueError(
+                "share_fmv.amount must equal price_per_share multiplied by quantity"
+            )
+    elif unit is None:
+        unit = (amount / qty).quantize(_FMV_Q6, rounding=ROUND_HALF_UP)
+        amount = (unit * qty).quantize(_FMV_Q6, rounding=ROUND_HALF_UP)
+    else:
+        amount = (unit * qty).quantize(_FMV_Q6, rounding=ROUND_HALF_UP)
+
+    amount = amount.quantize(_FMV_Q6, rounding=ROUND_HALF_UP)
+    unit = unit.quantize(_FMV_Q6, rounding=ROUND_HALF_UP)
+    eur_amount = (amount * rate).quantize(_FMV_Q6, rounding=ROUND_HALF_UP)
+    unit_eur = (unit * rate).quantize(_FMV_Q6, rounding=ROUND_HALF_UP)
+
+    for field, derived in (
+        ("eur_amount", eur_amount),
+        ("price_per_share_eur", unit_eur),
+    ):
+        if value.get(field) is not None:
+            supplied = _fmv_decimal(value[field], field).quantize(
+                _FMV_Q6, rounding=ROUND_HALF_UP
+            )
+            if supplied != derived:
+                raise ValueError(f"share_fmv.{field} is incompatible with derived value")
+
+    provenance = value.get("provenance")
+    reference = value.get("reference")
+    if source == "YAHOO_OPEN":
+        required = {
+            "provider", "provider_symbol", "price_field", "requested_date",
+            "market_session_date", "fetched_at", "script_version", "run_id",
+        }
+        if not isinstance(provenance, dict) or any(
+            not isinstance(provenance.get(field), str)
+            or not provenance[field].strip()
+            for field in required
+        ):
+            raise ValueError("YAHOO_OPEN share_fmv requires complete provenance")
+        if provenance.get("provider") != "yfinance" or provenance.get("price_field") != "OPEN":
+            raise ValueError("YAHOO_OPEN provenance must identify yfinance OPEN")
+        unknown_provenance = set(provenance) - required
+        if unknown_provenance:
+            raise ValueError(
+                "YAHOO_OPEN provenance contains unsupported fields: "
+                f"{sorted(unknown_provenance)}"
+            )
+        _fmv_date(provenance.get("requested_date"), "provenance.requested_date")
+        _fmv_date(
+            provenance.get("market_session_date"),
+            "provenance.market_session_date",
+        )
+        if provenance["requested_date"] != valuation_date:
+            raise ValueError(
+                "share_fmv.provenance.requested_date must equal valuation_date"
+            )
+        try:
+            fetched_at = datetime.fromisoformat(
+                provenance["fetched_at"].replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "share_fmv.provenance.fetched_at must be ISO-8601 UTC"
+            ) from exc
+        if (
+            fetched_at.tzinfo is None
+            or fetched_at.utcoffset() != timedelta(0)
+        ):
+            raise ValueError("share_fmv.provenance.fetched_at must be ISO-8601 UTC")
+        from uuid import UUID
+        try:
+            UUID(provenance["run_id"])
+        except (ValueError, AttributeError) as exc:
+            raise ValueError("share_fmv.provenance.run_id must be a UUID") from exc
+        if provenance["script_version"] != "dividend-buy-fmv-v1":
+            raise ValueError(
+                "share_fmv.provenance.script_version must be dividend-buy-fmv-v1"
+            )
+        if reference is not None:
+            raise ValueError("share_fmv.reference is not valid for YAHOO_OPEN")
+        normalized_provenance = dict(provenance)
+    else:
+        if provenance is not None:
+            if not persisted or not isinstance(provenance, dict):
+                raise ValueError("share_fmv.provenance is reserved for YAHOO_OPEN")
+            unknown = set(provenance) - {"reference"}
+            if unknown:
+                raise ValueError("manual share_fmv provenance only supports reference")
+            reference = provenance.get("reference")
+        if reference is not None and (
+            not isinstance(reference, str) or not reference.strip()
+        ):
+            raise ValueError("share_fmv.reference must be a non-empty string")
+        normalized_provenance = (
+            {"reference": reference.strip()} if reference is not None else None
+        )
+
+    result: Dict[str, Any] = {
+        "valuation_date": valuation_date,
+        "amount": f"{amount:.6f}",
+        "currency": currency,
+        "eur_amount": f"{eur_amount:.6f}",
+        "price_per_share": f"{unit:.6f}",
+        "price_per_share_eur": f"{unit_eur:.6f}",
+        "source": source,
+        "confidence": confidence,
+        "fx": {
+            "rate": f"{rate.quantize(_FMV_Q9, rounding=ROUND_HALF_UP):.9f}",
+            "date": fx_date,
+            "source": fx_source,
+        },
+    }
+    if normalized_provenance is not None:
+        result["provenance"] = normalized_provenance
+    return result
+
+
 class CorporateActionLegCreate(BaseModel):
     """One leg within a corporate-action group (maps to a ledger_txn document)."""
     leg_type: str                                   # CaLegType value
@@ -551,6 +801,7 @@ class CorporateActionLegCreate(BaseModel):
     fees: Optional[FeesInput] = None
     withholding: Optional[Any] = None
     fx: Optional[Dict[str, str]] = None
+    share_fmv: Optional[Dict[str, Any]] = None
     cost_basis_status: Optional[str] = None
     notes: Optional[str] = None
     transfer_cost_basis_eur: Optional[str] = None   # required for CONSOLIDATION_IN

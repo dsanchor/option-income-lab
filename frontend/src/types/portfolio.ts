@@ -22,6 +22,10 @@ export type AssetClass = "Equity";
 export type SecurityStatus = "ACTIVE" | "DELISTED";
 export type FxRateSource = "ECB" | "BROKER" | "MANUAL";
 export type ImportSource = "csv_import" | "manual";
+export type ShareFmvSource = "OFFICIAL_NOTICE" | "BROKER" | "MANUAL" | "YAHOO_OPEN";
+export type ManualShareFmvSource = Exclude<ShareFmvSource, "YAHOO_OPEN">;
+export type ShareFmvConfidence = "AUTHORITATIVE" | "USER_ASSERTED" | "MARKET_ESTIMATE";
+export type ShareFmvFxSource = "IDENTITY" | "ECB" | "BROKER" | "MANUAL";
 
 export const OPTION_TXN_TYPES: readonly OptionTxnType[] = [
   "CALL_SELL",
@@ -143,6 +147,51 @@ export interface FxInfo {
   rate_source: FxRateSource;
 }
 
+export interface ShareFmvFx {
+  rate: string;
+  date: string;
+  source: ShareFmvFxSource;
+}
+
+export interface ShareFmvProvenance {
+  reference?: string;
+  provider?: string;
+  provider_symbol?: string;
+  price_field?: string;
+  requested_date?: string;
+  market_session_date?: string;
+  fetched_at?: string;
+  script_version?: string;
+  run_id?: string;
+}
+
+export interface ShareFmv {
+  valuation_date: string;
+  amount: string;
+  currency: string;
+  eur_amount: string;
+  price_per_share: string;
+  price_per_share_eur: string;
+  source: ShareFmvSource;
+  confidence: ShareFmvConfidence;
+  fx: ShareFmvFx;
+  provenance?: ShareFmvProvenance;
+}
+
+export interface ShareFmvInput {
+  valuation_date: string;
+  currency: string;
+  source: ManualShareFmvSource;
+  amount?: string;
+  price_per_share?: string;
+  reference?: string;
+  fx?: {
+    rate: string;
+    date: string;
+    source: Exclude<ShareFmvFxSource, "IDENTITY">;
+  };
+}
+
 export interface LedgerMovement {
   id: string;
   txn_type: TxnType;
@@ -161,6 +210,7 @@ export interface LedgerMovement {
   created_at: string;
   cost_basis_status?: CostBasisStatus;
   lot_average_price_eur?: string | null;
+  share_fmv?: ShareFmv | null;
   /** Legacy compatibility fields used only to exclude unsupported rights rows. */
   source_derechos_amount?: string;
   sales_type?: "ACCIONES" | "DERECHOS" | null;
@@ -491,6 +541,7 @@ export interface CorporateActionLegRequest {
   withholding?: WithholdingInput | null;
   fx?: { rate: string; rate_source: FxRateSource };
   cost_basis_status?: CostBasisStatus;       // SHARE_ACQUISITION only
+  share_fmv?: ShareFmvInput | null;          // SHARE_ACQUISITION only
   notes?: string;
   transfer_cost_basis_eur?: string;          // CONSOLIDATION_IN only
 }

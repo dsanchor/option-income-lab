@@ -19,7 +19,7 @@ import logging
 import re
 import unicodedata
 from datetime import datetime, timezone
-from decimal import Decimal, DecimalException, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, DecimalException
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -27,8 +27,15 @@ from azure.cosmos.exceptions import CosmosResourceNotFoundError
 
 from .models import (
     OPTION_BUY_TXN_TYPES as _MODEL_OPTION_BUY_TYPES,
+)
+from .models import (
     OPTION_SELL_TXN_TYPES as _MODEL_OPTION_SELL_TYPES,
+)
+from .models import (
     OPTION_TXN_TYPES as _MODEL_OPTION_TXN_TYPES,
+)
+from .models import (
+    normalize_share_fmv,
 )
 from .rights_policy import (
     RIGHTS_UNSUPPORTED_MESSAGE,
@@ -315,10 +322,10 @@ def _optional_nonnegative_decimal(
     return amount, raw
 
 
-def _normalize_share_acquisition_fmv(
+def _normalize_share_acquisition_cost(
     leg: Dict[str, Any],
 ) -> tuple[Dict[str, str], Decimal, str]:
-    """Normalize authoritative share FMV and derive its cost-basis status."""
+    """Normalize investor contribution and derive its FIFO cost-basis status."""
     gross = leg.get("gross")
     if gross is None:
         gross = {}
@@ -346,10 +353,27 @@ def _normalize_share_acquisition_fmv(
     else:
         authoritative = eur
 
+    fees = leg.get("fees") or {}
+    if not isinstance(fees, dict):
+        raise ValueError("SHARE_ACQUISITION fees must be an object")
+    fee_native, _ = _optional_nonnegative_decimal(
+        fees.get("total", "0"), "SHARE_ACQUISITION fees.total"
+    )
+    fee_eur, _ = _optional_nonnegative_decimal(
+        fees.get("total_eur", "0"), "SHARE_ACQUISITION fees.total_eur"
+    )
+    fee_native = fee_native or Decimal("0")
+    fee_eur = fee_eur or Decimal("0")
+    fee_currency = str(fees.get("currency") or currency).strip().upper()
+    if fee_currency == "EUR" and fee_native != fee_eur:
+        raise ValueError(
+            "SHARE_ACQUISITION EUR fees.total and fees.total_eur must match"
+        )
+
     if authoritative is None:
         status = "INCOMPLETE"
         calculation_eur = Decimal("0")
-    elif authoritative == Decimal("0"):
+    elif authoritative + fee_eur == Decimal("0"):
         status = "ZERO_COST"
         calculation_eur = authoritative
     else:
@@ -370,6 +394,7 @@ def _normalize_share_acquisition_fmv(
 # Non-financial fields (trade_date, notes) remain individually correctable.
 _CA_FINANCIAL_FIELDS: frozenset = frozenset({
     "gross", "fees", "withholding", "quantity", "fx", "cost_basis_status",
+    "share_fmv",
 })
 
 
@@ -1233,6 +1258,15 @@ class CosmosPortfolioService:
         invalid_legs = provided_leg_types - valid_leg_types
         if invalid_legs:
             raise ValueError(f"Unknown leg_type(s): {sorted(invalid_legs)}")
+        for leg in legs:
+            if leg.get("share_fmv") is not None and (
+                event_type not in {"SCRIP_DIVIDEND", "DIVIDEND_WITH_SCRIP"}
+                or leg.get("leg_type") != "SHARE_ACQUISITION"
+            ):
+                raise ValueError(
+                    "share_fmv is only valid on SHARE_ACQUISITION legs of "
+                    "SCRIP_DIVIDEND or DIVIDEND_WITH_SCRIP"
+                )
 
         # Build and validate all leg docs before writing any (all-or-nothing).
         # CASH_DIVIDEND is the only event type that is *always* exactly one leg
@@ -1265,6 +1299,17 @@ class CosmosPortfolioService:
             elif leg_type == "SHARE_ACQUISITION":
                 quantity = str(leg.get("quantity") or "0")
                 cost_basis_status = leg.get("cost_basis_status") or "INCOMPLETE"
+                quantity_value, _ = _optional_nonnegative_decimal(
+                    quantity, "SHARE_ACQUISITION quantity"
+                )
+                if quantity_value is None or quantity_value <= 0:
+                    raise ValueError(
+                        "SHARE_ACQUISITION quantity must be finite and greater than zero"
+                    )
+                if leg.get("withholding") is not None:
+                    raise ValueError(
+                        "withholding is not applicable to SHARE_ACQUISITION"
+                    )
             else:
                 quantity = str(leg.get("quantity") or "0")
                 cost_basis_status = leg.get("cost_basis_status")
@@ -1282,7 +1327,7 @@ class CosmosPortfolioService:
 
             if leg_type == "SHARE_ACQUISITION":
                 gross, gross_eur, cost_basis_status = (
-                    _normalize_share_acquisition_fmv(leg)
+                    _normalize_share_acquisition_cost(leg)
                 )
             else:
                 gross_eur = _d(gross.get("eur_amount", "0"))
@@ -1293,7 +1338,15 @@ class CosmosPortfolioService:
                 wht_s = _d((wht.get("source") or {}).get("amount_eur", "0"))
                 wht_d = _d((wht.get("destination") or {}).get("amount_eur", "0"))
 
-            net_eur = gross_eur - fees_eur - wht_s - wht_d
+            if leg_type == "SHARE_ACQUISITION":
+                net_eur = gross_eur + fees_eur
+                net_amount = (
+                    _d(gross.get("amount", "0"))
+                    + _d(fees_data.get("total", "0"))
+                )
+            else:
+                net_eur = gross_eur - fees_eur - wht_s - wht_d
+                net_amount = net_eur
             currency = gross.get("currency", "EUR").upper()
 
             movement_id = f"mvt_{uuid4().hex}"
@@ -1321,7 +1374,7 @@ class CosmosPortfolioService:
                     "total_eur": str(fees_eur),
                 },
                 "net": {
-                    "amount": str(net_eur.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+                    "amount": str(net_amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
                     "currency": currency,
                     "eur_amount": str(net_eur.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
                 },
@@ -1344,6 +1397,12 @@ class CosmosPortfolioService:
 
             if txn_type == "BUY":
                 doc["cost_basis_status"] = cost_basis_status or "COMPLETE"
+            if leg_type == "SHARE_ACQUISITION" and leg.get("share_fmv") is not None:
+                doc["share_fmv"] = normalize_share_fmv(
+                    leg["share_fmv"],
+                    quantity=quantity,
+                    trade_date=trade_date,
+                )
 
             if leg_type == "CONSOLIDATION_IN":
                 doc["transfer_cost_basis_eur"] = str(transfer_cost_basis_eur)
@@ -1528,6 +1587,19 @@ class CosmosPortfolioService:
         invalid_types = provided_leg_types - set(_CA_LEG_TXN_TYPE)
         if invalid_types:
             raise ValueError(f"Unknown leg_type(s): {sorted(invalid_types)}")
+        for leg in legs:
+            if leg.get("share_fmv") is not None and (
+                event_type not in {"SCRIP_DIVIDEND", "DIVIDEND_WITH_SCRIP"}
+                or leg.get("leg_type") != "SHARE_ACQUISITION"
+            ):
+                raise ValueError(
+                    "share_fmv is only valid on SHARE_ACQUISITION legs of "
+                    "SCRIP_DIVIDEND or DIVIDEND_WITH_SCRIP"
+                )
+
+        originals_by_type: Dict[str, List[Dict[str, Any]]] = {}
+        for original in original_legs:
+            originals_by_type.setdefault(original.get("ca_leg_type", ""), []).append(original)
 
         # ── 3. Build all replacement leg docs in memory ──────────────────────
         new_ca_group_id = f"cag_{uuid4().hex}"
@@ -1547,6 +1619,17 @@ class CosmosPortfolioService:
             elif leg_type == "SHARE_ACQUISITION":
                 quantity = str(leg.get("quantity") or "0")
                 cost_basis_status = leg.get("cost_basis_status") or "INCOMPLETE"
+                quantity_value, _ = _optional_nonnegative_decimal(
+                    quantity, "SHARE_ACQUISITION quantity"
+                )
+                if quantity_value is None or quantity_value <= 0:
+                    raise ValueError(
+                        "SHARE_ACQUISITION quantity must be finite and greater than zero"
+                    )
+                if leg.get("withholding") is not None:
+                    raise ValueError(
+                        "withholding is not applicable to SHARE_ACQUISITION"
+                    )
             else:
                 quantity = str(leg.get("quantity") or "0")
                 cost_basis_status = leg.get("cost_basis_status")
@@ -1564,7 +1647,7 @@ class CosmosPortfolioService:
 
             if leg_type == "SHARE_ACQUISITION":
                 gross, gross_eur, cost_basis_status = (
-                    _normalize_share_acquisition_fmv(leg)
+                    _normalize_share_acquisition_cost(leg)
                 )
             else:
                 gross_eur = _d(gross.get("eur_amount", "0"))
@@ -1575,7 +1658,15 @@ class CosmosPortfolioService:
                 wht_s = _d((wht.get("source") or {}).get("amount_eur", "0"))
                 wht_d = _d((wht.get("destination") or {}).get("amount_eur", "0"))
 
-            net_eur = gross_eur - fees_eur - wht_s - wht_d
+            if leg_type == "SHARE_ACQUISITION":
+                net_eur = gross_eur + fees_eur
+                net_amount = (
+                    _d(gross.get("amount", "0"))
+                    + _d(fees_data.get("total", "0"))
+                )
+            else:
+                net_eur = gross_eur - fees_eur - wht_s - wht_d
+                net_amount = net_eur
             currency = gross.get("currency", "EUR").upper()
             new_mvt_id = f"mvt_{uuid4().hex}"
 
@@ -1603,7 +1694,7 @@ class CosmosPortfolioService:
                     "total_eur": str(fees_eur),
                 },
                 "net": {
-                    "amount": str(net_eur.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+                    "amount": str(net_amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
                     "currency": currency,
                     "eur_amount": str(net_eur.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
                 },
@@ -1627,6 +1718,47 @@ class CosmosPortfolioService:
 
             if txn_type == "BUY":
                 doc["cost_basis_status"] = cost_basis_status or "COMPLETE"
+            if leg_type == "SHARE_ACQUISITION":
+                if "share_fmv" in leg:
+                    if leg["share_fmv"] is not None:
+                        doc["share_fmv"] = normalize_share_fmv(
+                            leg["share_fmv"],
+                            quantity=quantity,
+                            trade_date=trade_date,
+                        )
+                else:
+                    original_candidates = originals_by_type.get(leg_type, [])
+                    originals_with_fmv = [
+                        candidate for candidate in original_candidates
+                        if candidate.get("share_fmv") is not None
+                    ]
+                    if originals_with_fmv:
+                        if len(original_candidates) != 1:
+                            raise ValueError(
+                                "share_fmv must be supplied or null when the original "
+                                "SHARE_ACQUISITION leg is ambiguous"
+                            )
+                        original = original_candidates[0]
+                        original_quantity = _optional_nonnegative_decimal(
+                            original.get("quantity"),
+                            "original SHARE_ACQUISITION quantity",
+                        )[0]
+                        if (
+                            original.get("security_id") != security_id
+                            or original_quantity != quantity_value
+                            or original.get("trade_date") != trade_date
+                        ):
+                            raise ValueError(
+                                "share_fmv must be supplied or null when security, "
+                                "quantity, or trade_date changes"
+                            )
+                        doc["share_fmv"] = normalize_share_fmv(
+                            original["share_fmv"],
+                            quantity=quantity,
+                            trade_date=trade_date,
+                            allow_yahoo=True,
+                            persisted=True,
+                        )
 
             if leg_type == "CONSOLIDATION_IN":
                 doc["transfer_cost_basis_eur"] = str(transfer_cost_basis_eur)

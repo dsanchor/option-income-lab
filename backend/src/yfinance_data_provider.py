@@ -305,6 +305,19 @@ class YFinanceDataProvider:
             return None
         return history
 
+    def get_daily_open(
+        self, symbol: str, requested_date: str, max_calendar_days: int = 7
+    ) -> Dict[str, Any]:
+        """Return a directed, unadjusted Yahoo daily-Open observation."""
+        return self.fetcher.get_daily_open(
+            symbol, requested_date, max_calendar_days=max_calendar_days
+        )
+
+    def get_historical_open(
+        self, symbol: str, requested_date: str, max_calendar_days: int = 7
+    ) -> Dict[str, Any]:
+        return self.get_daily_open(symbol, requested_date, max_calendar_days)
+
     def _build_volatility_context(self, options_chain, history, current_price):
         """Return ``(summary_dict, formatted_block)`` for IV/HV richness.
 

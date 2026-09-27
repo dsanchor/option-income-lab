@@ -1,6 +1,6 @@
 """FX rate service for the portfolio domain.
 
-Fetches daily EUR reference rates from the ECB's public CSV endpoint.
+Fetches daily EUR reference rates from the ECB's public XML endpoint.
 Rates are expressed as EUR per 1 unit of foreign currency
 (i.e. eur_amount = txn_amount × rate).
 
@@ -12,11 +12,9 @@ EUR-to-EUR always returns 1.0 without a network call.
 
 from __future__ import annotations
 
-import csv
-import io
 import logging
 import threading
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Dict, Optional, Tuple
 
@@ -24,10 +22,8 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# ECB publishes ~90 days of history in this URL; no auth required
-_ECB_HIST_90D_CSV = (
-    "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml"
-)
+# Full ECB reference-rate history; no auth required.
+_ECB_HIST_XML = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist.xml"
 
 # Lightweight daily cache: maps (iso_date, currency) → rate_str
 _rate_cache: Dict[Tuple[str, str], str] = {}
@@ -52,7 +48,7 @@ def _today_iso() -> str:
 
 
 def _fetch_and_cache() -> None:
-    """Fetch the ECB 90-day history XML and populate _rate_cache.
+    """Fetch the full ECB history XML and populate _rate_cache.
 
     The ECB publishes an XML with a table of <Cube time="YYYY-MM-DD"> rows,
     each containing <Cube currency="USD" rate="1.0843"/> children.
@@ -63,7 +59,7 @@ def _fetch_and_cache() -> None:
     """
     global _cache_fetched_date
     try:
-        response = requests.get(_ECB_HIST_90D_CSV, timeout=10)
+        response = requests.get(_ECB_HIST_XML, timeout=20)
         response.raise_for_status()
     except requests.RequestException as exc:
         raise FxUnavailableError(f"ECB API unreachable: {exc}") from exc
@@ -109,8 +105,12 @@ def _ensure_cache_fresh() -> None:
     _fetch_and_cache()
 
 
-def get_fx_rate(from_currency: str, to_currency: str = "EUR", rate_date: Optional[str] = None) -> str:
-    """Return the FX rate (EUR per 1 unit of from_currency) as a string.
+def get_historical_fx_rate(
+    from_currency: str,
+    to_currency: str = "EUR",
+    rate_date: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Return ``(EUR-per-unit rate, effective ECB date)``.
 
     Args:
         from_currency: 3-letter ISO currency code (e.g. "USD").
@@ -118,7 +118,7 @@ def get_fx_rate(from_currency: str, to_currency: str = "EUR", rate_date: Optiona
         rate_date: ISO date string (YYYY-MM-DD). Defaults to today.
 
     Returns:
-        Rate string with 9 decimal places (e.g. "0.921500000").
+        A 9-decimal rate string and the actual publication date used.
 
     Raises:
         ValueError: Unsupported to_currency or malformed date.
@@ -131,9 +131,6 @@ def get_fx_rate(from_currency: str, to_currency: str = "EUR", rate_date: Optiona
     if to_currency != "EUR":
         raise ValueError(f"Only EUR is supported as to_currency in Phase 2; got {to_currency!r}")
 
-    if from_currency == "EUR":
-        return "1.000000000"
-
     if rate_date is None:
         rate_date = _today_iso()
     else:
@@ -143,13 +140,16 @@ def get_fx_rate(from_currency: str, to_currency: str = "EUR", rate_date: Optiona
         except ValueError:
             raise ValueError(f"rate_date must be YYYY-MM-DD, got {rate_date!r}")
 
+    if from_currency == "EUR":
+        return "1.000000000", rate_date
+
     _ensure_cache_fresh()
 
     with _cache_lock:
         rate = _rate_cache.get((rate_date, from_currency))
 
     if rate is not None:
-        return rate
+        return rate, rate_date
 
     # Try adjacent business days (ECB doesn't publish on weekends/holidays)
     # Look back up to 5 calendar days
@@ -163,6 +163,36 @@ def get_fx_rate(from_currency: str, to_currency: str = "EUR", rate_date: Optiona
                 "FX rate for %s on %s not found; using %s rate",
                 from_currency, rate_date, fallback,
             )
-            return rate
+            return rate, fallback
 
     raise FxRateNotFoundError(from_currency, rate_date)
+
+
+def get_fx_rate_with_effective_date(
+    from_currency: str,
+    to_currency: str = "EUR",
+    rate_date: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Compatibility alias for callers that need the ECB observation date."""
+    return get_historical_fx_rate(from_currency, to_currency, rate_date)
+
+
+def get_historical_fx_observation(
+    from_currency: str,
+    to_currency: str = "EUR",
+    rate_date: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Explicit observation-oriented alias used by migration tooling."""
+    return get_historical_fx_rate(from_currency, to_currency, rate_date)
+
+
+def get_fx_rate(
+    from_currency: str,
+    to_currency: str = "EUR",
+    rate_date: Optional[str] = None,
+) -> str:
+    """Return only the rate, preserving the established portfolio API."""
+    rate, _effective_date = get_historical_fx_rate(
+        from_currency, to_currency, rate_date
+    )
+    return rate
