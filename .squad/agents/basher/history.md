@@ -672,3 +672,37 @@
   detail opening, and the single Stocks table.
 - Validation passed: 106/106 targeted backend tests, 125/125 targeted frontend
   tests, and diff hygiene.
+
+### 2026-09-27 — Independent Dividend · Buy share FMV gate
+- Added 62 hermetic backend tests covering independent FMV normalization,
+  gross-plus-fees FIFO and true zero cost, correction inherit/clear/replace,
+  backup validation/round-trip, directed Yahoo Open, effective-date ECB FX,
+  and dry-run/fingerprint/backup/CAS/idempotency/force/restore behavior.
+- Added 7 frontend contracts covering types, form/request semantics, correction
+  prefill/clear, separate FIFO/FMV detail blocks, provenance, contribution
+  labeling, and the absence of Economics aggregation.
+- **APPROVE.** All new tests pass; 361 related legacy backend tests, 111 directly
+  affected frontend tests, TypeScript, and diff hygiene pass. The broader
+  frontend run retains one documented unrelated Economics paper-action failure.
+  Two legacy option-chain assertions in `test_yfinance_data_provider.py` remain
+  stale against the current option-chain source, outside the FMV path.
+
+### 2026-09-27 — Dividend · Buy share FMV final integrated re-review
+- **REJECT.** Three contract blockers remain after all implementers finished:
+  unknown three-letter currencies such as `ZZZ` pass as ISO-4217; foreign
+  SHARE_ACQUISITION persists EUR net in native `net.amount`; and backup import
+  rejects explicit `share_fmv: null` although null is a valid absent value.
+- Added exact regression tests for all three failures. The remaining FMV
+  integration, backfill, correction, Yahoo Open/ECB, frontend, TypeScript, and
+  diff checks pass. Existing option-chain midpoint/Greeks assertions and the
+  frontend Economics PP-6 assertion remain unrelated baseline failures.
+
+### 2026-09-27 — Dividend · Buy share FMV blockers cleared
+- **APPROVE.** The final worktree rejects unsupported three-letter currencies,
+  persists native `net.amount = gross.amount + fees.total` alongside converted
+  `net.eur_amount` in create and correction, and treats explicit
+  `share_fmv: null` as valid absence during backup validation.
+- All 3 former blocker probes and all 64 FMV-specific backend tests pass.
+  The complete directed backend gate is 444 passed with only 2 unrelated stale
+  option-chain assertions; the frontend gate is 181 passed with only the known
+  unrelated Economics PP-6 assertion. TypeScript and diff hygiene pass.

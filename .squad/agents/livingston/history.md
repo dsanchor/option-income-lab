@@ -13,6 +13,22 @@
 
 ## Recent Learnings
 
+### 2026-09-27 — Independent Dividend Buy share FMV
+- `SHARE_ACQUISITION.gross` remains investor contribution and FIFO uses
+  `gross.eur_amount + fees.total_eur`; `share_fmv` is independently validated,
+  persisted, corrected, and backed up without entering holdings or Economics.
+- Manual FMV is normalized with Decimal-only six-place values and nine-place
+  FX, source/confidence pairing, valuation-date identity, eligibility guards,
+  and EUR identity FX; grouped corrections inherit only across unchanged
+  security/quantity/date identity and otherwise require replace or clear.
+- Backup validation fails closed for malformed or ineligible FMV on every
+  correction status while existing controls remain based only on ledger
+  economics.
+- Basher later rejected the integrated backend for permissive currency
+  validation, EUR leakage into native `net.amount`, and explicit-null backup
+  handling. Reuben independently corrected those three defects under rejection
+  lockout; the final integration was approved.
+
 ### 2026-09-26 — Rights movements removed from backend/domain
 - Removed rights creation from CSV import, manual API, corrections, and
   corporate actions; requests fail closed and converted shares remain modeled

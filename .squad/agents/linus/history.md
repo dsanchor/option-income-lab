@@ -15,6 +15,13 @@
 
 ## Recent Learnings
 
+- **2026-09-27:** Dividend · Buy Yahoo FMV backfill now resolves symbols only
+  through the shared resolver, observes unadjusted daily Open on the exact/next
+  session within seven calendar days, verifies listing currency, and converts
+  with full-history ECB rates carrying the effective publication date. The
+  migration is deterministic and dry-run-first, with confirmation-bound
+  fingerprints, pre-write full-document backups, ETag CAS, force fencing,
+  run-scoped restore, and complete YAHOO_OPEN provenance.
 - **2026-09-27:** Symbol movement lot average price is backend-authored from
   strict Decimal `BUY net.eur_amount / positive quantity`, with ZERO_COST
   represented as `0.00`, invalid/incomplete/non-share rows failing closed to

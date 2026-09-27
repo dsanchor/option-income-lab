@@ -298,3 +298,13 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
   proposed and unimplemented.
 - Staged and committed only `.squad` records; no production or test files were
   included.
+
+### 2026-09-27 — Dividend · Buy FMV/backfill consolidation
+- Consolidated the accepted independent `share_fmv` contract, Livingston,
+  Rusty, and Linus implementations, Basher's three-blocker rejection, Reuben's
+  lockout-safe revision, and Basher's final approval into the canonical
+  decision log.
+- Preserved the boundary that FMV capture/backfill is implemented while the
+  Dividend · Buy Economics card and event-level aggregation remain future
+  scope; updated identity and all contributor histories accordingly.
+- Cleared the six merged inbox records and committed only `.squad` state.

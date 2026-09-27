@@ -8750,3 +8750,98 @@ surface adoption, TypeScript, changed-file lint, and diff hygiene.
   fair values plus top-up subtraction, provenance, and coverage; later add
   market-close fallback and historical review/backfill; finally add bulk
   corrections and policy/reporting controls.
+
+## Dividend · Buy Independent Share FMV and Yahoo Backfill (2026-09-27)
+
+**Status:** IMPLEMENTED AND APPROVED
+**Contract:** Danny
+**Implementation:** Livingston, Rusty, and Linus
+**Independent revision:** Reuben
+**Reviewer:** Basher
+
+### Accepted scope and accounting contract
+
+- `SHARE_ACQUISITION.gross` is investor contribution, not fair market value.
+  Its FIFO cost is `net = gross + attributable fees`, with native
+  `net.amount = gross.amount + fees.total` and converted
+  `net.eur_amount = gross.eur_amount + fees.total_eur`. Withholding is not
+  allowed. Historical gross values are never inferred or migrated into FMV.
+- `ZERO_COST` requires explicit zero contribution and zero fees; `COMPLETE`
+  means known positive total cost; missing contribution or conversion is
+  `INCOMPLETE`. The backend derives this status.
+- Optional `share_fmv` is separate metadata available only on positive-quantity
+  `SHARE_ACQUISITION` legs of `SCRIP_DIVIDEND` and
+  `DIVIDEND_WITH_SCRIP`. It never affects FIFO, holdings, purchase outflow,
+  dividend income, warnings, or any Economics aggregation.
+- `CASH_TOP_UP` retains its legacy zero-quantity BUY/INCOMPLETE contract and
+  never supplies FMV. The previously proposed Dividend · Buy Economics card
+  and event-level economic aggregation remain future scope.
+
+### Canonical FMV data and corrections
+
+- `share_fmv` records valuation date, total and per-share native/EUR Decimal
+  values, currency, source/confidence, FX rate/effective date/source, and
+  optional provenance. Values persist at six decimal places and FX at nine,
+  using `ROUND_HALF_UP` and no floats.
+- The identities are `amount = price_per_share × quantity`,
+  `eur_amount = amount × fx.rate`, and
+  `price_per_share_eur = price_per_share × fx.rate`. Valuation date must equal
+  the share leg trade date. EUR uses identity FX.
+- Manual sources are `OFFICIAL_NOTICE`, `BROKER`, and `MANUAL`, paired with
+  `AUTHORITATIVE`, `AUTHORITATIVE`, and `USER_ASSERTED`. HTTP cannot submit
+  `YAHOO_OPEN`; that source is reserved for the internal backfill and carries
+  `MARKET_ESTIMATE` plus complete provider provenance.
+- Currency validation fails closed against the repository's supported
+  EUR/ECB reference-currency set, not merely a three-letter syntax check.
+  Unsupported codes such as `ZZZ` are invalid.
+- Group correction atomically replaces, explicitly clears with
+  `share_fmv: null`, or inherits an omitted FMV only when security, quantity,
+  and trade date are unchanged. Individual grouped-leg correction cannot patch
+  FMV. Superseded history retains its original snapshot.
+- Logical backup preserves canonical FMV for ACTIVE, SUPERSEDED, and VOIDED
+  records. Omitted and explicit-null `share_fmv` both mean absent; strict
+  eligibility and shape validation applies only to non-null objects.
+
+### Frontend and backfill
+
+- The corporate-action form and detail view separate Contribution, attributable
+  fees/FIFO cost, and optional Fair Value. FMV is never prefilled from gross,
+  net, or notes. Yahoo values may be displayed or inherited during an unchanged
+  group correction but cannot be manually authored as Yahoo data.
+- `backend/scripts/backfill_dividend_buy_share_fmv.py` selects only eligible
+  ACTIVE share-acquisition legs, resolves symbols through the shared resolver,
+  verifies Yahoo currency against listing currency, and uses unadjusted daily
+  `Open` on the requested session or first later session within seven calendar
+  days. It never falls back to Close, a prior session, current price, or a bare
+  ticker.
+- Non-EUR conversion uses historical ECB EUR-per-native-unit rates and records
+  the effective publication date, allowing at most five prior calendar days.
+  Missing symbol, market session, valid Open, matching currency, or FX skips
+  the record without partial FMV.
+- The migration is dry-run-first and deterministic. Apply requires the matching
+  plan SHA-256 and explicit confirmation; force overwrite requires an
+  additional confirmation. It creates a verified full-document backup before
+  the first write, uses ETag CAS, is idempotent, supports run-scoped restore,
+  and reports classified skips/failures without secrets.
+- The plan fingerprint covers target, filters, force/limit settings, document
+  identities/ETags, classifications, and proposed deterministic fields.
+  `run_id` is derived from the accepted hash and truthful runtime `fetched_at`
+  is added only after plan confirmation.
+
+### Rejection, independent revision, and final gate
+
+- Basher rejected Livingston's initial integrated backend on three blockers:
+  arbitrary three-letter currencies were accepted, foreign
+  `SHARE_ACQUISITION.net.amount` incorrectly held EUR rather than native
+  amount, and backup validation rejected explicit `share_fmv: null`.
+- Under rejection lockout, Reuben independently aligned currency validation to
+  the supported FX set, restored separate native/EUR net authorities in create
+  and correction, and made explicit-null backup FMV equivalent to absence.
+- Two independent arithmetic fixtures were corrected to follow the accepted
+  Decimal identity literally; the contract was not relaxed. Canonical backup
+  round-trip preserves already-normalized six-/nine-decimal FMV strings.
+- Basher issued final **APPROVE**: all 64 FMV-specific backend tests and all
+  former blocker probes passed. The directed backend gate had 444 passes with
+  two unrelated stale option-chain assertions; the frontend gate had 181
+  passes with one unrelated existing Economics PP-6 assertion. The 7 new
+  frontend FMV tests, TypeScript, and diff hygiene passed.

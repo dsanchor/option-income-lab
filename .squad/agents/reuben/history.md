@@ -145,3 +145,17 @@ Frontend: npx tsc --noEmit — 0 errors
 - Validation: 105 banner/technical tests and 23 last-run tests passed; provider
   suite retained its 3 pre-existing option-chain fixture failures. Ruff,
   `py_compile`, and scoped diff checks passed.
+
+## Dividend · Buy FMV Independent Revision (2026-09-27)
+
+- Replaced permissive three-letter FMV currency matching with an exact
+  fail-closed set aligned to currencies supported by the repository ECB FX
+  service; arbitrary codes such as `ZZZ` are rejected.
+- Corrected SHARE_ACQUISITION persistence so `net.amount` remains native
+  `gross.amount + fees.total`, while `net.eur_amount` remains the converted EUR
+  sum, in both create and group-correction paths.
+- Treated explicit backup `share_fmv: null` as absent while retaining strict
+  eligibility and shape validation for every non-null object.
+- Validation: Basher rejection probes 37/37; combined FMV, corporate-action,
+  correction, and backup suites 344/344; explicit foreign create/correction
+  probe passed; changed modules compiled successfully.

@@ -15,6 +15,19 @@
 
 ## Recent Learnings
 
+### 2026-09-27 — Dividend · Buy independent share FMV contract
+- Accepted a strict separation between investor contribution/FIFO cost and
+  optional share fair value: `gross` remains contribution, `net` remains
+  native/EUR gross plus attributable fees, and `share_fmv` never enters
+  holdings, dividend income, or Economics.
+- Defined Decimal normalization, source/confidence and FX provenance, atomic
+  correction inheritance/clear/replace rules, fail-closed backup handling, and
+  a safe Yahoo daily-Open plus historical ECB backfill with plan fingerprint,
+  pre-write backup, CAS, force fencing, and restore.
+- The independent FMV capture/backfill is implemented and approved. The
+  Dividend · Buy Economics card and event-level aggregation remain future
+  scope.
+
 ### 2026-09-26 — Rights-removal backend rejection revision
 - Rights detection must inspect normalized legacy amount, flag, type, and nested
   source-payload aliases. Non-zero values and malformed/non-finite values are

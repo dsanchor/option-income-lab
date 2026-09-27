@@ -130,3 +130,9 @@
 - The Economics/Dividends summary keeps `total_net_eur` as the primary Total Dividends headline and groups canonical gross, combined withholding, and effective withholding beneath it in a semantic definition list.
 - Dividend Count, Avg Monthly Net (last 12mo), and Portfolio Yield on Cost remain the only three sibling `StatCard` metrics, in their prior relative order.
 - The primary and sibling regions stack on mobile/tablet and align as equal-height desktop columns without nested card components; missing/nonfinite grouped values render as unavailable.
+
+### 2026-09-27 — Independent Dividend · Buy share FMV frontend
+- `SHARE_ACQUISITION.gross` is personal contribution, fees are attributable FIFO cost, and optional `share_fmv` is separate valuation metadata that never derives from gross, net, or notes.
+- Manual FMV requests allow only official notice, broker, or manual sources; non-EUR valuation requires its own FX rate, date, and source. Yahoo values are display/inheritance-only in group correction.
+- Group correction prefill reads FMV only from `share_fmv`, supports explicit removal with `null`, and preserves an unchanged Yahoo valuation by omitting it.
+- Movement detail presents distinct FIFO Cost and Fair Value blocks, including full Yahoo provenance, while corporate-action leg summaries label share-acquisition gross as Contribution.
