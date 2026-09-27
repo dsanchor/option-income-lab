@@ -16,6 +16,7 @@ _ZERO = Decimal(0)
 _TWOPLACES = Decimal("0.01")
 _SCRIP_EVENT_TYPES = {"SCRIP_DIVIDEND", "DIVIDEND_WITH_SCRIP"}
 _VALUED_COST_BASIS_STATUSES = {"COMPLETE", "ZERO_COST"}
+_MAX_UNVALUED_SCRIP_EVENTS = 100
 
 
 def _decimal(value: Any) -> Decimal:
@@ -269,7 +270,7 @@ def _event_from_legs(event_key: str, legs: list[dict[str, Any]]) -> dict[str, An
     share_dates = {
         parsed[3]
         for movement in share_legs
-        if (parsed := _parse_trade_date(movement.get("trade_date")))[3] is not None
+        if (parsed := _parse_trade_date(movement.get("trade_date")))[0] is not None
     }
     share_date_valid = bool(share_legs) and len(share_dates) == 1
     event_trade_date = (
@@ -286,6 +287,11 @@ def _event_from_legs(event_key: str, legs: list[dict[str, Any]]) -> dict[str, An
     attributable_fees_total = _ZERO
     scrip_valued = scrip_eligible and identity_valid and share_date_valid
     scrip_currencies: set[str] = set()
+    unvalued_reasons: set[str] = set()
+    if scrip_eligible and not identity_valid:
+        unvalued_reasons.add("INVALID_EVENT_IDENTITY")
+    if scrip_eligible and not share_date_valid:
+        unvalued_reasons.add("INVALID_EVENT_DATE")
 
     for movement in share_legs:
         quantity = _decimal_or_none(movement.get("quantity"))
@@ -301,13 +307,24 @@ def _event_from_legs(event_key: str, legs: list[dict[str, Any]]) -> dict[str, An
         currency = str(share_fmv.get("currency") or "").strip().upper()
         if currency:
             scrip_currencies.add(currency)
-        if (
-            quantity is None
-            or quantity <= _ZERO
-            or movement.get("cost_basis_status") not in _VALUED_COST_BASIS_STATUSES
-            or fmv_eur is None
-            or contribution is None
-            or fee is None
+        if quantity is None or quantity <= _ZERO:
+            unvalued_reasons.add("MISSING_OR_INVALID_QUANTITY")
+        if movement.get("cost_basis_status") not in _VALUED_COST_BASIS_STATUSES:
+            unvalued_reasons.add("COST_BASIS_INCOMPLETE")
+        if fmv_eur is None:
+            unvalued_reasons.add("MISSING_OR_INVALID_SHARE_FMV_EUR")
+        if contribution is None:
+            unvalued_reasons.add("MISSING_CONTRIBUTION_EUR")
+        if fee is None:
+            unvalued_reasons.add("INVALID_SHARE_FEES_EUR")
+        if any(
+            (
+                quantity is None or quantity <= _ZERO,
+                movement.get("cost_basis_status") not in _VALUED_COST_BASIS_STATUSES,
+                fmv_eur is None,
+                contribution is None,
+                fee is None,
+            )
         ):
             scrip_valued = False
             continue
@@ -322,6 +339,10 @@ def _event_from_legs(event_key: str, legs: list[dict[str, Any]]) -> dict[str, An
         fees = movement.get("fees")
         fees = fees if isinstance(fees, dict) else {}
         fee = _nonnegative_decimal(fees.get("total_eur"), omitted_is_zero=True)
+        if contribution is None:
+            unvalued_reasons.add("INVALID_TOP_UP_CONTRIBUTION_EUR")
+        if fee is None:
+            unvalued_reasons.add("INVALID_TOP_UP_FEES_EUR")
         if contribution is None or fee is None:
             scrip_valued = False
             continue
@@ -361,6 +382,33 @@ def _event_from_legs(event_key: str, legs: list[dict[str, Any]]) -> dict[str, An
         "scrip_events_total": 1 if scrip_eligible else 0,
         "scrip_events_valued": 1 if scrip_valued else 0,
         "scrip_events_unvalued": 1 if scrip_eligible and not scrip_valued else 0,
+        "_unvalued_scrip_diagnostic": (
+            {
+                "event_id": event_key,
+                "movement_ids": sorted(
+                    str(movement.get("id") or "").strip()
+                    for movement in raw_relevant
+                    if str(movement.get("id") or "").strip()
+                ),
+                "share_leg_ids": sorted(
+                    str(movement.get("id") or "").strip()
+                    for movement in share_legs
+                    if str(movement.get("id") or "").strip()
+                ),
+                "top_up_movement_ids": sorted(
+                    str(movement.get("id") or "").strip()
+                    for movement in top_up_legs
+                    if str(movement.get("id") or "").strip()
+                ),
+                "account_id": account_id or None,
+                "security_id": security_id or None,
+                "symbol": symbol or None,
+                "trade_date": parsed_trade_date,
+                "reason_codes": sorted(unvalued_reasons),
+            }
+            if scrip_eligible and not scrip_valued
+            else None
+        ),
         "_identity_valid": identity_valid,
         "_has_event_date": year is not None,
     }
@@ -732,6 +780,18 @@ def build_dividends_economics_report(
         ),
         reverse=True,
     )
+    all_unvalued_scrip_events = sorted(
+        (
+            event["_unvalued_scrip_diagnostic"]
+            for event in filtered_events
+            if event["_unvalued_scrip_diagnostic"] is not None
+        ),
+        key=lambda item: (
+            item.get("trade_date") or "",
+            item.get("event_id") or "",
+        ),
+    )
+    unvalued_scrip_events = all_unvalued_scrip_events[:_MAX_UNVALUED_SCRIP_EVENTS]
     return {
         "summary": _summarize_dividends(filtered_events),
         "monthly": monthly,
@@ -739,6 +799,7 @@ def build_dividends_economics_report(
         "yearly": yearly,
         "cumulative": cumulative,
         "positions": positions,
+        "unvalued_scrip_events": unvalued_scrip_events,
         "filters": {
             "years": sorted(available_years, reverse=True),
             "symbols": sorted(available_symbols),
@@ -771,5 +832,10 @@ def build_dividends_economics_report(
             ),
             "event_granularity": "ca_group_id_or_movement_id",
             "yearly_cumulative_scope": ("all_years_symbol_account_currency_filtered"),
+            "unvalued_scrip_events_total": len(all_unvalued_scrip_events),
+            "unvalued_scrip_events_limit": _MAX_UNVALUED_SCRIP_EVENTS,
+            "unvalued_scrip_events_truncated": (
+                len(all_unvalued_scrip_events) > len(unvalued_scrip_events)
+            ),
         },
     }

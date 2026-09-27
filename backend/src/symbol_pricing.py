@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 
 import yfinance as yf
@@ -99,6 +99,30 @@ def _extract_price(info: Dict[str, Any]) -> Optional[float]:
         return None
 
 
+def normalize_quote_price(
+    raw_price: Any, quote_currency: str
+) -> Tuple[Decimal, str, str, str]:
+    """Normalize a provider quote into its ISO major currency using Decimal.
+
+    Provider currency matching is intentionally case-sensitive so ``GBp`` is
+    distinguishable from ``GBP``. The original provider code is returned for
+    provenance and diagnostics.
+    """
+    raw_currency = str(quote_currency or "").strip()
+    if not raw_currency:
+        raise ValueError("provider quote currency is required")
+    try:
+        price = Decimal(str(raw_price).strip())
+    except (InvalidOperation, AttributeError, ValueError) as exc:
+        raise ValueError("provider quote price is invalid") from exc
+    if not price.is_finite():
+        raise ValueError("provider quote price is invalid")
+    if raw_currency in _MINOR_UNIT_MAP:
+        major_code, divisor = _MINOR_UNIT_MAP[raw_currency]
+        return price / Decimal(divisor), major_code, "minor", raw_currency
+    return price, raw_currency, "major", raw_currency
+
+
 def _apply_minor_unit(
     raw_price: float, quote_currency: str
 ) -> Tuple[float, str, str, str]:
@@ -107,15 +131,10 @@ def _apply_minor_unit(
     Returns (price_major, price_currency, quote_unit, quote_currency_display).
     quote_currency_display preserves the original code (e.g. "GBp") for UI.
     """
-    if quote_currency in _MINOR_UNIT_MAP:
-        major_code, divisor = _MINOR_UNIT_MAP[quote_currency]
-        return (
-            raw_price / divisor,
-            major_code,
-            "minor",
-            quote_currency,
-        )
-    return (raw_price, quote_currency, "major", quote_currency)
+    price, currency, unit, raw_currency = normalize_quote_price(
+        raw_price, quote_currency
+    )
+    return float(price), currency, unit, raw_currency
 
 
 # ---------------------------------------------------------------------------

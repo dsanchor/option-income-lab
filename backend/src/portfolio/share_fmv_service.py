@@ -14,6 +14,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID, uuid4
 
+from src.symbol_pricing import normalize_quote_price
 from src.yfinance_fetcher import YFinanceFetcher
 
 from .cosmos_securities import security_id_to_doc_id, security_id_to_ticker
@@ -281,8 +282,20 @@ def build_yahoo_share_fmv(
         )
 
     listing_currency = str(security.get("listing_currency") or "").strip().upper()
-    observed_currency = str(observation.get("currency") or "").strip().upper()
-    if not listing_currency or observed_currency != listing_currency:
+    observed_currency = str(observation.get("currency") or "").strip()
+    try:
+        price, normalized_currency, _, _ = normalize_quote_price(
+            observation.get("open"), observed_currency
+        )
+    except ValueError as exc:
+        raise YahooFmvError(
+            "yahoo_fmv_unavailable",
+            "Yahoo returned an invalid Open price or quote currency",
+            "yahoo",
+            False,
+            422,
+        ) from exc
+    if not listing_currency or normalized_currency != listing_currency:
         raise YahooFmvError(
             "yahoo_fmv_unavailable",
             "Yahoo currency does not match the Security Master listing currency",
@@ -291,9 +304,8 @@ def build_yahoo_share_fmv(
             422,
         )
 
-    price = _decimal(observation.get("open"))
     qty = _decimal(quantity)
-    if price is None or price <= 0 or qty is None or qty <= 0:
+    if price <= 0 or qty is None or qty <= 0:
         raise YahooFmvError(
             "yahoo_fmv_unavailable",
             "Yahoo returned an invalid Open price or share quantity",

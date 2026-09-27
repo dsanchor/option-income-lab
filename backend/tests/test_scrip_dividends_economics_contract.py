@@ -210,6 +210,124 @@ def test_ineligible_buy_top_up_and_inactive_or_deleted_documents_never_participa
 
 
 @pytest.mark.parametrize(
+    ("mutate", "expected_reason"),
+    [
+        (
+            lambda rows: rows[0].update(cost_basis_status="INCOMPLETE"),
+            "COST_BASIS_INCOMPLETE",
+        ),
+        (
+            lambda rows: rows[0]["gross"].pop("eur_amount"),
+            "MISSING_CONTRIBUTION_EUR",
+        ),
+        (
+            lambda rows: rows[0]["share_fmv"].update(eur_amount="NaN"),
+            "MISSING_OR_INVALID_SHARE_FMV_EUR",
+        ),
+        (
+            lambda rows: rows[0].update(quantity="0"),
+            "MISSING_OR_INVALID_QUANTITY",
+        ),
+        (
+            lambda rows: rows[0]["fees"].update(total_eur="-1"),
+            "INVALID_SHARE_FEES_EUR",
+        ),
+        (
+            lambda rows: rows.append(_top_up("bad-top-up-gross", gross="not-a-number")),
+            "INVALID_TOP_UP_CONTRIBUTION_EUR",
+        ),
+        (
+            lambda rows: rows.append(_top_up("bad-top-up-fee", fees="-1")),
+            "INVALID_TOP_UP_FEES_EUR",
+        ),
+        (
+            lambda rows: rows.append(
+                _cash("wrong-identity", group="scrip-1", account="acct-2")
+            ),
+            "INVALID_EVENT_IDENTITY",
+        ),
+        (
+            lambda rows: rows[0].update(trade_date="not-a-date"),
+            "INVALID_EVENT_DATE",
+        ),
+    ],
+)
+def test_unvalued_scrip_diagnostics_expose_each_stable_reason(mutate, expected_reason):
+    rows = [_share("share-1")]
+    mutate(rows)
+
+    report = build_dividends_economics_report(rows)
+
+    assert report["summary"]["scrip_events_unvalued"] == 1
+    assert len(report["unvalued_scrip_events"]) == 1
+    diagnostic = report["unvalued_scrip_events"][0]
+    assert diagnostic["event_id"] == "scrip-1"
+    assert expected_reason in diagnostic["reason_codes"]
+    assert set(diagnostic) == {
+        "event_id",
+        "movement_ids",
+        "share_leg_ids",
+        "top_up_movement_ids",
+        "account_id",
+        "security_id",
+        "symbol",
+        "trade_date",
+        "reason_codes",
+    }
+    assert "gross" not in diagnostic
+    assert "fees" not in diagnostic
+    assert "share_fmv" not in diagnostic
+
+
+def test_unvalued_scrip_diagnostics_follow_filters_dedup_and_bounded_output():
+    duplicate = _share(
+        "duplicate",
+        group="kept",
+        account="acct-keep",
+        security="XLON:KEEP",
+        cost_basis_status="INCOMPLETE",
+    )
+    movements = [duplicate, deepcopy(duplicate)]
+    movements.extend(
+        _share(
+            f"share-{index}",
+            group=f"event-{index:03d}",
+            account="acct-keep",
+            security="XLON:KEEP",
+            cost_basis_status="INCOMPLETE",
+        )
+        for index in range(105)
+    )
+    movements.append(
+        _share(
+            "excluded",
+            group="excluded",
+            account="acct-other",
+            security="XLON:OTHER",
+            cost_basis_status="INCOMPLETE",
+        )
+    )
+
+    report = build_dividends_economics_report(
+        movements,
+        account_filter=["acct-keep"],
+        symbol_filter=["KEEP"],
+    )
+
+    assert report["summary"]["scrip_events_total"] == 106
+    assert report["meta"]["unvalued_scrip_events_total"] == 106
+    assert report["meta"]["unvalued_scrip_events_limit"] == 100
+    assert report["meta"]["unvalued_scrip_events_truncated"] is True
+    assert len(report["unvalued_scrip_events"]) == 100
+    assert all(
+        row["account_id"] == "acct-keep"
+        and row["symbol"] == "KEEP"
+        and row["event_id"] != "excluded"
+        for row in report["unvalued_scrip_events"]
+    )
+
+
+@pytest.mark.parametrize(
     ("mutation", "expected_status"),
     [
         (lambda row: row.pop("share_fmv"), "UNAVAILABLE"),
@@ -238,6 +356,45 @@ def test_missing_malformed_or_noncanonical_required_values_fail_closed(
     assert report["summary"]["scrip_events_unvalued"] == 1
     assert report["summary"]["scrip_valuation_status"] == expected_status
     assert report["summary"]["total_dividends_is_partial"] is True
+
+
+def test_unvalued_diagnostics_publish_exact_ids_and_stable_reason_codes():
+    movement = _share("share-invalid", group="event-invalid")
+    movement["cost_basis_status"] = "INCOMPLETE"
+    movement["gross"]["eur_amount"] = None
+    movement["fees"]["total_eur"] = "-1"
+    movement["share_fmv"]["eur_amount"] = "bad"
+    movement["quantity"] = "0"
+    top_up = _top_up("top-invalid", group="event-invalid")
+    top_up["gross"]["eur_amount"] = None
+    top_up["fees"]["total_eur"] = "NaN"
+
+    report = build_dividends_economics_report([movement, top_up])
+
+    assert report["summary"]["scrip_valuation_status"] == "UNAVAILABLE"
+    assert report["unvalued_scrip_events"] == [
+        {
+            "event_id": "event-invalid",
+            "movement_ids": ["share-invalid", "top-invalid"],
+            "share_leg_ids": ["share-invalid"],
+            "top_up_movement_ids": ["top-invalid"],
+            "account_id": "acct-1",
+            "security_id": "XNAS:ACME",
+            "symbol": "ACME",
+            "trade_date": "2026-01-15",
+            "reason_codes": [
+                "COST_BASIS_INCOMPLETE",
+                "INVALID_SHARE_FEES_EUR",
+                "INVALID_TOP_UP_CONTRIBUTION_EUR",
+                "INVALID_TOP_UP_FEES_EUR",
+                "MISSING_CONTRIBUTION_EUR",
+                "MISSING_OR_INVALID_QUANTITY",
+                "MISSING_OR_INVALID_SHARE_FMV_EUR",
+            ],
+        }
+    ]
+    assert report["meta"]["unvalued_scrip_events_total"] == 1
+    assert report["meta"]["unvalued_scrip_events_truncated"] is False
 
 
 def test_zero_cost_negative_and_legitimate_zero_results_are_preserved():
@@ -353,8 +510,10 @@ def test_group_date_identity_and_filters_apply_to_the_whole_event():
     assert report["applied_filters"]["currencies"] == ["USD"]
 
     top_up_currency_only = build_dividends_economics_report(
-        [_share("share-only", group="top-currency", fmv_currency="EUR"),
-         _top_up("usd-top", group="top-currency")],
+        [
+            _share("share-only", group="top-currency", fmv_currency="EUR"),
+            _top_up("usd-top", group="top-currency"),
+        ],
         currency_filter=["USD"],
     )
     assert top_up_currency_only["summary"]["total_dividends"] == 0
@@ -447,9 +606,12 @@ def test_partial_status_is_present_on_every_aggregate_bucket_for_yoy_fail_closed
         assert all("scrip_events_total" in row for row in report[collection])
         assert all("scrip_events_valued" in row for row in report[collection])
         assert all("scrip_events_unvalued" in row for row in report[collection])
-    assert next(row for row in report["yearly"] if row["year"] == 2026)[
-        "scrip_valuation_status"
-    ] == "UNAVAILABLE"
+    assert (
+        next(row for row in report["yearly"] if row["year"] == 2026)[
+            "scrip_valuation_status"
+        ]
+        == "UNAVAILABLE"
+    )
 
 
 @pytest.mark.parametrize(
@@ -508,9 +670,7 @@ def test_overview_never_uses_or_fallback_for_zero_or_negative_combined_values(
         "filters": {"years": [2026], "symbols": ["ACME"]},
     }
 
-    report = _build_economics_overview_report(
-        _empty_options_report(), dividends_report
-    )
+    report = _build_economics_overview_report(_empty_options_report(), dividends_report)
 
     assert report["summary"]["dividends_net_eur"] == cash
     assert report["summary"]["dividends_cash_net_eur"] == cash

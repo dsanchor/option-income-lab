@@ -169,7 +169,8 @@ class YFinanceFetcher:
                 "market_session_date": session_date.isoformat(),
             }
 
-        currency = str(info.get("currency") or "").strip().upper()
+        # Preserve Yahoo's exact code: GBp/GBX are pence while GBP is pounds.
+        currency = str(info.get("currency") or "").strip()
         if not currency:
             return {
                 "status": "currency_unavailable",

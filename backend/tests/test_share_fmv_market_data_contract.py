@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from src.portfolio import fx_service
+from src.portfolio.share_fmv_service import YahooFmvError, build_yahoo_share_fmv
 from src.yfinance_fetcher import YFinanceFetcher
 
 
@@ -63,6 +64,74 @@ def test_daily_open_fails_closed_when_currency_is_missing():
     with patch("src.yfinance_fetcher.yf.Ticker", return_value=ticker):
         result = YFinanceFetcher().get_daily_open("ULVR.L", "2026-09-28")
     assert result["status"] == "currency_unavailable"
+
+
+@pytest.mark.parametrize("provider_currency", ["GBp", "GBX"])
+def test_uk_pence_open_is_normalized_to_gbp_before_fx(provider_currency):
+    result = build_yahoo_share_fmv(
+        quantity="2",
+        trade_date="2026-09-28",
+        security={"listing_currency": "GBP"},
+        provider_symbol="TEST.L",
+        observation={
+            "status": "ok",
+            "open": "4500",
+            "market_session_date": "2026-09-28",
+            "currency": provider_currency,
+        },
+        fx_getter=lambda *args, **kwargs: ("1.2", "2026-09-28"),
+    )
+    assert result["price_per_share"] == "45.000000"
+    assert result["amount"] == "90.000000"
+    assert result["price_per_share_eur"] == "54.000000"
+    assert result["price_per_share"] != "4500.000000"
+
+
+def test_uk_native_gbp_open_is_not_divided_by_100():
+    result = build_yahoo_share_fmv(
+        quantity="1",
+        trade_date="2026-09-28",
+        security={"listing_currency": "GBP"},
+        provider_symbol="TEST.L",
+        observation={
+            "status": "ok",
+            "open": "45",
+            "market_session_date": "2026-09-28",
+            "currency": "GBP",
+        },
+        fx_getter=lambda *args, **kwargs: ("1", "2026-09-28"),
+    )
+    assert result["price_per_share"] == "45.000000"
+
+
+@pytest.mark.parametrize("provider_currency", ["USD", "gbp", "GBx", "", None])
+def test_uk_invalid_or_mismatched_quote_currency_fails_closed(provider_currency):
+    with pytest.raises(YahooFmvError) as exc_info:
+        build_yahoo_share_fmv(
+            quantity="1",
+            trade_date="2026-09-28",
+            security={"listing_currency": "GBP"},
+            provider_symbol="TEST.L",
+            observation={
+                "status": "ok",
+                "open": "4500",
+                "market_session_date": "2026-09-28",
+                "currency": provider_currency,
+            },
+            fx_getter=lambda *args, **kwargs: ("1", "2026-09-28"),
+        )
+    assert exc_info.value.status_code == 422
+
+
+def test_daily_open_preserves_yahoo_minor_unit_currency():
+    ticker = MagicMock()
+    ticker.info = {"currency": "GBp"}
+    ticker.history.return_value = pd.DataFrame(
+        {"Open": [4500]}, index=pd.to_datetime(["2026-09-28"])
+    )
+    with patch("src.yfinance_fetcher.yf.Ticker", return_value=ticker):
+        result = YFinanceFetcher().get_daily_open("TEST.L", "2026-09-28")
+    assert result["currency"] == "GBp"
 
 
 def test_historical_fx_returns_effective_prior_ecb_date_with_five_day_limit(monkeypatch):

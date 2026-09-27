@@ -220,16 +220,6 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
   const avgLast12 = averageLastNExcludingZero(monthly.map((row) => getTotalNet(row)), 12);
   const cards = [
     {
-      label: "Scrip Dividends",
-      value: scripDividends ?? undefined,
-      prefix: "€",
-      suffix: "",
-      decimals: 2,
-      tone: ((scripDividends ?? 0) >= 0 ? "purple" : "red") as "purple" | "red",
-      hint: "Fair value of shares less personal contributions and attributable fees",
-      tooltip: scripCoverageTitle(summary),
-    },
-    {
       label: "Avg Monthly Total (last 12mo)",
       value: avgLast12 ?? undefined,
       prefix: "€",
@@ -336,7 +326,7 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
         </section>
       </Reveal>
       <div
-        className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-3 lg:grid-cols-1"
+        className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-1"
         data-testid="dividends-sibling-cards"
       >
         {cards.map((card, index) => (
@@ -349,7 +339,6 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
               decimals={card.decimals}
               tone={card.tone}
               hint={"hint" in card ? card.hint : undefined}
-              tooltip={"tooltip" in card ? card.tooltip : undefined}
             />
           </Reveal>
         ))}

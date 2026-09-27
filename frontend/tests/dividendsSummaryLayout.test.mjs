@@ -47,16 +47,18 @@ test("groups the canonical dividend totals inside the accessible primary card", 
   assert.doesNotMatch(primary, /<StatCard|Rights/);
 });
 
-test("shows scrip, total average, and cash YoC as the three sibling cards", () => {
+test("shows exactly the total card and two intended secondary cards", () => {
   const cardsStart = summary.indexOf("const cards = [");
   const cardsEnd = summary.indexOf("];", cardsStart);
   const cards = summary.slice(cardsStart, cardsEnd);
+  const secondaryCardCount = (cards.match(/label:/g) ?? []).length;
 
+  assert.equal((summary.match(/data-testid="total-dividends-card"/g) ?? []).length, 1);
   assert.equal((siblings.match(/<StatCard/g) ?? []).length, 1);
-  assert.equal((cards.match(/label:/g) ?? []).length, 3);
+  assert.equal(secondaryCardCount, 2);
+  assert.equal(1 + secondaryCardCount, 3);
 
   const labels = [
-    "Scrip Dividends",
     "Avg Monthly Total (last 12mo)",
     "Cash Yield on Cost",
   ];
@@ -66,10 +68,7 @@ test("shows scrip, total average, and cash YoC as the three sibling cards", () =
     assert.ok(index > previous, `Expected ${label} after the prior sibling metric`);
     previous = index;
   }
-  assert.match(
-    cards,
-    /Fair value of shares less personal contributions and attributable fees/,
-  );
+  assert.doesNotMatch(cards, /label: "Scrip Dividends"/);
   assert.doesNotMatch(cards, /Dividend Count|Avg Monthly Net|Portfolio Yield on Cost/);
 });
 
@@ -78,7 +77,7 @@ test("uses responsive equal-height grids without nested card components", () => 
     summary,
     /grid items-stretch gap-4 lg:grid-cols-\[minmax\(0,1\.5fr\)_minmax\(0,1fr\)\]/,
   );
-  assert.match(summary, /grid grid-cols-1 items-stretch gap-4 sm:grid-cols-3/);
+  assert.match(summary, /grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2/);
   assert.match(primary, /h-full/);
   assert.match(primary, /grid grid-cols-1 divide-y[\s\S]*sm:grid-cols-3/);
   assert.equal((primary.match(/className="surface/g) ?? []).length, 1);

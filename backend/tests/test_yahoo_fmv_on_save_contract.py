@@ -237,7 +237,10 @@ def test_script_and_endpoint_share_one_yahoo_ecb_policy_implementation():
     assert backfill.build_yahoo_share_fmv is build_yahoo_share_fmv
 
 
-def test_shared_policy_uses_resolved_symbol_open_seven_days_currency_ecb_and_provenance():
+@pytest.mark.parametrize("provider_currency", ["GBp", "GBX"])
+def test_shared_policy_uses_resolved_symbol_open_seven_days_currency_ecb_and_provenance(
+    provider_currency,
+):
     class Symbols:
         def read_item(self, *, item, partition_key):
             assert item == "sec_XLON_ULVR"
@@ -257,9 +260,9 @@ def test_shared_policy_uses_resolved_symbol_open_seven_days_currency_ecb_and_pro
             self.calls.append((symbol, requested_date, max_calendar_days))
             return {
                 "status": "ok",
-                "open": "12.345678",
+                "open": "1234.5678",
                 "market_session_date": "2026-09-28",
-                "currency": "GBP",
+                "currency": provider_currency,
             }
 
     fetcher = Fetcher()

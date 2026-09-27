@@ -193,6 +193,33 @@ def test_existing_fmv_is_idempotently_skipped_and_force_records_previous_value()
     assert forced["actions"][0]["previous_share_fmv"] == previous
 
 
+@pytest.mark.parametrize("provider_currency", ["GBp", "GBX"])
+def test_force_recomputes_erroneous_uk_pence_fmv_through_shared_service(
+    provider_currency,
+):
+    erroneous = {
+        "source": "YAHOO_OPEN",
+        "price_per_share": "4500.000000",
+        "currency": "GBP",
+    }
+    portfolio = MemoryContainer([_doc(share_fmv=erroneous)])
+    forced = _plan(
+        portfolio,
+        force=True,
+        fetcher=Fetcher(
+            {
+                "status": "ok",
+                "open": "4500",
+                "market_session_date": "2026-09-28",
+                "currency": provider_currency,
+            }
+        ),
+    )
+    action = forced["actions"][0]
+    assert action["previous_share_fmv"] == erroneous
+    assert action["share_fmv"]["price_per_share"] == "45.000000"
+
+
 def test_apply_backs_up_before_cas_write_and_restore_round_trips(monkeypatch):
     portfolio = MemoryContainer([_doc()])
     plan = _plan(portfolio)
