@@ -294,7 +294,7 @@ def validate(config: dict[str, Any], check_backend: bool = True) -> None:
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,63}", auth[key]):
             fail(f"frontendAuth.{key} must name an environment variable")
 
-    exact_keys(
+    optional_secrets = exact_keys(
         config["optionalSecrets"],
         {
             "telegramBotTokenEnvironmentVariable",
@@ -302,6 +302,9 @@ def validate(config: dict[str, Any], check_backend: bool = True) -> None:
         },
         "optionalSecrets",
     )
+    for key, value in optional_secrets.items():
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,63}", value):
+            fail(f"optionalSecrets.{key} must name an environment variable")
     exact_keys(config["diagnostics"], {"enabled"}, "diagnostics")
     exact_keys(config["locks"], {"enabled"}, "locks")
     if (

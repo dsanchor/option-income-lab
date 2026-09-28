@@ -491,10 +491,21 @@ fi
 [[ "$APPROVE_PLAN" == "$FINGERPRINT" ]] ||
   die "Approved fingerprint does not match the freshly computed plan"
 
-ENTRA_CLIENT_ID="${!ENTRA_CLIENT_ID_ENV:-}"
-ENTRA_CLIENT_SECRET="${!ENTRA_CLIENT_SECRET_ENV:-}"
-TELEGRAM_TOKEN="${!TELEGRAM_TOKEN_ENV:-}"
-TELEGRAM_CHAT="${!TELEGRAM_CHAT_ENV:-}"
+read_named_environment_variable() {
+  local name="$1" config_path="$2"
+  [[ "$name" =~ ^[A-Z][A-Z0-9_]{1,63}$ ]] ||
+    die "$config_path must contain an environment variable name, not its value"
+  printf '%s' "${!name:-}"
+}
+
+ENTRA_CLIENT_ID="$(read_named_environment_variable \
+  "$ENTRA_CLIENT_ID_ENV" "frontendAuth.clientIdEnvironmentVariable")"
+ENTRA_CLIENT_SECRET="$(read_named_environment_variable \
+  "$ENTRA_CLIENT_SECRET_ENV" "frontendAuth.clientSecretEnvironmentVariable")"
+TELEGRAM_TOKEN="$(read_named_environment_variable \
+  "$TELEGRAM_TOKEN_ENV" "optionalSecrets.telegramBotTokenEnvironmentVariable")"
+TELEGRAM_CHAT="$(read_named_environment_variable \
+  "$TELEGRAM_CHAT_ENV" "optionalSecrets.telegramChatIdEnvironmentVariable")"
 [[ -z "$TELEGRAM_TOKEN" && -z "$TELEGRAM_CHAT" || -n "$TELEGRAM_TOKEN" && -n "$TELEGRAM_CHAT" ]] ||
   die "Telegram token and chat ID must either both be set or both be empty"
 [[ -n "$ENTRA_CLIENT_ID" || "$BOOTSTRAP_ENTRA" == true ]] ||

@@ -92,6 +92,21 @@ def test_runtime_validator_enforces_schema_security_invariants(path, value):
 
 
 @pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("telegramBotTokenEnvironmentVariable", "123456:secret-value"),
+        ("telegramChatIdEnvironmentVariable", "123456789"),
+    ],
+)
+def test_runtime_validator_rejects_optional_secret_values(key, value):
+    config = _config()
+    config["optionalSecrets"][key] = value
+
+    with pytest.raises(VALIDATOR.ConfigError, match="environment variable"):
+        VALIDATOR.validate(config, check_backend=False)
+
+
+@pytest.mark.parametrize(
     "secret_property",
     ["secret", "password", "token", "apiKey", "connectionString"],
 )
