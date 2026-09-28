@@ -48,15 +48,15 @@ resource cosmosDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-pre
     workspaceId: workspaceId
     logs: [
       {
-        category: 'ContainerAppConsoleLogs'
+        category: 'DataPlaneRequests'
         enabled: true
       }
       {
-        category: 'ContainerAppSystemLogs'
+        category: 'QueryRuntimeStatistics'
         enabled: true
       }
       {
-        category: 'ContainerAppHTTPLogs'
+        category: 'ControlPlaneRequests'
         enabled: true
       }
     ]
@@ -116,6 +116,20 @@ resource environmentDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-0
   scope: containerAppsEnvironment
   properties: {
     workspaceId: workspaceId
+    logs: [
+      {
+        category: 'ContainerAppConsoleLogs'
+        enabled: true
+      }
+      {
+        category: 'ContainerAppSystemLogs'
+        enabled: true
+      }
+      {
+        category: 'ContainerAppHTTPLogs'
+        enabled: true
+      }
+    ]
     metrics: [
       {
         category: 'AllMetrics'
@@ -132,7 +146,7 @@ resource apiDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-previe
     workspaceId: workspaceId
     metrics: [
       {
-        category: 'Basic'
+        category: 'AllMetrics'
         enabled: true
       }
     ]
@@ -144,12 +158,6 @@ resource frontendDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-p
   scope: frontendApp
   properties: {
     workspaceId: workspaceId
-    logs: [
-      {
-        categoryGroup: 'allLogs'
-        enabled: true
-      }
-    ]
     metrics: [
       {
         category: 'AllMetrics'
@@ -164,15 +172,9 @@ resource backupJobDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-
   scope: backupJob
   properties: {
     workspaceId: workspaceId
-    logs: [
-      {
-        categoryGroup: 'allLogs'
-        enabled: true
-      }
-    ]
     metrics: [
       {
-        category: 'AllMetrics'
+        category: 'Basic'
         enabled: true
       }
     ]

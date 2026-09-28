@@ -250,6 +250,21 @@ def test_help_and_dry_run_make_zero_azure_calls(fake_cli):
     assert _calls(fake_cli) == []
 
 
+def test_entra_bootstrap_tags_new_app_with_supported_update_command():
+    script = SCRIPT.read_text(encoding="utf-8")
+    create_start = script.index("ENTRA_CLIENT_ID=\"$(az_read ad app create")
+    create_end = script.index("\n  fi", create_start)
+    create_flow = script[create_start:create_end]
+
+    create_command, update_command = create_flow.split(
+        "\n    az_read ad app update", maxsplit=1
+    )
+    assert "--set" not in create_command
+    assert "--query appId -o tsv" in create_command
+    assert '--id "$ENTRA_CLIENT_ID"' in update_command
+    assert "--set 'tags=[\"option-income-lab-provisioner-v1\"]'" in update_command
+
+
 def test_preflight_is_read_only_and_checks_account_models_quota_and_images(fake_cli):
     result = _run(fake_cli, "--mode", "preflight")
     assert result.returncode == 0, result.stderr

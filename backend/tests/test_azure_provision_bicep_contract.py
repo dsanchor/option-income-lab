@@ -228,15 +228,40 @@ def test_static_topology_has_expected_resources_diagnostics_locks_and_safe_outpu
 
 def test_diagnostics_use_supported_container_apps_categories():
     diagnostics = _text("diagnostics.bicep")
+
+    def resource_block(name: str) -> str:
+        start = diagnostics.index(f"resource {name} ")
+        end = diagnostics.find("\nresource ", start + 1)
+        return diagnostics[start:] if end == -1 else diagnostics[start:end]
+
     assert "Microsoft.DocumentDB/databaseAccounts@" in diagnostics
     assert "Microsoft.CognitiveServices/accounts@" in diagnostics
     assert "Microsoft.Storage/storageAccounts/blobServices@" in diagnostics
     assert "Microsoft.App/containerApps@" in diagnostics
     assert "Microsoft.App/jobs@" in diagnostics
     assert diagnostics.count("Microsoft.Insights/diagnosticSettings@") >= 6
-    assert "category: 'ContainerAppConsoleLogs'" in diagnostics
-    assert "category: 'ContainerAppSystemLogs'" in diagnostics
-    assert "category: 'ContainerAppHTTPLogs'" in diagnostics
+
+    cosmos = resource_block("cosmosDiagnostics")
+    assert "category: 'DataPlaneRequests'" in cosmos
+    assert "category: 'QueryRuntimeStatistics'" in cosmos
+    assert "category: 'ControlPlaneRequests'" in cosmos
+    assert "category: 'Requests'" in cosmos
+
+    environment = resource_block("environmentDiagnostics")
+    assert "category: 'ContainerAppConsoleLogs'" in environment
+    assert "category: 'ContainerAppSystemLogs'" in environment
+    assert "category: 'ContainerAppHTTPLogs'" in environment
+    assert "category: 'AllMetrics'" in environment
+
+    api = resource_block("apiDiagnostics")
+    frontend = resource_block("frontendDiagnostics")
+    backup_job = resource_block("backupJobDiagnostics")
+    assert "category: 'AllMetrics'" in api
+    assert "category: 'AllMetrics'" in frontend
+    assert "category: 'Basic'" in backup_job
+    assert "logs:" not in api
+    assert "logs:" not in frontend
+    assert "logs:" not in backup_job
+
     assert diagnostics.count("category: 'AllMetrics'") == 4
-    assert "category: 'Basic'" in diagnostics
-    assert diagnostics.count("categoryGroup: 'allLogs'") == 2
+    assert "categoryGroup: 'allLogs'" not in diagnostics

@@ -545,7 +545,9 @@ if [[ -z "$ENTRA_CLIENT_ID" ]]; then
   ENTRA_CLIENT_ID="$(az_read ad app list --display-name "$DISPLAY_NAME" --query "[?contains(tags, 'option-income-lab-provisioner-v1')].appId | [0]" -o tsv)"
   if [[ -z "$ENTRA_CLIENT_ID" ]]; then
     ENTRA_CLIENT_ID="$(az_read ad app create --display-name "$DISPLAY_NAME" --sign-in-audience AzureADMyOrg \
-      --set tags='[\"option-income-lab-provisioner-v1\"]' --query appId -o tsv)"
+      --query appId -o tsv)"
+    az_read ad app update --id "$ENTRA_CLIENT_ID" \
+      --set 'tags=["option-income-lab-provisioner-v1"]' -o none
   fi
   az_read ad sp show --id "$ENTRA_CLIENT_ID" -o none 2>/dev/null ||
     az_read ad sp create --id "$ENTRA_CLIENT_ID" -o none
