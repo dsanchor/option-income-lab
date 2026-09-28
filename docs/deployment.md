@@ -2,7 +2,7 @@
 
 [← Back to README](../README.md)
 
-## Self-contained Azure provisioner
+## Installation: self-contained Azure deployment
 
 `infra/azure/provision.sh` is the authoritative path for creating or adopting
 the complete production stack in one resource group. It deploys Log Analytics,
@@ -10,8 +10,57 @@ Container Apps, serverless Cosmos DB with all eight containers, a Foundry
 account/project and the three approved model deployments, private backup
 storage/job/RBAC, diagnostics, and final delete locks.
 
-Copy `infra/azure/config.example.json`, replace the placeholder subscription,
-tenant, suffix, and immutable public GHCR image references, then run:
+### Prerequisites
+
+- Azure CLI, `jq`, Python 3 and Bicep installed.
+- Public API and frontend packages in GHCR, referenced by an immutable
+  `:sha-<commit>` tag or `@sha256:<digest>`.
+- An Azure user that can create the target resource group and resources and
+  can create role definitions and assignments. `Owner` at the target scope is
+  sufficient for initial bootstrap; `Contributor` plus `User Access
+  Administrator` is also sufficient.
+- For `--bootstrap-entra`, the signed-in user must be allowed to create
+  Microsoft Entra applications and credentials, normally through
+  `Application Administrator` or an equivalent tenant policy.
+- The required Azure resource providers must be registered. `preflight`
+  reports missing providers without changing them.
+
+The Azure login is the identity of the **installation operator**:
+
+```bash
+az login --tenant '<tenant-id>'
+az account set --subscription '<subscription-id>'
+az account show --query '{subscription:id, tenant:tenantId, user:user.name}'
+```
+
+This interactive user login is sufficient for provisioning. It is separate
+from the Entra application used by Container Apps Easy Auth.
+
+### 1. Create the configuration
+
+Copy the versioned example:
+
+```bash
+cp infra/azure/config.example.json infra/azure/config.production.json
+```
+
+At minimum, replace:
+
+- `subscriptionId` and `tenantId`;
+- `suffix`;
+- globally unique `names.foundryAccount` and `names.backupStorage`, both
+  containing the suffix;
+- `images.api` and `images.frontend` with existing public immutable GHCR
+  references.
+
+Do not put Cosmos keys, Foundry keys, Entra secrets, tokens, passwords or
+connection strings in this JSON. The strict schema rejects unknown and secret
+fields. Keep the API ingress internal, frontend Entra authentication enabled,
+the exact eight Cosmos containers, and diagnostics and delete locks enabled.
+
+### 2. Validate and review the plan
+
+Run each non-mutating mode in order:
 
 ```bash
 # Offline: validates tools, strict JSON, names, routing, and invariants.
@@ -23,21 +72,57 @@ infra/azure/provision.sh --config infra/azure/config.production.json --mode pref
 
 # Read-only ARM what-if. Review and retain the printed SHA-256 fingerprint.
 infra/azure/provision.sh --config infra/azure/config.production.json --mode what-if
+```
 
-# Apply only the exact reviewed plan.
-export AZURE_ENTRA_CLIENT_ID='<existing-app-client-id>'
-export AZURE_ENTRA_CLIENT_SECRET='<client-secret>'
+`what-if` prints the SHA-256 fingerprint that binds the canonical
+configuration, compiled Bicep, tenant, subscription, region and reviewed ARM
+changes. `apply` refuses a different or stale fingerprint.
+
+### 3. Apply with the signed-in user
+
+The recommended first installation lets the provisioner create or reuse its
+owned Entra app registration:
+
+```bash
 infra/azure/provision.sh \
   --config infra/azure/config.production.json \
   --mode apply \
-  --approve-plan '<fingerprint>'
+  --approve-plan '<fingerprint-from-what-if>' \
+  --bootstrap-entra
 ```
 
-`--bootstrap-entra` can create/reuse the provisioner-owned Entra application
-when the operator has tenant permission. `--register-providers` explicitly
-opts into registering only missing providers. `--bootstrap-github-oidc`
-optionally creates the image-deployment identity after the stack succeeds.
-None of these mutations occur in `dry-run`, `preflight`, or `what-if`.
+No Entra client ID or secret needs to be exported in this flow. Using the
+current `az login` session, `--bootstrap-entra`:
+
+1. creates or reuses the provisioner-owned app registration and service
+   principal;
+2. adds the callback based on the frontend's real generated FQDN;
+3. creates the Easy Auth client credential;
+4. sends it directly to Azure as a secure deployment parameter; and
+5. stores it as a Container Apps secret.
+
+The generated credential is not written to the configuration, deployment
+outputs or logs.
+
+To reuse an existing app registration instead, omit `--bootstrap-entra` and
+provide its values only through the environment:
+
+```bash
+export AZURE_ENTRA_CLIENT_ID='<existing-app-client-id>'
+export AZURE_ENTRA_CLIENT_SECRET='<client-secret>'
+
+infra/azure/provision.sh \
+  --config infra/azure/config.production.json \
+  --mode apply \
+  --approve-plan '<fingerprint-from-what-if>'
+```
+
+`--register-providers` explicitly opts into registering only missing
+providers during apply. `--bootstrap-github-oidc` optionally creates the
+image-deployment identity after the stack succeeds. None of these mutations
+occur in `dry-run`, `preflight`, or `what-if`.
+
+### 4. Installation safety guarantees
 
 The frontend is fail-closed: it remains internal until its real FQDN has been
 used for the Entra callback, Easy Auth is read back and validated, and only

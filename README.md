@@ -107,7 +107,7 @@ Eight specialized AI agents power the backend:
 | [**Output**](docs/output.md) | Activity & alert documents, example JSON, Telegram notifications |
 | [**Web Dashboard**](docs/web-dashboard.md) | Dashboard, alerts, symbols, chat, economics, calendar, settings |
 | [**Running Locally**](docs/local-setup.md) | Prerequisites, setup, Python venv, Docker, configuration |
-| [**Deployment**](docs/deployment.md) | Azure Container Apps, CosmosDB provisioning, environment variables |
+| [**Installation & Deployment**](docs/deployment.md) | Complete Azure installation, Entra bootstrap, Container Apps, Cosmos DB and Foundry |
 | [**Troubleshooting**](docs/troubleshooting.md) | Common errors, connection issues, LLM auth, module imports |
 | [**Development**](docs/development.md) | Skills architecture, instruction files, SDK information |
 
@@ -279,7 +279,7 @@ Env vars are **per component**. The `api` takes the backend vars; the `web` take
 |---|---|---|
 | `API_BASE_URL` | Always | Base URL of the internal `api` (e.g. `https://<api-app>.internal.<env>.<region>.azurecontainerapps.io`). Defaults to `http://localhost:8000` for local dev. |
 
-→ [Full deployment walkthrough (CosmosDB provisioning, scheduler notes, GHCR auth)](docs/deployment.md)
+→ [Full installation and deployment walkthrough](docs/deployment.md)
 
 ---
 
