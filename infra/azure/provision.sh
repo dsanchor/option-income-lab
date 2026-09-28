@@ -190,9 +190,16 @@ PY
 }
 
 verify_ghcr_image_once() {
-  local image="$1" repo ref url headers challenge realm service scope token digest
-  repo="${image#ghcr.io/}"; repo="${repo%@sha256:*}"; repo="${repo%:sha-*}"
-  ref="${image#"$repo"}"; ref="${ref#:}"; ref="${ref#@}"
+  local image="$1" reference repo ref url
+  local headers challenge realm service scope token digest
+  reference="${image#ghcr.io/}"
+  if [[ "$reference" == *@sha256:* ]]; then
+    repo="${reference%@sha256:*}"
+    ref="${reference##*@}"
+  else
+    repo="${reference%:sha-*}"
+    ref="${reference##*:}"
+  fi
   url="https://ghcr.io/v2/${repo}/manifests/${ref}"
   headers="$(curl -fsSIL -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$url" 2>&1 || true)"
   if ! grep -qi '^docker-content-digest:' <<<"$headers"; then

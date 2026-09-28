@@ -363,3 +363,34 @@ else:
     )
     result = _run(fake_cli, "--mode", "preflight")
     assert result.returncode == 0, result.stderr
+
+
+def test_public_ghcr_manifest_urls_parse_repository_and_sha_tag(fake_cli):
+    curl_log = fake_cli["work"] / "curl-log"
+    fake_cli["env"]["FAKE_CURL_LOG"] = str(curl_log)
+    _write_executable(
+        fake_cli["bin"] / "curl",
+        """#!/usr/bin/env python3
+import os, pathlib, sys
+args = sys.argv[1:]
+pathlib.Path(os.environ["FAKE_CURL_LOG"]).open("a", encoding="utf-8").write(
+    " ".join(args) + "\\n"
+)
+print("HTTP/1.1 200 OK\\r")
+print("Docker-Content-Digest: sha256:" + "a" * 64 + "\\r")
+""",
+    )
+
+    result = _run(fake_cli, "--mode", "preflight")
+
+    assert result.returncode == 0, result.stderr
+    curl_calls = curl_log.read_text(encoding="utf-8")
+    assert (
+        "https://ghcr.io/v2/dsanchor/option-income-lab-api/"
+        "manifests/sha-0000000"
+    ) in curl_calls
+    assert (
+        "https://ghcr.io/v2/dsanchor/option-income-lab-front/"
+        "manifests/sha-0000000"
+    ) in curl_calls
+    assert "manifests/ghcr.io/" not in curl_calls
