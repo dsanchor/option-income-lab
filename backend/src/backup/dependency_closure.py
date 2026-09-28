@@ -68,6 +68,38 @@ def _is_ordinary_transfer(movement: dict[str, Any]) -> bool:
     )
 
 
+def validate_corporate_action_group(
+    group_id: str,
+    members: list[dict[str, Any]],
+) -> list[str]:
+    errors: list[str] = []
+    event_types = {member.get("ca_event_type") for member in members}
+    if len(event_types) != 1:
+        return [f"ca_group_id:{group_id}:inconsistent_event_type"]
+    event_type = next(iter(event_types))
+    if event_type not in _CA_REQUIRED_LEGS:
+        return [f"ca_group_id:{group_id}:invalid_event_type:{event_type}"]
+    leg_types = {member.get("ca_leg_type") for member in members}
+    missing = _CA_REQUIRED_LEGS[event_type] - leg_types
+    if missing:
+        errors.append(
+            f"ca_group_id:{group_id}:missing_required_legs:"
+            f"{','.join(sorted(missing))}"
+        )
+    for member in members:
+        member_key = logical_key("ledger_movements", member)
+        leg_type = member.get("ca_leg_type")
+        expected_txn_type = _CA_LEG_TXN_TYPE.get(leg_type)
+        if expected_txn_type is None:
+            errors.append(f"{member_key}:invalid_ca_leg_type:{leg_type}")
+        elif member.get("txn_type") != expected_txn_type:
+            errors.append(
+                f"{member_key}:invalid_ca_leg_txn_type:"
+                f"{leg_type}:{member.get('txn_type')}:{expected_txn_type}"
+            )
+    return errors
+
+
 def apply_filters(
     records: dict[str, list[dict[str, Any]]], filters: dict[str, Any]
 ) -> dict[str, list[dict[str, Any]]]:
@@ -351,34 +383,7 @@ def validate_dependency_closure(records: dict[str, list[dict[str, Any]]]) -> lis
             errors.append(f"{group_key}:mismatched_security")
 
     for group_id, members in ca_groups.items():
-        event_types = {member.get("ca_event_type") for member in members}
-        if len(event_types) != 1:
-            errors.append(f"ca_group_id:{group_id}:inconsistent_event_type")
-            continue
-        event_type = next(iter(event_types))
-        if event_type not in _CA_REQUIRED_LEGS:
-            errors.append(f"ca_group_id:{group_id}:invalid_event_type:{event_type}")
-            continue
-        leg_types = {member.get("ca_leg_type") for member in members}
-        missing = _CA_REQUIRED_LEGS[event_type] - leg_types
-        if missing:
-            errors.append(
-                f"ca_group_id:{group_id}:missing_required_legs:"
-                f"{','.join(sorted(missing))}"
-            )
-        for member in members:
-            member_key = logical_key("ledger_movements", member)
-            leg_type = member.get("ca_leg_type")
-            expected_txn_type = _CA_LEG_TXN_TYPE.get(leg_type)
-            if expected_txn_type is None:
-                errors.append(
-                    f"{member_key}:invalid_ca_leg_type:{leg_type}"
-                )
-            elif member.get("txn_type") != expected_txn_type:
-                errors.append(
-                    f"{member_key}:invalid_ca_leg_txn_type:"
-                    f"{leg_type}:{member.get('txn_type')}:{expected_txn_type}"
-                )
+        errors.extend(validate_corporate_action_group(group_id, members))
     for section in ("option_positions", "action_plans"):
         for record in records.get(section, []):
             identity = record.get("security_id") or record.get("symbol")

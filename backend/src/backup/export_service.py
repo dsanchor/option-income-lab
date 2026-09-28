@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import os
+from collections import defaultdict
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Any
 
 from .archive import SECTION_PATHS, BackupArchive
 from .canonical import canonical_hash, canonical_json_bytes, content_hash, sha256_bytes
 from .controls import compute_controls
-from .dependency_closure import apply_filters, close_dependencies
+from .dependency_closure import (
+    CA_GROUP_LINK_FIELDS,
+    apply_filters,
+    close_dependencies,
+    validate_corporate_action_group,
+)
 from .models import (
     SECTION_NAMES,
     BackupManifest,
@@ -77,6 +84,52 @@ class ExportService:
         }
 
     @staticmethod
+    def _exportable_ledger_records(
+        items: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        links: dict[str, set[str]] = defaultdict(set)
+        for item in items:
+            group_id = item.get("ca_group_id")
+            if not group_id:
+                continue
+            group_id = str(group_id)
+            groups[group_id].append(item)
+            for field in CA_GROUP_LINK_FIELDS:
+                linked_group = item.get(field)
+                if linked_group:
+                    linked_group = str(linked_group)
+                    links[group_id].add(linked_group)
+                    links[linked_group].add(group_id)
+
+        skipped = {
+            group_id
+            for group_id, members in groups.items()
+            if validate_corporate_action_group(group_id, members)
+        }
+        queue = list(skipped)
+        while queue:
+            group_id = queue.pop()
+            for linked_group in links.get(group_id, set()):
+                if linked_group not in skipped:
+                    skipped.add(linked_group)
+                    queue.append(linked_group)
+
+        warnings = [
+            "SKIPPED_GROUP:ledger_movements:SchemaError: "
+            "section=ledger_movements "
+            f"identity_hash={sha256(group_id.encode('utf-8')).hexdigest()[:12]} "
+            "issue=invalid_corporate_action_group"
+            for group_id in sorted(skipped)
+        ]
+        records = [
+            item
+            for item in items
+            if str(item.get("ca_group_id") or "") not in skipped
+        ]
+        return records, warnings
+
+    @staticmethod
     def _project_records(
         section: str,
         items: list[dict[str, Any]],
@@ -102,6 +155,9 @@ class ExportService:
     ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
         source = self.collector.collect()
         configs = source.get("symbol_configs", [])
+        ledger_records, group_warnings = self._exportable_ledger_records(
+            source.get("ledger_movements", [])
+        )
         projectors = {
             "accounts": (
                 source.get("accounts", []),
@@ -123,7 +179,7 @@ class ExportService:
                 ),
             ),
             "ledger_movements": (
-                source.get("ledger_movements", []),
+                ledger_records,
                 lambda item: project_ledger(item, request.include_source_row),
             ),
             "action_plans": (
@@ -136,7 +192,7 @@ class ExportService:
             ),
         }
         records: dict[str, list[dict[str, Any]]] = {}
-        warnings: list[str] = []
+        warnings: list[str] = list(group_warnings)
         for section, (items, projector) in projectors.items():
             records[section], section_warnings = self._project_records(
                 section,

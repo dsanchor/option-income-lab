@@ -108,6 +108,48 @@ def test_export_skips_invalid_record_and_reports_sanitized_warning():
     assert artifact.manifest["warnings"] == preview.warnings
 
 
+def test_export_skips_complete_invalid_corporate_action_group():
+    cosmos = populated_cosmos()
+    for movement in (
+        {
+            "id": "invalid-group-a",
+            "account_id": "acct_demo",
+            "doc_type": "ledger_txn",
+            "txn_type": "BUY",
+            "security_id": "XNAS:AAPL",
+            "ca_group_id": "group-must-not-leak",
+            "ca_event_type": "REMOVED_EVENT",
+            "ca_leg_type": "SHARE_ACQUISITION",
+        },
+        {
+            "id": "invalid-group-b",
+            "account_id": "acct_demo",
+            "doc_type": "ledger_txn",
+            "txn_type": "DIVIDEND",
+            "security_id": "XNAS:AAPL",
+            "ca_group_id": "group-must-not-leak",
+            "ca_event_type": "REMOVED_EVENT",
+            "ca_leg_type": "CASH_DIVIDEND",
+        },
+    ):
+        cosmos.portfolio_container.create_item(body=movement)
+    service = ExportService(CosmosBackupCollector(cosmos))
+    request = ExportRequest()
+
+    preview = service.preview(request)
+    request.preview_fingerprint = preview.selection_fingerprint
+    artifact = service.export(request)
+    parsed = BackupArchive().read(artifact.archive)
+
+    assert [item["id"] for item in parsed.sections["ledger_movements"]] == ["mvt_1"]
+    assert len(preview.warnings) == 1
+    assert preview.warnings[0].startswith(
+        "SKIPPED_GROUP:ledger_movements:SchemaError:"
+    )
+    assert "invalid_corporate_action_group" in preview.warnings[0]
+    assert "group-must-not-leak" not in preview.warnings[0]
+
+
 def test_recursive_secret_scanner_checks_arrays_and_serialized_json():
     findings = scan_for_secrets({
         "items": [{"safe": '{"nested_api_key":"redacted-canary"}'}],

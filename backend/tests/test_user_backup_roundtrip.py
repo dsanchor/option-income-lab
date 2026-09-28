@@ -1,9 +1,10 @@
 import pytest
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
 
 from src.backup.archive import BackupArchive
 from src.backup.collectors import CosmosBackupCollector
 from src.backup.export_service import ExportService
-from src.backup.import_service import ImportService
+from src.backup.import_service import ImportService, _not_found
 from src.backup.models import ExportRequest
 from src.backup.section_schemas import SchemaError, project_ledger, validate_record
 
@@ -15,6 +16,19 @@ def _export(cosmos):
     request = ExportRequest()
     request.preview_fingerprint = exporter.preview(request).selection_fingerprint
     return exporter.export(request)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        CosmosResourceNotFoundError(message="missing", response=None),
+        RuntimeError("(NotFound) Entity with the specified id does not exist"),
+        type("StatusError", (RuntimeError,), {"status_code": 404})("missing"),
+        type("CodeError", (RuntimeError,), {"error_code": "NotFound"})("missing"),
+    ],
+)
+def test_cosmos_not_found_variants_are_treated_as_missing_records(error):
+    assert _not_found(error)
 
 
 def test_validation_separates_archive_validity_from_destination_collisions():

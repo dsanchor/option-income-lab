@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
+
 from .archive import BackupArchive, ParsedArchive
 from .canonical import canonical_hash
 from .controls import compute_controls
@@ -35,7 +37,22 @@ class ImportValidationError(ValueError):
 
 
 def _not_found(exc: Exception) -> bool:
-    return "404" in str(exc) or "not found" in str(exc).lower()
+    if isinstance(exc, CosmosResourceNotFoundError):
+        return True
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+    if status_code == 404:
+        return True
+    error_code = str(
+        getattr(exc, "error_code", None)
+        or getattr(exc, "code", None)
+        or ""
+    ).casefold()
+    if error_code == "notfound":
+        return True
+    message = str(exc).casefold()
+    return "404" in message or "not found" in message or "(notfound)" in message
 
 
 class ImportService:
