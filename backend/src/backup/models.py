@@ -85,7 +85,7 @@ class RecordPlan(BaseModel):
     section: str
     logical_key: str
     status: Literal[
-        "CREATE", "SKIP_IDENTICAL", "CONFLICT_REQUIRES_CHOICE",
+        "CREATE", "SKIP_IDENTICAL", "SKIP_CONFLICT", "CONFLICT_REQUIRES_CHOICE",
         "BLOCKED_MISSING_REFERENCE", "BLOCKED_INVARIANT", "REDACTED_IGNORED",
     ]
     detail: str | None = None

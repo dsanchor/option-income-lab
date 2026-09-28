@@ -20,6 +20,10 @@ export function dryRunHasBlockingIssues(report: BackupDryRunPlan) {
 
 export default function BackupDryRunReport({ report }: { report: BackupDryRunPlan }) {
   const records = report.records ?? report.per_record_statuses ?? [];
+  const noteworthy = records.filter((record) =>
+    ["SKIP_CONFLICT", "CONFLICT_REQUIRES_CHOICE", "BLOCKED_MISSING_REFERENCE", "BLOCKED_INVARIANT"]
+      .includes(record.status),
+  );
   const counts = records.reduce<Record<string, number>>((result, record) => {
     result[record.status] = (result[record.status] ?? 0) + 1;
     return result;
@@ -41,6 +45,24 @@ export default function BackupDryRunReport({ report }: { report: BackupDryRunPla
         <details className="mt-4">
           <summary className="cursor-pointer text-sm font-semibold">Predicted controls</summary>
           <pre className="mt-2 overflow-auto rounded-[var(--radius)] bg-bg-input p-3 text-xs">{JSON.stringify(report.predicted_controls ?? report.controls, null, 2)}</pre>
+        </details>
+      ) : null}
+      {noteworthy.length ? (
+        <details className="mt-4" open>
+          <summary className="cursor-pointer text-sm font-semibold">
+            Conflicts and blocked records ({noteworthy.length})
+          </summary>
+          <div className="mt-2 max-h-80 overflow-auto rounded-[var(--radius)] border border-border">
+            {noteworthy.map((record, index) => (
+              <div key={`${record.section}-${record.logical_key}-${index}`} className="border-b border-border p-3 text-xs last:border-0">
+                <div className="font-mono font-semibold">{record.status.replaceAll("_", " ")}</div>
+                <div className="mt-1">{record.section}: {record.logical_key ?? record.id ?? "unknown"}</div>
+                {record.detail || record.reason ? (
+                  <div className="mt-1 text-text-muted">{record.detail ?? record.reason}</div>
+                ) : null}
+              </div>
+            ))}
+          </div>
         </details>
       ) : null}
       {dryRunHasBlockingIssues(report) ? (

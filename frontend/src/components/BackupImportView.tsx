@@ -25,6 +25,7 @@ export default function BackupImportView() {
   const [dryRun, setDryRun] = useState<BackupDryRunPlan | null>(null);
   const [result, setResult] = useState<BackupImportResult | null>(null);
   const [confirmed, setConfirmed] = useState(false);
+  const [skipExistingConflicts, setSkipExistingConflicts] = useState(false);
   const [busy, setBusy] = useState<BusyStep>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,7 +38,9 @@ export default function BackupImportView() {
     Boolean(validation.dependency_errors?.length) ||
     validation.checksums_valid === false;
   const validationBlocked =
-    validationInvalid || Boolean(validation?.collisions?.length);
+    validationInvalid || (
+      Boolean(validation?.collisions?.length) && !skipExistingConflicts
+    );
   const canApply =
     Boolean(file && validation && dryRun?.dry_run_fingerprint && confirmed) &&
     !validationBlocked &&
@@ -50,6 +53,7 @@ export default function BackupImportView() {
     setDryRun(null);
     setResult(null);
     setConfirmed(false);
+    setSkipExistingConflicts(false);
     setError(null);
     if (next && !next.name.toLowerCase().endsWith(".oil-backup.zip")) {
       setFile(null);
@@ -85,7 +89,10 @@ export default function BackupImportView() {
     setDryRun(null);
     setConfirmed(false);
     try {
-      const response = await postFile("/api/backups/import/dry-run", file, { mode: "create_only" });
+      const response = await postFile("/api/backups/import/dry-run", file, {
+        mode: "create_only",
+        skip_existing_conflicts: String(skipExistingConflicts),
+      });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail ?? data.error ?? "Dry-run failed");
       setDryRun(data);
@@ -105,6 +112,7 @@ export default function BackupImportView() {
         mode: "create_only",
         dry_run_fingerprint: dryRun.dry_run_fingerprint,
         confirm: "true",
+        skip_existing_conflicts: String(skipExistingConflicts),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail ?? data.error ?? "Restore failed");
@@ -151,6 +159,23 @@ export default function BackupImportView() {
       <section className="surface p-5">
         <h2 className="text-lg font-semibold">2. Dry-run against this destination</h2>
         <p className="mt-1 text-sm text-text-muted">Mode is fixed to Create missing / skip identical. Existing different records are never overwritten.</p>
+        <label className="mt-4 flex items-start gap-3 text-sm">
+          <input
+            type="checkbox"
+            checked={skipExistingConflicts}
+            disabled={busy !== null}
+            onChange={(event) => {
+              setSkipExistingConflicts(event.target.checked);
+              setDryRun(null);
+              setConfirmed(false);
+            }}
+            className="mt-1 accent-[var(--color-accent-blue)]"
+          />
+          <span>
+            Preserve destination values and skip conflicting records. Missing records
+            will still be created; nothing existing will be overwritten.
+          </span>
+        </label>
         <button type="button" onClick={runDryRun} disabled={!validation || validationInvalid || busy !== null} className="mt-4 inline-flex items-center gap-2 rounded-full border border-accent-blue px-4 py-2 text-sm font-semibold text-accent-blue disabled:opacity-40">
           {busy === "dry-run" ? <LoaderCircle size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Run dry-run
         </button>

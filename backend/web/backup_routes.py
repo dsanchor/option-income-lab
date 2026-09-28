@@ -121,10 +121,15 @@ async def import_validate(request: Request, file: UploadFile = File(...)):
 async def import_dry_run(
     request: Request, file: UploadFile = File(...),
     mode: str = Form("create_only"),
+    skip_existing_conflicts: bool = Form(False),
 ):
     try:
         payload = await _read_upload(file)
-        plan = _importer(request).dry_run(payload, mode=mode)
+        plan = _importer(request).dry_run(
+            payload,
+            mode=mode,
+            skip_existing_conflicts=skip_existing_conflicts,
+        )
         return plan.model_dump()
     except (ValueError, ImportValidationError) as exc:
         return JSONResponse(
@@ -138,12 +143,14 @@ async def import_apply(
     mode: str = Form("create_only"),
     dry_run_fingerprint: str = Form(...),
     confirm: bool = Form(False),
+    skip_existing_conflicts: bool = Form(False),
 ):
     try:
         payload = await _read_upload(file)
         result = _importer(request).apply(
             payload, mode=mode, dry_run_fingerprint=dry_run_fingerprint,
             confirm=confirm,
+            skip_existing_conflicts=skip_existing_conflicts,
         )
         return result.model_dump()
     except StaleDryRunError:
@@ -170,4 +177,3 @@ async def import_run_status(import_run_id: str, request: Request):
             {"error": "not_found", "detail": "Import run not found"}, status_code=404
         )
     return result
-

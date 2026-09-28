@@ -107,6 +107,7 @@ export interface BackupDryRunRecord {
   id?: string;
   status: BackupImportRecordStatus;
   reason?: string;
+  detail?: string;
 }
 
 export interface BackupDryRunPlan {

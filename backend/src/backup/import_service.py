@@ -211,7 +211,12 @@ class ImportService:
                 errors=[f"Destination validation failed: {exc}"],
             )
 
-    def _plan(self, parsed: ParsedArchive) -> DryRunPlan:
+    def _plan(
+        self,
+        parsed: ParsedArchive,
+        *,
+        skip_existing_conflicts: bool = False,
+    ) -> DryRunPlan:
         dependency_errors = validate_dependency_closure(parsed.sections)
         control_errors = self._validate_controls(parsed)
         records: list[RecordPlan] = []
@@ -233,8 +238,15 @@ class ImportService:
                     status = "SKIP_IDENTICAL"
                     detail = None
                 else:
-                    status = "CONFLICT_REQUIRES_CHOICE"
-                    detail = "Destination logical key exists with different canonical content"
+                    status = (
+                        "SKIP_CONFLICT"
+                        if skip_existing_conflicts
+                        else "CONFLICT_REQUIRES_CHOICE"
+                    )
+                    detail = (
+                        "Destination logical key exists with different canonical content; "
+                        "destination value will be preserved"
+                    )
                 records.append(RecordPlan(
                     section=section, logical_key=key, status=status, detail=detail
                 ))
@@ -244,9 +256,37 @@ class ImportService:
                 and record_plan.status == "CREATE"
                 and self._settings_document_exists()
             ):
-                record_plan.status = "CONFLICT_REQUIRES_CHOICE"
+                record_plan.status = (
+                    "SKIP_CONFLICT"
+                    if skip_existing_conflicts
+                    else "CONFLICT_REQUIRES_CHOICE"
+                )
                 record_plan.detail = (
-                    "Create-only import cannot add a path to an existing settings document"
+                    "Destination settings document already exists; "
+                    "destination value will be preserved"
+                )
+        config_status = {
+            item.logical_key: item.status
+            for item in records
+            if item.section == "symbol_configs"
+        }
+        for record_plan in records:
+            if record_plan.section != "option_positions" or record_plan.status != "CREATE":
+                continue
+            position = next(
+                item for item in parsed.sections["option_positions"]
+                if logical_key("option_positions", item) == record_plan.logical_key
+            )
+            config_identity = position.get("security_id") or position.get("symbol")
+            if config_status.get(str(config_identity)) != "CREATE":
+                record_plan.status = (
+                    "SKIP_CONFLICT"
+                    if skip_existing_conflicts
+                    else "CONFLICT_REQUIRES_CHOICE"
+                )
+                record_plan.detail = (
+                    "Position belongs to an existing symbol configuration; "
+                    "destination configuration will be preserved"
                 )
         for error in dependency_errors:
             records.append(RecordPlan(
@@ -262,11 +302,14 @@ class ImportService:
         fingerprint = canonical_hash({
             "archive_sha256": parsed.archive_sha256,
             "destination_snapshot_digest": destination_digest,
+            "skip_existing_conflicts": skip_existing_conflicts,
             "records": [item.model_dump() for item in records],
         })
         blocking = [
             item for item in records
-            if item.status not in {"CREATE", "SKIP_IDENTICAL", "REDACTED_IGNORED"}
+            if item.status not in {
+                "CREATE", "SKIP_IDENTICAL", "SKIP_CONFLICT", "REDACTED_IGNORED",
+            }
         ]
         counts = Counter(item.status for item in records)
         return DryRunPlan(
@@ -283,6 +326,7 @@ class ImportService:
             summary=(
                 f"{counts.get('CREATE', 0)} create, "
                 f"{counts.get('SKIP_IDENTICAL', 0)} identical, "
+                f"{counts.get('SKIP_CONFLICT', 0)} preserved, "
                 f"{len(blocking)} blocked"
             ),
             errors=[item.detail or item.logical_key for item in blocking],
@@ -299,11 +343,20 @@ class ImportService:
                 return False
             raise
 
-    def dry_run(self, payload: bytes, mode: str = "create_only") -> DryRunPlan:
+    def dry_run(
+        self,
+        payload: bytes,
+        mode: str = "create_only",
+        *,
+        skip_existing_conflicts: bool = False,
+    ) -> DryRunPlan:
         if mode != "create_only":
             raise ImportValidationError("Only create_only mode is supported")
         parsed = self.archive.read(payload)
-        return self._plan(parsed)
+        return self._plan(
+            parsed,
+            skip_existing_conflicts=skip_existing_conflicts,
+        )
 
     @staticmethod
     def _validate_controls(parsed: ParsedArchive) -> list[str]:
@@ -441,11 +494,15 @@ class ImportService:
     def apply(
         self, payload: bytes, *, dry_run_fingerprint: str,
         mode: str = "create_only", confirm: bool = False,
+        skip_existing_conflicts: bool = False,
     ) -> ImportResult:
         if mode != "create_only" or not confirm:
             raise ImportValidationError("create_only mode and confirm=true are required")
         parsed = self.archive.read(payload)
-        plan = self._plan(parsed)
+        plan = self._plan(
+            parsed,
+            skip_existing_conflicts=skip_existing_conflicts,
+        )
         if plan.dry_run_fingerprint != dry_run_fingerprint or not plan.valid:
             raise StaleDryRunError("STALE_DRY_RUN")
         run_id = str(uuid4())
@@ -460,7 +517,10 @@ class ImportService:
         try:
             journals.acquire_lock(run_id)
             lock_acquired = True
-            rechecked = self._plan(parsed)
+            rechecked = self._plan(
+                parsed,
+                skip_existing_conflicts=skip_existing_conflicts,
+            )
             if rechecked.dry_run_fingerprint != dry_run_fingerprint or not rechecked.valid:
                 raise StaleDryRunError("STALE_DRY_RUN")
             journal = journals.set_state(journal, "APPLYING")
@@ -474,7 +534,7 @@ class ImportService:
                 for record in parsed.sections[section]:
                     key = logical_key(section, record)
                     status = status_by_key[(section, key)]
-                    if status == "SKIP_IDENTICAL":
+                    if status in {"SKIP_IDENTICAL", "SKIP_CONFLICT"}:
                         skipped_counts[section] += 1
                         continue
                     if section == "option_positions":
@@ -495,20 +555,25 @@ class ImportService:
                     )
                     created_counts[section] += 1
                     affected.append(f"{section}:{key}")
-            postflight = self._plan(parsed)
+            postflight = self._plan(
+                parsed,
+                skip_existing_conflicts=skip_existing_conflicts,
+            )
             if not postflight.valid or any(
-                item.status != "SKIP_IDENTICAL" for item in postflight.records
+                item.status not in {"SKIP_IDENTICAL", "SKIP_CONFLICT"}
+                for item in postflight.records
             ):
                 raise RuntimeError("Post-flight logical verification failed")
-            actual_sections = {
-                section: [
-                    self._read_item(section, record)
-                    for record in parsed.sections[section]
-                ]
-                for section in SECTION_NAMES
-            }
-            if compute_controls(actual_sections) != parsed.manifest.get("controls"):
-                raise RuntimeError("Post-flight round-trip controls mismatch")
+            if not skip_existing_conflicts:
+                actual_sections = {
+                    section: [
+                        self._read_item(section, record)
+                        for record in parsed.sections[section]
+                    ]
+                    for section in SECTION_NAMES
+                }
+                if compute_controls(actual_sections) != parsed.manifest.get("controls"):
+                    raise RuntimeError("Post-flight round-trip controls mismatch")
             journal = journals.set_state(
                 journal, "COMPLETED", created_counts=dict(created_counts),
                 skipped_counts=dict(skipped_counts),

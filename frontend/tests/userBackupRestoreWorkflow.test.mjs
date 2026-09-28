@@ -36,6 +36,14 @@ describe("user backup restore workflow", () => {
     assert.doesNotMatch(importView, /update_existing|replace_all|delete_existing/);
   });
 
+  it("can preserve destination values while skipping same-key conflicts", () => {
+    assert.match(importView, /skip_existing_conflicts/);
+    assert.match(importView, /Preserve destination values and skip conflicting records/);
+    assert.match(importView, /nothing existing will be overwritten/);
+    assert.match(report, /Conflicts and blocked records/);
+    assert.match(report, /record\.logical_key/);
+  });
+
   it("blocks conflicts, missing references, invariants, and invalid validation", () => {
     for (const status of [
       "CONFLICT_REQUIRES_CHOICE",
