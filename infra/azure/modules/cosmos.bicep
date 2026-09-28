@@ -62,32 +62,38 @@ resource containerResources 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
     parent: database
     name: container.name
     properties: {
-      resource: {
-        id: container.name
-        partitionKey: {
-          paths: [container.partitionKey]
-          kind: 'Hash'
-          version: 2
-        }
-        defaultTtl: container.ttl
-        indexingPolicy: container.indexing == 'symbols'
-          ? {
-              indexingMode: 'consistent'
-              automatic: true
-              includedPaths: symbolsIncludedPaths
-              excludedPaths: symbolsExcludedPaths
-            }
+      resource: union(
+        {
+          id: container.name
+          partitionKey: {
+            paths: [container.partitionKey]
+            kind: 'Hash'
+            version: 2
+          }
+          indexingPolicy: container.indexing == 'symbols'
+            ? {
+                indexingMode: 'consistent'
+                automatic: true
+                includedPaths: symbolsIncludedPaths
+                excludedPaths: symbolsExcludedPaths
+              }
+            : {
+                indexingMode: 'consistent'
+                automatic: true
+                includedPaths: [
+                  { path: '/*' }
+                ]
+                excludedPaths: [
+                  { path: '/"_etag"/?' }
+                ]
+              }
+        },
+        container.ttl == null
+          ? {}
           : {
-              indexingMode: 'consistent'
-              automatic: true
-              includedPaths: [
-                { path: '/*' }
-              ]
-              excludedPaths: [
-                { path: '/"_etag"/?' }
-              ]
+              defaultTtl: container.ttl
             }
-      }
+      )
     }
   }
 ]

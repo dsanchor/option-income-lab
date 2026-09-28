@@ -87,6 +87,14 @@ elif has("storage", "account", "management-policy", "show"):
     raise SystemExit(1)
 elif has("cognitiveservices", "account", "show"):
     raise SystemExit(1)
+elif has("cognitiveservices", "account", "list-deleted"):
+    if os.environ.get("FAKE_FOUNDRY_DELETED") == "true":
+        out(json.dumps([{
+            "name": "ai-stock-options-manager-dsr2026",
+            "location": "swedencentral",
+        }]))
+    else:
+        out("[]")
 elif has("cognitiveservices", "account", "deployment", "list"):
     out("[]")
 elif has("cognitiveservices", "model", "list"):
@@ -331,6 +339,15 @@ def test_transient_catalog_failure_fails_closed_without_mutation(fake_cli):
     fake_cli["env"]["FAKE_MODEL_MODE"] = "transient-error"
     result = _run(fake_cli, "--mode", "preflight")
     assert result.returncode != 0
+    assert not [call for call in _calls(fake_cli) if _is_mutating(call["args"])]
+
+
+def test_soft_deleted_foundry_account_fails_with_actionable_error(fake_cli):
+    fake_cli["env"]["FAKE_FOUNDRY_DELETED"] = "true"
+    result = _run(fake_cli, "--mode", "preflight")
+    assert result.returncode != 0
+    assert "soft-deleted" in result.stderr
+    assert "recover or purge" in result.stderr
     assert not [call for call in _calls(fake_cli) if _is_mutating(call["args"])]
 
 

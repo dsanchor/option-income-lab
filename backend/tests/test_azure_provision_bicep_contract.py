@@ -88,6 +88,20 @@ def test_exact_eight_container_partition_ttl_and_index_contract():
         assert f"path: '{path}'" in cosmos
     assert "capabilities:" in cosmos and "EnableServerless" in cosmos
     assert "defaultConsistencyLevel: 'Session'" in cosmos
+    assert "container.ttl == null" in cosmos
+    assert "? {}" in cosmos
+    assert "defaultTtl: container.ttl" in cosmos
+
+
+def test_foundry_children_are_serialized_to_avoid_parent_conflicts():
+    foundry = _text("foundry.bicep")
+    assert "miniDeployment" in foundry
+    assert "lunaDeployment" in foundry
+    assert "solDeployment" in foundry
+    assert "dependsOn: [\n    project\n  ]" in foundry
+    assert "dependsOn: [\n    miniDeployment\n  ]" in foundry
+    assert "dependsOn: [\n    lunaDeployment\n  ]" in foundry
+    assert "for deployment in deployments" not in foundry
 
 
 def test_api_is_internal_frontend_requires_entra_and_real_internal_fqdn():

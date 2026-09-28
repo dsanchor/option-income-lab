@@ -256,6 +256,12 @@ PY
     [[ "$storage_available" == "true" ]] || die "Storage account name is unavailable"
   fi
   if ! az_read cognitiveservices account show -g "$RESOURCE_GROUP" -n "$FOUNDRY_ACCOUNT" -o none 2>/dev/null; then
+    local deleted_foundry
+    deleted_foundry="$(az_read cognitiveservices account list-deleted -o json |
+      jq -c --arg name "$FOUNDRY_ACCOUNT" --arg location "$LOCATION" \
+        '[.[] | select(.name == $name and .location == $location)]')"
+    [[ "$(jq 'length' <<<"$deleted_foundry")" == "0" ]] ||
+      die "Foundry account '$FOUNDRY_ACCOUNT' is soft-deleted in $LOCATION; recover or purge it before retrying"
     foundry_available="$(az_read rest --method post \
       --url "https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/providers/Microsoft.CognitiveServices/checkDomainAvailability?api-version=2025-06-01" \
       --body "{\"subdomainName\":\"${FOUNDRY_ACCOUNT}\",\"type\":\"Microsoft.CognitiveServices/accounts\"}" \
