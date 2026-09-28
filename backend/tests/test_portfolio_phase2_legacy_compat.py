@@ -1,17 +1,3 @@
-"""Phase 2 regression tests — Legacy compatibility and cross-cutting invariants.
-
-Verifies that Phase 2 changes do NOT regress Phase 1 behavior:
-- Existing imports (CSV) still work unchanged.
-- _unassigned account_id still silently accepted everywhere.
-- Rights-sale invariant (DERECHOS) holds after all Phase 2 operations.
-- Holdings service exclusions (deleted, superseded) do not affect unrelated movements.
-- Endpoint auth/error contract shapes unchanged (error codes unchanged).
-- Portfolio movements list pagination unchanged.
-- Securities catalog unaffected by portfolio Phase 2 changes.
-- Existing test_portfolio_endpoints.py contract signatures unchanged.
-
-These tests must ALL pass even before Phase 2 is implemented (they guard Phase 1).
-"""
 
 from __future__ import annotations
 
@@ -183,16 +169,7 @@ _SALES_CSV_7COL = (
     "2024\tApple Inc.\t15/06/2024\t5\t5,00\t950,00\tAcciones\n"
 ).encode()
 
-_SALES_CSV_DERECHOS = (
-    "Año\tEmpresa\tFecha venta\tAcciones\tComisión\tTotal Venta\tTipo\n"
-    "2024\tApple Inc.\t15/06/2024\t0\t0,00\t300,00\tDerechos\n"
-).encode()
 
-_DIVIDENDS_CSV = (
-    "Año\tEmpresa\tFecha de cobro\tImporte Bruto\tImporte Neto\t"
-    "Importe en Derechos\tRetención Origen\tRetención Destino\n"
-    "2024\tApple Inc.\t15/06/2024\t100,00\t73,31\t0,00\t12,94\t13,75\n"
-).encode()
 
 
 def _make_movement(
@@ -376,7 +353,6 @@ class TestLegacyHoldingsAndMovements:
 
 
 # ---------------------------------------------------------------------------
-# Tests — rights-sale invariant cross-cutting
 # ---------------------------------------------------------------------------
 
 class FakePortfolioHoldings:
@@ -426,23 +402,8 @@ def _make_holdings_service(movements):
     return HoldingsService(portfolio_svc, securities_svc)
 
 
-class TestRightsSaleInvariant:
-    """The DERECHOS rights-sale invariant must hold in all configurations."""
+class TestOrdinarySaleInvariant:
 
-    def test_derechos_from_csv_does_not_decrement_shares(self):
-        """CSV-imported DERECHOS (with sales_type='DERECHOS') does not reduce shares."""
-        movements = [
-            _make_movement("buy_d1", "XNYS:AAPL", "BUY", 100, "18250"),
-            _make_movement("sell_d1", "XNYS:AAPL", "SELL", 0, "300",
-                           sales_type="DERECHOS"),
-        ]
-        svc = _make_holdings_service(movements)
-        result = svc.compute_holdings()
-        aapl = next((h for h in result["holdings"] if h["security_id"] == "XNYS:AAPL"), None)
-        assert aapl is not None
-        assert Decimal(aapl["total_shares"]) == Decimal("100"), (
-            "DERECHOS sale from CSV must not decrement shares"
-        )
 
     def test_acciones_from_6col_csv_decrements_shares(self):
         """6-column CSV SELL (no Tipo column, defaults to ACCIONES) decrements shares."""
@@ -460,52 +421,8 @@ class TestRightsSaleInvariant:
             "6-column SELL defaults to ACCIONES and must decrement shares"
         )
 
-    def test_derechos_does_not_affect_other_securities(self):
-        """DERECHOS sale for security A does not affect security B holdings."""
-        movements = [
-            _make_movement("buy_aapl", "XNYS:AAPL", "BUY", 100, "18250"),
-            _make_movement("buy_msft", "XNAS:MSFT", "BUY", 50, "9000"),
-            _make_movement("sell_aapl_dr", "XNYS:AAPL", "SELL", 0, "300",
-                           sales_type="DERECHOS"),
-        ]
-        svc = _make_holdings_service(movements)
-        result = svc.compute_holdings()
-        msft = next((h for h in result["holdings"] if h["security_id"] == "XNAS:MSFT"), None)
-        assert msft is not None
-        assert Decimal(msft["total_shares"]) == Decimal("50"), (
-            "DERECHOS sale must not affect unrelated security holdings"
-        )
 
-    def test_mixed_acciones_and_derechos_correct_share_count(self):
-        """Mix of ACCIONES and DERECHOS sales computes correct net shares."""
-        movements = [
-            _make_movement("buy_mix", "XNYS:AAPL", "BUY", 200, "36500"),
-            # ACCIONES: reduces shares
-            _make_movement("sell_acc", "XNYS:AAPL", "SELL", 50, "9500",
-                           sales_type="ACCIONES"),
-            # DERECHOS: does not reduce shares
-            _make_movement("sell_der", "XNYS:AAPL", "SELL", 0, "500",
-                           sales_type="DERECHOS"),
-        ]
-        svc = _make_holdings_service(movements)
-        result = svc.compute_holdings()
-        aapl = next((h for h in result["holdings"] if h["security_id"] == "XNYS:AAPL"), None)
-        assert aapl is not None
-        # 200 - 50 (ACCIONES) = 150; DERECHOS doesn't reduce
-        assert Decimal(aapl["total_shares"]) == Decimal("150")
 
-    def test_derechos_proceeds_in_total_sales_eur(self):
-        """DERECHOS gross is included in total_sales_eur (it's a sale, just not shares)."""
-        movements = [
-            _make_movement("buy_ts", "XNYS:AAPL", "BUY", 100, "18250"),
-            _make_movement("sell_ts_dr", "XNYS:AAPL", "SELL", 0, "500",
-                           commission_eur="0", sales_type="DERECHOS"),
-        ]
-        svc = _make_holdings_service(movements)
-        result = svc.compute_holdings()
-        aapl = next((h for h in result["holdings"] if h["security_id"] == "XNYS:AAPL"), None)
-        assert aapl is not None
-        assert Decimal(aapl["total_sales_eur"]) == Decimal("0.00")
 
 
 # ---------------------------------------------------------------------------

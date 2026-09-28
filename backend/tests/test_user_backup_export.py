@@ -44,6 +44,35 @@ def test_query_order_does_not_change_content_hash():
     assert first.manifest["content_sha256"] == second.manifest["content_sha256"]
 
 
+def test_export_skips_invalid_record_and_reports_sanitized_warning():
+    cosmos = populated_cosmos()
+    cosmos.portfolio_container.create_item(body={
+        "id": "invalid-movement",
+        "account_id": "acct_demo",
+        "doc_type": "ledger_txn",
+        "txn_type": "BUY",
+        "security_id": "XNAS:AAPL",
+        "future_field": "must-not-export",
+    })
+    service = ExportService(CosmosBackupCollector(cosmos))
+    request = ExportRequest()
+
+    preview = service.preview(request)
+    request.preview_fingerprint = preview.selection_fingerprint
+    artifact = service.export(request)
+    parsed = BackupArchive().read(artifact.archive)
+
+    assert [item["id"] for item in parsed.sections["ledger_movements"]] == ["mvt_1"]
+    assert len(preview.warnings) == 1
+    assert preview.warnings[0].startswith(
+        "SKIPPED_RECORD:ledger_movements:SchemaError:"
+    )
+    assert "future_field" in preview.warnings[0]
+    assert "invalid-movement" not in preview.warnings[0]
+    assert b"must-not-export" not in artifact.archive
+    assert artifact.manifest["warnings"] == preview.warnings
+
+
 def test_recursive_secret_scanner_checks_arrays_and_serialized_json():
     findings = scan_for_secrets({
         "items": [{"safe": '{"nested_api_key":"redacted-canary"}'}],

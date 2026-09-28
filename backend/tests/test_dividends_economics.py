@@ -29,7 +29,6 @@ def _dividend_movement(
     source_withholding_eur: float = 0.0,
     destination_withholding_eur: float = 0.0,
     net_eur: float,
-    source_derechos_eur: float = 0.0,
     correction_status=None,
     txn_type: str = "DIVIDEND",
 ):
@@ -39,7 +38,7 @@ def _dividend_movement(
     if destination_withholding_eur:
         withholding["destination"] = {"amount_eur": str(destination_withholding_eur)}
 
-    movement = {
+    return {
         "id": movement_id,
         "txn_type": txn_type,
         "trade_date": trade_date,
@@ -56,9 +55,6 @@ def _dividend_movement(
         "withholding": withholding,
         "net": {"eur_amount": str(net_eur)},
     }
-    if source_derechos_eur:
-        movement["source_derechos_amount"] = str(source_derechos_eur)
-    return movement
 
 
 def _sample_dividend_movements():
@@ -420,83 +416,8 @@ def test_withholding_taxonomy_fields_and_effective_withholding_pct_are_computed_
     assert report["summary"]["effective_withholding_pct"] == 10.0
 
 
-def test_legacy_rights_amounts_are_ignored_everywhere():
-    report = build_dividends_economics_report(
-        [
-            _dividend_movement(
-                movement_id="with-derechos-2023",
-                trade_date="2023-12-05",
-                ticker="IBE",
-                account_id="acct-1",
-                gross_eur=100,
-                fees_eur=0,
-                net_eur=80,
-                source_derechos_eur=20,
-            ),
-            _dividend_movement(
-                movement_id="cash-only-2024",
-                trade_date="2024-01-06",
-                ticker="IBE",
-                account_id="acct-1",
-                gross_eur=40,
-                fees_eur=0,
-                net_eur=40,
-            ),
-            _dividend_movement(
-                movement_id="with-derechos-2024",
-                trade_date="2024-02-07",
-                ticker="SAN",
-                account_id="acct-2",
-                gross_eur=20,
-                fees_eur=0,
-                net_eur=10,
-                source_derechos_eur=5,
-            ),
-        ]
-    )
-
-    assert report["summary"]["total_net_eur"] == 40.0
-    assert report["summary"]["total_net"] == 40.0
-    assert report["summary"]["total_dividends"] == 1
-    assert all("derechos_net" not in row for row in report["monthly"])
-    assert all("derechos_net" not in row for row in report["yearly"])
-    assert all("cumulative_derechos_net_eur" not in row for row in report["cumulative"])
-    positions_by_id = {position["id"]: position for position in report["positions"]}
-    assert set(positions_by_id) == {"cash-only-2024"}
-    assert positions_by_id["cash-only-2024"]["total_net"] == 40.0
 
 
-@pytest.mark.parametrize(
-    "rights_data",
-    [
-        {"SOURCE_DERECHOS_AMOUNT": "7"},
-        {"rights amount": "NaN"},
-        {"source_payload": {"nested": {"Importe en Derechos": "5,00"}}},
-    ],
-)
-def test_rights_aliases_and_malformed_values_are_absent_from_every_dividend_model(
-    rights_data,
-):
-    movement = _dividend_movement(
-        movement_id="inert",
-        trade_date="2024-01-01",
-        ticker="SAN",
-        account_id="acct-1",
-        gross_eur=100,
-        fees_eur=0,
-        net_eur=100,
-    )
-    movement.update(rights_data)
-
-    report = build_dividends_economics_report([movement])
-
-    assert report["positions"] == []
-    assert report["monthly"] == []
-    assert report["yearly"] == []
-    assert report["cumulative"] == []
-    assert report["by_symbol"] == []
-    assert report["summary"]["total_net_eur"] == 0.0
-    assert report["summary"]["total_dividends"] == 0
 
 
 def test_zero_gross_dividend_keeps_effective_withholding_pct_at_zero():

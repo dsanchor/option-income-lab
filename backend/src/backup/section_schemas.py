@@ -8,11 +8,6 @@ from hashlib import sha256
 from typing import Any
 
 from src.portfolio.models import normalize_share_fmv
-from src.portfolio.rights_policy import (
-    RIGHTS_UNSUPPORTED_MESSAGE,
-    contains_legacy_rights_data,
-    sanitize_legacy_movement,
-)
 
 from .canonical import COSMOS_SYSTEM_KEYS, normalize
 from .models import SECTION_NAMES
@@ -346,21 +341,7 @@ def project_positions(doc: dict[str, Any], include_paper: bool) -> list[dict[str
 
 def project_ledger(doc: dict[str, Any], include_source_row: bool) -> dict[str, Any]:
     identity = f"{doc.get('account_id')}|{doc.get('id')}"
-    if contains_legacy_rights_data(doc):
-        raise SchemaError(
-            RIGHTS_UNSUPPORTED_MESSAGE,
-            section="ledger_movements",
-            logical_identity=identity,
-            issue="unsupported_rights_movement",
-        )
-    source = sanitize_legacy_movement(doc)
-    if source is None:  # Defensive: the strict check above already rejects this.
-        raise SchemaError(
-            RIGHTS_UNSUPPORTED_MESSAGE,
-            section="ledger_movements",
-            logical_identity=identity,
-            issue="unsupported_rights_movement",
-        )
+    source = dict(doc)
     if not include_source_row:
         source.pop("source_row", None)
     result = _project(
@@ -509,13 +490,6 @@ def validate_record(section: str, record: dict[str, Any]) -> None:
         raise SchemaError(f"Unknown section {section}")
     if not isinstance(record, dict):
         raise SchemaError(f"{section} record must be an object")
-    if section == "ledger_movements" and contains_legacy_rights_data(record):
-        raise SchemaError(
-            RIGHTS_UNSUPPORTED_MESSAGE,
-            section=section,
-            logical_identity=f"{record.get('account_id')}|{record.get('id')}",
-            issue="unsupported_rights_movement",
-        )
     if section == "ledger_movements":
         _validate_ledger_share_fmv(record)
     unknown = set(record) - FIELDS[section]

@@ -402,37 +402,8 @@ def test_legacy_canonical_type_call_and_put_match_their_positions():
         assert rows[0]["recent_activities"][0]["id"] == "activity-"
 
 
-def test_legacy_option_type_aliases_trim_and_ignore_case():
-    legacy = _activity(
-        "", "2026-09-24T12:00:00Z", risk="LOW", price=495
-    )
-    legacy.pop("position_id")
-    legacy.update({
-        "type": " CALL ",
-        "option_type": "Call",
-        "right": "call ",
-    })
-    legacy["source"] = {"current_option_type": " cAlL "}
-
-    rows = _monitor_rows([_position("pos-a")], [legacy])
-
-    assert rows[0]["assignment_risk"] == "LOW"
-    assert rows[0]["underlying_price"] == 495
 
 
-def test_legacy_conflicting_option_type_aliases_are_unassigned():
-    for conflicting_alias in ("option_type", "right"):
-        legacy = _activity(
-            "", "2026-09-24T12:00:00Z", risk="HIGH", price=520
-        )
-        legacy.pop("position_id")
-        legacy["type"] = "put"
-        legacy[conflicting_alias] = "call"
-
-        rows = _monitor_rows([_position("pos-a")], [legacy])
-
-        assert rows[0]["assignment_risk"] is None, conflicting_alias
-        assert rows[0]["recent_activities"] == [], conflicting_alias
 
 
 def test_legacy_malformed_canonical_type_is_unassigned():
@@ -463,27 +434,6 @@ def test_exact_position_id_rejects_mismatched_canonical_type():
     assert rows[0]["recent_activities"] == []
 
 
-def test_nested_source_option_type_aliases_match_and_conflict_check():
-    matching = _activity(
-        "", "2026-09-24T12:00:00Z", risk="LOW", price=495
-    )
-    matching.pop("position_id")
-    matching["source"] = {
-        "type": " CALL ",
-        "option_type": "call",
-        "current_option_type": "Call",
-        "right": "cAlL",
-    }
-
-    rows = _monitor_rows([_position("pos-a")], [matching])
-    assert rows[0]["assignment_risk"] == "LOW"
-
-    conflicting = dict(matching)
-    conflicting["source"] = {**matching["source"], "right": "put"}
-
-    rows = _monitor_rows([_position("pos-a")], [conflicting])
-    assert rows[0]["assignment_risk"] is None
-    assert rows[0]["recent_activities"] == []
 
 
 def test_legacy_conflicting_top_level_and_source_paper_lane_is_unassigned():

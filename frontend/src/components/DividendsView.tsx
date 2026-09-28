@@ -35,10 +35,6 @@ import type {
   DividendsYearlyRow,
   ScripDividendCoverage,
 } from "@/types/economics";
-import {
-  excludeUnsupportedRightsFromDividends,
-  getCanonicalTotalNetEur,
-} from "@/lib/rightsExclusion";
 
 const MONTHS = [
   { value: "1", label: "Jan" },
@@ -123,7 +119,9 @@ function compareValues(a: unknown, b: unknown): number {
 }
 
 function getNetDividendsReceived(summary: DividendsSummary) {
-  return getCanonicalTotalNetEur(summary);
+  return Number.isFinite(summary.total_dividends_eur)
+    ? summary.total_dividends_eur
+    : summary.total_net_eur;
 }
 
 type DividendsNetRow = {
@@ -1078,8 +1076,8 @@ export default function DividendsView() {
       ]);
       if (!mainRes.ok) throw new Error((mainBody as { error?: string }).error || `HTTP ${mainRes.status}`);
       if (!comparisonRes.ok) throw new Error((comparisonBody as { error?: string }).error || `HTTP ${comparisonRes.status}`);
-      setData(excludeUnsupportedRightsFromDividends(mainBody as DividendsReport));
-      setComparisonData(excludeUnsupportedRightsFromDividends(comparisonBody as DividendsReport));
+      setData(mainBody as DividendsReport);
+      setComparisonData(comparisonBody as DividendsReport);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load dividends data.");
     } finally {

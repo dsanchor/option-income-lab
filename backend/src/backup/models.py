@@ -139,4 +139,5 @@ class AutomaticRunStatus(BaseModel):
     blob_path: str | None = None
     same_content_as_latest: bool = False
     counts: dict[str, int] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
     detail: str | None = None

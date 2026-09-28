@@ -1,20 +1,3 @@
-"""Amendment H — Corporate-Action Group tests.
-
-Covers:
-- H-T1: DIVIDEND_WITH_SCRIP with 4 legs → 4 ledger_txn docs with shared ca_group_id
-- H-T2: CASH_DIVIDEND leg → txn_type=DIVIDEND
-- H-T3: SHARE_ACQUISITION (COMPLETE) → txn_type=BUY, cost_basis_status=COMPLETE
-- H-T4: SHARE_ACQUISITION (INCOMPLETE) → txn_type=BUY, cost_basis_status=INCOMPLETE
-- H-T5: RIGHTS_SOLD → txn_type=SELL, sales_type=DERECHOS
-- H-T6: CASH_TOP_UP → txn_type=BUY, quantity=0, cost_basis_status=INCOMPLETE
-- H-T7: Correct one leg → replacement inherits ca_group_id
-- H-T8: Void group → all legs VOIDED
-- H-T9: Missing required leg → rejected
-- H-T10: Individual leg failing validation → entire group rejected
-- H-W1: WHT rate_pct derived server-side for create (amount-primary)
-- H-W2: WHT rate_pct derived server-side for correct (amount-primary)
-- H-W3: WHT rate_pct = 0 when gross_eur is zero
-"""
 
 from __future__ import annotations
 
@@ -290,38 +273,8 @@ class TestCorporateActionCreate:
         assert response.status_code == 400
         assert response.json()["error"] == "validation_error"
 
-    def test_rights_sold_leg_rejected(self, svc):
-        request = {**_CA_4_LEGS, "legs": [*_CA_4_LEGS["legs"], {
-            "leg_type": "RIGHTS_SOLD",
-            "trade_date": "2024-03-28",
-            "gross": {"amount": "1", "currency": "EUR", "eur_amount": "1"},
-        }]}
-        with pytest.raises(ValueError, match="no longer supported"):
-            svc.create_corporate_action(request)
 
-    def test_rights_sold_leg_api_returns_400(self, client):
-        c, _ = client
-        request = {**_CA_4_LEGS, "legs": [*_CA_4_LEGS["legs"], {
-            "leg_type": "RIGHTS_SOLD",
-            "trade_date": "2024-03-28",
-            "gross": {"amount": "1", "currency": "EUR", "eur_amount": "1"},
-        }]}
-        response = c.post("/api/portfolio/corporate-actions", json=request)
-        assert response.status_code == 400
-        assert response.json()["error"] == "validation_error"
-        assert "no longer supported" in response.json()["detail"]
 
-    def test_rights_issue_event_api_returns_400(self, client):
-        c, _ = client
-        request = {
-            "event_type": "RIGHTS_ISSUE",
-            "security_id": _SECURITY_ID,
-            "payment_date": "2024-03-28",
-            "legs": [_CA_4_LEGS["legs"][1]],
-        }
-        response = c.post("/api/portfolio/corporate-actions", json=request)
-        assert response.status_code == 400
-        assert "no longer supported" in response.json()["detail"]
 
     def test_ht6_cash_top_up_qty_zero_incomplete(self, svc):
         """H-T6: CASH_TOP_UP → BUY, quantity=0, cost_basis_status=INCOMPLETE."""

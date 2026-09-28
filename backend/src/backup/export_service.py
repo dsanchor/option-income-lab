@@ -16,6 +16,7 @@ from .models import (
     SectionDescriptor,
 )
 from .section_schemas import (
+    SchemaError,
     logical_key,
     project_account,
     project_action_plan,
@@ -75,29 +76,79 @@ class ExportService:
             "source_row_sensitive": True,
         }
 
-    def _project_all(self, request: ExportRequest) -> dict[str, list[dict[str, Any]]]:
+    @staticmethod
+    def _project_records(
+        section: str,
+        items: list[dict[str, Any]],
+        projector,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        records: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        for item in items:
+            try:
+                projected = projector(item)
+            except SchemaError as exc:
+                warnings.append(f"SKIPPED_RECORD:{section}:{exc.safe_detail()}")
+                continue
+            if isinstance(projected, list):
+                records.extend(projected)
+            else:
+                records.append(projected)
+        return records, warnings
+
+    def _project_all_with_warnings(
+        self,
+        request: ExportRequest,
+    ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
         source = self.collector.collect()
         configs = source.get("symbol_configs", [])
-        return {
-            "accounts": [project_account(item) for item in source.get("accounts", [])],
-            "securities": [project_security(item) for item in source.get("securities", [])],
-            "symbol_configs": [project_symbol_config(item) for item in configs],
-            "option_positions": [
-                position
-                for config in configs
-                for position in project_positions(config, request.include_paper_positions)
-            ],
-            "ledger_movements": [
-                project_ledger(item, request.include_source_row)
-                for item in source.get("ledger_movements", [])
-            ],
-            "action_plans": [
-                project_action_plan(item) for item in source.get("action_plans", [])
-            ],
-            "app_settings": project_settings(
-                (source.get("app_settings_source") or [{}])[0]
+        projectors = {
+            "accounts": (
+                source.get("accounts", []),
+                project_account,
+            ),
+            "securities": (
+                source.get("securities", []),
+                project_security,
+            ),
+            "symbol_configs": (
+                configs,
+                project_symbol_config,
+            ),
+            "option_positions": (
+                configs,
+                lambda item: project_positions(
+                    item,
+                    request.include_paper_positions,
+                ),
+            ),
+            "ledger_movements": (
+                source.get("ledger_movements", []),
+                lambda item: project_ledger(item, request.include_source_row),
+            ),
+            "action_plans": (
+                source.get("action_plans", []),
+                project_action_plan,
+            ),
+            "app_settings": (
+                source.get("app_settings_source") or [{}],
+                project_settings,
             ),
         }
+        records: dict[str, list[dict[str, Any]]] = {}
+        warnings: list[str] = []
+        for section, (items, projector) in projectors.items():
+            records[section], section_warnings = self._project_records(
+                section,
+                items,
+                projector,
+            )
+            warnings.extend(section_warnings)
+        return records, warnings
+
+    def _project_all(self, request: ExportRequest) -> dict[str, list[dict[str, Any]]]:
+        records, _ = self._project_all_with_warnings(request)
+        return records
 
     def _plan(self, request: ExportRequest):
         if request.preset == "custom":
@@ -107,13 +158,14 @@ class ExportService:
                 raise ValueError(f"Unknown sections: {sorted(unknown)}")
         else:
             requested = set(PRESETS[request.preset])
-        all_records = self._project_all(request)
+        all_records, projection_warnings = self._project_all_with_warnings(request)
         filtered = apply_filters(all_records, request.filters.model_dump())
         selected = {
             section: list(filtered[section]) if section in requested else []
             for section in SECTION_NAMES
         }
-        closed, additions, warnings = close_dependencies(all_records, selected)
+        closed, additions, dependency_warnings = close_dependencies(all_records, selected)
+        warnings = sorted(set([*projection_warnings, *dependency_warnings]))
         effective = sorted(section for section, items in closed.items() if items or section in requested)
         for section in SECTION_NAMES:
             closed[section] = sorted(
@@ -126,6 +178,7 @@ class ExportService:
                 section: [logical_key(section, item) for item in closed[section]]
                 for section in SECTION_NAMES
             },
+            "warnings": warnings,
         }
         preview = ExportPreview(
             requested_sections=sorted(requested),

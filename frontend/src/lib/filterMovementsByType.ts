@@ -1,5 +1,3 @@
-import { isUnsupportedRightsMovement } from "./legacyMovementExclusion.js";
-
 /** Shared movement-type membership rules for user-facing filters. */
 
 export interface MovementTypeFilterShape {
@@ -28,7 +26,6 @@ export function matchesMovementTypeFilter(
   movement: MovementTypeFilterShape,
   filter: string | null | undefined,
 ): boolean {
-  if (isUnsupportedRightsMovement(movement)) return false;
   if (!filter || filter === "ALL") return true;
   if (movement.txn_type === filter) return true;
   return filter === "DIVIDEND" && isDividendDerivedShareAcquisition(movement);
@@ -79,8 +76,6 @@ export function filterMovementsForStocksTab<
   T extends { txn_type: string } & MovementTypeFilterShape,
 >(movements: T[]): T[] {
   return movements.filter(
-    (movement) =>
-      !isUnsupportedRightsMovement(movement) &&
-      isStocksTabMovement(movement.txn_type),
+    (movement) => isStocksTabMovement(movement.txn_type),
   );
 }

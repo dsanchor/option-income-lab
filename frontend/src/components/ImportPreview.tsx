@@ -2,10 +2,6 @@
 
 import type { ImportPreviewData } from "@/types/import";
 import type { WarningType } from "@/types/portfolio";
-import {
-  excludeUnsupportedRightsMovements,
-  isUnsupportedRightsWarning,
-} from "@/lib/rightsExclusion";
 
 interface Props {
   preview: ImportPreviewData;
@@ -21,10 +17,8 @@ const WARNING_LABELS: Record<WarningType, string> = {
 
 /** Preview table showing movements to be committed, persistent warnings, and confirm button. */
 export default function ImportPreview({ preview, onCommit, onBack, committing }: Props) {
-  const movements = excludeUnsupportedRightsMovements(preview.movements);
-  const warnings = preview.warnings.filter((warning) => !isUnsupportedRightsWarning(warning));
+  const { movements, warnings } = preview;
   const { skipped_rows, skip_reasons } = preview;
-  const hasUnsupportedRows = movements.length !== preview.movements.length;
 
   return (
     <div className="space-y-6">
@@ -67,12 +61,6 @@ export default function ImportPreview({ preview, onCommit, onBack, committing }:
               </li>
             ))}
           </ul>
-        </div>
-      )}
-
-      {hasUnsupportedRows && (
-        <div className="rounded-[var(--radius)] border border-accent-red/30 bg-accent-red/5 p-4 text-sm text-accent-red">
-          This import contains unsupported movement rows and cannot be committed.
         </div>
       )}
 
@@ -169,7 +157,7 @@ export default function ImportPreview({ preview, onCommit, onBack, committing }:
         <button
           type="button"
           onClick={onCommit}
-          disabled={committing || hasUnsupportedRows || movements.length === 0}
+          disabled={committing || movements.length === 0}
           className="rounded-[var(--radius)] bg-[image:var(--grad-blue)] px-6 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 shadow-[var(--shadow-glow-blue)]"
         >
           {committing

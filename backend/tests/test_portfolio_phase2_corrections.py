@@ -665,25 +665,12 @@ class TestFullCorrectionFieldMatrix:
         net_expected = Decimal("5000") - Decimal("3.00") - Decimal("45.30")
         assert Decimal(repl["net"]["eur_amount"]) == net_expected
 
-    # ── C-4: SELL — removed rights conversion is rejected ─────────────────
-    def test_c4_sell_sales_type_acciones_to_derechos(self, client):
-        c, fake = client
-        _seed_full(fake, "c4_001", txn_type="SELL", sales_type="ACCIONES")
-        resp = c.post("/api/portfolio/movements/c4_001/correct", json={
-            "account_id": "_unassigned",
-            "correction_note": "Was a rights sale not a share sale",
-            "sales_type": "DERECHOS",
-        })
-        assert resp.status_code == 400
-        assert resp.json()["error"] == "validation_error"
-        assert "no longer supported" in resp.json()["detail"]
 
     # ─────────────────────────────────────────────────────────────────────
     # C-5 through C-7, C-10, C-12, C-13: DIVIDEND — ⚠️ PENDING AMENDMENT
     # Danny's in-flight amendment redefines the DIVIDEND model:
     #   • Withholding amounts user-entered; rate_pct auto-calculated (not stored as input)
     #   • DIVIDEND may be a linked COMPOSITE corporate action:
-    #       residual cash leg + partial rights sale + shares from remaining rights
     #       + optional investor cash top-up to round whole shares
     #   • Multiple linked movements MUST NOT be flattened; quantity/cost must not be fabricated
     # These tests exercise the CURRENT single-movement model (contract v1 §B.4/B.5).
@@ -900,18 +887,6 @@ class TestFullCorrectionValidation:
         assert resp.status_code == 400
         assert resp.json()["error"] == "validation_error"
 
-    # ── C-14c: invalid sales_type ─────────────────────────────────────────
-    def test_c14c_invalid_sales_type_value(self, client):
-        c, fake = client
-        _seed_full(fake, "c14c_001", txn_type="SELL", sales_type="ACCIONES")
-        resp = c.post("/api/portfolio/movements/c14c_001/correct", json={
-            "account_id": "_unassigned",
-            "correction_note": "Bad sales type",
-            "sales_type": "OPTIONS",  # invalid
-        })
-        assert resp.status_code == 400
-        assert resp.json()["error"] == "validation_error"
-
     # ── C-14d: BUY with withholding → rejected ────────────────────────────
     def test_c14d_buy_with_withholding_rejected(self, client):
         c, fake = client
@@ -936,19 +911,6 @@ class TestFullCorrectionValidation:
             "account_id": "_unassigned",
             "correction_note": "SELL should not have cost_basis_status",
             "cost_basis_status": "COMPLETE",
-        })
-        assert resp.status_code == 400
-        assert resp.json()["error"] == "validation_error"
-
-    # ── C-14f: DIVIDEND with sales_type → rejected ────────────────────────
-    def test_c14f_dividend_with_sales_type_rejected(self, client):
-        c, fake = client
-        _seed_full(fake, "c14f_001", txn_type="DIVIDEND",
-                   gross_eur="200", commission_eur="0")
-        resp = c.post("/api/portfolio/movements/c14f_001/correct", json={
-            "account_id": "_unassigned",
-            "correction_note": "DIVIDEND should not have sales_type",
-            "sales_type": "ACCIONES",
         })
         assert resp.status_code == 400
         assert resp.json()["error"] == "validation_error"

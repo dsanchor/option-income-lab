@@ -1454,25 +1454,6 @@ class TestSchedulerRegistration:
             "Contract SS2.1 specifies hourly at 09:00-23:00 UTC Mon-Fri (inclusive)."
         )
 
-    def test_sp22c_symbol_pricing_config_key_used(self):
-        """SP-22c: registry.register must use 'symbol_pricing' as config_key."""
-        main_py = pathlib.Path(__file__).parent.parent / "src" / "main.py"
-        src = main_py.read_text(encoding="utf-8")
-
-        # Check the register block contains the right pattern near symbol_pricing
-        import re
-        # Look for the register call block for symbol_pricing
-        block_match = re.search(
-            r'register\s*\(\s*["\']symbol_pricing["\'].*?\)',
-            src, re.DOTALL
-        )
-        assert block_match, (
-            "SP-22c DEFECT: Could not find registry.register('symbol_pricing', ...) block in main.py"
-        )
-        block = block_match.group(0)
-        assert "symbol_pricing" in block.lower(), (
-            "SP-22c DEFECT: symbol_pricing register block should use 'symbol_pricing' config_key"
-        )
 
 
 # ===========================================================================

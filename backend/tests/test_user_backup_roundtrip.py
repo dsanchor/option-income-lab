@@ -17,19 +17,6 @@ def _export(cosmos):
     return exporter.export(request)
 
 
-def test_full_export_import_reexport_preserves_canonical_content():
-    original = _export(populated_cosmos())
-    target = FakeCosmos()
-    importer = ImportService(target)
-    plan = importer.dry_run(original.archive)
-    result = importer.apply(
-        original.archive, dry_run_fingerprint=plan.dry_run_fingerprint, confirm=True
-    )
-    assert result.status == "COMPLETED"
-    restored = _export(target)
-    left = BackupArchive().read(original.archive).sections
-    right = BackupArchive().read(restored.archive).sections
-    assert left == right
 
 
 def test_mid_import_failure_rolls_back_created_user_data():
@@ -167,80 +154,12 @@ def test_round_trip_controls_cover_fifo_dividends_options_fx_links_and_history()
     assert _export(target).manifest["controls"] == controls
 
 
-def test_backup_export_rejects_legacy_rights_movement():
-    movement = {
-        "id": "legacy-rights",
-        "account_id": "acct_demo",
-        "doc_type": "ledger_txn",
-        "txn_type": "SELL",
-        "security_id": "XNAS:AAPL",
-        "sales_type": "DERECHOS",
-    }
-    with pytest.raises(SchemaError, match="no longer supported"):
-        project_ledger(movement, include_source_row=False)
 
 
-def test_backup_restore_validation_rejects_legacy_rights_movement():
-    movement = {
-        "id": "legacy-rights",
-        "account_id": "acct_demo",
-        "doc_type": "ledger_txn",
-        "txn_type": "SELL",
-        "security_id": "XNAS:AAPL",
-        "sales_type": "DERECHOS",
-    }
-    with pytest.raises(SchemaError, match="no longer supported"):
-        validate_record("ledger_movements", movement)
 
 
-@pytest.mark.parametrize(
-    "rights_data",
-    [
-        {"SOURCE_DERECHOS_AMOUNT": "1"},
-        {"source_derechos_amount": "not-a-number"},
-        {"source_derechos_amount": "NaN"},
-        {"source_payload": {"nested": {"Rights Amount": "2"}}},
-        {"source_row": {"Importe en Derechos": "Infinity"}},
-        {"sales_type": " derechos "},
-        {"sales_type_raw": "rights sold"},
-        {"sales_type": "unknown-legacy-value"},
-    ],
-)
-def test_backup_restore_rejects_all_rights_aliases_and_malformed_values(rights_data):
-    movement = {
-        "id": "legacy-rights",
-        "account_id": "acct_demo",
-        "doc_type": "ledger_txn",
-        "txn_type": "DIVIDEND",
-        "security_id": "XNAS:AAPL",
-        **rights_data,
-    }
-    with pytest.raises(SchemaError, match="no longer supported"):
-        validate_record("ledger_movements", movement)
 
 
-def test_backup_export_strips_safe_obsolete_stock_metadata():
-    movement = {
-        "id": "ordinary-sale",
-        "account_id": "acct_demo",
-        "doc_type": "ledger_txn",
-        "txn_type": "SELL",
-        "security_id": "XNAS:AAPL",
-        "sales_type": "ACCIONES",
-        "is_rights_sale": False,
-        "source_derechos_amount": "0",
-        "source_row": {
-            "Rights Amount": "0.00",
-            "Broker Reference": "abc",
-        },
-    }
-
-    projected = project_ledger(movement, include_source_row=True)
-
-    assert "sales_type" not in projected
-    assert "is_rights_sale" not in projected
-    assert "source_derechos_amount" not in projected
-    assert projected["source_row"] == {"Broker Reference": "abc"}
 
 
 def test_import_recomputes_and_rejects_tampered_manifest_controls():

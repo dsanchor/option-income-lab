@@ -43,7 +43,6 @@ import type {
   CommitResult,
   UploadParams,
 } from "@/types/import";
-import { excludeUnsupportedRightsMovements } from "@/lib/rightsExclusion";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -135,13 +134,7 @@ export async function getMovements(
   if (filter.limit !== undefined) params.set("limit", String(filter.limit));
   if (filter.offset !== undefined) params.set("offset", String(filter.offset));
   const qs = params.toString() ? `?${params.toString()}` : "";
-  const response = await fetchJSON<MovementsResponse>(`/api/portfolio/movements${qs}`, init);
-  const movements = excludeUnsupportedRightsMovements(response.movements);
-  return {
-    ...response,
-    movements,
-    total_count: Math.max(0, response.total_count - (response.movements.length - movements.length)),
-  };
+  return fetchJSON<MovementsResponse>(`/api/portfolio/movements${qs}`, init);
 }
 
 export async function deleteMovement(

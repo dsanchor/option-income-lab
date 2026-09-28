@@ -106,8 +106,6 @@ export interface PreviewMovement {
   fees_eur: string;
   wht_source_eur?: string;
   net_eur: string;
-  /** Legacy compatibility field used only to exclude unsupported preview rows. */
-  sales_type?: "DERECHOS" | "ACCIONES";
   warnings?: MovementWarning[];
 }
 

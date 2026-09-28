@@ -44,7 +44,7 @@ test("groups the canonical dividend totals inside the accessible primary card", 
     /effectiveWithholding == null \? "—" : `\$\{effectiveWithholding\.toFixed\(2\)\}%`/,
   );
   assert.match(primary, /Partial/);
-  assert.doesNotMatch(primary, /<StatCard|Rights/);
+  assert.doesNotMatch(primary, /<StatCard/);
 });
 
 test("shows exactly the total card and two intended secondary cards", () => {

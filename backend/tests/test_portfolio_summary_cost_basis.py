@@ -1,39 +1,3 @@
-"""Regression tests — Portfolio summary with CMP (moving weighted average) cost-basis semantics.
-
-Requested by: Copilot on behalf of Danny (Lead Architect).
-Written by: Basher (independent tester/reviewer).
-Decision document: .squad/decisions/inbox/danny-portfolio-summary-cost-basis.md
-
-──────────────────────────────────────────────────────────────────────────────
-SCOPE
-──────────────────────────────────────────────────────────────────────────────
-These tests verify the NEW semantics defined in Danny's contract:
-  - CMP (coste medio ponderado / moving weighted average) cost-basis algorithm
-  - New fields: total_purchase_outflow_eur, cost_basis_sold_eur,
-    remaining_cost_basis_eur, total_sale_proceeds_eur, rights_proceeds_eur,
-    realized_result_eur, has_incomplete_cost_basis
-  - Changed semantics: current_invested_eur → remaining_cost_basis_eur
-  - Changed semantics: avg_cost_basis_eur → CMP (reduces with sells)
-  - DERECHOS: proceeds counted; pool unchanged
-  - Transfer: global basis unchanged; per-account carried basis coherent
-  - Correction/superseded/voided/deleted exclusion
-  - Negative inventory: no fabricated cost
-
-Tests are STRICT (no xfail). Tests that target unimplemented features will
-fail; failures are intentional defect markers. Do NOT weaken assertions.
-
-──────────────────────────────────────────────────────────────────────────────
-EXPECTED FAILURES vs CURRENT IMPLEMENTATION
-──────────────────────────────────────────────────────────────────────────────
-The following are NOT yet implemented (holdings_service.py uses old algorithm):
-  - new summary fields (total_purchase_outflow_eur, cost_basis_sold_eur,
-    remaining_cost_basis_eur, total_sale_proceeds_eur, rights_proceeds_eur,
-    realized_result_eur, has_incomplete_cost_basis)
-  - new per-holding fields (same set)
-  - current_invested_eur now equals remaining_cost_basis_eur (CMP)
-  - avg_cost_basis_eur is CMP-adjusted (changes when shares are sold)
-These will raise KeyError or fail assertions until the implementation is updated.
-"""
 
 from __future__ import annotations
 
@@ -435,89 +399,13 @@ class TestS4MultipleBuysAndSale:
 
 
 # ---------------------------------------------------------------------------
-# S5 — A legacy rights SELL is fully inert.
 # ---------------------------------------------------------------------------
 
-class TestS5SellDerechos:
-    """A stored legacy rights record contributes no holdings or economics."""
-
-    def setup_method(self):
-        svc = _make_svc([
-            _buy("b1", "XNYS:MSFT", 100, "1000.00"),
-            _sell("s1", "XNYS:MSFT", 20, "100.00", sales_type="DERECHOS"),
-        ])
-        self.result = svc.compute_holdings()
-        self.s = self.result["summary"]
-        self.h = _holding(self.result, "XNYS:MSFT")
-
-    def test_shares_unchanged(self):
-        """DERECHOS sale does NOT decrement share count."""
-        assert _d(self.h["total_shares"]) == _d("100")
-
-    def test_cost_pool_unchanged(self):
-        """DERECHOS sale does NOT consume from cost pool."""
-        assert _d(self.h["remaining_cost_basis_eur"]) == _d("1000.00")
-
-    def test_cost_basis_sold_zero(self):
-        assert _d(self.h["cost_basis_sold_eur"]) == _d("0.00")
-
-    def test_rights_proceeds(self):
-        assert "rights_proceeds_eur" not in self.h
-
-    def test_total_sale_proceeds_equals_rights(self):
-        assert _d(self.h["total_sale_proceeds_eur"]) == _d("0.00")
-
-    def test_realized_result_equals_rights(self):
-        """The excluded record contributes no realized result."""
-        assert _d(self.h["realized_result_eur"]) == _d("0.00")
-
-    def test_summary_rights_proceeds(self):
-        assert "rights_proceeds_eur" not in self.s
-
-    def test_summary_realized(self):
-        assert _d(self.s["realized_result_eur"]) == _d("0.00")
 
 
 # ---------------------------------------------------------------------------
-# S6 — An ordinary sale remains correct beside an inert legacy rights record.
 # ---------------------------------------------------------------------------
 
-class TestS6MixedAccionesDerechos:
-    """Only the ordinary SELL affects shares, proceeds, and realized result."""
-
-    def setup_method(self):
-        svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "1000.00"),
-            _sell("s1", "XNYS:AAPL", 30, "450.00", sales_type="ACCIONES"),
-            _sell("s2", "XNYS:AAPL", 10, "50.00", sales_type="DERECHOS"),
-        ])
-        self.result = svc.compute_holdings()
-        self.s = self.result["summary"]
-        self.h = _holding(self.result, "XNYS:AAPL")
-
-    def test_shares_only_acciones_decremented(self):
-        assert _d(self.h["total_shares"]) == _d("70")
-
-    def test_cost_basis_sold(self):
-        assert _d(self.h["cost_basis_sold_eur"]) == _d("300.00")
-
-    def test_remaining_cost_basis(self):
-        assert _d(self.h["remaining_cost_basis_eur"]) == _d("700.00")
-
-    def test_rights_proceeds(self):
-        assert "rights_proceeds_eur" not in self.h
-
-    def test_total_sale_proceeds(self):
-        assert _d(self.h["total_sale_proceeds_eur"]) == _d("450.00")
-
-    def test_realized_result(self):
-        assert _d(self.h["realized_result_eur"]) == _d("150.00")
-
-    def test_summary_rights_proceeds(self):
-        assert "rights_proceeds_eur" not in self.s
-
-    def test_summary_total_sale_proceeds(self):
-        assert _d(self.s["total_sale_proceeds_eur"]) == _d("450.00")
 
 
 # ---------------------------------------------------------------------------
@@ -1235,13 +1123,4 @@ class TestCurrentInvestedNonNegative:
 
 
 # ---------------------------------------------------------------------------
-# Explicit rights_proceeds_eur = 0.00 when there are no rights sales.
 # ---------------------------------------------------------------------------
-
-class TestRightsProceedsZeroDefault:
-    def test_rights_proceeds_field_is_removed(self):
-        svc = _make_svc([_buy("b1", "XNYS:AAPL", 100, "1000.00")])
-        result = svc.compute_holdings()
-        assert "rights_proceeds_eur" not in result["summary"]
-        h = _holding(result, "XNYS:AAPL")
-        assert "rights_proceeds_eur" not in h

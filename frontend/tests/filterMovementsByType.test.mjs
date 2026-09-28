@@ -30,11 +30,6 @@ describe("user-facing movement type membership", () => {
     ca_leg_type: "SHARE_ACQUISITION",
     ca_event_type: "DIVIDEND_WITH_SCRIP",
   };
-  const rightsBuy = {
-    txn_type: "BUY",
-    ca_leg_type: "SHARE_ACQUISITION",
-    ca_event_type: "RIGHTS_ISSUE",
-  };
   const sell = { txn_type: "SELL" };
 
   it("keeps dividend-derived share acquisitions in both Buy and Dividend", () => {
@@ -54,12 +49,6 @@ describe("user-facing movement type membership", () => {
   it("keeps cash dividends in Dividend only", () => {
     assert.equal(matchesMovementTypeFilter(cashDividend, "DIVIDEND"), true);
     assert.equal(matchesMovementTypeFilter(cashDividend, "BUY"), false);
-  });
-
-  it("excludes legacy rights-issue share acquisitions from every filter", () => {
-    assert.equal(matchesMovementTypeFilter(rightsBuy, "BUY"), false);
-    assert.equal(matchesMovementTypeFilter(rightsBuy, "DIVIDEND"), false);
-    assert.equal(matchesMovementTypeFilter(rightsBuy, "ALL"), false);
   });
 
   it("leaves SELL and unrelated types unaffected", () => {
@@ -266,9 +255,4 @@ describe("filterMovementsForStocksTab", () => {
     assert.equal(result[0].sales_type, "ACCIONES");
   });
 
-  it("excludes legacy rights sales", () => {
-    const movs = [{ id: "sell_rights", txn_type: "SELL", sales_type: "DERECHOS" }];
-    const result = filterMovementsForStocksTab(movs);
-    assert.equal(result.length, 0);
-  });
 });

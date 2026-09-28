@@ -136,6 +136,7 @@ class AutomaticBackupService:
                         "archive_sha256": artifact.archive_sha256,
                         "size": len(artifact.archive), "schema_version": 1,
                         "counts": artifact.preview.counts, "local_date": local_date,
+                        "warnings": artifact.preview.warnings,
                         "completed_at_utc": completed.isoformat().replace("+00:00", "Z"),
                     }
                     run_value = {
@@ -160,6 +161,7 @@ class AutomaticBackupService:
                         "archive_sha256": effective_archive_sha,
                         "blob_path": blob_path, "same_content_as_latest": same,
                         "counts": artifact.preview.counts,
+                        "warnings": artifact.preview.warnings,
                         "size": latest.get("size") if latest else None,
                         "started_at_utc": started.isoformat().replace("+00:00", "Z"),
                         "completed_at_utc": completed.isoformat().replace("+00:00", "Z"),
@@ -188,6 +190,7 @@ class AutomaticBackupService:
                     archive_sha256=effective_archive_sha,
                     blob_path=blob_path, same_content_as_latest=same,
                     counts=artifact.preview.counts,
+                    warnings=artifact.preview.warnings,
                 )
         except BlobLeaseBusyError:
             return self._status("ALREADY_RUNNING", run_id=run_id, local_date=local_date)

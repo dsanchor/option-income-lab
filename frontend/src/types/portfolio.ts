@@ -211,10 +211,6 @@ export interface LedgerMovement {
   cost_basis_status?: CostBasisStatus;
   lot_average_price_eur?: string | null;
   share_fmv?: ShareFmv | null;
-  /** Legacy compatibility fields used only to exclude unsupported rights rows. */
-  source_derechos_amount?: string;
-  sales_type?: "ACCIONES" | "DERECHOS" | null;
-  is_rights_sale?: boolean | null;
   warnings?: MovementWarning[];
 
   // Phase 2: correction audit chain
@@ -238,8 +234,8 @@ export interface LedgerMovement {
 
   // Amendment H: corporate action group linkage (Phase H-α)
   ca_group_id?: string;
-  ca_leg_type?: CaLegType | "RIGHTS_SOLD";
-  ca_event_type?: CaEventType | "RIGHTS_ISSUE";
+  ca_leg_type?: CaLegType;
+  ca_event_type?: CaEventType;
   ca_group_seq?: number;
 
   // Option movement linkage / metadata

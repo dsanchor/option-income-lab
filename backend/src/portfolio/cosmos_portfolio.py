@@ -39,12 +39,6 @@ from .models import (
 from .models import (
     normalize_share_fmv,
 )
-from .rights_policy import (
-    RIGHTS_UNSUPPORTED_MESSAGE,
-    contains_legacy_rights_data,
-    payload_requests_rights,
-    sanitize_legacy_movement,
-)
 from .share_fmv_service import (
     ShareFmvService,
     YahooFmvError,
@@ -421,9 +415,6 @@ def _validate_correction_fields(txn_type: str, correction_data: Dict[str, Any]) 
     All per-field structural checks (enum values, numeric ranges, required sub-fields,
     type applicability) are centralised here so correct_movement stays readable.
     """
-    if payload_requests_rights(correction_data) or "sales_type" in correction_data:
-        raise ValueError(RIGHTS_UNSUPPORTED_MESSAGE)
-
     # ── Type-specific field restrictions ──────────────────────────────────
     if txn_type in _STOCK_BUY_TYPES:
         if "withholding" in correction_data and correction_data["withholding"] is not None:
@@ -885,7 +876,7 @@ class CosmosPortfolioService:
             )
             if doc.get("doc_type") != "ledger_txn":
                 return None
-            return sanitize_legacy_movement(_clean(doc))
+            return _clean(doc)
         except CosmosResourceNotFoundError:
             return None
 
@@ -990,9 +981,6 @@ class CosmosPortfolioService:
         security_id = data.get("security_id", "")
         trade_date = data.get("trade_date", "")
         account_id = data.get("account_id", "_unassigned")
-        if payload_requests_rights(data) or "sales_type" in data:
-            raise ValueError(RIGHTS_UNSUPPORTED_MESSAGE)
-
         if not security_id:
             raise ValueError("security_id is required")
         if not trade_date:
@@ -1338,10 +1326,6 @@ class CosmosPortfolioService:
         Returns {"ca_group_id": ..., "event_type": ..., "movements": [...]}.
         """
         self._require_portfolio()
-        if payload_requests_rights(request) or any(
-            payload_requests_rights(leg) for leg in request.get("legs") or []
-        ):
-            raise ValueError(RIGHTS_UNSUPPORTED_MESSAGE)
         client_request_id = validate_yahoo_request(request)
         request_hash = canonical_request_hash(request) if client_request_id else None
 
@@ -1679,10 +1663,6 @@ class CosmosPortfolioService:
           ValueError("integrity_error: ...")             — phase 2 failed; new docs deleted
         """
         self._require_portfolio()
-        if payload_requests_rights(request) or any(
-            payload_requests_rights(leg) for leg in request.get("legs") or []
-        ):
-            raise ValueError(RIGHTS_UNSUPPORTED_MESSAGE)
         client_request_id = validate_yahoo_request(request)
         request_hash = canonical_request_hash(request) if client_request_id else None
 
@@ -2114,13 +2094,8 @@ class CosmosPortfolioService:
                 ),
                 reverse=True,
             )
-            visible_items = [
-                sanitized
-                for item in all_items
-                if (sanitized := sanitize_legacy_movement(item)) is not None
-            ]
-            total = len(visible_items)
-            items = visible_items[offset: offset + limit]
+            total = len(all_items)
+            items = all_items[offset: offset + limit]
         except Exception as exc:
             logger.warning("Data query failed: %s", exc)
             items = []
@@ -2141,11 +2116,7 @@ class CosmosPortfolioService:
                 query=query,
                 enable_cross_partition_query=True,
             ))
-            return [
-                sanitized
-                for item in items
-                if (sanitized := sanitize_legacy_movement(_clean(item))) is not None
-            ]
+            return [_clean(item) for item in items]
         except Exception as exc:
             logger.warning("get_all_movements_for_holdings failed: %s", exc)
             return []
@@ -2168,7 +2139,7 @@ class CosmosPortfolioService:
             return {
                 item.get("security_id")
                 for item in items
-                if item.get("security_id") and not contains_legacy_rights_data(item)
+                if item.get("security_id")
             }
         except Exception as exc:
             logger.warning("get_ledger_security_ids_all failed: %s", exc)
@@ -2449,10 +2420,9 @@ class CosmosPortfolioService:
                 partition_key=account_id,
             ))
             return [
-                sanitized
+                _clean(item)
                 for item in items
                 if item.get("account_id") == account_id
-                and (sanitized := sanitize_legacy_movement(_clean(item))) is not None
             ]
         except Exception as exc:
             logger.warning("_get_movements_up_to_date failed: %s", exc)

@@ -1,12 +1,3 @@
-"""Regression tests for danny-scrip-zero-cost-and-buy-import-contract.md.
-
-NEW semantics (Livingston implementation):
-  A. ZERO_COST BUY (scrip/rights): enters pool at cost 0, dilutes avg naturally.
-     INCOMPLETE BUY (genuinely unknown): stays in unpaid_shares, emits INCOMPLETE_COST_BASIS.
-  B. BUY CSV import: CSV "Total (€)" is NET; gross = net + commission.
-     Engine: cost = gross_eur only (no double-add of commission).
-     SELL: unchanged — gross is total_proceeds, net = gross - commission.
-"""
 
 import pytest
 from decimal import Decimal, ROUND_HALF_UP
@@ -610,15 +601,3 @@ class TestSellNonRegression:
         # remaining=0; realized = (1200-10) - 1000 = 190
         assert _d(h["remaining_cost_basis_eur"]) == _d("0.00")
         assert _d(h["realized_result_eur"]) == _d("190.00")
-
-    def test_legacy_rights_sale_is_ignored(self):
-        svc = _make_svc([
-            _buy("b1", "XNYS:AAPL", 100, "2000.00"),
-            _sell("s1", "XNYS:AAPL", 10, "80.00", commission_eur="2.00",
-                  sales_type="DERECHOS"),
-        ])
-        result = svc.compute_holdings()
-        h = result["holdings"][0]
-        assert "rights_proceeds_eur" not in h
-        assert _d(h["total_sale_proceeds_eur"]) == _d("0.00")
-        assert _d(h["total_shares"]) == _d("100")

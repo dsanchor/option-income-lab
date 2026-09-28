@@ -152,8 +152,6 @@ export interface DividendsSummary extends ScripDividendCoverage {
   total_withholding_eur: number;
   total_net_eur: number;
   cash_net: number;
-  /** Legacy response compatibility; stripped before rendering. */
-  derechos_net?: number | null;
   total_net: number;
   effective_withholding_pct: number;
   total_dividends: number;
@@ -173,8 +171,6 @@ export interface DividendsMonthlyRow extends ScripDividendCoverage {
   withholding_total_eur: number;
   net_eur: number;
   cash_net: number;
-  /** Legacy response compatibility; stripped before rendering. */
-  derechos_net?: number | null;
   total_net: number;
   dividend_count: number;
 }
@@ -185,8 +181,6 @@ export interface DividendsBySymbolRow extends ScripDividendCoverage {
   withholding_total_eur: number;
   net_eur: number;
   cash_net: number;
-  /** Legacy response compatibility; stripped before rendering. */
-  derechos_net?: number | null;
   total_net: number;
   dividend_count: number;
   yoc_pct?: number | null;
@@ -202,8 +196,6 @@ export interface DividendsYearlyRow extends ScripDividendCoverage {
   withholding_eur: number;
   net_eur: number;
   cash_net: number;
-  /** Legacy response compatibility; stripped before rendering. */
-  derechos_net?: number | null;
   total_net: number;
   dividend_count: number;
 }
@@ -212,12 +204,8 @@ export interface DividendsCumulativeRow extends ScripDividendCoverage {
   month: string;
   cumulative_net_eur: number;
   cash_net: number;
-  /** Legacy response compatibility; stripped before rendering. */
-  derechos_net?: number | null;
   total_net: number;
   cumulative_cash_net_eur: number;
-  /** Legacy response compatibility; stripped before rendering. */
-  cumulative_derechos_net_eur?: number | null;
   cumulative_total_net_eur: number;
 }
 
@@ -236,14 +224,6 @@ export interface DividendPosition {
   withholding_total_eur: number;
   net_eur: number;
   cash_net?: number | null;
-  /** Legacy response compatibility; used only to exclude this row. */
-  derechos_net?: unknown;
-  derechos_eur?: unknown;
-  source_derechos_amount?: unknown;
-  rights_amount?: unknown;
-  sales_type?: string | null;
-  sales_type_raw?: unknown;
-  is_rights_sale?: unknown;
   ca_leg_type?: string | null;
   ca_event_type?: string | null;
   warnings?: Array<{ type?: string | null } | string> | null;
@@ -292,7 +272,6 @@ export interface EconomicsAggregatedSummary {
   dividends_net_eur: number;
   dividends_cash_net_eur: number;
   dividends_scrip_eur?: number | null;
-  dividends_derechos_net_eur?: number;
   dividends_total_net_eur?: number;
   dividends_total_is_partial?: boolean;
   total_dividends_is_partial?: boolean;
@@ -315,7 +294,6 @@ export interface EconomicsAggregatedMonthlyRow {
   dividends_net_eur: number;
   dividends_cash_net_eur: number;
   dividends_scrip_eur?: number | null;
-  dividends_derechos_net_eur?: number;
   dividends_total_net_eur?: number;
   dividends_total_is_partial?: boolean;
   total_dividends_is_partial?: boolean;
@@ -335,7 +313,6 @@ export interface EconomicsAggregatedBySymbolRow {
   dividends_net_eur: number;
   dividends_cash_net_eur: number;
   dividends_scrip_eur?: number | null;
-  dividends_derechos_net_eur?: number;
   dividends_total_net_eur?: number;
   dividends_total_is_partial?: boolean;
   total_dividends_is_partial?: boolean;

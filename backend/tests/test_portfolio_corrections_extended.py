@@ -1,22 +1,3 @@
-"""Extended regression tests — Full movement correction field matrix.
-
-Extends test_portfolio_phase2_corrections.py with:
-  - BUY: gross+fees override, cost_basis_status, fx, trade_date changes
-  - SELL: withholding source, sales_type ACCIONES↔DERECHOS, quantity+gross
-  - DIVIDEND: all withholding destination states (null/zero/value), quantity
-    null-preserved and null→value, FX
-  - Net arithmetic: gross − fees − wht_source − wht_dest (server-side)
-  - Decimal precision: 6dp monetary, partial override uses original values
-  - TRANSFER correction rejected (xfail — not yet implemented)
-  - Double-correction chain A→B→C; B correctly SUPERSEDED
-  - Imported-movement correction retains provenance (import_source → manual)
-  - Security/txn_type immutability; account mismatch → 404
-  - Legacy narrow correction (only note, no overrides) still works
-  - Withholding structure validation (xfail — not yet implemented)
-  - Holdings impact: SELL ACCIONES corrected to DERECHOS → shares unchanged
-
-Contract reference: danny-zero-filter-full-correction-contract.md Part B/C/F
-"""
 
 from __future__ import annotations
 
@@ -214,20 +195,7 @@ class TestBuyFullCorrection:
 # ===========================================================================
 
 class TestSellCorrection:
-    def test_sell_sales_type_acciones_to_derechos(self, client):
-        """C-4: correction cannot convert an ordinary sale into rights."""
-        c, fake = client
-        _seed(fake, "sell_std_001", txn_type="SELL", sales_type="ACCIONES")
-        resp = _correct(c, "sell_std_001", sales_type="DERECHOS")
-        assert resp.status_code == 400
-        assert "no longer supported" in resp.json()["detail"]
 
-    def test_sell_sales_type_derechos_to_acciones(self, client):
-        """Legacy rights records are hidden and cannot be corrected."""
-        c, fake = client
-        _seed(fake, "sell_dta_001", txn_type="SELL", sales_type="DERECHOS")
-        resp = _correct(c, "sell_dta_001", sales_type="ACCIONES")
-        assert resp.status_code == 400
 
     def test_sell_withholding_source_added(self, client):
         """C-3: SELL correction adds withholding.source; net reduced."""
@@ -279,13 +247,6 @@ class TestSellCorrection:
 # DIVIDEND — withholding null/zero/value lifecycle
 # ===========================================================================
 
-_DIVIDEND_SKIP_REASON = (
-    "PAUSED — pending contract amendment: DIVIDEND composite action model under revision. "
-    "New requirement: withholding amounts/percentages auto-calculated; DIVIDEND may be a "
-    "linked composite corporate action (residual cash, partial rights sale, shares from "
-    "remaining rights, optional cash top-up). Tests will be reconciled once the amended "
-    "contract lands. Do not flatten into a single movement or fabricate quantity/cost."
-)
 
 
 class TestDividendWithholding:
@@ -786,7 +747,6 @@ class TestLegacyNarrowCorrection:
 
 
 # ===========================================================================
-# Holdings — SELL ACCIONES corrected to DERECHOS (share impact)
 # ===========================================================================
 
 class TestHoldingsSELLTypeCorrection:
@@ -831,43 +791,7 @@ class TestHoldingsSELLTypeCorrection:
             doc["sales_type"] = sales_type
         return doc
 
-    def test_sell_acciones_corrected_to_derechos_shares_unchanged(self):
-        """After ACCIONES→DERECHOS correction: shares stay at original BUY level.
 
-        Scenario:
-          BUY  100 shares (ACTIVE)
-          SELL  50 shares ACCIONES (SUPERSEDED by correction)
-          SELL  50 shares DERECHOS (replacement, ACTIVE)
-
-        With DERECHOS, share count not decremented → total_shares = 100.
-        """
-        movements = [
-            self._mvt("h_buy_001", "BUY", 100, "10000"),
-            self._mvt("h_sell_sup", "SELL", 50, "2500",
-                      sales_type="ACCIONES", correction_status="SUPERSEDED"),
-            self._mvt("h_sell_derechos", "SELL", 50, "2500",
-                      sales_type="DERECHOS"),  # replacement
-        ]
-        result = self._holdings(movements)
-        aapl = next(h for h in result["holdings"] if h["security_id"] == "XNYS:AAPL")
-        assert _d(aapl["total_shares"]) == _d("100"), (
-            "DERECHOS SELL must not decrement shares; total must remain 100"
-        )
-
-    def test_sell_derechos_corrected_to_acciones_shares_decremented(self):
-        """After DERECHOS→ACCIONES correction: shares decremented."""
-        movements = [
-            self._mvt("h2_buy_001", "BUY", 100, "10000"),
-            self._mvt("h2_sell_sup", "SELL", 50, "2500",
-                      sales_type="DERECHOS", correction_status="SUPERSEDED"),
-            self._mvt("h2_sell_acc", "SELL", 50, "2500",
-                      sales_type="ACCIONES"),  # replacement
-        ]
-        result = self._holdings(movements)
-        aapl = next(h for h in result["holdings"] if h["security_id"] == "XNYS:AAPL")
-        assert _d(aapl["total_shares"]) == _d("50"), (
-            "ACCIONES SELL must decrement shares by 50; total must be 50"
-        )
 
 
 # ===========================================================================

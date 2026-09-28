@@ -235,13 +235,6 @@ class TestManualSell:
         assert resp.status_code == 201
         assert "sales_type" not in resp.json()
 
-    def test_post_sell_derechos_rejected(self, client):
-        c, _ = client
-        body = _sell_body()
-        body["sales_type"] = "DERECHOS"
-        resp = c.post("/api/portfolio/movements", json=body)
-        assert resp.status_code == 400
-        assert "no longer supported" in resp.json()["detail"]
 
     def test_sell_without_sales_type_is_ordinary(self, client):
         c, _ = client
@@ -249,15 +242,6 @@ class TestManualSell:
         resp = c.post("/api/portfolio/movements", json=body)
         assert resp.status_code == 201
         assert "sales_type" not in resp.json()
-
-    def test_sell_invalid_sales_type_400(self, client):
-        c, _ = client
-        body = _sell_body()
-        body["sales_type"] = "BONOS"
-        resp = c.post("/api/portfolio/movements", json=body)
-        assert resp.status_code == 400
-        assert resp.json()["error"] == "validation_error"
-
 
 # ===========================================================================
 # DIVIDEND creation
@@ -407,7 +391,6 @@ class TestMovementDetail:
 
 
 # ===========================================================================
-# Unit tests — HoldingsService SELL and legacy rights filtering
 # ===========================================================================
 
 class FakePortfolioForHoldings:
@@ -473,23 +456,7 @@ class TestSellTypeHoldingsUnit:
         aapl = next(h for h in result["holdings"] if h["security_id"] == "XNYS:AAPL")
         assert Decimal(aapl["total_shares"]) == Decimal("60")
 
-    def test_legacy_rights_record_is_ignored(self):
-        movements = [
-            _mvt("b2", "XNYS:AAPL", "BUY", 100, "18250"),
-            _mvt("d1", "XNYS:AAPL", "SELL", 0, "300", sales_type="DERECHOS"),
-        ]
-        result = _make_svc(movements).compute_holdings()
-        aapl = next(h for h in result["holdings"] if h["security_id"] == "XNYS:AAPL")
-        assert Decimal(aapl["total_shares"]) == Decimal("100")
 
-    def test_legacy_rights_proceeds_are_not_aggregated(self):
-        movements = [
-            _mvt("b3", "XNYS:AAPL", "BUY", 100, "18250"),
-            _mvt("d2", "XNYS:AAPL", "SELL", 0, "500", sales_type="DERECHOS"),
-        ]
-        result = _make_svc(movements).compute_holdings()
-        aapl = next(h for h in result["holdings"] if h["security_id"] == "XNYS:AAPL")
-        assert Decimal(aapl["total_sales_eur"]) == Decimal("0.00")
 
     def test_no_sales_type_defaults_to_acciones(self):
         movements = [

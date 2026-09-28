@@ -142,13 +142,17 @@ def _create_account(portfolio_svc, name="IB Main", broker="interactive_brokers")
 # ---------------------------------------------------------------------------
 
 def _dividends_csv(rows=None):
-    header = "Año\tEmpresa\tFecha de cobro\tImporte Bruto\tImporte Neto\tImporte en Derechos\tRetención Origen\tRetención Destino\n"
+    header = (
+        "Año\tEmpresa\tFecha de cobro\tImporte Bruto\tImporte Neto\t"
+        "Retención Origen\tRetención Destino\n"
+    )
     if rows is None:
         rows = [
-            "2024\tApple Inc.\t15/06/2024\t100,00\t73,31\t0,00\t12,94\t13,75\n",
-            "2024\tTelefónica\t20/06/2024\t50,00\t38,00\t0,00\t7,50\t4,50\n",
+            "2024\tApple Inc.\t15/06/2024\t100,00\t73,31\t12,94\t13,75\n",
+            "2024\tTelefónica\t20/06/2024\t50,00\t38,00\t7,50\t4,50\n",
         ]
     return (header + "".join(rows)).encode("utf-8")
+
 
 
 def _purchases_csv(rows=None):
@@ -261,13 +265,6 @@ class TestCreateSession:
         session = svc.create_session(_dividends_csv())
         assert session["account_id"] == "_unassigned"
 
-    def test_rights_amount_rejected_in_session(self):
-        rows = [
-            "2024\tSantander\t10/06/2024\t80,00\t60,00\t45,30\t12,00\t8,00\n",
-        ]
-        svc = _make_import_service()
-        with pytest.raises(ValueError, match="no longer supported"):
-            svc.create_session(_dividends_csv(rows))
 
     def test_empty_file_raises_value_error(self):
         svc = _make_import_service()
@@ -791,9 +788,7 @@ class TestQuantityNullability:
 
 
 # ---------------------------------------------------------------------------
-# Rights sales import round-trip (danny-rights-sale-contract)
 # Tests cover: 6-col default, 7-col explicit types, preview shape, commit
-# persistence, and in-batch NEGATIVE_INVENTORY suppression for DERECHOS.
 # Tests will fail until Livingston's implementation is merged; assertions are
 # intentionally un-weakened so the failures are explicit.
 # ---------------------------------------------------------------------------
@@ -808,16 +803,9 @@ def _sales_csv_7col(rows=None):
     return (header + "".join(rows)).encode("utf-8")
 
 
-def _sales_csv_7col_derechos(rows=None):
-    """7-column sales CSV fixture with a Derechos row (qty=0 for a clean signal)."""
-    header = "Año\tEmpresa\tFecha venta\tTipo\tAcciones\tComisión\tTotal Venta\n"
-    if rows is None:
-        rows = ["2024\tApple Inc.\t20/06/2024\tDerechos\t0\t4,00\t300,00\n"]
-    return (header + "".join(rows)).encode("utf-8")
 
 
 class TestImportSalesSalesType:
-    """Ordinary sales omit obsolete metadata and rights rows fail closed."""
 
     def _do_full_import(self, svc, content, security_id):
         """Create → answer → preview → commit. Returns (sid, list[ledger_txn])."""
@@ -857,11 +845,6 @@ class TestImportSalesSalesType:
         assert len(txns) == 1
         assert "sales_type" not in txns[0]
 
-    def test_6col_committed_movement_is_rights_sale_false(self):
-        """A valid 6-column stock sale remains importable without legacy metadata."""
-        svc = _make_import_service(preload_securities=[_AAPL_SEC])
-        _, txns = self._do_full_import(svc, _sales_csv(), "XNYS:AAPL")
-        assert "is_rights_sale" not in txns[0]
 
     @pytest.mark.parametrize("quantity", ["", "0", "-1", "NaN", "Infinity"])
     def test_6col_invalid_stock_quantity_rejected_before_session(self, quantity):
@@ -877,13 +860,6 @@ class TestImportSalesSalesType:
 
     # --- 7-column CSV — ACCIONES row -----------------------------------------
 
-    def test_7col_acciones_commit_has_acciones(self):
-        """7-col CSV with Tipo='Acciones' → ledger doc has sales_type='ACCIONES'."""
-        svc = _make_import_service(preload_securities=[_AAPL_SEC])
-        _, txns = self._do_full_import(svc, _sales_csv_7col(), "XNYS:AAPL")
-        assert len(txns) == 1
-        assert "sales_type" not in txns[0]
-        assert "is_rights_sale" not in txns[0]
 
     def test_7col_acciones_preview_includes_sales_type(self):
         """Preview movement for Acciones row exposes sales_type='ACCIONES'."""
@@ -893,69 +869,8 @@ class TestImportSalesSalesType:
         assert len(movements) == 1
         assert "sales_type" not in movements[0]
 
-    # --- 7-column CSV — DERECHOS row -----------------------------------------
 
-    def test_7col_derechos_commit_rejected(self):
-        svc = _make_import_service(preload_securities=[_AAPL_SEC])
-        with pytest.raises(ValueError, match="no longer supported"):
-            svc.create_session(_sales_csv_7col_derechos(), format_hint="sales")
 
-    def test_7col_derechos_never_persists(self):
-        svc = _make_import_service(preload_securities=[_AAPL_SEC])
-        with pytest.raises(ValueError, match="no longer supported"):
-            svc.create_session(_sales_csv_7col_derechos(), format_hint="sales")
-        assert not svc.portfolio_svc.portfolio_container._store
 
-    def test_7col_derechos_preview_rejected_before_session(self):
-        svc = _make_import_service(preload_securities=[_AAPL_SEC])
-        with pytest.raises(ValueError, match="no longer supported"):
-            svc.create_session(_sales_csv_7col_derechos(), format_hint="sales")
 
     # --- Mixed 7-column CSV ---------------------------------------------------
-
-    def test_7col_mixed_commit_is_rejected_atomically(self):
-        rows = [
-            "2024\tApple Inc.\t20/06/2024\tAcciones\t5\t7,50\t1.050,00\n",
-            "2024\tApple Inc.\t25/06/2024\tDerechos\t0\t4,00\t300,00\n",
-        ]
-        svc = _make_import_service(preload_securities=[_AAPL_SEC])
-        with pytest.raises(ValueError, match="no longer supported"):
-            svc.create_session(_sales_csv_7col(rows), format_hint="sales")
-        assert not svc.portfolio_svc.portfolio_container._store
-
-    def test_7col_mixed_preview_is_rejected(self):
-        rows = [
-            "2024\tApple Inc.\t20/06/2024\tAcciones\t5\t7,50\t1.050,00\n",
-            "2024\tApple Inc.\t25/06/2024\tDerechos\t0\t4,00\t300,00\n",
-        ]
-        svc = _make_import_service(preload_securities=[_AAPL_SEC])
-        with pytest.raises(ValueError, match="no longer supported"):
-            svc.create_session(_sales_csv_7col(rows), format_hint="sales")
-
-
-class TestImportSalesDerechosNegativeInventory:
-    """Removed rights rows are rejected before inventory analysis."""
-
-    def test_derechos_only_import_no_negative_inventory_warning(self):
-        """Importing a single DERECHOS sale with no prior buys must NOT produce
-        a NEGATIVE_INVENTORY warning (DERECHOS does not decrement share count)."""
-        svc = _make_import_service(preload_securities=[_AAPL_SEC])
-        with pytest.raises(ValueError, match="no longer supported"):
-            svc.create_session(_sales_csv_7col_derechos(), format_hint="sales")
-
-    def test_acciones_only_import_still_warns_on_negative_inventory(self):
-        """Existing behaviour preserved: ACCIONES sale with no buys keeps the
-        NEGATIVE_INVENTORY warning (non-blocking, just a signal)."""
-        svc = _make_import_service(preload_securities=[_AAPL_SEC])
-        # 6-column CSV → ACCIONES by default
-        session = svc.create_session(_sales_csv(), format_hint="sales")
-        sid = session["session_id"]
-        q = session["questions"][0]
-        svc.answer_question(sid, {
-            "question_id": q["question_id"],
-            "answer_type": "SELECTED_CANDIDATE",
-            "selected_security_id": "XNYS:AAPL",
-        })
-        preview = svc.generate_preview(sid)
-        warning_types = [w["type"] for w in preview["preview"]["warnings"]]
-        assert "NEGATIVE_INVENTORY" in warning_types

@@ -3,7 +3,7 @@
 Expected columns (6):
   Año | Empresa | Fecha venta | Acciones | Comisión | Total Venta
 
-Two legacy 7-column variants are recognized only to reject rights rows:
+Two optional 7-column variants support an explicit ordinary-sale type:
 
   A) Tipo between Fecha venta and Acciones (user sample layout):
      Año | Empresa | Fecha venta | Tipo | Acciones | Comisión | Total Venta
@@ -22,7 +22,6 @@ import unicodedata
 from decimal import Decimal
 from typing import Any, Dict, List, Set
 
-from ..rights_policy import RIGHTS_UNSUPPORTED_MESSAGE
 from .common import (
     normalize_company_name,
     parse_spanish_date,
@@ -49,7 +48,6 @@ _COMMISSION_ALIASES: Set[str] = {"comision", "commission", "fees"}
 _TOTAL_ALIASES: Set[str] = {"total venta", "total", "total proceeds", "proceeds"}
 
 _ORDINARY_SALE_TYPES = {"ACCIONES", "STOCKS", "SHARES"}
-_REMOVED_RIGHTS_TYPES = {"DERECHOS", "RIGHTS"}
 
 
 def _normalize_header(h: str) -> str:
@@ -59,16 +57,14 @@ def _normalize_header(h: str) -> str:
     return " ".join(stripped.split())
 
 
-def _validate_legacy_type_cell(raw: str) -> None:
-    """Accept ordinary-sale labels and explicitly reject removed rights labels."""
+def _validate_type_cell(raw: str) -> None:
+    """Accept supported ordinary-sale labels."""
     stripped = raw.strip()
     if not stripped:
         return
     nfkd = unicodedata.normalize("NFKD", stripped)
     normalized = "".join(c for c in nfkd if not unicodedata.combining(c)).upper().strip()
     normalized = " ".join(normalized.split())
-    if normalized in _REMOVED_RIGHTS_TYPES:
-        raise ValueError(RIGHTS_UNSUPPORTED_MESSAGE)
     if normalized not in _ORDINARY_SALE_TYPES:
         raise ValueError(
             f"Invalid Tipo value {raw!r}; only ordinary share sales are supported"
@@ -181,7 +177,7 @@ def parse_sales(content: bytes) -> List[Dict[str, Any]]:
 
             if variant == "7A":
                 try:
-                    _validate_legacy_type_cell(row[3])
+                    _validate_type_cell(row[3])
                 except ValueError as exc:
                     raise ValueError(f"Row {row_index + 2}: {exc}") from exc
                 quantity = parse_spanish_decimal(row[4])
@@ -189,7 +185,7 @@ def parse_sales(content: bytes) -> List[Dict[str, Any]]:
                 total_proceeds = parse_spanish_decimal(row[6]) or Decimal("0")
             elif variant == "7B":
                 try:
-                    _validate_legacy_type_cell(row[6])
+                    _validate_type_cell(row[6])
                 except ValueError as exc:
                     raise ValueError(f"Row {row_index + 2}: {exc}") from exc
                 quantity = parse_spanish_decimal(row[3])

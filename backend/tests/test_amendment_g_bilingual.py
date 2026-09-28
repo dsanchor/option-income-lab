@@ -1,23 +1,3 @@
-"""Amendment G — Bilingual CSV parser tests.
-
-Contract references: §G.4 bilingual headers and §G.4.3 English sales type aliases.
-
-Coverage:
-- Purchases parser accepts full English headers (Amendment G §G.4.1)
-- Sales parser accepts English 6-column headers (Amendment G §G.4.2)
-- Sales parser 7-col variant A with English headers + English Tipo column
-- Sales type alias: STOCKS → ACCIONES (new in G.4.3)
-- Sales type alias: SHARES → ACCIONES (new in G.4.3)
-- Sales type alias: RIGHTS → DERECHOS (new in G.4.3)
-- Case-insensitive English aliases (Stocks, stocks, STOCKS all accepted)
-- Non-empty unrecognized alias still raises ValueError
-- Empty type still defaults to ACCIONES (6-col backward compat)
-- Dividends parser accepts English headers (Amendment G §G.4.4)
-- Spanish-only files continue to parse unchanged (no regression)
-- Mixed-language header row (some Spanish, some English aliases) accepted
-
-All assertions use exact equality — no weakened checks.
-"""
 
 from __future__ import annotations
 
@@ -25,7 +5,7 @@ import pytest
 from decimal import Decimal
 
 from src.portfolio.parsers.purchases import parse_purchases
-from src.portfolio.parsers.sales import parse_sales, _validate_legacy_type_cell
+from src.portfolio.parsers.sales import parse_sales, _validate_type_cell
 from src.portfolio.parsers.dividends import parse_dividends
 
 
@@ -200,63 +180,50 @@ class TestSalesEnglishHeaders:
 # ---------------------------------------------------------------------------
 
 class TestSalesTypeAliases:
-    """Legacy ordinary labels remain accepted; rights labels fail closed."""
 
     def test_stocks_maps_to_acciones(self):
-        assert _validate_legacy_type_cell("STOCKS") is None
+        assert _validate_type_cell("STOCKS") is None
 
     def test_stocks_lowercase_maps_to_acciones(self):
         """Case-insensitive: 'stocks' → ACCIONES."""
-        assert _validate_legacy_type_cell("stocks") is None
+        assert _validate_type_cell("stocks") is None
 
     def test_stocks_mixedcase_maps_to_acciones(self):
-        assert _validate_legacy_type_cell("Stocks") is None
+        assert _validate_type_cell("Stocks") is None
 
     def test_shares_maps_to_acciones(self):
-        assert _validate_legacy_type_cell("SHARES") is None
+        assert _validate_type_cell("SHARES") is None
 
     def test_shares_lowercase_maps_to_acciones(self):
-        assert _validate_legacy_type_cell("shares") is None
+        assert _validate_type_cell("shares") is None
 
-    def test_rights_is_rejected(self):
-        with pytest.raises(ValueError, match="no longer supported"):
-            _validate_legacy_type_cell("RIGHTS")
 
-    def test_rights_lowercase_maps_to_derechos(self):
-        with pytest.raises(ValueError, match="no longer supported"):
-            _validate_legacy_type_cell("rights")
 
-    def test_rights_mixedcase_maps_to_derechos(self):
-        with pytest.raises(ValueError, match="no longer supported"):
-            _validate_legacy_type_cell("Rights")
 
     def test_acciones_unchanged(self):
         """Spanish 'ACCIONES' continues to work (regression guard)."""
-        assert _validate_legacy_type_cell("ACCIONES") is None
+        assert _validate_type_cell("ACCIONES") is None
 
-    def test_derechos_is_rejected(self):
-        with pytest.raises(ValueError, match="no longer supported"):
-            _validate_legacy_type_cell("DERECHOS")
 
     def test_empty_string_defaults_acciones(self):
         """Empty / whitespace → ACCIONES (legacy 6-col default; unchanged behavior)."""
-        assert _validate_legacy_type_cell("") is None
-        assert _validate_legacy_type_cell("   ") is None
+        assert _validate_type_cell("") is None
+        assert _validate_type_cell("   ") is None
 
     def test_invalid_english_typo_raises(self):
         """'stock' (without S) is not in aliases → ValueError."""
         with pytest.raises(ValueError, match="Invalid Tipo"):
-            _validate_legacy_type_cell("stock")
+            _validate_type_cell("stock")
 
     def test_invalid_spanish_opciones_raises(self):
         """'OPCIONES' is not a valid alias → ValueError (unchanged behavior)."""
         with pytest.raises(ValueError):
-            _validate_legacy_type_cell("OPCIONES")
+            _validate_type_cell("OPCIONES")
 
     def test_invalid_mixed_garbage_raises(self):
         """Arbitrary non-empty string → ValueError."""
         with pytest.raises(ValueError):
-            _validate_legacy_type_cell("VENTA_RAPIDA")
+            _validate_type_cell("VENTA_RAPIDA")
 
     def test_stocks_in_7col_csv(self):
         """End-to-end: 'Stocks' in Tipo column of a 7-col CSV → ACCIONES."""
@@ -276,13 +243,6 @@ class TestSalesTypeAliases:
         rows = parse_sales(_enc(csv))
         assert "sales_type" not in rows[0]
 
-    def test_rights_in_7col_csv_rejected(self):
-        csv = (
-            "Año\tEmpresa\tFecha venta\tTipo\tAcciones\tComisión\tTotal Venta\n"
-            "2024\tFoo Corp\t20/06/2024\tRights\t0\t3,00\t150,00\n"
-        )
-        with pytest.raises(ValueError, match="no longer supported"):
-            parse_sales(_enc(csv))
 
     def test_invalid_type_in_7col_csv_raises(self):
         """Non-empty unrecognized type in actual CSV row raises ValueError (G-13)."""
@@ -301,22 +261,22 @@ class TestSalesTypeAliases:
 # Full English dividend headers (tab-delimited)
 _DIVIDENDS_EN = (
     "Year\tCompany\tPayment Date\tGross Amount\tNet Amount\t"
-    "Rights Amount\tSource Withholding\tDestination Withholding\n"
-    "2024\tApple Inc.\t15/03/2024\t1.000,00\t800,00\t0,00\t100,00\t100,00\n"
-    "2024\tTelefónica\t20/06/2024\t500,00\t400,00\t0,00\t75,00\t25,00\n"
+    "Source Withholding\tDestination Withholding\n"
+    "2024\tApple Inc.\t15/03/2024\t1.000,00\t800,00\t100,00\t100,00\n"
+    "2024\tTelefónica\t20/03/2024\t50,00\t38,00\t7,50\t4,50\n"
 )
 
 # Alternative English aliases
 _DIVIDENDS_EN_ALT = (
-    "Year\tCompany\tDate\tGross\tNet\tScrip Amount\tWHT Source\tWHT Dest\n"
-    "2024\tMicrosoft\t2024-04-10\t200,00\t165,00\t0,00\t20,00\t15,00\n"
+    "Year\tCompany\tDate\tGross\tNet\tWHT Source\tWHT Dest\n"
+    "2024\tMicrosoft\t2024-04-10\t200,00\t165,00\t20,00\t15,00\n"
 )
 
 # Spanish headers (regression guard)
 _DIVIDENDS_ES = (
     "Año\tEmpresa\tFecha de cobro\tImporte Bruto\tImporte Neto\t"
-    "Importe en Derechos\tRetención Origen\tRetención Destino\n"
-    "2024\tApple Inc.\t15/03/2024\t1.000,00\t800,00\t0,00\t100,00\t100,00\n"
+    "Retención Origen\tRetención Destino\n"
+    "2024\tApple Inc.\t15/03/2024\t1.000,00\t800,00\t100,00\t100,00\n"
 )
 
 
@@ -345,17 +305,9 @@ class TestDividendsEnglishHeaders:
         rows = parse_dividends(_enc(_DIVIDENDS_EN))
         assert rows[0]["wht_destination"] == Decimal("100.00")
 
-    def test_english_rights_amount_nonzero_rejected(self):
-        csv = (
-            "Year\tCompany\tPayment Date\tGross Amount\tNet Amount\t"
-            "Rights Amount\tSource Withholding\tDestination Withholding\n"
-            "2024\tFoo Corp\t2024-01-01\t500,00\t400,00\t50,00\t50,00\t0,00\n"
-        )
-        with pytest.raises(ValueError, match="no longer supported"):
-            parse_dividends(_enc(csv))
 
     def test_alternative_english_aliases_accepted(self):
-        """'Date', 'Gross', 'Net', 'Scrip Amount', 'WHT Source', 'WHT Dest' are valid."""
+        """Short English aliases are accepted."""
         rows = parse_dividends(_enc(_DIVIDENDS_EN_ALT))
         assert len(rows) == 1
         assert rows[0]["gross"] == Decimal("200.00")
@@ -365,13 +317,3 @@ class TestDividendsEnglishHeaders:
         rows = parse_dividends(_enc(_DIVIDENDS_ES))
         assert len(rows) == 1
         assert rows[0]["gross"] == Decimal("1000.00")
-
-    def test_unrecognized_dividend_header_raises(self):
-        """Unrecognized column header → ValueError."""
-        csv = (
-            "Year\tCompany\tPayment Date\tBAD_COL\tNet Amount\t"
-            "Rights Amount\tSource Withholding\tDestination Withholding\n"
-            "2024\tFoo\t2024-01-01\t100\t80\t0\t10\t10\n"
-        )
-        with pytest.raises(ValueError):
-            parse_dividends(_enc(csv))

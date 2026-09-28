@@ -1,22 +1,3 @@
-"""Amendment H — Holdings effects from corporate-action leg types.
-
-Contract reference: §H.3.5 Holdings and Cost-Basis Effects (Detailed).
-
-These tests verify that when the holdings service processes ledger_txn documents
-produced by create_corporate_action(), each leg type has the correct holdings
-effect. The service processes CA legs via normal txn_type — no special CA
-handling needed.
-
-Coverage:
-- H-T2: CASH_DIVIDEND leg → no share change, counted in total_dividends_eur
-- H-T3: SHARE_ACQUISITION (COMPLETE) → +shares, pool_cost increased
-- H-T4: SHARE_ACQUISITION (INCOMPLETE) → +unpaid_shares, zero pool cost
-- H-T5: RIGHTS_SOLD (DERECHOS) → no share change, counted in rights proceeds
-- H-T6: CASH_TOP_UP (qty=0, INCOMPLETE) → no share change, no pool cost
-- Combined event: DIVIDEND_WITH_SCRIP full 4-leg holdings computation
-- Standalone movements unaffected by CA legs (no double-counting)
-- CASH_DIVIDEND leg does not appear in pool_cost or total_shares
-"""
 
 from __future__ import annotations
 
@@ -156,27 +137,6 @@ def _share_acquisition_leg(doc_id="leg_sa_1", quantity="9", gross_eur="0",
     }
 
 
-def _rights_sold_leg(doc_id="leg_rs_1", quantity="3", gross_eur="78.67",
-                     fees_eur="2.33", ca_group_id="cag_test") -> dict:
-    """RIGHTS_SOLD → txn_type=SELL, sales_type=DERECHOS."""
-    net_eur = str(Decimal(gross_eur) - Decimal(fees_eur))
-    return {
-        "id": doc_id,
-        "doc_type": "ledger_txn",
-        "txn_type": "SELL",
-        "ca_leg_type": "RIGHTS_SOLD",
-        "ca_group_id": ca_group_id,
-        "security_id": _SECURITY_ID,
-        "ticker": "ULVR",
-        "trade_date": "2024-03-28",
-        "quantity": quantity,
-        "sales_type": "DERECHOS",
-        "gross": {"amount": gross_eur, "currency": "GBP", "eur_amount": gross_eur},
-        "fees": {"total": fees_eur, "currency": "GBP", "total_eur": fees_eur},
-        "net": {"amount": net_eur, "currency": "GBP", "eur_amount": net_eur},
-        "account_id": "_unassigned",
-        "correction_status": "ACTIVE",
-    }
 
 
 def _cash_top_up_leg(doc_id="leg_ctu_1", gross_eur="5.77",
@@ -419,55 +379,8 @@ class TestShareAcquisitionIncompleteHoldings:
 
 
 # ---------------------------------------------------------------------------
-# H-T5: RIGHTS_SOLD (DERECHOS) → no share change, counted in rights proceeds
 # ---------------------------------------------------------------------------
 
-class TestRightsSoldLegHoldings:
-    """H-T5: RIGHTS_SOLD (sales_type=DERECHOS) → no share change."""
-
-    def test_rights_sold_no_share_change(self):
-        """RIGHTS_SOLD must not decrement total_shares."""
-        svc = _make_services([
-            _standard_buy(quantity="100"),
-            _rights_sold_leg(quantity="3", gross_eur="78.67", fees_eur="2.33"),
-        ])
-        result = svc.compute_holdings()
-        h = result["holdings"][0]
-        assert Decimal(h["total_shares"]) == Decimal("100"), (
-            "RIGHTS_SOLD (DERECHOS) must not reduce total_shares"
-        )
-
-    def test_rights_sold_does_not_affect_avg_cost(self):
-        """RIGHTS_SOLD must not change the average cost basis."""
-        from decimal import ROUND_HALF_UP
-        buy_gross = "2009.95"
-        buy_fees = "9.95"
-        buy_qty = "100"
-        # Engine: cost = net = gross + fees; avg = net / qty = 2019.90/100 = 20.20
-        raw_avg = (Decimal(buy_gross) + Decimal(buy_fees)) / Decimal(buy_qty)
-        expected_avg = raw_avg.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-        svc = _make_services([
-            _standard_buy(quantity=buy_qty, gross_eur=buy_gross, fees_eur=buy_fees),
-            _rights_sold_leg(quantity="50", gross_eur="500.00", fees_eur="5.00"),
-        ])
-        result = svc.compute_holdings()
-        h = result["holdings"][0]
-        actual_avg = Decimal(h["avg_cost_basis_eur"])
-        assert actual_avg == expected_avg, (
-            f"avg_cost_basis_eur ({actual_avg}) must not be affected by RIGHTS_SOLD"
-        )
-
-    def test_rights_sold_counted_in_rights_proceeds(self):
-        """Legacy RIGHTS_SOLD records are inert and expose no aggregate."""
-        svc = _make_services([
-            _standard_buy(quantity="100"),
-            _rights_sold_leg(quantity="3", gross_eur="78.67", fees_eur="2.33"),
-        ])
-        result = svc.compute_holdings()
-        h = result["holdings"][0]
-        assert "rights_proceeds_eur" not in h
-        assert Decimal(h["total_sale_proceeds_eur"]) == Decimal("0")
 
 
 # ---------------------------------------------------------------------------
@@ -525,27 +438,17 @@ class TestCashTopUpLegHoldings:
 # ---------------------------------------------------------------------------
 
 class TestDividendWithScripGroupHoldings:
-    """Smoke test for a complete DIVIDEND_WITH_SCRIP corporate-action group.
-
-    Legs: CASH_DIVIDEND + SHARE_ACQUISITION(INCOMPLETE) + RIGHTS_SOLD + CASH_TOP_UP
-    Prior position: 100 shares via standard BUY.
-
-    Expected holdings after all legs:
-    - total_shares: 100 (prior BUY) + 9 (SHARE_ACQUISITION) = but INCOMPLETE
-      so unpaid_shares=9, pool_shares=100
-    - Pool avg_cost: unchanged by INCOMPLETE acq, CASH_DIVIDEND, RIGHTS_SOLD, CASH_TOP_UP
-    - total_dividends_eur: 169.93 (CASH_DIVIDEND net)
-    - rights_proceeds_eur: 76.34 (RIGHTS_SOLD net)
-    """
 
     def _build_full_group(self):
         return [
             _standard_buy(quantity="100", gross_eur="2009.95", fees_eur="9.95"),
             _cash_dividend_leg(doc_id="g_cd", gross_eur="209.79", net_eur="169.93"),
-            _share_acquisition_leg(doc_id="g_sa", quantity="9", gross_eur="0",
-                                   cost_basis_status="INCOMPLETE"),
-            _rights_sold_leg(doc_id="g_rs", quantity="3",
-                             gross_eur="78.67", fees_eur="2.33"),
+            _share_acquisition_leg(
+                doc_id="g_sa",
+                quantity="9",
+                gross_eur="0",
+                cost_basis_status="INCOMPLETE",
+            ),
             _cash_top_up_leg(doc_id="g_ctu", gross_eur="5.77"),
         ]
 
@@ -562,11 +465,6 @@ class TestDividendWithScripGroupHoldings:
             f"total_dividends_eur must be 169.93 from CASH_DIVIDEND leg; got {dividends}"
         )
 
-    def test_full_group_rights_proceeds_counted(self):
-        svc = _make_services(self._build_full_group())
-        h = svc.compute_holdings()["holdings"][0]
-        assert "rights_proceeds_eur" not in h
-        assert Decimal(h["total_sale_proceeds_eur"]) == Decimal("0")
 
     def test_full_group_pool_cost_unchanged_by_incomplete_legs(self):
         """Pool avg cost reflects only the COMPLETE BUY, not INCOMPLETE CA legs."""

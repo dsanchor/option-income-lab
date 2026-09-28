@@ -29,7 +29,6 @@ from typing import Any, Dict, List, Optional
 from .cosmos_portfolio import CosmosPortfolioService
 from .cosmos_securities import CosmosSecuritiesService
 from .models import OPTION_TXN_TYPES as _MODEL_OPTION_TXN_TYPES
-from .rights_policy import sanitize_legacy_movement
 from .symbol_config_sync import ensure_symbol_config
 
 logger = logging.getLogger(__name__)
@@ -149,11 +148,7 @@ class HoldingsService:
         Returns:
             Dict with 'holdings' list and 'summary' dict.
         """
-        movements = [
-            sanitized
-            for movement in self.portfolio_svc.get_all_movements_for_holdings()
-            if (sanitized := sanitize_legacy_movement(movement)) is not None
-        ]
+        movements = self.portfolio_svc.get_all_movements_for_holdings()
 
         # Filter by account if requested
         if account_id:

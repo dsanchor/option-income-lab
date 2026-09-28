@@ -116,10 +116,7 @@ describe("Economics type contracts", () => {
   });
 
   it("keeps legacy dividend fields only for compatibility exclusion", () => {
-    for (const field of [
-      "cash_net?: number | null;",
-      "derechos_net?: number | null;",
-    ]) {
+    for (const field of ["cash_net?: number | null;"]) {
       assert.ok(
         economicsTypes.includes(field),
         `Expected economics.ts to include "${field}".`

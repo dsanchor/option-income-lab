@@ -1,35 +1,3 @@
-"""Tests for Symbol Detail Stocks tab data contract.
-
-Investigation findings (Basher, Symbol Details Stocks/Options task):
-
-DATA VERDICT: Backend populates recent_movements correctly for all portfolio states.
-ROOT CAUSE of missing tab visibility: No tab UI in frontend — flat scrolling layout,
-no "Options" / "Stocks" section labels. Fix is a frontend structural change.
-
-SECONDARY GAP: get_movements() is called without txn_type filter, so TRANSFER_IN
-and TRANSFER_OUT appear in recent_movements alongside BUY/SELL/DIVIDEND. Backend
-supports txn_type filtering; the detail endpoint just doesn't use it yet.
-
-DIVIDEND: Skipped pending Danny's amended contract (composite corporate action).
-
-Coverage:
-- _map_recent_movement() maps all 13 contract fields (full field matrix)
-- SELL movement includes sales_type (ACCIONES / DERECHOS)
-- import_source audit field preserved through mapping
-- correction_status exposed in mapped output
-- SUPERSEDED movement excluded from recent_movements at endpoint level
-- VOIDED movement excluded from recent_movements
-- Soft-deleted movement excluded
-- ACTIVE movement included correctly
-- TRANSFER_IN movement currently appears (documented existing behavior)
-- portfolio_only state exposes recent_movements
-- portfolio_historical state exposes recent_movements
-- watchlist_and_portfolio state exposes recent_movements
-- watchlist_only state: portfolio is null, no recent_movements
-- movement_count reflects unfiltered total, not page limit
-- Existing portfolio / rights / transfer / CMP / Symbol Unification tests green (no
-  regression — run test_unified_symbol_detail.py to confirm)
-"""
 
 from __future__ import annotations
 
@@ -468,18 +436,6 @@ class TestMapRecentMovementFieldContract:
         result = _map_recent_movement(raw)
         assert "sales_type" not in result
 
-    def test_legacy_rights_metadata_is_not_serialized(self):
-        from web.app import _map_recent_movement
-        raw = {
-            "id": "txn_sell_rights",
-            "txn_type": "SELL",
-            "sales_type": "DERECHOS",
-            "gross": {"eur_amount": "150.00"},
-            "fees": {"total_eur": "2.50"},
-            "net": {"eur_amount": "147.50"},
-        }
-        result = _map_recent_movement(raw)
-        assert "sales_type" not in result
 
     def test_correction_status_active_preserved(self):
         from web.app import _map_recent_movement
@@ -782,17 +738,6 @@ class TestStocksTabMovementTypes:
         assert len(sell_movs) == 1, "SELL movement must appear with txn_type='SELL'"
         assert "sales_type" not in sell_movs[0]
 
-    def test_legacy_rights_sell_is_hidden(self, client):
-        c, fake = client
-        fake.container.seed_security("XNYS:DREC", "Rights Co")
-        fake.container.seed_config("DREC", {"security_id": "XNYS:DREC"})
-        _buy(fake, "XNYS:DREC", doc_id="txn_drec_buy", quantity="100")
-        _sell(fake, "XNYS:DREC", doc_id="txn_drec_rights", quantity="100",
-              sales_type="DERECHOS")
-
-        resp = c.get("/api/symbols/XNYS:DREC/detail")
-        movements = resp.json().get("portfolio", {}).get("recent_movements", [])
-        assert all(m.get("id") != "txn_drec_rights" for m in movements)
 
     def test_transfer_in_currently_appears(self, client):
         """TRANSFER_IN currently appears in recent_movements (not yet filtered).
@@ -1007,21 +952,6 @@ class TestMovementsEndpointForStocksTable:
         buy_ids = [m["id"] for m in movements]
         assert "mvt_pill_buy" in buy_ids
 
-    def test_txn_type_filter_sell_returns_only_sell(self, client):
-        """?txn_type=SELL returns ordinary SELL rows and hides legacy rights."""
-        c, fake = client
-        _buy(fake, "XNYS:AAPL", doc_id="mvt_pills_buy")
-        _sell(fake, "XNYS:AAPL", doc_id="mvt_pills_sell_acc", sales_type="ACCIONES")
-        _sell(fake, "XNYS:AAPL", doc_id="mvt_pills_sell_dec", sales_type="DERECHOS")
-
-        resp = c.get("/api/portfolio/movements?security_id=XNYS:AAPL&txn_type=SELL")
-        assert resp.status_code == 200
-        movements = resp.json()["movements"]
-        assert all(m["txn_type"] == "SELL" for m in movements)
-        sell_ids = {m["id"] for m in movements}
-        assert "mvt_pills_sell_acc" in sell_ids
-        assert "mvt_pills_sell_dec" not in sell_ids
-        assert "mvt_pills_buy" not in sell_ids
 
     def test_invalid_txn_type_returns_400(self, client):
         """txn_type=GARBAGE must return 400 validation_error (not 500)."""
@@ -1053,13 +983,6 @@ class TestMovementsEndpointForStocksTable:
         assert len(data["movements"]) <= 3, "Must not return more rows than limit"
         assert data["total_count"] == 5, "total_count reflects full unfiltered count"
 
-    def test_legacy_rights_movement_is_hidden(self, client):
-        c, fake = client
-        _sell(fake, "XNYS:AAPL", doc_id="mvt_st_sell", sales_type="DERECHOS")
-        resp = c.get("/api/portfolio/movements?security_id=XNYS:AAPL")
-        movements = resp.json()["movements"]
-        sell = next((m for m in movements if m["id"] == "mvt_st_sell"), None)
-        assert sell is None
 
 
 class TestMovementLotAveragePrice:
@@ -1339,26 +1262,3 @@ class TestMovementsEndpointCaGroupFields:
         assert ca_id is None or ca_id == "", (
             "Standalone BUY must not carry a ca_group_id"
         )
-
-    def test_supported_ca_leg_types_returned_and_legacy_rights_hidden(self, client):
-        c, fake = client
-        grp = "cag_allfour"
-        leg_specs = [
-            ("mvt_4t_div",  "DIVIDEND", "CASH_DIVIDEND",      1),
-            ("mvt_4t_rts",  "SELL",     "RIGHTS_SOLD",         2),
-            ("mvt_4t_acq",  "BUY",      "SHARE_ACQUISITION",   3),
-            ("mvt_4t_top",  "BUY",      "CASH_TOP_UP",         4),
-        ]
-        for doc_id, txn_type, leg_type, seq in leg_specs:
-            _ca_leg(fake, "XNYS:ULVR", doc_id,
-                    txn_type=txn_type, ca_leg_type=leg_type,
-                    ca_group_id=grp, ca_group_seq=seq)
-
-        resp = c.get("/api/portfolio/movements?security_id=XNYS:ULVR")
-        movements = resp.json()["movements"]
-        returned_types = {
-            m["ca_leg_type"] for m in movements if m.get("ca_group_id") == grp
-        }
-        assert returned_types == {
-            "CASH_DIVIDEND", "SHARE_ACQUISITION", "CASH_TOP_UP"
-        }

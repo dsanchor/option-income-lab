@@ -136,3 +136,35 @@ def test_scheduled_no_change_is_success_without_replacing_latest_archive():
     assert health["last_attempt"]["state"] == "NO_CHANGE"
     assert health["last_scheduled_success"]["state"] == "NO_CHANGE"
     assert health["latest_changed_archive"]["run_id"] == uploaded.run_id
+
+
+def test_automatic_backup_skips_invalid_record_and_stays_healthy():
+    cosmos = populated_cosmos()
+    cosmos.portfolio_container.create_item(body={
+        "id": "invalid-movement",
+        "account_id": "acct_demo",
+        "doc_type": "ledger_txn",
+        "txn_type": "BUY",
+        "security_id": "XNAS:AAPL",
+        "unexpected": "must-not-export",
+    })
+    blobs = BlobStore(FakeBlobContainer())
+    service = AutomaticBackupService(
+        ExportService(CosmosBackupCollector(cosmos)),
+        blobs,
+        CFG,
+    )
+
+    result = service.run(
+        trigger="manual",
+        now_utc=datetime(2026, 9, 20, 1, 0, tzinfo=timezone.utc),
+    )
+
+    assert result.state == "UPLOADED"
+    assert len(result.warnings) == 1
+    assert result.warnings[0].startswith(
+        "SKIPPED_RECORD:ledger_movements:SchemaError:"
+    )
+    health = blobs.read_json("v1/control/health.json").value
+    assert health["health"] == "healthy"
+    assert health["last_attempt"]["warnings"] == result.warnings

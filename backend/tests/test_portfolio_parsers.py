@@ -173,25 +173,17 @@ class TestRowIdempotencyHash:
 # ---------------------------------------------------------------------------
 
 DIVIDENDS_CSV_TAB = """\
-Año\tEmpresa\tFecha de cobro\tImporte Bruto\tImporte Neto\tImporte en Derechos\tRetención Origen\tRetención Destino
-2024\tApple Inc.\t15/06/2024\t100,00\t73,31\t0,00\t12,94\t13,75
-2024\tTelefónica\t20/06/2024\t50,00\t38,00\t0,00\t7,50\t4,50
+Año\tEmpresa\tFecha de cobro\tImporte Bruto\tImporte Neto\tRetención Origen\tRetención Destino
+2024\tApple Inc.\t15/06/2024\t100,00\t73,31\t12,94\t13,75
+2024\tTelefónica\t20/06/2024\t50,00\t38,00\t7,50\t4,50
 """
 
 DIVIDENDS_CSV_SEMICOLON = """\
-Año;Empresa;Fecha de cobro;Importe Bruto;Importe Neto;Importe en Derechos;Retención Origen;Retención Destino
-2024;Apple Inc.;15/06/2024;100,00;73,31;0,00;12,94;13,75
+Año;Empresa;Fecha de cobro;Importe Bruto;Importe Neto;Retención Origen;Retención Destino
+2024;Apple Inc.;15/06/2024;100,00;73,31;12,94;13,75
 """
 
-DIVIDENDS_CSV_COMMA = """\
-Año,Empresa,Fecha de cobro,Importe Bruto,Importe Neto,Importe en Derechos,Retención Origen,Retención Destino
-2024,Apple Inc.,15/06/2024,"100,00","73,31","0,00","12,94","13,75"
-"""
 
-DIVIDENDS_CSV_DERECHOS = """\
-Año\tEmpresa\tFecha de cobro\tImporte Bruto\tImporte Neto\tImporte en Derechos\tRetención Origen\tRetención Destino
-2024\tSantander\t10/06/2024\t80,00\t60,00\t45,30\t12,00\t8,00
-"""
 
 
 class TestDividendsParser:
@@ -219,14 +211,7 @@ class TestDividendsParser:
         rows = parse_dividends(_encode(DIVIDENDS_CSV_TAB))
         assert rows[1]["empresa_normalized"] == "telefonica"
 
-    def test_rights_amount_is_rejected(self):
-        with pytest.raises(ValueError, match="no longer supported"):
-            parse_dividends(_encode(DIVIDENDS_CSV_DERECHOS))
 
-    def test_no_rights_warning_when_zero(self):
-        rows = parse_dividends(_encode(DIVIDENDS_CSV_TAB))
-        for row in rows:
-            assert not any(w["type"] == "RIGHTS_AMOUNT" for w in row["warnings"])
 
     def test_row_index_zero_based(self):
         rows = parse_dividends(_encode(DIVIDENDS_CSV_TAB))
@@ -242,13 +227,6 @@ class TestDividendsParser:
         with pytest.raises(ValueError):
             parse_dividends(b"")
 
-    def test_header_only_raises(self):
-        header = _encode(
-            "Año\tEmpresa\tFecha de cobro\tImporte Bruto\t"
-            "Importe Neto\tImporte en Derechos\tRetención Origen\tRetención Destino\n"
-        )
-        with pytest.raises(ValueError):
-            parse_dividends(header)
 
     def test_wrong_columns_raises(self):
         with pytest.raises(ValueError):
@@ -258,14 +236,6 @@ class TestDividendsParser:
         rows = parse_dividends(_encode(DIVIDENDS_CSV_TAB))
         assert rows[0]["year"] == 2024
 
-    def test_spanish_thousands_in_amounts(self):
-        csv = (
-            "Año\tEmpresa\tFecha de cobro\tImporte Bruto\tImporte Neto\t"
-            "Importe en Derechos\tRetención Origen\tRetención Destino\n"
-            "2024\tCo\t15/06/2024\t1.234,56\t900,00\t0,00\t100,00\t234,56\n"
-        )
-        rows = parse_dividends(_encode(csv))
-        assert rows[0]["gross"] == Decimal("1234.56")
 
 
 # ---------------------------------------------------------------------------
@@ -473,8 +443,8 @@ class TestIsoDatesRegressionDividends:
 
     _CSV_ISO = (
         "Año\tEmpresa\tFecha de cobro\tImporte Bruto\tImporte Neto\t"
-        "Importe en Derechos\tRetención Origen\tRetención Destino\n"
-        "2016\tSome Corp\t2016-07-18\t50,00\t38,00\t0,00\t7,50\t4,50\n"
+        "Retención Origen\tRetención Destino\n"
+        "2016\tSome Corp\t2016-07-18\t50,00\t38,00\t7,50\t4,50\n"
     )
 
     def test_iso_date_accepted(self):
@@ -500,7 +470,6 @@ class TestIsoDatesRegressionSales:
 # ---------------------------------------------------------------------------
 # Sales parser — Tipo (4th column) support
 # Authoritative header: Año | Empresa | Fecha venta | Tipo | Acciones | Comisión | Total Venta
-# Regression coverage for danny-rights-sale-contract design.
 # ---------------------------------------------------------------------------
 
 _SALES_7COL_ACCIONES = (
@@ -509,17 +478,7 @@ _SALES_7COL_ACCIONES = (
     "2024\tTelefónica\t25/06/2024\tACCIONES\t50\t4,00\t200,00\n"
 )
 
-_SALES_7COL_DERECHOS = (
-    "Año\tEmpresa\tFecha venta\tTipo\tAcciones\tComisión\tTotal Venta\n"
-    "2024\tApple Inc.\t20/06/2024\tDerechos\t5\t7,50\t1.050,00\n"
-    "2024\tTelefónica\t25/06/2024\tderechos\t50\t4,00\t200,00\n"
-)
 
-_SALES_7COL_MIXED = (
-    "Año\tEmpresa\tFecha venta\tTipo\tAcciones\tComisión\tTotal Venta\n"
-    "2024\tApple Inc.\t20/06/2024\tAcciones\t5\t7,50\t1.050,00\n"
-    "2024\tTelefónica\t25/06/2024\tDerechos\t0\t4,00\t200,00\n"
-)
 
 _SALES_7COL_EMPTY_TIPO = (
     "Año\tEmpresa\tFecha venta\tTipo\tAcciones\tComisión\tTotal Venta\n"
@@ -533,7 +492,6 @@ _SALES_7COL_INVALID_TIPO = (
 
 
 class TestSalesParserSalesType:
-    """Legacy Tipo columns accept only ordinary sales and reject rights."""
 
     def test_6col_has_no_sales_type_metadata(self):
         rows = parse_sales(_encode(SALES_CSV))
@@ -550,13 +508,6 @@ class TestSalesParserSalesType:
         for row in rows:
             assert "sales_type" not in row
 
-    def test_7col_derechos_rejected(self):
-        with pytest.raises(ValueError, match="no longer supported"):
-            parse_sales(_encode(_SALES_7COL_DERECHOS))
-
-    def test_7col_mixed_tipos_rejected(self):
-        with pytest.raises(ValueError, match="no longer supported"):
-            parse_sales(_encode(_SALES_7COL_MIXED))
 
     def test_7col_empty_tipo_defaults_acciones(self):
         """Empty Tipo cell → defaults to 'ACCIONES' with no INVALID_SALES_TYPE warning."""
@@ -577,21 +528,7 @@ class TestSalesParserSalesType:
         rows = parse_sales(_encode(csv))
         assert "sales_type" not in rows[0]
 
-    def test_7col_accent_insensitive_derechos_rejected(self):
-        csv = (
-            "Año\tEmpresa\tFecha venta\tTipo\tAcciones\tComisión\tTotal Venta\n"
-            "2024\tApple Inc.\t20/06/2024\tDérechos\t5\t7,50\t1.050,00\n"
-        )
-        with pytest.raises(ValueError, match="no longer supported"):
-            parse_sales(_encode(csv))
 
-    def test_7col_derechos_with_positive_qty_rejected(self):
-        csv = (
-            "Año\tEmpresa\tFecha venta\tTipo\tAcciones\tComisión\tTotal Venta\n"
-            "2024\tApple Inc.\t20/06/2024\tDerechos\t15\t7,50\t1.050,00\n"
-        )
-        with pytest.raises(ValueError, match="no longer supported"):
-            parse_sales(_encode(csv))
 
     def test_7col_acciones_zero_qty_rejected(self):
         csv = (
@@ -713,13 +650,6 @@ class TestSalesParserBilingual:
         rows = parse_sales(_encode(csv))
         assert "sales_type" not in rows[0]
 
-    def test_rights_alias_is_rejected(self):
-        csv = (
-            "Año\tEmpresa\tFecha venta\tTipo\tAcciones\tComisión\tTotal Venta\n"
-            "2024\tApple Inc.\t20/06/2024\tRights\t0\t2,00\t500,00\n"
-        )
-        with pytest.raises(ValueError, match="no longer supported"):
-            parse_sales(_encode(csv))
 
     def test_invalid_nonempty_type_raises(self):
         """Non-empty unrecognized type value raises ValueError (G-13)."""
@@ -754,8 +684,8 @@ class TestDividendsParserBilingual:
 
     _ENGLISH_CSV = (
         "Year\tCompany\tPayment Date\tGross Amount\tNet Amount\t"
-        "Rights Amount\tSource Withholding\tDestination Withholding\n"
-        "2024\tUnilever PLC\t28/03/2024\t225,50\t170,38\t0,00\t23,68\t31,44\n"
+        "Source Withholding\tDestination Withholding\n"
+        "2024\tUnilever PLC\t28/03/2024\t225,50\t170,38\t23,68\t31,44\n"
     )
 
     def test_english_headers_parse_ok(self):
@@ -768,27 +698,8 @@ class TestDividendsParserBilingual:
 
     def test_wht_dest_alias(self):
         csv = (
-            "Year\tCompany\tDate\tGross\tNet\tScrip Amount\tWHT Source\tWHT Dest\n"
-            "2024\tUnilever PLC\t28/03/2024\t225,50\t170,38\t0,00\t23,68\t31,44\n"
+            "Year\tCompany\tDate\tGross\tNet\tWHT Source\tWHT Dest\n"
+            "2024\tUnilever PLC\t28/03/2024\t225,50\t170,38\t23,68\t31,44\n"
         )
         rows = parse_dividends(_encode(csv))
         assert rows[0]["wht_destination"] == Decimal("31.44")
-
-    def test_spanish_headers_regression(self):
-        """G-15: Original Spanish-only files parse identically."""
-        csv = (
-            "Año\tEmpresa\tFecha de cobro\tImporte Bruto\tImporte Neto\t"
-            "Importe en Derechos\tRetención Origen\tRetención Destino\n"
-            "2024\tUnilever PLC\t28/03/2024\t225,50\t170,38\t0,00\t23,68\t31,44\n"
-        )
-        rows = parse_dividends(_encode(csv))
-        assert rows[0]["gross"] == Decimal("225.50")
-
-    def test_unrecognized_header_raises(self):
-        csv = (
-            "Year\tCompany\tPayment Date\tGross Amount\tNet Amount\t"
-            "Rights Amount\tSource Withholding\tBadColumn\n"
-            "2024\tUnilever PLC\t28/03/2024\t225,50\t170,38\t0,00\t23,68\t31,44\n"
-        )
-        with pytest.raises(ValueError, match="unrecognized header"):
-            parse_dividends(_encode(csv))

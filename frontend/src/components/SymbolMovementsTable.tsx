@@ -4,7 +4,6 @@
  */
 import Link from "next/link";
 import type { RecentMovement } from "@/types/symbol-detail";
-import { excludeUnsupportedRightsMovements } from "@/lib/rightsExclusion";
 
 interface Props {
   movements: RecentMovement[];
@@ -35,11 +34,7 @@ function qty(v: string | null | undefined): string {
 }
 
 export default function SymbolMovementsTable({ movements, movementCount, securityId }: Props) {
-  const visibleMovements = excludeUnsupportedRightsMovements(movements);
-  const visibleMovementCount = movementCount === undefined
-    ? undefined
-    : Math.max(0, movementCount - (movements.length - visibleMovements.length));
-  if (visibleMovements.length === 0) {
+  if (movements.length === 0) {
     return (
       <div className="surface rounded-[var(--radius)] border border-border p-4">
         <h3 className="mb-2 text-sm font-semibold text-text">Stock Movements</h3>
@@ -57,9 +52,9 @@ export default function SymbolMovementsTable({ movements, movementCount, securit
       <div className="flex items-center justify-between px-4 py-3 border-b border-border/60">
         <h3 className="text-sm font-semibold text-text">
           Stock Movements
-          {visibleMovementCount !== undefined && visibleMovementCount > visibleMovements.length && (
+          {movementCount !== undefined && movementCount > movements.length && (
             <span className="ml-1.5 text-xs font-normal text-text-muted">
-              (showing {visibleMovements.length} of {visibleMovementCount})
+              (showing {movements.length} of {movementCount})
             </span>
           )}
         </h3>
@@ -82,7 +77,7 @@ export default function SymbolMovementsTable({ movements, movementCount, securit
             </tr>
           </thead>
           <tbody>
-            {visibleMovements.map((m) => {
+            {movements.map((m) => {
               const meta = TXN_LABELS[m.txn_type] ?? { label: m.txn_type, cls: "text-text-muted border-border bg-bg-input" };
               return (
                 <tr key={m.id} className="border-b border-border/40 last:border-0">

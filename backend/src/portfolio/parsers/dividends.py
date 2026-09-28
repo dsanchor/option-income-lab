@@ -4,11 +4,8 @@ Expected columns (7):
   Año | Empresa | Fecha de cobro | Importe Bruto | Importe Neto |
   Retención Origen | Retención Destino
 
-The removed legacy 8-column layout is accepted only when its rights amount is
-zero. Any non-zero rights value fails explicitly.
-
 Bilingual: Spanish or English headers are both accepted (Amendment G).
-Additional columns beyond col 8 are preserved as `extra_cols`.
+Additional columns beyond column 7 are preserved as `extra_cols`.
 
 Spanish locale: DD/MM/YYYY dates, decimal comma numbers.
 Delimiter auto-detected: tab, semicolon, comma.
@@ -20,7 +17,6 @@ import unicodedata
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Set
 
-from ..rights_policy import RIGHTS_UNSUPPORTED_MESSAGE
 from .common import (
     normalize_company_name,
     parse_spanish_date,
@@ -37,7 +33,6 @@ _DIVIDENDS_BASE_ALIASES: Dict[int, Set[str]] = {
     3: {"importe bruto", "gross amount", "gross"},
     4: {"importe neto", "net amount", "net"},
 }
-_RIGHTS_HEADER_ALIASES = {"importe en derechos", "rights amount", "scrip amount"}
 _SOURCE_WHT_ALIASES = {"retencion origen", "source withholding", "withholding source", "wht source"}
 _DEST_WHT_ALIASES = {"retencion destino", "destination withholding", "withholding destination", "wht destination", "wht dest"}
 
@@ -88,15 +83,9 @@ def parse_dividends(content: bytes) -> List[Dict[str, Any]]:
                 f"Expected one of: {', '.join(sorted(aliases))}"
             )
 
-    legacy_rights_column = (
-        len(normalized_headers) >= 8
-        and normalized_headers[5] in _RIGHTS_HEADER_ALIASES
-    )
-    wht_source_pos = 6 if legacy_rights_column else 5
-    wht_dest_pos = 7 if legacy_rights_column else 6
     for pos, aliases in (
-        (wht_source_pos, _SOURCE_WHT_ALIASES),
-        (wht_dest_pos, _DEST_WHT_ALIASES),
+        (5, _SOURCE_WHT_ALIASES),
+        (6, _DEST_WHT_ALIASES),
     ):
         if pos >= len(normalized_headers) or normalized_headers[pos] not in aliases:
             raise ValueError(
@@ -108,7 +97,7 @@ def parse_dividends(content: bytes) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
 
     for row_index, row in enumerate(rows[1:]):
-        while len(row) < (8 if legacy_rights_column else 7):
+        while len(row) < 7:
             row.append("")
 
         source_row: Dict[str, str] = {}
@@ -122,17 +111,12 @@ def parse_dividends(content: bytes) -> List[Dict[str, Any]]:
             payment_date = parse_spanish_date(row[2])
             gross = parse_spanish_decimal(row[3]) or Decimal("0")
             net = parse_spanish_decimal(row[4]) or Decimal("0")
-            if legacy_rights_column:
-                rights_amount = parse_spanish_decimal(row[5]) or Decimal("0")
-                if not rights_amount.is_finite() or rights_amount != Decimal("0"):
-                    raise ValueError(RIGHTS_UNSUPPORTED_MESSAGE)
-            wht_source = parse_spanish_decimal(row[wht_source_pos]) or Decimal("0")
-            wht_destination = parse_spanish_decimal(row[wht_dest_pos]) or Decimal("0")
+            wht_source = parse_spanish_decimal(row[5]) or Decimal("0")
+            wht_destination = parse_spanish_decimal(row[6]) or Decimal("0")
         except (ValueError, IndexError) as exc:
             raise ValueError(f"Row {row_index + 2}: {exc}") from exc
 
-        base_columns = 8 if legacy_rights_column else 7
-        extra_cols = row[base_columns:] if len(row) > base_columns else []
+        extra_cols = row[7:] if len(row) > 7 else []
         empresa_normalized = normalize_company_name(empresa_raw)
 
         results.append({

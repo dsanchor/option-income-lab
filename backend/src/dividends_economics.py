@@ -10,8 +10,6 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from statistics import median
 from typing import Any
 
-from .portfolio.rights_policy import contains_legacy_rights_data
-
 _ZERO = Decimal(0)
 _TWOPLACES = Decimal("0.01")
 _SCRIP_EVENT_TYPES = {"SCRIP_DIVIDEND", "DIVIDEND_WITH_SCRIP"}
@@ -105,8 +103,7 @@ def _parse_iso_date(value: Any) -> date | None:
 
 def _is_active_movement(movement: dict[str, Any]) -> bool:
     return (
-        not contains_legacy_rights_data(movement)
-        and movement.get("is_deleted") is not True
+        movement.get("is_deleted") is not True
         and movement.get("deleted_at") is None
         and movement.get("correction_status") in (None, "", "ACTIVE")
     )

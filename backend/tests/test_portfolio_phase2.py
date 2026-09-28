@@ -308,17 +308,6 @@ class TestManualMovementCreation:
         })
         assert "sales_type" not in doc
 
-    def test_sell_derechos_rejected(self):
-        svc, _ = _make_svc()
-        with pytest.raises(ValueError, match="no longer supported"):
-            svc.create_manual_movement({
-                "txn_type": "SELL",
-                "security_id": "XMAD:TEF",
-                "trade_date": "2026-02-01",
-                "quantity": "10",
-                "gross": {"amount": "5.00", "currency": "EUR", "eur_amount": "5.00"},
-                "sales_type": "DERECHOS",
-            })
 
     def test_invalid_txn_type_raises(self):
         svc, _ = _make_svc()
@@ -329,18 +318,6 @@ class TestManualMovementCreation:
                 "trade_date": "2026-01-15",
                 "quantity": "10",
                 "gross": {"amount": "100", "currency": "EUR", "eur_amount": "100"},
-            })
-
-    def test_invalid_sales_type_raises(self):
-        svc, _ = _make_svc()
-        with pytest.raises(ValueError, match="no longer supported"):
-            svc.create_manual_movement({
-                "txn_type": "SELL",
-                "security_id": "XNYS:AAPL",
-                "trade_date": "2026-01-15",
-                "quantity": "10",
-                "gross": {"amount": "100", "currency": "EUR", "eur_amount": "100"},
-                "sales_type": "BONOS",
             })
 
     def test_buy_sets_cost_basis_complete(self):
@@ -919,7 +896,7 @@ class TestFxService:
         # Manually populate cache without the target currency
         fx_mod._rate_cache.clear()
         fx_mod._rate_cache[("2026-01-15", "GBP")] = "0.850000000"
-        fx_mod._cache_fetched_date = "2026-01-15"
+        fx_mod._cache_fetched_date = fx_mod._today_iso()
         with pytest.raises(FxRateNotFoundError):
             get_fx_rate("XYZ", "EUR", rate_date="2026-01-15")
 
@@ -927,7 +904,7 @@ class TestFxService:
         import src.portfolio.fx_service as fx_mod
         fx_mod._rate_cache.clear()
         fx_mod._rate_cache[("2026-01-15", "USD")] = "0.921500000"
-        fx_mod._cache_fetched_date = "2026-01-15"
+        fx_mod._cache_fetched_date = fx_mod._today_iso()
         rate = get_fx_rate("USD", "EUR", rate_date="2026-01-15")
         assert rate == "0.921500000"
 
@@ -936,7 +913,7 @@ class TestFxService:
         fx_mod._rate_cache.clear()
         # Only have rate for Jan 14 (weekend), not Jan 15
         fx_mod._rate_cache[("2026-01-14", "USD")] = "0.920000000"
-        fx_mod._cache_fetched_date = "2026-01-15"
+        fx_mod._cache_fetched_date = fx_mod._today_iso()
         rate = get_fx_rate("USD", "EUR", rate_date="2026-01-15")
         assert rate == "0.920000000"
 
@@ -1099,7 +1076,7 @@ class TestFxEndpoint:
         import src.portfolio.fx_service as fx_mod
         fx_mod._rate_cache.clear()
         fx_mod._rate_cache[("2026-01-15", "USD")] = "0.921500000"
-        fx_mod._cache_fetched_date = "2026-01-15"
+        fx_mod._cache_fetched_date = fx_mod._today_iso()
         resp = c.get("/api/fx/rates?from_currency=USD&date=2026-01-15")
         assert resp.status_code == 200
         data = resp.json()

@@ -26,7 +26,6 @@ import type {
   EconomicsAggregatedSummary,
   ScripValuationStatus,
 } from "@/types/economics";
-import { excludeUnsupportedRightsFromEconomicsOverview } from "@/lib/rightsExclusion";
 
 const MONTHS = [
   { value: "1", label: "Jan" },
@@ -534,8 +533,7 @@ export default function EconomicsOverviewView() {
       const response = await fetch(`/api/economics/overview${queryString ? `?${queryString}` : ""}`);
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-      const report = excludeUnsupportedRightsFromEconomicsOverview(body as EconomicsAggregatedReport);
-      setData(report);
+      setData(body as EconomicsAggregatedReport);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load economics overview.");
     } finally {
