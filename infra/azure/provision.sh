@@ -153,7 +153,7 @@ ensure_providers() {
 
 verify_operator_permissions() {
   local permissions
-  permissions="$(az_read rest --method post \
+  permissions="$(az_read rest --method get \
     --url "https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01" \
     -o json)"
   python3 - "$permissions" <<'PY'
@@ -341,9 +341,16 @@ verify_models_and_quota() {
   catalog="$(az_read cognitiveservices model list --location "$LOCATION" --subscription "$SUBSCRIPTION_ID" -o json)"
   usage="$(az_read cognitiveservices usage list --location "$LOCATION" --subscription "$SUBSCRIPTION_ID" -o json)"
   existing="$(az_read cognitiveservices account deployment list -g "$RESOURCE_GROUP" -n "$FOUNDRY_ACCOUNT" -o json 2>/dev/null || printf '[]')"
-  python3 - "$CANONICAL_CONFIG" "$catalog" "$usage" "$existing" <<'PY'
+  printf '%s\0%s\0%s\0%s\0' \
+    "$CANONICAL_CONFIG" "$catalog" "$usage" "$existing" |
+    python3 /dev/fd/3 3<<'PY'
 import json, sys
-cfg, catalog, usage, existing = map(json.loads, sys.argv[1:])
+payloads = sys.stdin.buffer.read().split(b"\0")
+if payloads[-1] == b"":
+    payloads.pop()
+if len(payloads) != 4:
+    raise SystemExit("Expected config, catalog, usage, and existing deployments")
+cfg, catalog, usage, existing = (json.loads(payload) for payload in payloads)
 for wanted in cfg["models"]["deployments"]:
     matches = []
     for item in catalog:

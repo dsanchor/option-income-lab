@@ -102,6 +102,12 @@ elif has("cognitiveservices", "model", "list"):
         models[-1]["model"]["version"] = "wrong-version"
     if os.environ.get("FAKE_MODEL_MODE") == "transient-error":
         raise SystemExit(55)
+    if os.environ.get("FAKE_MODEL_MODE") == "large-catalog":
+        models.extend(
+            {"model": {"name": "unused-" + str(index), "version": "1",
+                       "description": "x" * 256, "skus": []}}
+            for index in range(10000)
+        )
     out(json.dumps(models))
 elif has("cognitiveservices", "usage", "list"):
     usage = [
@@ -203,6 +209,15 @@ def test_preflight_is_read_only_and_checks_account_models_quota_and_images(fake_
     calls = _calls(fake_cli)
     assert not [call for call in calls if _is_mutating(call["args"])]
     assert any(call["args"][:2] == ["account", "show"] for call in calls)
+    permissions_calls = [
+        call
+        for call in calls
+        if call["args"][:1] == ["rest"]
+        and any("permissions?" in value for value in call["args"])
+    ]
+    assert len(permissions_calls) == 1
+    permissions_args = permissions_calls[0]["args"]
+    assert permissions_args[permissions_args.index("--method") + 1] == "get"
     assert any(
         call["args"][:3] == ["cognitiveservices", "model", "list"]
         for call in calls
@@ -212,6 +227,17 @@ def test_preflight_is_read_only_and_checks_account_models_quota_and_images(fake_
         for call in calls
     )
     assert sum(call["args"][:2] == ["bicep", "build"] for call in calls) == 3
+
+
+def test_preflight_streams_large_model_catalog_without_argv_overflow(fake_cli):
+    fake_cli["env"]["FAKE_MODEL_MODE"] = "large-catalog"
+    result = _run(fake_cli, "--mode", "preflight")
+    assert result.returncode == 0, result.stderr
+    assert (
+        "Foundry catalog, existing deployments, and quota validated."
+        in result.stdout
+    )
+    assert not [call for call in _calls(fake_cli) if _is_mutating(call["args"])]
 
 
 def test_what_if_is_deterministic_and_uses_subscription_scope_stdin(fake_cli):
