@@ -322,12 +322,12 @@ PY
     jq -e --arg rg "/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}" '
       length == 1 and
       .[0].assignableScopes == [$rg] and
-      .[0].permissions == [{
-        actions: [],
-        notActions: [],
-        dataActions: ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"],
-        notDataActions: []
-      }]
+      (.[0].permissions | length) == 1 and
+      .[0].permissions[0].actions == [] and
+      .[0].permissions[0].notActions == [] and
+      .[0].permissions[0].dataActions ==
+        ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/write"] and
+      .[0].permissions[0].notDataActions == []
     ' <<<"$value" >/dev/null ||
       die "Existing backup tag-writer custom role has incompatible permissions or scope"
   fi

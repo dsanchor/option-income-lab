@@ -130,7 +130,26 @@ elif has("cognitiveservices", "usage", "list"):
         usage[-1]["limit"] = 0
     out(json.dumps(usage))
 elif has("role", "definition", "list"):
-    out("[]")
+    if os.environ.get("FAKE_ROLE_MODE") == "azure-shape":
+        out(json.dumps([{
+            "assignableScopes": [
+                "/subscriptions/00000000-0000-0000-0000-000000000000/"
+                "resourceGroups/stock-options-manager-rg"
+            ],
+            "permissions": [{
+                "actions": [],
+                "condition": None,
+                "conditionVersion": None,
+                "dataActions": [
+                    "Microsoft.Storage/storageAccounts/blobServices/"
+                    "containers/blobs/tags/write"
+                ],
+                "notActions": [],
+                "notDataActions": [],
+            }],
+        }]))
+    else:
+        out("[]")
 elif has("bicep", "build"):
     file_name = args[args.index("--file") + 1]
     out(json.dumps({"compiled": pathlib.Path(file_name).name}, sort_keys=True))
@@ -348,6 +367,13 @@ def test_soft_deleted_foundry_account_fails_with_actionable_error(fake_cli):
     assert result.returncode != 0
     assert "soft-deleted" in result.stderr
     assert "recover or purge" in result.stderr
+    assert not [call for call in _calls(fake_cli) if _is_mutating(call["args"])]
+
+
+def test_preflight_accepts_azure_custom_role_condition_metadata(fake_cli):
+    fake_cli["env"]["FAKE_ROLE_MODE"] = "azure-shape"
+    result = _run(fake_cli, "--mode", "preflight")
+    assert result.returncode == 0, result.stderr
     assert not [call for call in _calls(fake_cli) if _is_mutating(call["args"])]
 
 

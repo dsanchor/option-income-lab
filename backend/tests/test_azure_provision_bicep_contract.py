@@ -104,6 +104,19 @@ def test_foundry_children_are_serialized_to_avoid_parent_conflicts():
     assert "for deployment in deployments" not in foundry
 
 
+def test_key_consumers_wait_for_resource_producers():
+    stack = _text("stack.bicep")
+    assert """module environment 'container-apps-environment.bicep' = {""" in stack
+    assert "dependsOn: [\n    observability\n  ]" in stack
+    assert """module apps 'apps.bicep' = {""" in stack
+    assert "dependsOn: [\n    environment\n    cosmos\n    foundry\n  ]" in stack
+    assert """module backup 'backup.bicep' = {""" in stack
+    assert (
+        "dependsOn: [\n    environment\n    cosmos\n    backupIdentity\n  ]"
+        in stack
+    )
+
+
 def test_api_is_internal_frontend_requires_entra_and_real_internal_fqdn():
     apps = _text("apps.bicep")
     auth = _text("frontend-auth.bicep")

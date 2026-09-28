@@ -33,6 +33,9 @@ module environment 'container-apps-environment.bicep' = {
     workspaceKey: listKeys(resourceId('Microsoft.OperationalInsights/workspaces', config.names.logAnalytics), '2023-09-01').primarySharedKey
     tags: config.tags
   }
+  dependsOn: [
+    observability
+  ]
 }
 
 module cosmos 'cosmos.bicep' = {
@@ -88,6 +91,11 @@ module apps 'apps.bicep' = {
     frontendExternal: frontendExternal
     tags: config.tags
   }
+  dependsOn: [
+    environment
+    cosmos
+    foundry
+  ]
 }
 
 module backup 'backup.bicep' = {
@@ -109,6 +117,11 @@ module backup 'backup.bicep' = {
     preservedLifecycleRules: preservedLifecycleRules
     tags: config.tags
   }
+  dependsOn: [
+    environment
+    cosmos
+    backupIdentity
+  ]
 }
 
 module diagnostics 'diagnostics.bicep' = {
