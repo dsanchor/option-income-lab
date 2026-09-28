@@ -232,9 +232,10 @@ def _project(
     *,
     section: str,
     logical_identity: str | None = None,
+    reject_unknown: bool = True,
 ) -> dict[str, Any]:
     unknown = set(doc) - allowed - RUNTIME_FIELDS
-    if unknown:
+    if unknown and reject_unknown:
         raise SchemaError(
             f"{section} contains unknown fields: {sorted(unknown)}",
             section=section,
@@ -349,6 +350,7 @@ def project_ledger(doc: dict[str, Any], include_source_row: bool) -> dict[str, A
         LEDGER_FIELDS,
         section="ledger_movements",
         logical_identity=identity,
+        reject_unknown=False,
     )
     if result.get("doc_type") != "ledger_txn" or not result.get("account_id") or not result.get("id"):
         raise SchemaError(

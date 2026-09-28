@@ -47,6 +47,12 @@ describe("user backup restore workflow", () => {
     }
   });
 
+  it("distinguishes archive errors from destination conflicts and renders diagnostics", () => {
+    assert.match(importView, /Archive is valid, but destination conflicts block restore/);
+    assert.match(importView, /validation\.errors\?\.length/);
+    assert.match(importView, /Destination|validation\.errors/);
+  });
+
   it("prevents double submit and renders a terminal result", () => {
     assert.match(importView, /busy === null/);
     assert.match(importView, /disabled=\{!canApply\}/);

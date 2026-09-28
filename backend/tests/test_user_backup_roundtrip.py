@@ -17,6 +17,44 @@ def _export(cosmos):
     return exporter.export(request)
 
 
+def test_validation_separates_archive_validity_from_destination_collisions():
+    source = populated_cosmos()
+    original = _export(source)
+
+    fresh_report = ImportService(FakeCosmos()).validate(original.archive)
+    assert fresh_report.valid
+    assert fresh_report.compatible
+    assert fresh_report.errors == []
+    assert fresh_report.dependency_errors == []
+    assert fresh_report.collisions == []
+    assert fresh_report.section_counts["ledger_movements"] == 1
+
+    source.portfolio_container.store[("acct_demo", "acct_demo")]["name"] = "Different name"
+    collision_report = ImportService(source).validate(original.archive)
+    assert collision_report.valid
+    assert collision_report.compatible
+    assert collision_report.errors == []
+    assert collision_report.collisions
+
+
+def test_destination_validation_failure_does_not_mark_archive_incompatible():
+    original = _export(populated_cosmos())
+    target = FakeCosmos()
+
+    def fail_read(*args, **kwargs):
+        raise RuntimeError("injected destination failure")
+
+    target.container.read_item = fail_read
+    report = ImportService(target).validate(original.archive)
+
+    assert not report.valid
+    assert report.compatible
+    assert report.section_counts["ledger_movements"] == 1
+    assert report.errors == [
+        "Destination validation failed: injected destination failure"
+    ]
+
+
 
 
 def test_mid_import_failure_rolls_back_created_user_data():

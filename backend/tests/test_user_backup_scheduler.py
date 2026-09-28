@@ -93,7 +93,12 @@ def test_schema_failure_reports_only_sanitized_context():
                 "id": "txn-sensitive",
                 "account_id": "acct-sensitive",
                 "doc_type": "ledger_txn",
-                "future_field": "must not reach automatic backup output",
+                "txn_type": "BUY",
+                "share_fmv": {
+                    "unit_fmv_eur": "10",
+                    "valuation_date": "2026-01-01",
+                    "valuation_source": "MANUAL",
+                },
             }, include_source_row=False)
 
     service = AutomaticBackupService(FailingExporter(), blobs, CFG)
@@ -107,10 +112,9 @@ def test_schema_failure_reports_only_sanitized_context():
     ).hexdigest()[:12]
     assert failure.detail == (
         "SchemaError: section=ledger_movements "
-        f"identity_hash={expected_hash} issue=unknown_fields "
-        "fields=['future_field']"
+        f"identity_hash={expected_hash} issue=invalid_share_fmv_eligibility "
+        "fields=['share_fmv']"
     )
-    assert "must not reach" not in failure.detail
     assert "sensitive" not in failure.detail
 
 
@@ -146,7 +150,11 @@ def test_automatic_backup_skips_invalid_record_and_stays_healthy():
         "doc_type": "ledger_txn",
         "txn_type": "BUY",
         "security_id": "XNAS:AAPL",
-        "unexpected": "must-not-export",
+        "share_fmv": {
+            "unit_fmv_eur": "10",
+            "valuation_date": "2026-01-01",
+            "valuation_source": "MANUAL",
+        },
     })
     blobs = BlobStore(FakeBlobContainer())
     service = AutomaticBackupService(

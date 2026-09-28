@@ -44,10 +44,10 @@ def test_query_order_does_not_change_content_hash():
     assert first.manifest["content_sha256"] == second.manifest["content_sha256"]
 
 
-def test_export_skips_invalid_record_and_reports_sanitized_warning():
+def test_export_omits_unknown_ledger_metadata_without_dropping_record():
     cosmos = populated_cosmos()
     cosmos.portfolio_container.create_item(body={
-        "id": "invalid-movement",
+        "id": "movement-with-extra-metadata",
         "account_id": "acct_demo",
         "doc_type": "ledger_txn",
         "txn_type": "BUY",
@@ -62,14 +62,49 @@ def test_export_skips_invalid_record_and_reports_sanitized_warning():
     artifact = service.export(request)
     parsed = BackupArchive().read(artifact.archive)
 
+    assert {item["id"] for item in parsed.sections["ledger_movements"]} == {
+        "movement-with-extra-metadata",
+        "mvt_1",
+    }
+    exported = next(
+        item
+        for item in parsed.sections["ledger_movements"]
+        if item["id"] == "movement-with-extra-metadata"
+    )
+    assert "future_field" not in exported
+    assert preview.warnings == []
+    assert b"must-not-export" not in artifact.archive
+
+
+def test_export_skips_invalid_record_and_reports_sanitized_warning():
+    cosmos = populated_cosmos()
+    cosmos.portfolio_container.create_item(body={
+        "id": "invalid-movement",
+        "account_id": "acct_demo",
+        "doc_type": "ledger_txn",
+        "txn_type": "BUY",
+        "security_id": "XNAS:AAPL",
+        "share_fmv": {
+            "unit_fmv_eur": "10",
+            "valuation_date": "2026-01-01",
+            "valuation_source": "MANUAL",
+        },
+    })
+    service = ExportService(CosmosBackupCollector(cosmos))
+    request = ExportRequest()
+
+    preview = service.preview(request)
+    request.preview_fingerprint = preview.selection_fingerprint
+    artifact = service.export(request)
+    parsed = BackupArchive().read(artifact.archive)
+
     assert [item["id"] for item in parsed.sections["ledger_movements"]] == ["mvt_1"]
     assert len(preview.warnings) == 1
     assert preview.warnings[0].startswith(
         "SKIPPED_RECORD:ledger_movements:SchemaError:"
     )
-    assert "future_field" in preview.warnings[0]
+    assert "invalid_share_fmv_eligibility" in preview.warnings[0]
     assert "invalid-movement" not in preview.warnings[0]
-    assert b"must-not-export" not in artifact.archive
     assert artifact.manifest["warnings"] == preview.warnings
 
 

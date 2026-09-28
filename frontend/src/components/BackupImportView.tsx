@@ -134,12 +134,16 @@ export default function BackupImportView() {
             <p className="font-semibold">{validationInvalid ? "Archive is invalid" : validationBlocked ? "Archive is valid, but destination conflicts block restore" : "Archive is valid and compatible"}</p>
             <dl className="mt-2 grid gap-2 sm:grid-cols-2">
               <div><dt className="text-text-muted">Compatibility</dt><dd>{validation.compatible === false ? "Incompatible" : asText(validation.compatibility ?? "Compatible")}</dd></div>
-              <div><dt className="text-text-muted">Checksums</dt><dd>{validation.checksums_valid === false ? "Invalid" : "Verified"}</dd></div>
+              <div>
+                <dt className="text-text-muted">Checksums</dt>
+                <dd>{validation.checksums_valid === false ? "Invalid" : validation.checksums_valid === true ? "Verified" : "Verified by archive validation"}</dd>
+              </div>
               <div><dt className="text-text-muted">Dependency errors</dt><dd>{validation.dependency_errors?.length ?? 0}</dd></div>
               <div><dt className="text-text-muted">Collisions</dt><dd>{validation.collisions?.length ?? 0}</dd></div>
             </dl>
             {validation.section_counts ? <p className="mt-2 text-text-muted">Sections: {Object.entries(validation.section_counts).map(([key, value]) => `${key} ${value}`).join(" · ")}</p> : null}
             {validation.warnings?.length ? <ul className="mt-2">{validation.warnings.map((warning) => <li key={warning}>⚠️ {warning}</li>)}</ul> : null}
+            {validation.errors?.length ? <ul className="mt-2 text-accent-red">{validation.errors.map((item) => <li key={item}>⛔ {item}</li>)}</ul> : null}
           </div>
         ) : null}
       </section>

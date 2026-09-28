@@ -145,6 +145,12 @@ class ImportService:
     def validate(self, payload: bytes) -> ValidationReport:
         try:
             parsed = self.archive.read(payload)
+        except Exception as exc:
+            return ValidationReport(
+                valid=False, archive_sha256=canonical_hash(payload.hex()),
+                compatible=False, errors=[str(exc)],
+            )
+        try:
             dependency_errors = validate_dependency_closure(parsed.sections)
             control_errors = self._validate_controls(parsed)
             plan = self._plan(parsed)
@@ -154,7 +160,7 @@ class ImportService:
             ]
             errors = list(dependency_errors) + control_errors
             return ValidationReport(
-                valid=not errors and not collisions,
+                valid=not errors,
                 archive_sha256=parsed.archive_sha256,
                 manifest_summary={
                     "export_id": parsed.manifest.get("export_id"),
@@ -172,8 +178,20 @@ class ImportService:
             )
         except Exception as exc:
             return ValidationReport(
-                valid=False, archive_sha256=canonical_hash(payload.hex()),
-                compatible=False, errors=[str(exc)],
+                valid=False,
+                archive_sha256=parsed.archive_sha256,
+                compatible=True,
+                manifest_summary={
+                    "export_id": parsed.manifest.get("export_id"),
+                    "exported_at": parsed.manifest.get("exported_at"),
+                    "schema_version": parsed.manifest.get("schema_version"),
+                    "content_sha256": parsed.manifest.get("content_sha256"),
+                },
+                section_counts={
+                    section: len(parsed.sections[section]) for section in SECTION_NAMES
+                },
+                warnings=list(parsed.manifest.get("warnings") or []),
+                errors=[f"Destination validation failed: {exc}"],
             )
 
     def _plan(self, parsed: ParsedArchive) -> DryRunPlan:
