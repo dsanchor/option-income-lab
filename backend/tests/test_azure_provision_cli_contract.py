@@ -154,7 +154,27 @@ elif has("bicep", "build"):
     file_name = args[args.index("--file") + 1]
     out(json.dumps({"compiled": pathlib.Path(file_name).name}, sort_keys=True))
 elif has("deployment", "sub", "what-if"):
-    out(json.dumps({"changes": []}))
+    mode = os.environ.get("FAKE_WHAT_IF_MODE")
+    if mode == "large":
+        out(json.dumps({
+            "changes": [
+                {
+                    "changeType": "NoChange",
+                    "resourceId": "/subscriptions/test/resource-" + str(index),
+                    "after": {"payload": "x" * 512},
+                }
+                for index in range(5000)
+            ]
+        }))
+    elif mode == "delete":
+        out(json.dumps({
+            "changes": [{
+                "changeType": "Delete",
+                "resourceId": "/subscriptions/test/resource-to-delete",
+            }]
+        }))
+    else:
+        out(json.dumps({"changes": []}))
 elif has("deployment", "sub", "create"):
     raise SystemExit(42)
 else:
@@ -282,6 +302,21 @@ def test_what_if_is_deterministic_and_uses_subscription_scope_stdin(fake_cli):
     assert len(what_if) == 2
     assert all(call["stdin_present"] for call in what_if)
     assert not [call for call in calls if _is_mutating(call["args"])]
+
+
+def test_large_what_if_is_streamed_and_scanned_without_argv_overflow(fake_cli):
+    fake_cli["env"]["FAKE_WHAT_IF_MODE"] = "large"
+    result = _run(fake_cli, "--mode", "what-if")
+    assert result.returncode == 0, result.stderr
+    assert re.search(r"Plan fingerprint: ([0-9a-f]{64})", result.stdout)
+
+
+def test_what_if_delete_is_rejected_before_apply(fake_cli):
+    fake_cli["env"]["FAKE_WHAT_IF_MODE"] = "delete"
+    result = _run(fake_cli, "--mode", "what-if")
+    assert result.returncode != 0
+    assert "forbidden delete" in result.stderr
+    assert not [call for call in _calls(fake_cli) if _is_mutating(call["args"])]
 
 
 def test_apply_rejects_wrong_fingerprint_before_any_mutation(fake_cli):

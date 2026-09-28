@@ -48,7 +48,15 @@ resource cosmosDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-pre
     workspaceId: workspaceId
     logs: [
       {
-        categoryGroup: 'allLogs'
+        category: 'ContainerAppConsoleLogs'
+        enabled: true
+      }
+      {
+        category: 'ContainerAppSystemLogs'
+        enabled: true
+      }
+      {
+        category: 'ContainerAppHTTPLogs'
         enabled: true
       }
     ]
@@ -66,12 +74,6 @@ resource foundryDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-pr
   scope: foundry
   properties: {
     workspaceId: workspaceId
-    logs: [
-      {
-        categoryGroup: 'allLogs'
-        enabled: true
-      }
-    ]
     metrics: [
       {
         category: 'AllMetrics'
@@ -114,12 +116,6 @@ resource environmentDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-0
   scope: containerAppsEnvironment
   properties: {
     workspaceId: workspaceId
-    logs: [
-      {
-        categoryGroup: 'allLogs'
-        enabled: true
-      }
-    ]
     metrics: [
       {
         category: 'AllMetrics'
@@ -134,15 +130,9 @@ resource apiDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-previe
   scope: apiApp
   properties: {
     workspaceId: workspaceId
-    logs: [
-      {
-        categoryGroup: 'allLogs'
-        enabled: true
-      }
-    ]
     metrics: [
       {
-        category: 'AllMetrics'
+        category: 'Basic'
         enabled: true
       }
     ]

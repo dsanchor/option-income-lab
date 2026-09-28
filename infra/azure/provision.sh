@@ -449,9 +449,9 @@ run_what_if() {
     --parameters @/dev/stdin \
     --result-format FullResourcePayloads \
     --no-pretty-print -o json)"
-  python3 - "$result" <<'PY'
+  if ! printf '%s' "$result" | python3 /dev/fd/3 3<<'PY'
 import json, sys
-plan = json.loads(sys.argv[1])
+plan = json.load(sys.stdin)
 deletes = []
 def walk(value):
     if isinstance(value, dict):
@@ -466,6 +466,9 @@ walk(plan)
 if deletes:
     raise SystemExit("What-if contains forbidden delete/replacement changes: " + ", ".join(deletes))
 PY
+  then
+    return 1
+  fi
   jq -cS 'del(.. | .timestamp?)' <<<"$result"
 }
 

@@ -226,7 +226,7 @@ def test_static_topology_has_expected_resources_diagnostics_locks_and_safe_outpu
     )
 
 
-def test_diagnostics_cover_data_services_apps_and_backup_job():
+def test_diagnostics_use_supported_container_apps_categories():
     diagnostics = _text("diagnostics.bicep")
     assert "Microsoft.DocumentDB/databaseAccounts@" in diagnostics
     assert "Microsoft.CognitiveServices/accounts@" in diagnostics
@@ -234,3 +234,9 @@ def test_diagnostics_cover_data_services_apps_and_backup_job():
     assert "Microsoft.App/containerApps@" in diagnostics
     assert "Microsoft.App/jobs@" in diagnostics
     assert diagnostics.count("Microsoft.Insights/diagnosticSettings@") >= 6
+    assert "category: 'ContainerAppConsoleLogs'" in diagnostics
+    assert "category: 'ContainerAppSystemLogs'" in diagnostics
+    assert "category: 'ContainerAppHTTPLogs'" in diagnostics
+    assert diagnostics.count("category: 'AllMetrics'") == 4
+    assert "category: 'Basic'" in diagnostics
+    assert diagnostics.count("categoryGroup: 'allLogs'") == 2
