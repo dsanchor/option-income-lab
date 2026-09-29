@@ -8952,3 +8952,47 @@ Value” and “Dividend · Buy Independent Share FMV and Yahoo Backfill”
   frontend contract, TypeScript, lint, and diff-hygiene checks passed. The
   Economics summary now contains Total Dividends and two secondary cards; the
   duplicate standalone Scrip Dividends card was removed.
+
+## Self-Contained Azure Provisioner Contract (2026-09-27)
+
+**Status:** ACCEPTED FOR IMPLEMENTATION
+**Design:** Danny
+**Implementation:** Reuben
+**Review:** Basher
+
+- Provisioning is one operator-facing Bash entry point backed by
+  subscription/resource-group-scoped Bicep, a strict secret-free JSON schema,
+  and offline contract tests. All application Azure resources live in one
+  explicit Sweden Central resource group; tenant-level Entra and GitHub OIDC
+  objects remain clearly bounded exceptions.
+- `dry-run`, `preflight`, `what-if`, and fingerprint-approved `apply` are
+  fail-closed. Preflight verifies subscription, region, providers, exact
+  resource compatibility, immutable public GHCR images, Foundry
+  model/version/SKU/quota, configuration-to-backend routing equality, and
+  forbidden drift before mutation.
+- The API must remain internal. The frontend starts internal and becomes
+  external only after Microsoft Entra Easy Auth, its real-FQDN callback, and
+  anonymous-login redirection are validated. Failure leaves the frontend
+  internal, and the frontend reaches the API only through its actual internal
+  Container Apps Environment FQDN.
+- Cosmos and Foundry keys never enter config, output, argv, logs, or literal
+  environment values; Bicep exposes them only as Container Apps secrets
+  consumed through `secretRef`. Runtime managed-identity migration is an
+  explicit future task, not partially provisioned here.
+- The deployment recreates/adopts the exact serverless Cosmos database and
+  eight-container contract, one Log Analytics workspace, an in-RG Foundry
+  account/project with the approved mini/luna/sol deployments, API/frontend
+  apps, and the backup storage/UAMI/job topology. Azure AI Search and ACR are
+  excluded.
+- Runtime RBAC is least-privilege: the backup UAMI receives only Blob data and
+  tag-write access at the exact container scope. No runtime identity receives
+  Contributor/Owner, unused Cosmos/Foundry data-plane roles, registry
+  credentials, image-pull identities, or RG-wide access.
+- Apply requires deterministic what-if/fingerprint agreement, blocks
+  unapproved delete/replacement and incompatible adoption, handles RBAC
+  propagation with bounded retries, validates application/auth/network/data
+  planes, cleans verification sentinels, adds final `CanNotDelete` locks, and
+  remains safely resumable after partial failure.
+- Reuben exclusively owns implementation/configuration/docs; Basher
+  exclusively owns non-mutating schema, CLI, Bicep, routing, secrets, drift,
+  network, RBAC, and idempotency tests plus the final APPROVE/REJECT gate.
