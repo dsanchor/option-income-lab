@@ -4107,12 +4107,16 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
             name="ForecastReportChatAgent",
             instructions=prompt.instructions,
         )
+        deployment = self._resolve_model_deployment(
+            model=None,
+            function_id="forecast_report_chat",
+        )
+        options = {"max_tokens": prompt.max_completion_tokens}
+        if "luna" not in deployment.lower():
+            options["temperature"] = prompt.temperature
         result = await agent.run(
             prompt.message,
-            options={
-                "temperature": prompt.temperature,
-                "max_tokens": prompt.max_completion_tokens,
-            },
+            options=options,
         )
         reply = (result.text or str(result)).strip()
         logger.info(
