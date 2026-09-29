@@ -3,6 +3,7 @@ import { apiFetch } from "@/lib/api";
 import StatCard from "@/components/StatCard";
 import ForecastCharts from "@/components/ForecastCharts";
 import ForecastHistory from "@/components/ForecastHistory";
+import ForecastReportChat from "@/components/ForecastReportChat";
 import { HORIZONS } from "@/types/forecasts";
 import type { ForecastsResponse, ForecastCalibration, Horizon } from "@/types/forecasts";
 import { decodeSymbolParam } from "@/lib/symbolEncoding";
@@ -67,26 +68,28 @@ export default async function ForecastsPage({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="grid items-start gap-4 md:grid-cols-[1fr_auto]">
         <div>
           <h1 className="text-2xl font-semibold">🎯 {d.symbol} Forecasts</h1>
           <p className="text-sm text-text-muted">
             Deterministic price-forecast history and rolling calibration.
           </p>
         </div>
-        <div className="flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1">
-          {RANGES.map((r) => (
-            <Link
-              key={r}
-              href={`/symbols/${symbol}/forecasts?range=${r}`}
-              className={`rounded-[var(--radius-pill)] px-3 py-1 text-xs transition ${
-                r === range ? "bg-accent-blue text-white" : "text-text-muted hover:text-text"
-              }`}
-            >
-              {r}
-            </Link>
-          ))}
-        </div>
+        <ForecastReportChat key={`${symbol}:${range}`} symbol={symbol} range={range}>
+          <div className="flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1">
+            {RANGES.map((r) => (
+              <Link
+                key={r}
+                href={`/symbols/${symbol}/forecasts?range=${r}`}
+                className={`rounded-[var(--radius-pill)] px-3 py-1 text-xs transition ${
+                  r === range ? "bg-accent-blue text-white" : "text-text-muted hover:text-text"
+                }`}
+              >
+                {r}
+              </Link>
+            ))}
+          </div>
+        </ForecastReportChat>
       </div>
 
       {/* Top-line stats */}

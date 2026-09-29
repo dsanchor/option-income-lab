@@ -48,6 +48,15 @@ AI_FUNCTIONS = {
         "group": "Reporting",
         "description": "Comprehensive symbol situation report.",
     },
+    "forecast_report_chat": {
+        "label": "Forecast Report & Chat",
+        "group": "Analysis & Reports",
+        "description": (
+            "Brief forecast-history report and follow-up questions on the "
+            "Forecasts page."
+        ),
+        "default_model": "gpt-5.6-luna",
+    },
     "technical_analysis": {
         "label": "Technical Analysis",
         "group": "Reporting",

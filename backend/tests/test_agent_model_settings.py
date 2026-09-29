@@ -1,21 +1,25 @@
 """Focused tests for per-function AI provider/model configuration."""
 
+import asyncio
 import copy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from azure.cosmos.exceptions import CosmosHttpResponseError
+from starlette.testclient import TestClient
+
 from src.agent_runner import AgentRunner
 from src.ai_functions import AI_FUNCTIONS
 from src.config import Config
 from src.cosmos_db import CosmosDBService
 from src.llm import LlmConfig
-from starlette.testclient import TestClient
 
 EXPECTED_FUNCTIONS = {
     "monitor_assessment", "monitor_roll", "supervisor", "alpha", "analysis",
     "buy_tracker", "summary", "report", "chat", "symbol_chat",
     "technical_analysis", "plan_monitor", "activity_chat", "dps_insights",
+    "forecast_report_chat",
 }
 
 
@@ -63,6 +67,7 @@ def test_function_resolution_defaults_and_independent_overrides():
     assert config.model_for("summary") == "custom-summary"
     assert config.model_for("chat") == "chat-model"
     assert config.model_for("report") == "global-model"
+    assert config.model_for("forecast_report_chat") == "gpt-5.6-luna"
 
 
 def test_legacy_task_overrides_remain_safe_fallbacks():
@@ -242,6 +247,52 @@ def test_set_function_models_updates_routing(monkeypatch):
 
     assert created[1] == ("new-analysis-model", "azure", c2)
     assert created[2] == ("new-supervisor-model", "azure", c3)
+
+
+def test_forecast_report_chat_runner_uses_dedicated_function_and_limits(monkeypatch):
+    routed = []
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, *, client, name, instructions):
+            captured.update(
+                client=client,
+                name=name,
+                instructions=instructions,
+            )
+
+        async def run(self, message, *, options):
+            captured.update(message=message, options=options)
+            return SimpleNamespace(text="brief reply")
+
+    runner = AgentRunner(
+        llm=LlmConfig("azure", "azure-key", "https://azure.test"),
+        model="global-model",
+        function_models={"forecast_report_chat": "gpt-5.6-luna"},
+    )
+    monkeypatch.setattr("src.agent_runner.Agent", FakeAgent)
+    monkeypatch.setattr(
+        runner,
+        "_get_client",
+        lambda model=None, function_id=None: routed.append(
+            (model, function_id)
+        ) or object(),
+    )
+    prompt = SimpleNamespace(
+        mode="initial",
+        instructions="forecast-only instructions",
+        message="bounded forecast context",
+        temperature=0.2,
+        max_completion_tokens=700,
+    )
+
+    result = asyncio.run(
+        runner.run_forecast_report_chat(symbol="MSFT", prompt=prompt)
+    )
+
+    assert result == "brief reply"
+    assert routed == [(None, "forecast_report_chat")]
+    assert captured["options"] == {"temperature": 0.2, "max_tokens": 700}
 
 
 class FakeCosmos:

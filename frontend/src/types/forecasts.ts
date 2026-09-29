@@ -74,9 +74,48 @@ export interface ForecastRow {
   outer_confidence: number;
   bias: number | null;
   trend: { slope?: number | null } & Record<string, unknown> | null;
-  reading: string | null;
+  reading: ForecastReading | null;
   flags: Record<string, unknown>;
   horizons: Partial<Record<Horizon, HorizonSummary>>;
+}
+
+export interface ForecastReading {
+  code?: string | null;
+  label?: string | null;
+  icon?: string | null;
+  conviction?: string | null;
+  agree?: boolean | null;
+  bias_dir?: number | null;
+  trend_dir?: number | null;
+  csp?: string | null;
+  cc?: string | null;
+  reason?: string | null;
+  momentum?: string | null;
+}
+
+export type ForecastChatRange = "1d" | "7d" | "30d" | "90d";
+
+export interface ForecastChatMessage {
+  role: "assistant" | "user";
+  content: string;
+}
+
+export interface ForecastChatResponse {
+  reply: string;
+  mode: "initial" | "follow_up";
+  symbol: string;
+  range: {
+    key: ForecastChatRange;
+    from: string;
+    to: string;
+  };
+  context_meta: {
+    forecast_count: number;
+    rows_in_context?: number;
+    truncated?: boolean;
+    generated_at: string;
+  };
+  error?: string;
 }
 
 export interface HitRateEntry {

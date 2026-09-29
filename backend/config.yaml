@@ -10,6 +10,7 @@ ai:
     buy_tracker: "gpt-5.4-mini"
     summary: "gpt-5.4-mini"
     report: "gpt-5.4-mini"
+    forecast_report_chat: "gpt-5.6-luna"
     chat: "gpt-5.4-mini"
     symbol_chat: "gpt-5.4-mini"
 

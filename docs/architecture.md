@@ -16,6 +16,16 @@ Eight specialized agents handle options trading and stock screening:
 
 The first two agents (sell-side) decide whether to **open** new positions. The next two (position monitors) decide whether to **hold or adjust** existing positions. The Supervisor and Alpha Advisor run as Phase 3 in parallel — after the primary decision is written but before Telegram notifications, providing quality assurance and aggressive alternatives respectively. The report agent provides on-demand deep-dive analysis accessible from each symbol's detail page. Additionally, **per-symbol chat** is available directly from the symbol detail page, offering context-aware conversations with pre-loaded market data via the yfinance provider.
 
+The Forecasts page also has a separate **Forecast Report & Chat** agent. Its
+`forecast_report_chat` function defaults to `gpt-5.6-luna` and is routed through
+the same per-function provider/model registry and live-reload path. Unlike the
+broad symbol report/chat, it receives only server-authored, size-bounded
+persisted forecast history for the selected symbol and range: calibration,
+per-horizon hit rates/averages, structured readings, forecast rows, and
+deterministic anchor-price movement. It has no tools, does not load portfolio,
+activity, dividend, overview, or options-chain context, and does not persist
+the report or conversation.
+
 Both sell-side agents use the Microsoft Agent Framework (`agent-framework`) with Yahoo Finance (yfinance) as the data source. All market data — overview, technicals, forecast, dividends, and full options chains — is fetched via the `yfinance` Python library. No browser, no scraping, no authentication required. Data is pre-fetched deterministically and passed to the LLM for analysis. The LLM never makes HTTP requests directly.
 
 **Storage backend:** Azure CosmosDB with five containers: `symbols` (watchlists, positions, activities, alerts, reports), `telemetry` (runtime performance stats with 30-day TTL), `settings` (application configuration persistence), `dgi_screener` (DGI screening results and daily snapshots), and `calendar` (cached earnings and ex-dividend dates from Yahoo Finance). Each symbol is a partition key in the symbols container containing four document types: `symbol_config` (watchlist flags + positions), `activity` (full audit trail), `alert` (actionable alerts), and `report` (generated symbol reports). The telemetry container tracks data fetch durations and agent run times, displayed on the Settings page. The settings container persists application configuration with partition key `/id`. The dgi_screener container stores current Top 20 entries and daily snapshots for historical tracking, partitioned by `/symbol`. The calendar container stores event data partitioned by `/symbol`. See the [Provisioning CosmosDB](deployment.md#3-provision-cosmosdb) section for details.

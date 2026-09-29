@@ -5217,6 +5217,463 @@ def _resolve_forecast_range(range_param, date_from, date_to):
     return (today - timedelta(days=days)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
 
 
+_FORECAST_CHAT_RANGES = frozenset({"1d", "7d", "30d", "90d"})
+_FORECAST_CHAT_MAX_BODY_BYTES = 128 * 1024
+_FORECAST_CHAT_MAX_CONTEXT_BYTES = 96 * 1024
+_FORECAST_CHAT_MAX_ROWS = 100
+_FORECAST_CHAT_MAX_HISTORY = 12
+_FORECAST_CHAT_MAX_HISTORY_MESSAGE_CHARS = 4000
+_FORECAST_CHAT_MAX_HISTORY_CHARS = 20000
+_FORECAST_CHAT_MAX_MESSAGE_CHARS = 2000
+_FORECAST_CHAT_MAX_OUTPUT_CHARS = 24000
+_FORECAST_CHAT_HORIZONS = ("1d", "1w", "2w", "4w")
+_FORECAST_CHAT_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_FORECAST_CHAT_STATUS_VALUES = frozenset({"open", "closed"})
+_FORECAST_CHAT_VOL_SOURCE_VALUES = frozenset({"hv", "ewma", "iv"})
+_FORECAST_CHAT_TREND_QUALITY_VALUES = frozenset(
+    {"strong", "moderate", "weak"}
+)
+_FORECAST_CHAT_READING_VALUES = {
+    "code": frozenset({"bull", "bear", "top", "bottom", "neutral"}),
+    "label": frozenset(
+        {"Bullish", "Bearish", "Topping", "Bottoming", "Neutral"}
+    ),
+    "conviction": frozenset({"high", "low", "none"}),
+    "csp": frozenset({"favorable", "avoid", "caution", "neutral"}),
+    "cc": frozenset({"favorable", "avoid", "caution", "neutral"}),
+}
+_FORECAST_CHAT_FLAG_KEYS = ("earnings_in_window", "exdiv_in_window")
+
+
+def _finite_number(value):
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _forecast_chat_number(value):
+    return value if _finite_number(value) else None
+
+
+def _forecast_chat_integer(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _forecast_chat_boolean(value):
+    return value if isinstance(value, bool) else None
+
+
+def _forecast_chat_date(value):
+    if not isinstance(value, str) or not _FORECAST_CHAT_DATE_RE.fullmatch(value):
+        return None
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return value
+
+
+def _forecast_chat_enum(value, allowed):
+    return value if isinstance(value, str) and value in allowed else None
+
+
+def _forecast_chat_compact(mapping):
+    return {
+        key: value
+        for key, value in mapping.items()
+        if value is not None and value != {}
+    }
+
+
+def _forecast_chat_project_horizons(value):
+    if not isinstance(value, dict):
+        return {}
+    projected = {}
+    for horizon in _FORECAST_CHAT_HORIZONS:
+        source = value.get(horizon)
+        if not isinstance(source, dict):
+            continue
+        endpoint = source.get("endpoint")
+        endpoint_projection = {}
+        if isinstance(endpoint, dict):
+            endpoint_projection = _forecast_chat_compact({
+                "horizon": _forecast_chat_enum(
+                    endpoint.get("horizon"), frozenset({horizon})
+                ),
+                "offset": _forecast_chat_integer(endpoint.get("offset")),
+                "price": _forecast_chat_number(endpoint.get("price")),
+                "inside_1sigma": _forecast_chat_boolean(
+                    endpoint.get("inside_1sigma")
+                ),
+                "inside_2sigma": _forecast_chat_boolean(
+                    endpoint.get("inside_2sigma")
+                ),
+                "is_endpoint": _forecast_chat_boolean(
+                    endpoint.get("is_endpoint")
+                ),
+                "direction_correct": _forecast_chat_boolean(
+                    endpoint.get("direction_correct")
+                ),
+            })
+        item = _forecast_chat_compact({
+            "path_count": _forecast_chat_integer(source.get("path_count")),
+            "path_pct_1sigma": _forecast_chat_number(
+                source.get("path_pct_1sigma")
+            ),
+            "path_pct_2sigma": _forecast_chat_number(
+                source.get("path_pct_2sigma")
+            ),
+            "endpoint": endpoint_projection,
+            "center": _forecast_chat_number(source.get("center")),
+            "sigma": _forecast_chat_number(source.get("sigma")),
+            "low1": _forecast_chat_number(source.get("low1")),
+            "high1": _forecast_chat_number(source.get("high1")),
+            "low2": _forecast_chat_number(source.get("low2")),
+            "high2": _forecast_chat_number(source.get("high2")),
+            "trend_end": _forecast_chat_number(source.get("trend_end")),
+            "mean_dev": _forecast_chat_number(source.get("mean_dev")),
+            "mean_dev_pct": _forecast_chat_number(
+                source.get("mean_dev_pct")
+            ),
+        })
+        if item:
+            projected[horizon] = item
+    return projected
+
+
+def _forecast_chat_project_calibration(value):
+    if not isinstance(value, dict):
+        return {}
+    return _forecast_chat_compact({
+        "k": _forecast_chat_number(value.get("k")),
+        "prev_k": _forecast_chat_number(value.get("prev_k")),
+        "target": _forecast_chat_number(value.get("target")),
+        "n": _forecast_chat_integer(value.get("n")),
+        "applied": _forecast_chat_boolean(value.get("applied")),
+        "updated": _forecast_chat_date(value.get("updated")),
+    })
+
+
+def _forecast_chat_project_movement(value):
+    if not isinstance(value, dict):
+        return {}
+    return _forecast_chat_compact({
+        "sample_count": _forecast_chat_integer(value.get("sample_count")),
+        "oldest_date": _forecast_chat_date(value.get("oldest_date")),
+        "oldest_price": _forecast_chat_number(value.get("oldest_price")),
+        "newest_date": _forecast_chat_date(value.get("newest_date")),
+        "newest_price": _forecast_chat_number(value.get("newest_price")),
+        "change": _forecast_chat_number(value.get("change")),
+        "change_pct": _forecast_chat_number(value.get("change_pct")),
+        "direction": _forecast_chat_enum(
+            value.get("direction"), frozenset({"up", "down", "flat"})
+        ),
+        "regression_slope": _forecast_chat_number(
+            value.get("regression_slope")
+        ),
+        "regression_r2": _forecast_chat_number(value.get("regression_r2")),
+    })
+
+
+def _forecast_chat_project_horizon_metrics(value, fields):
+    if not isinstance(value, dict):
+        return {}
+    projected = {}
+    for horizon in _FORECAST_CHAT_HORIZONS:
+        source = value.get(horizon)
+        if not isinstance(source, dict):
+            continue
+        item = {}
+        for field, projector in fields.items():
+            projected_value = projector(source.get(field))
+            if projected_value is not None:
+                item[field] = projected_value
+        if item:
+            projected[horizon] = item
+    return projected
+
+
+def _forecast_history_anchor_movement(preds):
+    samples = [
+        (p.get("created_date"), float(p["price_at_creation"]))
+        for p in reversed(preds)
+        if p.get("created_date") and _finite_number(p.get("price_at_creation"))
+    ]
+    if not samples:
+        return {"sample_count": 0}
+    oldest_date, oldest_price = samples[0]
+    newest_date, newest_price = samples[-1]
+    change = newest_price - oldest_price
+    movement = {
+        "sample_count": len(samples),
+        "oldest_date": oldest_date,
+        "oldest_price": oldest_price,
+        "newest_date": newest_date,
+        "newest_price": newest_price,
+        "change": change,
+        "change_pct": (
+            change / oldest_price * 100 if oldest_price != 0 else None
+        ),
+        "direction": "up" if change > 0 else "down" if change < 0 else "flat",
+    }
+    if len(samples) >= 2:
+        prices = [price for _, price in samples]
+        x_mean = (len(prices) - 1) / 2
+        y_mean = sum(prices) / len(prices)
+        denominator = sum((i - x_mean) ** 2 for i in range(len(prices)))
+        slope = (
+            sum((i - x_mean) * (price - y_mean)
+                for i, price in enumerate(prices)) / denominator
+            if denominator else 0.0
+        )
+        total = sum((price - y_mean) ** 2 for price in prices)
+        residual = sum(
+            (price - (y_mean + slope * (i - x_mean))) ** 2
+            for i, price in enumerate(prices)
+        )
+        movement["regression_slope"] = slope
+        movement["regression_r2"] = 1 - residual / total if total else 1.0
+    return movement
+
+
+def _forecast_chat_row(row):
+    trend = row.get("trend") if isinstance(row.get("trend"), dict) else {}
+    reading = row.get("reading") if isinstance(row.get("reading"), dict) else {}
+    flags = row.get("flags") if isinstance(row.get("flags"), dict) else {}
+    return _forecast_chat_compact({
+        "created_date": _forecast_chat_date(row.get("created_date")),
+        "status": _forecast_chat_enum(
+            row.get("status"), _FORECAST_CHAT_STATUS_VALUES
+        ),
+        "price_at_creation": _forecast_chat_number(
+            row.get("price_at_creation")
+        ),
+        "hv": _forecast_chat_number(row.get("hv")),
+        "vol_source": _forecast_chat_enum(
+            row.get("vol_source"), _FORECAST_CHAT_VOL_SOURCE_VALUES
+        ),
+        "bias": _forecast_chat_number(row.get("bias")),
+        "trend": _forecast_chat_compact({
+            "slope": _forecast_chat_number(trend.get("slope")),
+            "r2": _forecast_chat_number(trend.get("r2")),
+            "quality": _forecast_chat_enum(
+                trend.get("quality"), _FORECAST_CHAT_TREND_QUALITY_VALUES
+            ),
+            "window": _forecast_chat_integer(trend.get("window")),
+        }),
+        "reading": _forecast_chat_compact({
+            "code": _forecast_chat_enum(
+                reading.get("code"), _FORECAST_CHAT_READING_VALUES["code"]
+            ),
+            "label": _forecast_chat_enum(
+                reading.get("label"), _FORECAST_CHAT_READING_VALUES["label"]
+            ),
+            "conviction": _forecast_chat_enum(
+                reading.get("conviction"),
+                _FORECAST_CHAT_READING_VALUES["conviction"],
+            ),
+            "agree": _forecast_chat_boolean(reading.get("agree")),
+            "bias_dir": (
+                reading.get("bias_dir")
+                if reading.get("bias_dir") in (-1, 0, 1)
+                and not isinstance(reading.get("bias_dir"), bool)
+                else None
+            ),
+            "trend_dir": (
+                reading.get("trend_dir")
+                if reading.get("trend_dir") in (-1, 0, 1)
+                and not isinstance(reading.get("trend_dir"), bool)
+                else None
+            ),
+            "csp": _forecast_chat_enum(
+                reading.get("csp"), _FORECAST_CHAT_READING_VALUES["csp"]
+            ),
+            "cc": _forecast_chat_enum(
+                reading.get("cc"), _FORECAST_CHAT_READING_VALUES["cc"]
+            ),
+        }),
+        "event_flags": _forecast_chat_compact({
+            key: _forecast_chat_boolean(flags.get(key))
+            for key in _FORECAST_CHAT_FLAG_KEYS
+        }),
+        "horizons": _forecast_chat_project_horizons(row.get("horizons")),
+    })
+
+
+def _build_forecast_data(cosmos, symbol, date_from, date_to):
+    from src.price_forecast import (
+        aggregate_forecast_averages,
+        aggregate_hit_rate,
+        compute_reading,
+        summarize_prediction,
+    )
+
+    loader = getattr(
+        cosmos, "get_price_forecasts_required", cosmos.get_price_forecasts
+    )
+    preds = loader(symbol, date_from, date_to)
+    rows = []
+    for prediction in preds:
+        rows.append({
+            "id": prediction.get("id"),
+            "created_date": prediction.get("created_date"),
+            "start_date": prediction.get("start_date"),
+            "end_date": prediction.get("end_date"),
+            "status": prediction.get("status"),
+            "price_at_creation": prediction.get("price_at_creation"),
+            "hv": prediction.get("hv"),
+            "vol_source": prediction.get("vol_source", "hv"),
+            "confidence": prediction.get("confidence", 0.68),
+            "outer_confidence": prediction.get("outer_confidence", 0.95),
+            "bias": prediction.get("bias"),
+            "trend": prediction.get("trend"),
+            "reading": prediction.get("reading") or compute_reading(
+                prediction.get("bias"),
+                (prediction.get("trend") or {}).get("slope"),
+            ),
+            "flags": prediction.get("flags", {}),
+            "horizons": summarize_prediction(prediction),
+        })
+    return {
+        "symbol": symbol,
+        "range": {"from": date_from, "to": date_to},
+        "count": len(rows),
+        "confidence": rows[0]["confidence"] if rows else 0.68,
+        "outer_confidence": rows[0]["outer_confidence"] if rows else 0.95,
+        "calibration": preds[0].get("calibration") if preds else None,
+        "rows": rows,
+        "hit_rate": aggregate_hit_rate(preds),
+        "averages": aggregate_forecast_averages(preds),
+        "_predictions": preds,
+    }
+
+
+def _build_bounded_forecast_chat_context(forecast_data, range_key):
+    rows = [
+        _forecast_chat_row(row)
+        for row in forecast_data["rows"][:_FORECAST_CHAT_MAX_ROWS]
+    ]
+    selected_count = forecast_data["count"]
+    context = {
+        "symbol": forecast_data["symbol"],
+        "range": {"key": range_key, **forecast_data["range"]},
+        "generated_at": datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        ),
+        "forecast_count": selected_count,
+        "confidence": _forecast_chat_number(forecast_data["confidence"]),
+        "outer_confidence": _forecast_chat_number(
+            forecast_data["outer_confidence"]
+        ),
+        "calibration": _forecast_chat_project_calibration(
+            forecast_data["calibration"]
+        ),
+        "hit_rate": _forecast_chat_project_horizon_metrics(
+            forecast_data["hit_rate"],
+            {
+                "resolved": _forecast_chat_integer,
+                "hit_pct_1sigma": _forecast_chat_number,
+                "hit_pct_2sigma": _forecast_chat_number,
+                "direction_pct": _forecast_chat_number,
+                "direction_n": _forecast_chat_integer,
+                "mean_dev_pct": _forecast_chat_number,
+                "mean_dev_n": _forecast_chat_integer,
+            },
+        ),
+        "averages": _forecast_chat_project_horizon_metrics(
+            forecast_data["averages"],
+            {
+                "n": _forecast_chat_integer,
+                "lookback": _forecast_chat_integer,
+                "anchor": _forecast_chat_number,
+                "mean": _forecast_chat_number,
+                "trimmed_mean": _forecast_chat_number,
+                "low": _forecast_chat_number,
+                "high": _forecast_chat_number,
+            },
+        ),
+        "history_anchor_movement": _forecast_chat_project_movement(
+            _forecast_history_anchor_movement(
+                forecast_data["_predictions"]
+            )
+        ),
+        "truncation": {
+            "truncated": selected_count > len(rows),
+            "selected_count": selected_count,
+            "rows_in_context": len(rows),
+        },
+        "rows": rows,
+    }
+    context = _forecast_chat_compact(context)
+    rows = context["rows"]
+    while len(json.dumps(
+        context, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")) > _FORECAST_CHAT_MAX_CONTEXT_BYTES and len(rows) > 1:
+        rows.pop()
+        context["truncation"]["truncated"] = True
+        context["truncation"]["rows_in_context"] = len(rows)
+    if len(json.dumps(
+        context, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")) > _FORECAST_CHAT_MAX_CONTEXT_BYTES:
+        raise ValueError("Forecast context exceeds the supported size")
+    return context
+
+
+def _validate_forecast_chat_payload(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("JSON body must be an object")
+    allowed = {"mode", "range", "message", "history"}
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"Unknown field(s): {', '.join(unknown)}")
+    mode = payload.get("mode")
+    range_key = payload.get("range")
+    if mode not in {"initial", "follow_up"}:
+        raise ValueError("mode must be 'initial' or 'follow_up'")
+    if range_key not in _FORECAST_CHAT_RANGES:
+        raise ValueError("range must be one of: 1d, 7d, 30d, 90d")
+    if mode == "initial":
+        if "message" in payload or "history" in payload:
+            raise ValueError("Initial mode does not accept message or history")
+        return mode, range_key, None, []
+
+    message = payload.get("message")
+    history = payload.get("history")
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("Follow-up mode requires a non-empty message")
+    if len(message) > _FORECAST_CHAT_MAX_MESSAGE_CHARS:
+        raise OverflowError("Message exceeds 2,000 characters")
+    if not isinstance(history, list):
+        raise ValueError("Follow-up history must be an array")
+    if not history:
+        raise ValueError("Follow-up history must start with the initial report")
+    if len(history) > _FORECAST_CHAT_MAX_HISTORY:
+        raise OverflowError("History exceeds 12 messages")
+    expected_role = "assistant"
+    total_chars = 0
+    normalized = []
+    for item in history:
+        if not isinstance(item, dict) or set(item) != {"role", "content"}:
+            raise ValueError("Each history item must contain only role and content")
+        role, content = item["role"], item["content"]
+        if role != expected_role:
+            raise ValueError("History must alternate assistant/user and end with assistant")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("History content must be a non-empty string")
+        if len(content) > _FORECAST_CHAT_MAX_HISTORY_MESSAGE_CHARS:
+            raise OverflowError("A history message exceeds 4,000 characters")
+        total_chars += len(content)
+        normalized.append({"role": role, "content": content})
+        expected_role = "user" if role == "assistant" else "assistant"
+    if normalized[-1]["role"] != "assistant":
+        raise ValueError("History must end with an assistant message")
+    if total_chars > _FORECAST_CHAT_MAX_HISTORY_CHARS:
+        raise OverflowError("History exceeds 20,000 characters")
+    return mode, range_key, message.strip(), normalized
+
+
 @app.get("/api/symbols/{symbol}/forecasts")
 async def api_symbol_forecasts(request: Request, symbol: str,
                                range: str = "30d",
@@ -5228,8 +5685,6 @@ async def api_symbol_forecasts(request: Request, symbol: str,
     (YYYY-MM-DD). Returns per-prediction rows (path % + endpoint per horizon) and a
     rolling per-horizon endpoint hit-rate aggregate.
     """
-    from src.price_forecast import summarize_prediction, aggregate_hit_rate, aggregate_forecast_averages, compute_reading
-
     try:
         cosmos = _get_cosmos(request)
     except RuntimeError as e:
@@ -5247,54 +5702,137 @@ async def api_symbol_forecasts(request: Request, symbol: str,
         return _guard
 
     date_from, date_to = _resolve_forecast_range(range, from_, to)
-    preds = cosmos.get_price_forecasts(sym, date_from, date_to)
+    try:
+        result = _build_forecast_data(cosmos, sym, date_from, date_to)
+    except Exception:
+        logger.exception("Forecast history unavailable for %s", sym)
+        return JSONResponse(
+            {"error": "Forecast history is unavailable"},
+            status_code=503,
+        )
+    result.pop("_predictions", None)
+    return JSONResponse(result)
 
-    rows = []
-    for p in preds:
-        rows.append({
-            "id": p.get("id"),
-            "created_date": p.get("created_date"),
-            "start_date": p.get("start_date"),
-            "end_date": p.get("end_date"),
-            "status": p.get("status"),
-            "price_at_creation": p.get("price_at_creation"),
-            "hv": p.get("hv"),
-            "vol_source": p.get("vol_source", "hv"),
-            "confidence": p.get("confidence", 0.68),
-            "outer_confidence": p.get("outer_confidence", 0.95),
-            "bias": p.get("bias"),
-            "trend": p.get("trend"),
-            "reading": p.get("reading") or compute_reading(
-                p.get("bias"), (p.get("trend") or {}).get("slope")
-            ),
-            "flags": p.get("flags", {}),
-            "horizons": summarize_prediction(p),
-        })
 
-    # Confidence used by the most recent prediction — drives UI labels/target.
-    latest_conf = rows[0]["confidence"] if rows else 0.68
-    latest_outer = rows[0]["outer_confidence"] if rows else 0.95
-    # Per-symbol volatility calibration from the newest prediction (band-width
-    # multiplier that self-adjusts each cron run). None for legacy docs.
-    latest_calibration = preds[0].get("calibration") if preds else None
+@app.post("/api/symbols/{symbol}/forecasts/chat")
+async def api_symbol_forecasts_chat(request: Request, symbol: str):
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if content_type != "application/json":
+        return JSONResponse(
+            {"error": "Content-Type must be application/json"},
+            status_code=400,
+        )
+    body = await request.body()
+    if len(body) > _FORECAST_CHAT_MAX_BODY_BYTES:
+        return JSONResponse({"error": "Request body is too large"}, status_code=413)
+    try:
+        payload = json.loads(body)
+        mode, range_key, message, history = _validate_forecast_chat_payload(payload)
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "Malformed JSON body"}, status_code=400)
+    except OverflowError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=413)
+    except (TypeError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
-    # Averages use a fixed per-horizon lookback (1d→1, 1w→5, 2w→10, 4w→20 most
-    # recent predictions), independent of the table range selector. Fetch a window
-    # wide enough (~45 calendar days ≈ 30 sessions) to always satisfy the 4w=20
-    # lookback; the aggregator caps per horizon.
-    avg_from = (datetime.now(timezone.utc) - timedelta(days=45)).strftime("%Y-%m-%d")
-    avg_preds = cosmos.get_price_forecasts(sym, avg_from, None)
+    try:
+        cosmos = _get_cosmos(request)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=503)
+    sym = _ticker_from_symbol_param(symbol)
+    try:
+        symbol_doc = _get_symbol_doc_for_guard(cosmos, symbol)
+    except Exception:
+        logger.exception("Symbol lookup unavailable for forecast chat symbol=%s", sym)
+        return JSONResponse({"error": "Symbol data is unavailable"}, status_code=503)
+    if not symbol_doc:
+        return JSONResponse({"error": f"Symbol {sym} not found"}, status_code=404)
+    from src.us_exchange_eligibility import enforce_us_options_eligible
+    guard = enforce_us_options_eligible(symbol_doc)
+    if guard:
+        return guard
+
+    date_from, date_to = _resolve_forecast_range(range_key, None, None)
+    try:
+        forecast_data = _build_forecast_data(cosmos, sym, date_from, date_to)
+        context = _build_bounded_forecast_chat_context(
+            forecast_data, range_key
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=413)
+    except Exception:
+        logger.exception("Forecast context unavailable symbol=%s range=%s", sym, range_key)
+        return JSONResponse(
+            {"error": "Forecast history is unavailable"},
+            status_code=503,
+        )
+
+    try:
+        from src.agent_runner import AgentRunner
+        from src.forecast_report_chat_instructions import (
+            build_forecast_report_chat_prompt,
+        )
+        from src.llm import validate_llm_config
+
+        config_obj = _config_with_persisted_ai_overrides(cosmos)
+        llm = config_obj.llm_config_for_function("forecast_report_chat")
+        llm_error = validate_llm_config(llm)
+        if llm_error:
+            return JSONResponse({"error": llm_error}, status_code=503)
+        prompt = build_forecast_report_chat_prompt(
+            mode=mode,
+            forecast_context=context,
+            history=history,
+            message=message,
+        )
+        runner = AgentRunner(
+            llm=config_obj.llm_config(),
+            model=config_obj.model_deployment,
+            function_llms=config_obj.function_llm_configs(),
+            function_models=config_obj.function_model_deployments(),
+        )
+        reply = await runner.run_forecast_report_chat(
+            symbol=sym,
+            prompt=prompt,
+        )
+        if not reply:
+            raise RuntimeError("The configured model returned an empty response")
+        if len(reply) > _FORECAST_CHAT_MAX_OUTPUT_CHARS:
+            raise RuntimeError("The configured model response exceeded the output limit")
+    except Exception as exc:
+        logger.exception(
+            "Forecast report generation failed symbol=%s range=%s mode=%s",
+            sym,
+            range_key,
+            mode,
+        )
+        error_name = type(exc).__name__.lower()
+        unavailable = any(
+            marker in error_name
+            for marker in ("connection", "timeout", "serviceunavailable")
+        )
+        return JSONResponse(
+            {
+                "error": (
+                    "Configured LLM is unavailable"
+                    if unavailable
+                    else "Forecast report generation failed"
+                )
+            },
+            status_code=503 if unavailable else 500,
+        )
 
     return JSONResponse({
+        "reply": reply,
+        "mode": mode,
         "symbol": sym,
-        "range": {"from": date_from, "to": date_to},
-        "count": len(rows),
-        "confidence": latest_conf,
-        "outer_confidence": latest_outer,
-        "calibration": latest_calibration,
-        "rows": rows,
-        "hit_rate": aggregate_hit_rate(preds),
-        "averages": aggregate_forecast_averages(avg_preds),
+        "range": {"key": range_key, "from": date_from, "to": date_to},
+        "context_meta": {
+            "forecast_count": forecast_data["count"],
+            "rows_in_context": context["truncation"]["rows_in_context"],
+            "truncated": context["truncation"]["truncated"],
+            "generated_at": context["generated_at"],
+        },
     })
 
 

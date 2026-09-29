@@ -990,10 +990,10 @@ class CosmosDBService:
             logger.warning("get_open_price_forecasts failed for %s: %s", symbol, exc)
             return []
 
-    def get_price_forecasts(self, symbol: str, date_from: str | None = None,
-                            date_to: str | None = None,
-                            limit: int = 500) -> list[dict]:
-        """Return a symbol's forecasts by creation date, newest first.
+    def _query_price_forecasts(self, symbol: str, date_from: str | None = None,
+                               date_to: str | None = None,
+                               limit: int = 500) -> list[dict]:
+        """Query a symbol's forecasts by creation date, newest first.
 
         Optional ``date_from``/``date_to`` (YYYY-MM-DD) filter on ``created_date``.
 
@@ -1012,17 +1012,33 @@ class CosmosDBService:
             conditions.append("c.created_date <= @to")
             params.append({"name": "@to", "value": date_to})
         query = f"SELECT * FROM c WHERE {' AND '.join(conditions)}"
+        items = list(self.container.query_items(
+            query=query,
+            parameters=params,
+            partition_key=symbol,
+        ))
+        items.sort(key=lambda d: d.get("created_date", ""), reverse=True)
+        return items[: int(limit)]
+
+    def get_price_forecasts(self, symbol: str, date_from: str | None = None,
+                            date_to: str | None = None,
+                            limit: int = 500) -> list[dict]:
+        """Best-effort forecast query retained for background compatibility."""
         try:
-            items = list(self.container.query_items(
-                query=query,
-                parameters=params,
-                partition_key=symbol,
-            ))
-            items.sort(key=lambda d: d.get("created_date", ""), reverse=True)
-            return items[: int(limit)]
+            return self._query_price_forecasts(symbol, date_from, date_to, limit)
         except Exception as exc:
             logger.warning("get_price_forecasts failed for %s: %s", symbol, exc)
             return []
+
+    def get_price_forecasts_required(
+        self,
+        symbol: str,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        """Return forecasts without converting storage failures into no history."""
+        return self._query_price_forecasts(symbol, date_from, date_to, limit)
 
     def get_price_forecast(self, symbol: str, forecast_id: str) -> Optional[dict]:
         """Read a single forecast document by id, or None if missing."""

@@ -4085,6 +4085,47 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
 
         return report_text
 
+    async def run_forecast_report_chat(
+        self,
+        *,
+        symbol: str,
+        prompt,
+    ) -> str:
+        """Generate one ephemeral forecast-history report/chat response."""
+        run_start = time.time()
+        logger.info(
+            "Starting forecast report chat symbol=%s mode=%s function_id=%s",
+            symbol,
+            prompt.mode,
+            "forecast_report_chat",
+        )
+        agent = Agent(
+            client=self._get_client(
+                model=None,
+                function_id="forecast_report_chat",
+            ),
+            name="ForecastReportChatAgent",
+            instructions=prompt.instructions,
+        )
+        result = await agent.run(
+            prompt.message,
+            options={
+                "temperature": prompt.temperature,
+                "max_tokens": prompt.max_completion_tokens,
+            },
+        )
+        reply = (result.text or str(result)).strip()
+        logger.info(
+            "Forecast report chat completed symbol=%s mode=%s duration=%.2fs "
+            "output_chars=%d function_id=%s",
+            symbol,
+            prompt.mode,
+            time.time() - run_start,
+            len(reply),
+            "forecast_report_chat",
+        )
+        return reply
+
     # ------------------------------------------------------------------
     # Technical Analysis Agent
     # ------------------------------------------------------------------

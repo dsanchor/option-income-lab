@@ -15,6 +15,7 @@
   - **⚠️ No Calls** — Wait + Bullish pure (runaway)
 - **Symbol Report** (`/symbols/{symbol}/report`) — Dedicated report display page showing the latest generated report for a symbol (technical analysis, dividends, options chain, risk assessment, and recommendations).
 - **Symbol Chat** (`/symbols/{symbol}/chat`) — Per-symbol chat page with a context selection screen before starting the conversation. Pre-loads market data via the yfinance provider for faster responses. Supports open call and open put analysis contexts.
+- **Forecast Report & Chat** (`/symbols/{symbol}/forecasts`) — Inline, expandable report and follow-up chat scoped only to the selected symbol and 1d/7d/30d/90d forecast-history range. The backend rebuilds bounded context from persisted forecast rows, calibration, hit rates, and rolling averages on every request; browser-authored market/portfolio context is never accepted. Conversations remain ephemeral. Its independently configurable AI Providers function id is `forecast_report_chat` and its default Azure deployment is `gpt-5.6-luna`.
 - **Fetch Preview** (`/symbols/{symbol}/fetch-preview`) — Debug page showing raw market data for each resource (overview, technicals, forecast, options chain) with fetch timing and size.
 - **Chat** (`/chat`) — Dual-mode chat experience powered by your configured LLM provider (Azure or Gemini):
   - **Portfolio Chat** — Analyze tracked symbols using CosmosDB data (watchlists, positions, recent activities). Click "Portfolio Chat" to ask questions about your tracked symbols.
