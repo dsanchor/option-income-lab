@@ -16,6 +16,33 @@
 
 ## Recent Learnings
 
+### 2026-09-29 — Forecast Report & Chat revision approved
+- Approved Reuben's fail-closed hardening after **199 backend tests**, **9
+  frontend tests**, TypeScript, scoped lint, compile, clean production build,
+  and diff hygiene passed.
+- Independent probes distinguished a Cosmos outage (exact 503, no model call)
+  from genuine empty history (200 with `forecast_count: 0`).
+- Recursive typed projection removed injected cross-symbol/prompt strings from
+  every tested nested seam while retaining legitimate forecast facts.
+- The built BFF returned 415 for JSON under `text/plain`, 400 for malformed
+  JSON, and preserved a sentinel upstream 422 status/body.
+- Remaining risk is limited to no live Cosmos/model call and source-contract
+  rather than DOM-driven frontend interaction coverage.
+
+### 2026-09-29 — Forecast Report & Chat final gate rejected
+- Rejected despite 45 focused backend tests, 197 forecast regressions, 9
+  frontend tests, TypeScript, scoped lint, compile, production build, and diff
+  hygiene passing.
+- `get_price_forecasts()` swallows Cosmos query failures as `[]`, so the chat
+  endpoint can return a successful empty-history LLM report instead of 503.
+- Prompt context is not strictly projected: arbitrary calibration, event-flag,
+  and endpoint keys can enter the authoritative context; an adversarial MSFT
+  fixture propagated cross-symbol TSLA text three times.
+- The Next.js BFF accepts valid JSON under non-JSON Content-Type and rewrites it
+  to `application/json`, bypassing the public boundary requirement.
+- Rusty is locked out from the next revision. A different implementation agent
+  must repair the three blockers and add adversarial tests before re-review.
+
 ### 2026-09-27 — Historical ECB full-history repair approved
 - Approved the bounded parser, cache/timeout hardening, full 1999+ ECB
   coverage, and actionable `fx_unavailable` diagnostics after the `XLON:RKT`

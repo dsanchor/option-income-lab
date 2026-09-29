@@ -8996,3 +8996,64 @@ Value” and “Dividend · Buy Independent Share FMV and Yahoo Backfill”
 - Reuben exclusively owns implementation/configuration/docs; Basher
   exclusively owns non-mutating schema, CLI, Bicep, routing, secrets, drift,
   network, RBAC, and idempotency tests plus the final APPROVE/REJECT gate.
+
+## Forecast Report & Chat (2026-09-29)
+
+**Status:** IMPLEMENTED AND APPROVED
+**Design:** Danny
+**Prompt/domain:** Linus
+**Initial implementation:** Rusty
+**Hardening revision:** Reuben
+**Review:** Basher
+**Requested by:** Copilot
+
+- The Forecasts page has a dedicated inline, expandable report and ephemeral
+  follow-up chat scoped exclusively to the canonical symbol and selected
+  `1d`, `7d`, `30d`, or `90d` forecast-history range. It does not reuse broad
+  symbol report/chat context and excludes positions, activities, alerts,
+  dividends, overview, option-chain, and browser-authored factual context.
+- The exact AI function id is `forecast_report_chat`. It independently resolves
+  provider/model settings through the generic AI Providers registry, defaults
+  to `gpt-5.6-luna`, and is exposed in AI Providers without a special-case UI.
+- `POST /api/symbols/{symbol}/forecasts/chat` supports one initial report and
+  bounded follow-ups. Context is rebuilt from storage on every request;
+  conversation state remains client-only, strictly validated, untrusted as
+  factual input, and is never persisted with the report or telemetry.
+- The server context is compact, typed, range-bounded, and capped. It includes
+  only documented forecast rows, calibration, per-horizon outcomes and sample
+  sizes, rolling aggregates, readings, volatility, event flags, and
+  deterministic history-anchor movement. Unknown or malformed nested values
+  are omitted rather than serialized into the authoritative prompt.
+- Linus's dedicated prompt keeps history-anchor movement distinct from stored
+  trend and R², requires percentages to include sample sizes, treats R² as fit
+  evidence rather than correctness probability, exposes contradictions and
+  missing evidence, and presents CSP/CC labels as informational timing context
+  rather than personalized trade recommendations.
+- The inline client generates only after first expansion, preserves successful
+  messages across collapse/reopen for the same symbol/range, resets on key
+  changes, fences and aborts stale requests, preserves failed follow-up input
+  for retry, scrolls only when already near the bottom, renders assistant
+  Markdown through the existing sanitized path, and provides accessible
+  controls/status.
+- Rusty's initial implementation passed 142 targeted backend tests, 9 frontend
+  tests, TypeScript, scoped ESLint/Ruff, Python compilation, production build,
+  and diff hygiene.
+- Basher then **REJECTED** the initial artifact on three strict-boundary
+  blockers: Cosmos query failures were swallowed into successful empty history,
+  nested authoritative context accepted arbitrary keys/text including
+  cross-symbol prompt injection, and the public BFF accepted valid JSON under a
+  non-JSON media type. Rusty was reviewer-locked from the revision.
+- Reuben independently hardened the feature: required forecast retrieval now
+  propagates storage failure as exact 503 without invoking the model; recursive
+  typed allowlists project every nested context seam; and the BFF rejects
+  non-JSON media types before parsing while preserving upstream status/body.
+  Adversarial regression tests cover all three blockers.
+- Basher's final verdict was **APPROVE** after independently distinguishing
+  Cosmos failure from genuine empty history, verifying injected text could not
+  enter the prompt, and exercising the built BFF for 415, 400, and preserved
+  upstream 422 behavior.
+- Final validation passed **199 backend tests**, **9 frontend tests**,
+  TypeScript, scoped ESLint, focused Ruff, Python `compileall`, a clean
+  production build, and `git diff --check`. Residual risk is limited to no live
+  Cosmos/model call, prompt-enforced output length, and frontend interaction
+  coverage that remains primarily source-contract rather than DOM-driven.

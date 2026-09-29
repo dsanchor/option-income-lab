@@ -122,3 +122,10 @@
   Missing quantity, missing exact contracts, invalid quotes, inactive
   positions, and non-US eligibility fail closed, while quote timestamps,
   source, stale/carried status, and field status remain visible.
+- **2026-09-29:** Forecast Report & Chat now has a dedicated, framework-neutral
+  prompt contract for both initial and follow-up modes. Server-authored forecast
+  JSON is the sole factual authority; history is explicitly untrusted dialogue.
+  Interpretation keeps history-anchor movement, stored trend/R², bias, reading,
+  volatility bands, calibration, and CSP/CC badges distinct; percentages require
+  sample sizes, conflicts and missing evidence stay explicit, and strategy
+  labels remain compatibility context rather than trade recommendations.

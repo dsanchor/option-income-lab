@@ -15,6 +15,22 @@
 
 ## Recent Learnings
 
+### 2026-09-29 — Forecast Report & Chat design
+- Approved a dedicated inline forecast-history report/chat on the symbol
+  Forecasts page. It uses server-authored, range-bounded forecast data only;
+  broad symbol report/chat context, positions, activities, dividends, overview,
+  and option chains are explicitly excluded.
+- Fixed the AI function id at `forecast_report_chat`, with independent provider
+  routing and `gpt-5.6-luna` as its registry/config default exposed through the
+  existing AI Providers surface.
+- Chose one stateless POST contract for initial and follow-up generation.
+  Conversation remains ephemeral client state, while every request rebuilds
+  authoritative forecast context and enforces strict message/history/context
+  bounds.
+- The initial report is deliberately brief and must quantify movement,
+  slope/R², signal alignment, volatility, calibration/hit rates and sample
+  sizes, CSP/CC timing context, contradictions, risks, and limitations.
+
 ### 2026-09-27 — Legacy scrip cost repair accepted
 - Accepted a separate dry-run-first migration for ACTIVE legacy scrip
   share-acquisition cost metadata. It must use only persisted accounting

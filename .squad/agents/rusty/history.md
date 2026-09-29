@@ -155,3 +155,9 @@
 - Staged backend errors retain the form and expose Retry only when `retryable=true`; Retry reuses the same request UUID.
 - Correction distinguishes unchanged inherited Yahoo FMV from refresh, manual replacement, and explicit clear. Quantity/payment-date changes require refresh, replacement, or clear, and persisted Yahoo provenance is shown read-only.
 - Successful create/correct responses consume the returned `movements[].share_fmv` as the post-save authority before normal parent refresh handling.
+
+### 2026-09-29 — Forecast Report & Chat
+- Added a dedicated `forecast_report_chat` AI function with an independent `gpt-5.6-luna` default; keeping it alias-free ensures persisted provider/model overrides inherit and reset through the generic AI Providers registry without coupling to broad report/chat settings.
+- Forecast chat context is rebuilt server-side from the same bounded range helper as the Forecasts GET route. It contains only persisted forecast rows, readings, calibration, hit-rate/average aggregates, and deterministic anchor movement; browser context and portfolio/options domains are rejected.
+- Conversation transport is strict and ephemeral: initial requests accept only range, follow-ups require alternating bounded visible history ending in an assistant response, and body/history/message/context/output limits return explicit 400/413 errors.
+- The inline client preserves a successful conversation across collapse/reopen, resets by canonical symbol+range key, fences/aborts stale requests, keeps failed follow-ups editable/retryable, and scrolls only when near the bottom while leaving the initial report at its top.

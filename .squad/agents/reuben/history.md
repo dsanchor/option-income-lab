@@ -177,3 +177,21 @@ Frontend: npx tsc --noEmit — 0 errors
   Python compilation, CLI help, and scoped diff hygiene passed.
 - Basher's final combined gate approved the implementation after 370 targeted
   backend tests and frontend, type, lint, and diff checks passed.
+
+## Forecast Report & Chat Fail-Closed Hardening (2026-09-29)
+
+- Added a required forecast-history Cosmos query path so interactive GET/chat
+  requests distinguish genuine empty history from storage failure; query errors
+  now remain explicit 503 responses and never reach the model as empty context.
+- Replaced permissive recursive serialization with a recursive typed projection:
+  only documented horizon, calibration, aggregate, reading-enum, event-flag,
+  numeric, boolean, and ISO-date fields can enter authoritative LLM context.
+  Free-form persisted reason/extension text is excluded.
+- Added adversarial coverage for cross-symbol prompt text and malformed nested
+  values across calibration, flags, readings, horizons, endpoints, and snapshots.
+- Made the Next.js BFF reject non-JSON body media types with 415 before parsing or
+  forwarding, while retaining upstream response status and body.
+- Validation: 199 targeted backend tests, 9 frontend tests, focused suites,
+  TypeScript, scoped ESLint/Ruff, Python compilation, production Next.js build,
+  and `git diff --check` passed. The build retained the known generated-CSS
+  warning; broad legacy Ruff still reports pre-existing debt in `web/app.py`.

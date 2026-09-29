@@ -9,6 +9,7 @@ Agent Scribe maintains squad administrative work: orchestration logs, session lo
 
 ## Recent Updates
 
+📌 2026-09-29T21:07:28Z: Consolidated the Forecast Report & Chat lifecycle from design and prompt contract through Rusty's implementation, Basher's three-blocker rejection and lockout, Reuben's independent fail-closed revision, and Basher's final approval; preserved 199-backend/9-frontend validation and residual risks, cleared six inbox records, and committed only `.squad` documentation
 📌 2026-09-29T15:06:11Z: Recorded Linus's read-only, source-grounded stock forecast calculation and UI interpretation explanation; created no forecast product decision or durable knowledge entry; separately merged and deduplicated the pre-existing accepted self-contained Azure provisioner contract and prepared only `.squad` records for commit
 📌 2026-09-27T19:51:10Z: Recorded the approved historical ECB full-history repair prompted by nine `XLON:RKT` `fx_unavailable` dry-run skips; preserved Linus's bounded single-line XML parsing, cache/timeout, 1999+ coverage, and diagnostic changes plus Basher's 102-test/live verification; confirmed the inbox was empty and committed only `.squad` records
 📌 2026-09-27T19:23:18Z: Consolidated UK pence quote normalization, the final three-card scrip summary layout, Danny's accepted legacy-cost repair design, Reuben's diagnostics/migration implementation, and Basher's 370-test approval; cleared the inbox and committed only `.squad` records
