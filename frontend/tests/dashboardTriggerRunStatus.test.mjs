@@ -10,6 +10,7 @@ const trigger = source("src/components/TriggerButton.tsx");
 const tables = source("src/components/DashboardAgentTables.tsx");
 const autoRefresh = source("src/components/AutoRefresh.tsx");
 const types = source("src/types/dashboard.ts");
+const route = source("src/app/api/trigger/[name]/route.ts");
 
 describe("dashboard trigger run-status contract", () => {
   it("requires a run ID before polling and never marks POST acceptance complete", () => {
@@ -27,7 +28,7 @@ describe("dashboard trigger run-status contract", () => {
   });
 
   it("sends complete position identity from the clicked monitor row", () => {
-    assert.match(trigger, /\.\.\.position/);
+    assert.match(trigger, /buildManualTriggerPayload\(symbol, position\)/);
     assert.match(tables, /position_id: row\.position_id/);
     assert.match(tables, /account_id: row\.account_id/);
     assert.match(tables, /contract_id: row\.contract_id/);
@@ -35,6 +36,12 @@ describe("dashboard trigger run-status contract", () => {
     assert.match(tables, /is_paper: row\.is_paper/);
     assert.match(types, /account_id\?: string \| null/);
     assert.match(types, /is_paper\?: boolean/);
+  });
+
+  it("applies sparse identity cleanup in both the client and monitor BFF", () => {
+    assert.match(trigger, /buildManualTriggerPayload/);
+    assert.match(route, /POSITION_MONITORS\.has\(name\)/);
+    assert.match(route, /omitAbsentMonitorConstraints/);
   });
 
   it("preserves 409 handling, double-click protection, timeout, and cleanup", () => {

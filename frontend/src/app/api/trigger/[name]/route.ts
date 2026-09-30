@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 import { API_BASE_URL } from "@/lib/api";
+import { omitAbsentMonitorConstraints } from "@/lib/monitorTriggerPayload";
+
+const POSITION_MONITORS = new Set(["open_call_monitor", "open_put_monitor"]);
 
 /**
  * BFF proxy: run a named scheduler task now. Mirrors POST /api/trigger/{name}
@@ -14,9 +17,19 @@ export async function POST(
   let body: string | undefined;
   try {
     const raw = await _req.text();
-    if (raw) body = raw;
+    if (raw) {
+      body = raw;
+      if (POSITION_MONITORS.has(name)) {
+        const parsed: unknown = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          body = JSON.stringify(
+            omitAbsentMonitorConstraints(parsed as Record<string, unknown>),
+          );
+        }
+      }
+    }
   } catch {
-    /* no body */
+    // Preserve malformed JSON so the upstream endpoint remains authoritative.
   }
   try {
     const res = await fetch(

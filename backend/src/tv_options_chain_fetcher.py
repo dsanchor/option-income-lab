@@ -41,6 +41,7 @@ _OPTIONS_SCAN_URLS = [
     "scanner.tradingview.com/options/scan3?label-product=symbols-options",
 ]
 _OPTIONS_SCAN_FALLBACK = "scanner.tradingview.com"
+_CLEANUP_STEP_TIMEOUT_SECONDS = 2.0
 
 # Field-name mapping: lowercased TradingView API field → canonical name
 _FIELD_MAP = {
@@ -306,7 +307,62 @@ async def fetch_tv_options_chain(symbol: str, *, timeout: int = 50000) -> dict:
 
         captured_responses.append({"url": resp_url, "body": body})
 
+    pw = None
     browser = None
+    context = None
+    page = None
+
+    cleanup_errors: list[BaseException] = []
+
+    def _consume_cleanup_result(task: asyncio.Task) -> None:
+        if not task.cancelled():
+            task.exception()
+
+    async def _close_resource(resource, method_name: str, label: str) -> None:
+        if resource is None:
+            return
+        cleanup_call = asyncio.create_task(getattr(resource, method_name)())
+        try:
+            done, _ = await asyncio.wait(
+                {cleanup_call},
+                timeout=_CLEANUP_STEP_TIMEOUT_SECONDS,
+            )
+            if not done:
+                cleanup_call.cancel()
+                cleanup_call.add_done_callback(_consume_cleanup_result)
+                exc = TimeoutError(
+                    f"{label} cleanup exceeded "
+                    f"{_CLEANUP_STEP_TIMEOUT_SECONDS:.0f}s"
+                )
+            else:
+                exc = (
+                    asyncio.CancelledError()
+                    if cleanup_call.cancelled()
+                    else cleanup_call.exception()
+                )
+        except BaseException:
+            cleanup_call.cancel()
+            raise
+
+        if exc is not None:
+            cleanup_errors.append(exc)
+            logger.warning(
+                "TradingView Playwright %s cleanup failed for %s: %r",
+                label,
+                symbol,
+                exc,
+            )
+
+    async def _cleanup() -> None:
+        await _close_resource(page, "close", "page")
+        await _close_resource(context, "close", "context")
+        await _close_resource(browser, "close", "browser")
+        await _close_resource(pw, "stop", "driver")
+
+    provider_error: Exception | None = None
+    provider_cancellation: asyncio.CancelledError | None = None
+    fatal_error: BaseException | None = None
+
     try:
         pw = await async_playwright().start()
         browser = await pw.chromium.launch(headless=True)
@@ -347,18 +403,62 @@ async def fetch_tv_options_chain(symbol: str, *, timeout: int = 50000) -> dict:
         # Wait for async data loads
         await page.wait_for_timeout(random.randint(2500, 4000))
 
-        await page.close()
-        await context.close()
-
-    except Exception as exc:
-        logger.error("TradingView Playwright fetch failed for %s: %s", symbol, exc)
-        return _empty_chain(symbol)
+    except asyncio.CancelledError as exc:
+        provider_cancellation = exc
+    except Exception as exc:  # noqa: BLE001 - provider failures use fallback
+        provider_error = exc
+    except BaseException as exc:  # noqa: BLE001 - cleanup must not mask fatal errors
+        fatal_error = exc
     finally:
-        if browser:
+        cleanup_task = asyncio.create_task(_cleanup())
+        cleanup_cancellation = None
+        while not cleanup_task.done():
             try:
-                await browser.close()
-            except Exception:
-                pass
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError as exc:
+                cleanup_cancellation = cleanup_cancellation or exc
+
+    primary_error = provider_cancellation or fatal_error or provider_error
+    if primary_error is not None:
+        for cleanup_error in cleanup_errors:
+            primary_error.add_note(
+                f"TradingView Playwright cleanup failure: {cleanup_error!r}"
+            )
+
+    if provider_cancellation is not None:
+        raise provider_cancellation
+    if fatal_error is not None:
+        raise fatal_error
+    if cleanup_cancellation is not None:
+        if provider_error is not None:
+            logger.error(
+                "TradingView Playwright fetch failed for %s before caller "
+                "cancellation: %s",
+                symbol,
+                provider_error,
+            )
+            cleanup_cancellation.add_note(
+                f"TradingView provider failure before cancellation: "
+                f"{provider_error!r}"
+            )
+        for cleanup_error in cleanup_errors:
+            cleanup_cancellation.add_note(
+                f"TradingView Playwright cleanup failure: {cleanup_error!r}"
+            )
+        raise cleanup_cancellation
+    if provider_error is not None:
+        logger.error(
+            "TradingView Playwright fetch failed for %s: %s",
+            symbol,
+            provider_error,
+        )
+        return _empty_chain(symbol)
+    if cleanup_errors:
+        logger.error(
+            "TradingView Playwright fetch failed during cleanup for %s",
+            symbol,
+        )
+        return _empty_chain(symbol)
 
     if not captured_responses:
         logger.warning("TradingView: no API responses captured for %s", symbol)

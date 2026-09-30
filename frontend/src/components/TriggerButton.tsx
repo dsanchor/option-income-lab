@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  buildManualTriggerPayload,
+  type MonitorPositionIdentity,
+} from "@/lib/monitorTriggerPayload";
 import type { DashboardStatusPayload } from "@/types/dashboard";
 
 type Status =
@@ -35,16 +39,7 @@ export default function TriggerButton({
 }: {
   agent: string;
   symbol?: string;
-  position?: {
-    position_id: string;
-    option_type?: string;
-    strike?: number | string | null;
-    expiration?: string | null;
-    account_id?: string | null;
-    contract_id?: string | null;
-    instrument_id?: string | null;
-    is_paper?: boolean;
-  };
+  position?: MonitorPositionIdentity;
   compact?: boolean;
   className?: string;
   globallyDisabled?: boolean;
@@ -121,12 +116,7 @@ export default function TriggerButton({
       const res = await fetch(`/api/trigger/${agent}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbol,
-          ...position,
-          run_trigger: "manual",
-          force_alpha: true,
-        }),
+        body: JSON.stringify(buildManualTriggerPayload(symbol, position)),
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 409) {

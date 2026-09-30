@@ -32,6 +32,11 @@ POSITION_CONSTRAINT_FIELDS = (
     "is_paper",
 )
 
+POSITION_CONSTRAINT_ALIASES = {
+    field: _ALIASES.get(field, (field,))
+    for field in POSITION_CONSTRAINT_FIELDS
+}
+
 
 def _first_identity(position: dict, field: str) -> Any:
     aliases = _ALIASES.get(field, (field,))
@@ -111,6 +116,46 @@ def _validate_constraint(field: str, value: Any) -> Any:
                 "expiration must be a valid ISO date", 400
             ) from None
     return normalized
+
+
+def parse_monitor_position_constraints(body: dict) -> tuple[dict, bool]:
+    """Read the documented top-level/source aliases without choosing conflicts."""
+    source = body.get("source")
+    containers = (body, source if isinstance(source, dict) else {})
+    constraints = {}
+    supplied = False
+    for field, aliases in POSITION_CONSTRAINT_ALIASES.items():
+        values = []
+        normalized_values = []
+        for container in containers:
+            for alias in aliases:
+                if alias not in container:
+                    continue
+                supplied = True
+                value = container[alias]
+                values.append(value)
+                normalized_values.append(_validate_constraint(field, value))
+        if not values:
+            continue
+        first = normalized_values[0]
+        if any(not _same(field, first, value) for value in normalized_values[1:]):
+            raise PositionSelectionError(
+                f"Conflicting aliases for position identity constraint: {field}",
+                400,
+            )
+        constraints[field] = values[0]
+    return constraints, supplied
+
+
+def monitor_position_constraints_supplied(body: dict) -> bool:
+    source = body.get("source")
+    containers = (body, source if isinstance(source, dict) else {})
+    return any(
+        alias in container
+        for container in containers
+        for aliases in POSITION_CONSTRAINT_ALIASES.values()
+        for alias in aliases
+    )
 
 
 def resolve_active_monitor_position(

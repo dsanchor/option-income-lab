@@ -9516,21 +9516,20 @@ async def trigger_agent(request: Request, agent_type: str):
                             status_code=400)
     if agent_type in {"open_call_monitor", "open_put_monitor"}:
         from src.position_monitor_selection import (
-            POSITION_CONSTRAINT_FIELDS,
             PositionSelectionError,
+            monitor_position_constraints_supplied,
+            parse_monitor_position_constraints,
             position_identity,
             resolve_active_monitor_position,
         )
-        supplied_constraint_fields = [
-            field for field in POSITION_CONSTRAINT_FIELDS if field in body
-        ]
-        identity_supplied = position_id_supplied or bool(supplied_constraint_fields)
+        constraints_supplied = monitor_position_constraints_supplied(body)
+        identity_supplied = position_id_supplied or constraints_supplied
         if identity_supplied and not symbol:
             return JSONResponse(
                 {"error": "symbol is required when position identity is provided"},
                 status_code=400,
             )
-        if supplied_constraint_fields and not position_id_supplied:
+        if constraints_supplied and not position_id_supplied:
             return JSONResponse(
                 {
                     "error": (
@@ -9540,11 +9539,11 @@ async def trigger_agent(request: Request, agent_type: str):
                 },
                 status_code=400,
             )
+        try:
+            requested_constraints, _ = parse_monitor_position_constraints(body)
+        except PositionSelectionError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=exc.status_code)
     if agent_type in {"open_call_monitor", "open_put_monitor"} and symbol:
-        requested_constraints = {
-            field: body.get(field)
-            for field in supplied_constraint_fields
-        }
         expected_type = "call" if agent_type == "open_call_monitor" else "put"
         try:
             selected_position = resolve_active_monitor_position(

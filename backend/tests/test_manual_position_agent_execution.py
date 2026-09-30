@@ -11,7 +11,9 @@ from starlette.testclient import TestClient
 from src.agent_runner import AgentRunner
 from src.open_call_monitor_agent import run_open_call_monitor
 from src.position_monitor_selection import (
+    POSITION_CONSTRAINT_ALIASES,
     PositionSelectionError,
+    parse_monitor_position_constraints,
     resolve_active_monitor_position,
 )
 from web import app as web_app
@@ -179,6 +181,94 @@ def test_malformed_constraints_fail_closed(field, value, message):
             option_type="call",
             position_id="pos-a",
             constraints={field: value},
+        )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("field", "aliases"),
+    POSITION_CONSTRAINT_ALIASES.items(),
+)
+@pytest.mark.parametrize("nested", [False, True])
+def test_every_constraint_alias_is_accepted_top_level_and_in_source(
+    field, aliases, nested
+):
+    valid = {
+        "option_type": "call",
+        "strike": "500.00",
+        "expiration": "2026-10-16",
+        "account_id": "Acct-Exact",
+        "contract_id": "MSFT261016C00500000",
+        "instrument_id": "Instrument-Exact",
+        "is_paper": False,
+    }[field]
+    for alias in aliases:
+        body = {"source": {alias: valid}} if nested else {alias: valid}
+        constraints, supplied = parse_monitor_position_constraints(body)
+        assert supplied is True
+        assert constraints == {field: valid}
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+@pytest.mark.parametrize(
+    "alias",
+    [
+        alias
+        for aliases in POSITION_CONSTRAINT_ALIASES.values()
+        for alias in aliases
+    ],
+)
+def test_every_explicit_sparse_alias_fails_closed(alias, value):
+    with pytest.raises(PositionSelectionError) as exc_info:
+        parse_monitor_position_constraints({alias: value})
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("field", "alias", "invalid"),
+    [
+        (
+            field,
+            alias,
+            {
+                "option_type": "calls",
+                "strike": True,
+                "expiration": "16-10-2026",
+                "account_id": ["acct-a"],
+                "contract_id": {"id": "contract"},
+                "instrument_id": 42,
+                "is_paper": 1,
+            }[field],
+        )
+        for field, aliases in POSITION_CONSTRAINT_ALIASES.items()
+        for alias in aliases
+    ],
+)
+def test_every_alias_preserves_malformed_non_empty_values_for_validation(
+    field, alias, invalid
+):
+    with pytest.raises(PositionSelectionError) as exc_info:
+        parse_monitor_position_constraints({alias: invalid})
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("field", "left", "right"),
+    [
+        ("option_type", "call", "put"),
+        ("strike", 500, 501),
+        ("expiration", "2026-10-16", "2026-11-20"),
+        ("account_id", "acct-a", "acct-b"),
+        ("contract_id", "contract-a", "contract-b"),
+        ("instrument_id", "instrument-a", "instrument-b"),
+        ("is_paper", False, True),
+    ],
+)
+def test_top_level_and_source_constraint_conflicts_fail_closed(field, left, right):
+    aliases = POSITION_CONSTRAINT_ALIASES[field]
+    with pytest.raises(PositionSelectionError, match="Conflicting aliases") as exc_info:
+        parse_monitor_position_constraints(
+            {aliases[0]: left, "source": {aliases[-1]: right}}
         )
     assert exc_info.value.status_code == 400
 
@@ -397,6 +487,20 @@ def test_manual_endpoint_requires_position_id_when_any_constraint_is_present(
     assert response.status_code == 400
     assert "position_id is required" in response.json()["error"]
 
+    alias_response = client.post(
+        "/api/trigger/open_call_monitor",
+        json={"symbol": "MSFT", "source": {"account": "acct-a"}},
+    )
+    assert alias_response.status_code == 400
+    assert "position_id is required" in alias_response.json()["error"]
+
+    symbol_response = client.post(
+        "/api/trigger/open_call_monitor",
+        json={"position_id": "pos-a", "contract_symbol": "contract-a"},
+    )
+    assert symbol_response.status_code == 400
+    assert "symbol is required" in symbol_response.json()["error"]
+
 
 @pytest.mark.parametrize(
     ("field", "value"),
@@ -520,6 +624,66 @@ def test_manual_endpoint_forwards_exact_position_and_run_status_identity(monkeyp
             break
         time.sleep(0.02)
     assert run["position_id"] == "pos-b"
+
+
+@pytest.mark.parametrize(
+    ("agent_type", "option_type", "runner_path"),
+    [
+        (
+            "open_call_monitor",
+            "call",
+            "src.open_call_monitor_agent.run_open_call_monitor",
+        ),
+        (
+            "open_put_monitor",
+            "put",
+            "src.open_put_monitor_agent.run_open_put_monitor",
+        ),
+    ],
+)
+def test_manual_monitor_endpoints_accept_nested_alias_identity(
+    monkeypatch, agent_type, option_type, runner_path
+):
+    position = _position("pos-a", account_id="acct-a")
+    position["type"] = option_type
+    client = _client(monkeypatch, [position])
+    calls = []
+    completed = threading.Event()
+
+    async def fake_monitor(
+        config, runner, cosmos, context_provider, symbol=None,
+        position_id=None, position_constraints=None, **_kwargs,
+    ):
+        calls.append((symbol, position_id, position_constraints))
+        completed.set()
+
+    monkeypatch.setattr(runner_path, fake_monitor)
+    response = client.post(
+        f"/api/trigger/{agent_type}",
+        json={
+            "symbol": "MSFT",
+            "position_id": "pos-a",
+            "source": {
+                "account": "acct-a",
+                "contract_symbol": "MSFT-identical-contract",
+                "instrument_identifier": "instrument-msft",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert completed.wait(timeout=2)
+    assert calls == [
+        (
+            "MSFT",
+            "pos-a",
+            {
+                "account_id": "acct-a",
+                "contract_id": "MSFT-identical-contract",
+                "instrument_id": "instrument-msft",
+            },
+        )
+    ]
 
 
 def test_manual_endpoint_locks_concurrently_per_position(monkeypatch):
