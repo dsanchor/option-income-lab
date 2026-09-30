@@ -11,6 +11,11 @@ import {
   matchesSymbolSuitability,
   type SymbolSuitabilityFilter,
 } from "@/lib/symbolSuitability";
+import {
+  matchesSymbolMomentum,
+  SYMBOL_MOMENTUM_OPTIONS,
+  type SymbolMomentumFilter,
+} from "@/lib/symbolMomentum";
 import { symbolHref } from "@/lib/symbolEncoding";
 import SymbolInfoModal from "@/components/SymbolInfoModal";
 import type { SymbolRow } from "@/types/symbols";
@@ -151,6 +156,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
   const [sort, setSort] = useState<SortKey>("symbol");
   const [dir, setDir] = useState<"asc" | "desc">("asc");
   const [suitabilityFilter, setSuitabilityFilter] = useState<SymbolSuitabilityFilter>("all");
+  const [momentumFilters, setMomentumFilters] = useState<Set<SymbolMomentumFilter>>(new Set());
   const [hideHistorical, setHideHistorical] = useState(true);
   const [modalSymbol, setModalSymbol] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("portfolio");
@@ -248,6 +254,9 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
     if (suitabilityFilter !== "all") {
       out = out.filter((r) => matchesSymbolSuitability(r.entry_tag, r.momentum, suitabilityFilter));
     }
+    if (momentumFilters.size > 0) {
+      out = out.filter((r) => matchesSymbolMomentum(r.momentum, momentumFilters));
+    }
     const sorted = [...out].sort((a, b) => {
       let cmp: number;
       if (sort === "gain_loss_pct") {
@@ -268,7 +277,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       return dir === "asc" ? cmp : -cmp;
     });
     return sorted;
-  }, [rows, q, sort, dir, suitabilityFilter, removedSymbols]);
+  }, [rows, q, sort, dir, suitabilityFilter, momentumFilters, removedSymbols]);
 
   /** Columns visible in the current view mode (no-modes = always visible). */
   const visibleColumns = useMemo(
@@ -297,6 +306,22 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
     if (sort === key) setDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSort(key); setDir(key === "symbol" || key === "category" ? "asc" : "desc"); }
   }
+
+  function toggleMomentumFilter(momentum: SymbolMomentumFilter) {
+    setMomentumFilters((current) => {
+      const next = new Set(current);
+      if (next.has(momentum)) next.delete(momentum);
+      else next.add(momentum);
+      return next;
+    });
+  }
+
+  const momentumFilterLabel =
+    momentumFilters.size === 0
+      ? "All"
+      : momentumFilters.size === 1
+        ? [...momentumFilters][0]
+        : `${momentumFilters.size} selected`;
 
   const portfolioFiltered = filtered.filter(isPortfolioRow);
   const watchlistFiltered = filtered.filter((r) => !isPortfolioRow(r));
@@ -517,6 +542,43 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
             </button>
           ))}
         </div>
+        <details className="group min-w-0 max-w-full open:basis-full">
+          <summary
+            aria-label={`Filter Symbols by momentum. Current selection: ${momentumFilterLabel}`}
+            className="cursor-pointer list-none rounded-[var(--radius-pill)] border border-border bg-bg-input px-3 py-1 text-xs text-text-muted transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/60"
+          >
+            Momentum: <span className="text-text">{momentumFilterLabel}</span>
+          </summary>
+          <fieldset className="mt-2 w-full max-w-full rounded-[var(--radius)] border border-border bg-bg-card p-3 shadow-lg">
+            <legend className="sr-only">Filter Symbols by momentum</legend>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <span className="text-xs font-medium text-text">Momentum</span>
+              <button
+                type="button"
+                onClick={() => setMomentumFilters(new Set())}
+                disabled={momentumFilters.size === 0}
+                className="text-xs text-accent-blue hover:underline disabled:cursor-default disabled:text-text-muted disabled:no-underline"
+              >
+                All / clear
+              </button>
+            </div>
+            <div className="space-y-1.5">
+              {SYMBOL_MOMENTUM_OPTIONS.map((momentum) => (
+                <label key={momentum} className="flex cursor-pointer items-center gap-2 text-xs text-text">
+                  <input
+                    type="checkbox"
+                    checked={momentumFilters.has(momentum)}
+                    onChange={() => toggleMomentumFilter(momentum)}
+                  />
+                  <span>{momentum}</span>
+                  {momentum === "Unknown" && (
+                    <span className="text-text-muted">(includes missing)</span>
+                  )}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        </details>
         <label className="flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
           <input
             type="checkbox"
