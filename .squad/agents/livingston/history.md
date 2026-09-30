@@ -13,6 +13,17 @@
 
 ## Recent Learnings
 
+### 2026-09-30 — Momentum selector containment
+- A trigger-anchored popup cannot guarantee both viewport edges with alignment
+  and width caps alone because the trigger position remains unconstrained.
+- Keep the native `details`/`summary` compact while closed, but let the open
+  `details` take a full flex row and render its fieldset in normal flow at
+  `w-full max-w-full`; containment then derives from the filter surface rather
+  than viewport measurement or a fragile popup anchor.
+- Responsive contract tests should assert that full-row, in-flow architecture
+  and reject absolute fieldset positioning instead of blessing one alignment
+  class combination.
+
 ### 2026-09-27 — Independent Dividend Buy share FMV
 - `SHARE_ACQUISITION.gross` remains investor contribution and FIFO uses
   `gross.eur_amount + fees.total_eur`; `share_fmv` is independently validated,

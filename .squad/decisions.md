@@ -9057,3 +9057,42 @@ Value” and “Dividend · Buy Independent Share FMV and Yahoo Backfill”
   production build, and `git diff --check`. Residual risk is limited to no live
   Cosmos/model call, prompt-enforced output length, and frontend interaction
   coverage that remains primarily source-contract rather than DOM-driven.
+
+## Symbols Momentum Multi-Select Filter (2026-09-30)
+
+**Status:** IMPLEMENTED AND APPROVED
+**Initial implementation:** Rusty
+**Placement revision:** Danny
+**Containment revision:** Livingston
+**Review:** Basher
+**Requested by:** Copilot
+
+- The Symbols page filters on the backend-authored `SymbolRow.momentum` value;
+  the frontend does not recalculate momentum. The canonical options are
+  Bullish, Bullish (overextended), Weakening, Neutral, Bearish, Bearish
+  (oversold), and Unknown, in that order.
+- The native checkbox control is a multi-select. No selection means All;
+  selected momentum values use OR semantics, while momentum intersects with
+  search and suitability through AND semantics. Missing, blank, canonical
+  Unknown, and unrecognized legacy values share the Unknown bucket.
+- Existing sorting, view mode, historical visibility, row sectioning, and
+  rendering behavior remain unchanged. The Symbols page has no pagination
+  path.
+- Basher rejected Rusty's trigger-anchored absolute popup because a fixed
+  left-aligned width could overflow the viewport's right edge.
+- Danny changed the popup to right alignment with a viewport-relative maximum
+  width. Basher rejected that revision because a trigger near the opposite
+  edge could still place the popup left of the viewport.
+- Livingston independently replaced the trigger-anchored popup layout. The
+  native `details` summary remains compact while closed; while open,
+  `open:basis-full` gives the control a complete filter row and its
+  `w-full max-w-full` fieldset stays in normal flow inside the filter surface.
+  This contains both horizontal edges without viewport measurement, absolute
+  positioning, or custom keyboard handling.
+- Basher issued final **APPROVE** after **7/7 focused tests**, TypeScript,
+  scoped ESLint, and `git diff --check` passed. The unrelated untracked
+  `infra/azure/config.dr.json` remained untouched, unstaged, and excluded from
+  tracked and staged feature diffs.
+- Residual risk: responsive containment and keyboard behavior have native
+  semantics and source-contract coverage, but no browser-level interaction
+  test.

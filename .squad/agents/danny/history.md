@@ -15,6 +15,14 @@
 
 ## Recent Learnings
 
+### 2026-09-30 — Symbols momentum popup revision
+- Right-align wrapped toolbar popups to their trigger and combine the preferred
+  width with a viewport-relative maximum; a fixed minimum width can defeat
+  responsive bounds on narrow screens.
+- Preserve the native `details`/`summary`, fieldset, labels, and checkbox
+  behavior when the defect is purely placement, and pin the responsive class
+  contract with a focused source test.
+
 ### 2026-09-29 — Forecast Report & Chat design
 - Approved a dedicated inline forecast-history report/chat on the symbol
   Forecasts page. It uses server-authored, range-bounded forecast data only;

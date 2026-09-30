@@ -16,6 +16,16 @@
 
 ## Recent Learnings
 
+### 2026-09-30 — Symbols momentum filter rejected
+- The backend-label helper, All default, OR selection, AND composition, Unknown
+  bucketing, and unchanged sorting/view/history paths passed review; 6 focused
+  tests, TypeScript, scoped ESLint, and `git diff --check` passed.
+- Rejected because unrelated `infra/azure/config.dr.json` remains untracked in
+  the change set and the `absolute left-0 min-w-56` popup can overflow the
+  viewport when its narrow trigger wraps near the right edge.
+- Component coverage remains source-contract based, with no DOM/browser check
+  for responsive placement or live combined-filter interaction.
+
 ### 2026-09-29 — Forecast Report & Chat revision approved
 - Approved Reuben's fail-closed hardening after **199 backend tests**, **9
   frontend tests**, TypeScript, scoped lint, compile, clean production build,
@@ -794,3 +804,28 @@
   instruction-only `YAHOO_OPEN`, stable request UUID, single in-flight Save,
   response FMV authority, loading text, staged Retry, and correction refresh.
   Definitive blockers: none.
+
+### 2026-09-30 — Symbols momentum popup revision rejected
+- **REJECT.** The popup is now right-aligned, but `right-0 w-56
+  max-w-[calc(100vw-2rem)]` limits only its width, not its left position. When
+  the flex-wrapped trigger begins near the viewport's left edge, its right edge
+  can be narrower than the 14-rem popup, so the popup still extends left of the
+  viewport.
+- Momentum semantics and preservation requirements remain valid. The focused
+  suite passes 7/7; TypeScript, scoped ESLint, and `git diff --check` pass.
+- `infra/azure/config.dr.json` remains unrelated, untracked, unstaged, and
+  absent from the feature diff; it was not treated as a blocker or modified.
+- Residual coverage risk remains: placement and combined live state have only
+  source-contract/helper tests, not DOM/browser interaction coverage.
+
+### 2026-09-30 — Symbols momentum containment approved
+- **APPROVE.** Livingston's root containment revision keeps the closed native
+  summary compact, gives open details a full flex row, and places the bounded
+  full-width fieldset in normal flow, removing both trigger-edge overflow
+  failure modes without custom keyboard behavior.
+- All/default, OR selection, AND composition, Unknown handling, sort/view,
+  historical visibility, and sectioning remain correct. Focused tests pass
+  7/7; TypeScript, scoped ESLint, and diff hygiene pass.
+- `infra/azure/config.dr.json` remains untracked and absent from tracked/staged
+  feature diffs. Residual risk is limited to the lack of browser-level
+  responsive and keyboard interaction coverage.

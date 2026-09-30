@@ -161,3 +161,8 @@
 - Forecast chat context is rebuilt server-side from the same bounded range helper as the Forecasts GET route. It contains only persisted forecast rows, readings, calibration, hit-rate/average aggregates, and deterministic anchor movement; browser context and portfolio/options domains are rejected.
 - Conversation transport is strict and ephemeral: initial requests accept only range, follow-ups require alternating bounded visible history ending in an assistant response, and body/history/message/context/output limits return explicit 400/413 errors.
 - The inline client preserves a successful conversation across collapse/reopen, resets by canonical symbol+range key, fences/aborts stale requests, keeps failed follow-ups editable/retryable, and scrolls only when near the bottom while leaving the initial report at its top.
+
+### 2026-09-30 — Symbols momentum filter
+- The Symbols list consumes the backend-authored `momentum` label directly; its canonical order is Bullish, Bullish (overextended), Weakening, Neutral, Bearish, Bearish (oversold), then Unknown.
+- An empty momentum selection is the explicit All state. The compact checkbox multi-select intersects with search and suitability filters without changing sorting, sections, view mode, or the default historical-row behavior.
+- Missing, blank, canonical Unknown, and unrecognized legacy values share the explicit Unknown filter bucket; the browser does not recalculate momentum.
