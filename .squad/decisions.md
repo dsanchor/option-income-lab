@@ -9096,3 +9096,89 @@ Value” and “Dividend · Buy Independent Share FMV and Yahoo Backfill”
 - Residual risk: responsive containment and keyboard behavior have native
   semantics and source-contract coverage, but no browser-level interaction
   test.
+
+## TradingView Playwright lifecycle is owned by each fetch (2026-09-30)
+
+**Status:** IMPLEMENTED
+**Requested by:** Copilot
+
+- `fetch_tv_options_chain()` owns every resource it initializes and tears them
+  down in strict page → context → browser → Playwright-driver order.
+- Once `async_playwright().start()` succeeds, `pw.stop()` is awaited exactly
+  once on success, provider failure, partial initialization, and cancellation.
+  Cleanup failures are logged independently and cannot prevent later outer
+  resources from being released or hide the original provider error.
+- Provider fallback behavior is unchanged: ordinary TradingView failures remain
+  visible in logs and return the existing empty-chain fallback; task
+  cancellation still propagates.
+- No cache redesign was required. SWR tasks already release their per-symbol
+  lock in `finally`, and scheduler `_run_async` already cancels and gathers
+  pending tasks before async-generator/executor shutdown. With fetch-owned
+  Playwright teardown, loop shutdown now reaches the driver deterministically.
+- Validation: 79 focused fetcher/cache tests passed; both changed Python files
+  compiled; scoped `git diff --check` passed. Scoped Ruff improved the fetcher
+  baseline from 12 existing findings to 10, with no new findings.
+
+## TradingView Playwright exception precedence is explicit (2026-09-30)
+
+**Status:** REVISED AFTER REVIEW
+**Requested by:** Copilot
+**Revision owner:** Livingston
+
+- Once the Playwright driver starts, one shielded, inside-out cleanup task owns
+  page, context, browser, and driver teardown. Every resource cleanup is
+  invoked at most once and bounded to two seconds; `pw.stop()` is therefore
+  reached exactly once without allowing a hung inner close to block shutdown.
+- Cleanup-raised exceptions, including `asyncio.CancelledError`, are recorded,
+  logged, and attached to an existing body exception. They never replace the
+  body/provider failure.
+- Caller cancellation during body or cleanup is distinct from cleanup-raised
+  cancellation. The cleanup task continues best-effort under `shield`, then
+  the caller's cancellation is re-raised; an ordinary provider error observed
+  before that cancellation remains logged and attached.
+- If provider work succeeds but cleanup fails, the fetch is failed visibly and
+  returns the repository-standard empty-chain fallback. It never returns
+  captured provider data as though shutdown succeeded.
+- Deterministic tests cover success, primary provider failure plus cleanup
+  cancellation, caller cancellation during body, caller cancellation during
+  cleanup, external cancellation after a provider failure, cleanup-only
+  failure, intermediate cleanup errors, and partial initialization.
+- Validation: 82 focused fetcher/cache tests passed; changed files compiled;
+  scoped diff hygiene passed. Scoped Ruff reports only the fetcher's nine
+  pre-existing findings, with the lifecycle test file clean.
+
+## Manual monitor trigger and Playwright lifecycle incident closure (2026-09-30)
+
+**Status:** IMPLEMENTED AND APPROVED
+**Requested by:** Copilot
+
+- Open Call/Open Put HTTP 400s appeared without a code deployment. Authentic
+  position rows sometimes lacked optional identity aliases, and the frontend
+  serialized those absent values as explicit null or blank constraints. The
+  strict backend correctly rejected those supplied invalid constraints before
+  any model invocation; backend validation was not relaxed.
+- Rusty's initial sparse-payload correction covered canonical fields but not
+  all documented account, contract, and instrument aliases. Reuben's initial
+  Playwright teardown correction stopped the driver on ordinary paths but
+  allowed cleanup-raised `CancelledError` to mask a primary provider failure.
+  Basher rejected both gaps and the original implementers remained locked out
+  from revising their own rejected work.
+- Saul independently implemented the complete sparse alias contract: all 15
+  canonical/alias names are handled at top level and nested `source`, omitting
+  only absent, null, or blank optional values. Required identity, boolean
+  `false`, exact values, malformed non-empty values, conflicts, and unrelated
+  nulls remain intact for fail-closed backend validation.
+- Livingston independently implemented bounded exactly-once Playwright
+  cleanup. A shielded inside-out task closes page, context, browser, and driver
+  with per-resource deadlines. Cleanup failure or cleanup cancellation cannot
+  mask provider failure; genuine caller cancellation remains observable; the
+  driver is stopped exactly once after successful start.
+- The Playwright warnings were a separate lifecycle leak in short-lived
+  manual-trigger loops, not the cause of the request 400s.
+- Basher's final verdict was **APPROVE** after 185 monitor/lifecycle backend
+  tests, 56 cache tests, 19 frontend tests, 82 alias assertions, and a bounded
+  hung-cleanup probe. TypeScript, scoped ESLint, Python compilation, diff
+  checks, and improved Ruff baseline comparison passed.
+- Residual risk is limited to the absence of a live Chromium teardown fault
+  injection; lifecycle fault coverage is hermetic. The unrelated
+  `infra/azure/config.dr.json` remained untouched, untracked, and unstaged.

@@ -829,3 +829,45 @@
 - `infra/azure/config.dr.json` remains untracked and absent from tracked/staged
   feature diffs. Residual risk is limited to the lack of browser-level
   responsive and keyboard interaction coverage.
+
+### 2026-09-30 — Combined incident fixes rejected
+- **REJECT.** Canonical sparse monitor fields are handled correctly, but the
+  shared sanitizer does not omit blank/null documented identity aliases
+  (`brokerage_account_id`, `account`, `option_contract_id`, `contract_symbol`,
+  `occ_symbol`, `osi_symbol`, `instrument_identifier`, `security_id`). An
+  adversarial helper probe retained every alias.
+- Playwright success, ordinary failure, and normal cancellation cleanup pass,
+  but `_close_resource` catches only `Exception`. A cleanup coroutine raising
+  `asyncio.CancelledError` replaced the primary provider failure with the
+  cleanup cancellation, violating the non-masking gate, although outer cleanup
+  and `pw.stop()` still ran once.
+- Validation passed 174 focused backend and 13 frontend tests (187 total),
+  TypeScript, scoped ESLint, Python compilation, and `git diff --check`.
+  Changed-file Ruff has 10 legacy findings versus 12 on `HEAD`, with the test
+  file clean.
+- `infra/azure/config.dr.json` is absent from tracked and staged diffs, but is
+  untracked and not ignored (`git check-ignore` failed), so repository-level
+  exclusion is not established.
+
+### 2026-09-30 — Monitor trigger and Playwright revisions approved
+- **APPROVE.** Saul's shared sparse allowlist now covers all 15 canonical and
+  documented account/contract/instrument aliases at top level and nested
+  `source`. Null/blank optional aliases are omitted while required
+  `symbol`/conditional `position_id`, false, malformed non-empty values,
+  conflicts, and unrelated nulls retain fail-closed behavior for both Open
+  Call and Open Put.
+- Livingston's shielded lifecycle reaches page → context → browser → driver
+  exactly once after driver start across success, partial initialization,
+  provider failure, cleanup failure, and caller cancellation. Cleanup
+  `CancelledError` no longer masks provider failure; external cancellation
+  remains observable; cleanup-only failure returns the visible empty-chain
+  fallback.
+- Validation passed 185 focused backend lifecycle/monitor tests, 56 cache
+  regressions, and 19 frontend tests. TypeScript, scoped ESLint, Python
+  compilation, diff hygiene, 82 independent alias assertions, and a bounded
+  hung-cleanup probe passed. Ruff remains baseline-only: 440 findings versus
+  443 on `HEAD` across the changed Python files.
+- `infra/azure/config.dr.json` remains unrelated, untracked, unstaged, and
+  absent from tracked/staged feature diffs. Residual risk is limited to
+  hermetic fake-Playwright lifecycle coverage rather than a live browser
+  teardown fault injection.

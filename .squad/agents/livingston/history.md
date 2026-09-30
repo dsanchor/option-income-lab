@@ -24,6 +24,23 @@
   and reject absolute fieldset positioning instead of blessing one alignment
   class combination.
 
+### 2026-09-30 — Playwright exception precedence revision
+- Cleanup must run in its own shielded task so caller cancellation cannot
+  interrupt the page → context → browser → driver sequence midway. Each
+  cleanup call has a fixed deadline, so shielding cannot create an unbounded
+  shutdown.
+- A `CancelledError` produced by cleanup machinery is a cleanup failure, not
+  caller cancellation. It is logged and attached like any other cleanup error;
+  an actual cancellation of the fetch task during body or cleanup remains
+  externally observable after best-effort teardown.
+- Precedence is: body cancellation/fatal error, external cancellation received
+  during cleanup, ordinary provider failure, then cleanup-only failure.
+  Ordinary provider and cleanup-only failures retain the repository's visible
+  empty-chain fallback rather than silently returning captured data.
+- This was the independent revision after Basher rejected Reuben's teardown
+  because cleanup cancellation could mask the primary failure; rejection
+  lockout was preserved.
+
 ### 2026-09-27 — Independent Dividend Buy share FMV
 - `SHARE_ACQUISITION.gross` remains investor contribution and FIFO uses
   `gross.eur_amount + fees.total_eur`; `share_fmv` is independently validated,

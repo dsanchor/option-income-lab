@@ -166,3 +166,11 @@
 - The Symbols list consumes the backend-authored `momentum` label directly; its canonical order is Bullish, Bullish (overextended), Weakening, Neutral, Bearish, Bearish (oversold), then Unknown.
 - An empty momentum selection is the explicit All state. The compact checkbox multi-select intersects with search and suitability filters without changing sorting, sections, view mode, or the default historical-row behavior.
 - Missing, blank, canonical Unknown, and unrecognized legacy values share the explicit Unknown filter bucket; the browser does not recalculate momentum.
+
+### 2026-09-30 — Sparse manual monitor trigger identity
+- Dashboard monitor rows can legitimately lack optional account, contract, or instrument IDs. Spreading those rows directly into JSON serialized explicit `null` values, which the strict backend correctly rejects as supplied invalid constraints.
+- The client and monitor-only BFF boundary now omit only absent, null, or blank optional constraints. Required `position_id`, false boolean values, exact symbol/type/strike/expiration/account identity, and every non-empty malformed value remain untouched so backend validation stays authoritative and fail-closed.
+- Basher rejected this initial revision because the sanitizer covered canonical
+  fields but omitted eight documented account, contract, and instrument
+  aliases. Under rejection lockout, Saul supplied the independent complete
+  alias revision.

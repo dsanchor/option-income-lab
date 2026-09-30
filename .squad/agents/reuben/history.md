@@ -195,3 +195,23 @@ Frontend: npx tsc --noEmit — 0 errors
   TypeScript, scoped ESLint/Ruff, Python compilation, production Next.js build,
   and `git diff --check` passed. The build retained the known generated-CSS
   warning; broad legacy Ruff still reports pre-existing debt in `web/app.py`.
+
+## TradingView Playwright Deterministic Cleanup (2026-09-30)
+
+- Added inside-out, partially initialized teardown for page, context, browser,
+  and the Playwright driver. A started driver is stopped exactly once across
+  success, failures, and cancellation.
+- Cleanup errors are logged per resource and do not skip later cleanup or mask
+  the original provider failure. Existing empty-chain fallback and cancellation
+  propagation remain unchanged.
+- Reviewed cache SWR and scheduler loop shutdown. Their existing `finally`
+  lock release plus cancel-and-gather behavior is sufficient once the fetcher
+  owns driver shutdown; no cache lifecycle redesign was needed.
+- Added hermetic success, partial-start, intermediate-cleanup-failure,
+  original-error, and cancellation tests.
+- Validation: 79 focused tests passed; compile and scoped diff checks passed;
+  Ruff introduced no findings and reduced the fetcher baseline from 12 to 10.
+- Basher rejected this initial revision because cleanup-raised
+  `asyncio.CancelledError` could replace an existing provider failure. Under
+  rejection lockout, Livingston independently revised cleanup exception and
+  cancellation precedence.

@@ -36,6 +36,24 @@
   source-contract assertions. The build retained one pre-existing generated
   CSS warning; focused Ruff reports only legacy findings outside the new test
   and import-order change.
+- 2026-09-30: Manual Open Call/Open Put trigger identity now has one explicit
+  sparse allowlist shared by the component and monitor-only BFF. It covers the
+  seven canonical optional constraints plus account (`brokerage_account_id`,
+  `account`), contract (`option_contract_id`, `contract_symbol`, `occ_symbol`,
+  `osi_symbol`), and instrument (`instrument_identifier`, `security_id`)
+  aliases at both top level and nested `source`.
+- 2026-09-30: Only absent, null, and blank-string allowlisted values are
+  omitted. Required `position_id`, unrelated nulls, exact non-empty values,
+  false booleans, malformed non-empty values, and alias conflicts survive the
+  frontend boundary. The backend now parses that same matrix, rejects explicit
+  sparse/malformed/conflicting aliases, and resolves accepted aliases through
+  the unchanged strict canonical position validator.
+- 2026-09-30: Validation passed 184 focused backend and 19 focused frontend
+  tests, TypeScript, scoped ESLint, changed-file Ruff, Python compilation, and
+  diff hygiene. `infra/azure/config.dr.json` remained untracked and absent from
+  both tracked and staged diffs.
+- 2026-09-30: This was the independent revision after Basher rejected Rusty's
+  incomplete canonical-only sanitizer; rejection lockout was preserved.
 - 2026-09-26: Fixed the merged roll-simulator regression at the cache/view
   boundary: `OptionsChainCache.get_or_load_async()` returns serialized JSON,
   but the endpoint passed that string to `apply_agent_view()`, which correctly
