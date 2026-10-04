@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { renderMarkdown } from "@/lib/markdown";
 
-type Mode = "portfolio" | "quick-analysis";
+type Mode = "portfolio" | "quick-analysis" | "api";
 type Phase = "select" | "portfolio-config" | "quick-config" | "chat";
 type ChatMessage = { role: "user" | "assistant"; content: string; ephemeral?: boolean };
 
@@ -88,7 +88,27 @@ export default function GlobalChatView() {
 
   function selectMode(m: Mode) {
     setMode(m);
+    if (m === "api") {
+      startApiChat();
+      return;
+    }
     setPhase(m === "portfolio" ? "portfolio-config" : "quick-config");
+  }
+
+  function startApiChat() {
+    setModeLabel("🤖 API Chat");
+    setSymbolLabel("");
+    setMessages([
+      {
+        role: "assistant",
+        ephemeral: true,
+        content:
+          "Hello! I'm your general-purpose Option Income Lab assistant. I have live access to your " +
+          "symbols, portfolio holdings and movements, economics, options screeners, calendar, plans, " +
+          "alerts, and DGI data via MCP. Ask me anything about your data.",
+      },
+    ]);
+    setPhase("chat");
   }
 
   // ---- backend history (excludes ephemeral greeting messages) ----
@@ -225,6 +245,8 @@ export default function GlobalChatView() {
       };
       if (mode === "quick-analysis") {
         payload.symbol_data = symbolData;
+      } else if (mode === "api") {
+        // No extra config fields — the API chat is general-purpose and MCP-backed.
       } else {
         payload.selected_agents = selectedAgents.map((a) => a.value);
         payload.activities_limit = activitiesLimit;
@@ -282,7 +304,7 @@ export default function GlobalChatView() {
           <div className="border-b border-border px-5 py-3">
             <h2 className="text-base font-semibold">Choose Chat Mode</h2>
           </div>
-          <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-3">
             <ModeCard
               icon="💼"
               title="Options Chat"
@@ -296,6 +318,13 @@ export default function GlobalChatView() {
               desc="Analyze any symbol (not yet tracked) using live market data"
               onClick={() => selectMode("quick-analysis")}
               tone="purple"
+            />
+            <ModeCard
+              icon="🤖"
+              title="API Chat"
+              desc="General-purpose assistant with live access to all your data via MCP"
+              onClick={() => selectMode("api")}
+              tone="green"
             />
           </div>
         </section>
@@ -592,12 +621,14 @@ function ModeCard({
   title: string;
   desc: string;
   onClick: () => void;
-  tone?: "blue" | "purple";
+  tone?: "blue" | "purple" | "green";
 }) {
   const t =
     tone === "purple"
       ? { bar: "var(--grad-purple)", glow: "rgba(167,139,250,0.14)" }
-      : { bar: "var(--grad-blue)", glow: "rgba(91,97,255,0.14)" };
+      : tone === "green"
+        ? { bar: "var(--grad-green)", glow: "rgba(0,196,147,0.14)" }
+        : { bar: "var(--grad-blue)", glow: "rgba(91,97,255,0.14)" };
   return (
     <button
       type="button"

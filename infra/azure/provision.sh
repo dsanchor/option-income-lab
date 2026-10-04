@@ -81,6 +81,7 @@ LOCATION="$(cfg '.location')"
 RESOURCE_GROUP="$(cfg '.resourceGroupName')"
 API_APP="$(cfg '.names.apiApp')"
 FRONTEND_APP="$(cfg '.names.frontendApp')"
+MCP_APP="$(cfg '.names.mcpApp')"
 BACKUP_JOB="$(cfg '.names.backupJob')"
 BACKUP_IDENTITY="$(cfg '.names.backupIdentity')"
 COSMOS_ACCOUNT="$(cfg '.names.cosmosAccount')"
@@ -537,6 +538,7 @@ info "Applying phase 1: all Azure resources with frontend ingress internal."
 PHASE1="$(deploy_main false '')"
 FRONTEND_FQDN="$(jq -er '.properties.outputs.frontendFqdn.value' <<<"$PHASE1")"
 API_FQDN="$(jq -er '.properties.outputs.apiFqdn.value' <<<"$PHASE1")"
+MCP_FQDN="$(jq -er '.properties.outputs.mcpFqdn.value' <<<"$PHASE1")"
 REDIRECT_URI="https://${FRONTEND_FQDN}/.auth/login/aad/callback"
 
 if [[ -z "$ENTRA_CLIENT_ID" ]]; then
@@ -615,12 +617,15 @@ verify_revision() {
 }
 verify_revision "$API_APP"
 verify_revision "$FRONTEND_APP"
+verify_revision "$MCP_APP"
 
 [[ "$(az_read containerapp show -g "$RESOURCE_GROUP" -n "$API_APP" --query properties.configuration.ingress.external -o tsv)" == "false" ]] ||
   die "Post-deployment invariant failed: API is public"
 [[ "$(az_read containerapp show -g "$RESOURCE_GROUP" -n "$FRONTEND_APP" --query properties.configuration.ingress.external -o tsv)" == "true" ]] ||
   die "Post-deployment invariant failed: authenticated frontend is not public"
-for app in "$API_APP" "$FRONTEND_APP"; do
+[[ "$(az_read containerapp show -g "$RESOURCE_GROUP" -n "$MCP_APP" --query properties.configuration.ingress.external -o tsv)" == "false" ]] ||
+  die "Post-deployment invariant failed: MCP server is public"
+for app in "$API_APP" "$FRONTEND_APP" "$MCP_APP"; do
   APP_JSON="$(az_read containerapp show -g "$RESOURCE_GROUP" -n "$app" -o json)"
   jq -e '(.properties.configuration.registries // []) | length == 0' <<<"$APP_JSON" >/dev/null ||
     die "$app has forbidden registry configuration"
@@ -642,6 +647,17 @@ jq -e '
     select(.name == "AZURE_OPENAI_API_KEY" and .secretRef == "foundry-api-key")] | length == 1)
 ' <<<"$API_JSON" >/dev/null ||
   die "API Cosmos/Foundry credentials are not wired exclusively through secretRef"
+jq -e --arg expected "https://${MCP_FQDN}/mcp" '
+  [.properties.template.containers[].env[] |
+    select(.name == "OIL_MCP_URL" and .value == $expected)] | length == 1
+' <<<"$API_JSON" >/dev/null ||
+  die "API OIL_MCP_URL is not the actual internal MCP FQDN"
+MCP_JSON="$(az_read containerapp show -g "$RESOURCE_GROUP" -n "$MCP_APP" -o json)"
+jq -e --arg expected "https://${API_FQDN}" '
+  [.properties.template.containers[].env[] |
+    select(.name == "OIL_API_INTERNAL_URL" and .value == $expected)] | length == 1
+' <<<"$MCP_JSON" >/dev/null ||
+  die "MCP OIL_API_INTERNAL_URL is not the actual internal API FQDN"
 FRONTEND_JSON="$(az_read containerapp show -g "$RESOURCE_GROUP" -n "$FRONTEND_APP" -o json)"
 jq -e --arg expected "https://${API_FQDN}" '
   [.properties.template.containers[].env[] |
@@ -719,6 +735,7 @@ if $BOOTSTRAP_GITHUB_OIDC; then
   for spec in \
     "Container Apps Contributor|/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/containerApps/${API_APP}" \
     "Container Apps Contributor|/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/containerApps/${FRONTEND_APP}" \
+    "Container Apps Contributor|/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/containerApps/${MCP_APP}" \
     "Container Apps Jobs Contributor|/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.App/jobs/${BACKUP_JOB}"; do
     role="${spec%%|*}"; scope="${spec#*|}"
     if ! az_read role assignment list --assignee-object-id "$OIDC_SP_ID" --scope "$scope" \
@@ -733,4 +750,5 @@ fi
 info "Provisioning succeeded."
 info "Frontend: https://${FRONTEND_FQDN}"
 info "API: internal-only (${API_FQDN})"
+info "MCP: internal-only (${MCP_FQDN})"
 info "Future TODO: migrate Cosmos and Foundry runtime authentication to managed identity; no roles were pre-assigned."

@@ -16,7 +16,7 @@ from uuid import uuid4
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", message=r".*experimental.*")
 
-from agent_framework import Agent, SkillsProvider
+from agent_framework import Agent, MCPStreamableHTTPTool, SkillsProvider
 from agent_framework.openai import OpenAIChatCompletionClient
 
 from .cosmos_db import CosmosDBService, is_watchlist_paused
@@ -4127,6 +4127,55 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
             time.time() - run_start,
             len(reply),
             "forecast_report_chat",
+        )
+        return reply
+
+    # ------------------------------------------------------------------
+    # API Chat Agent (MCP-backed general business-data assistant)
+    # ------------------------------------------------------------------
+
+    async def run_api_chat(
+        self,
+        *,
+        prompt,
+        mcp_url: str,
+    ) -> str:
+        """Generate one API Chat response using live MCP tools for business data.
+
+        ``mcp_url`` must point at the internal-only oil-mcp Container App
+        (e.g. ``https://<mcp-fqdn>/mcp``). Raises ``RuntimeError`` wrapping
+        any MCP connectivity failure so the route layer can surface a clear
+        503 instead of a generic 500.
+        """
+        run_start = time.time()
+        logger.info("Starting API chat function_id=%s", "api_chat")
+        mcp_tool = MCPStreamableHTTPTool(
+            name="oil-mcp",
+            url=mcp_url,
+            request_timeout=30,
+        )
+        try:
+            async with mcp_tool:
+                agent = Agent(
+                    client=self._get_client(model=None, function_id="api_chat"),
+                    name="ApiChatAgent",
+                    instructions=prompt.instructions,
+                    tools=[mcp_tool],
+                )
+                deployment = self._resolve_model_deployment(model=None, function_id="api_chat")
+                options = {"max_tokens": prompt.max_completion_tokens}
+                if "luna" not in deployment.lower():
+                    options["temperature"] = prompt.temperature
+                result = await agent.run(prompt.message, options=options)
+        except Exception as exc:
+            logger.exception("API chat MCP tool invocation failed")
+            raise RuntimeError(f"API Chat MCP server is unavailable: {exc}") from exc
+        reply = (result.text or str(result)).strip()
+        logger.info(
+            "API chat completed duration=%.2fs output_chars=%d function_id=%s",
+            time.time() - run_start,
+            len(reply),
+            "api_chat",
         )
         return reply
 

@@ -13,6 +13,7 @@ ai:
     forecast_report_chat: "gpt-5.6-luna"
     chat: "gpt-5.4-mini"
     symbol_chat: "gpt-5.4-mini"
+    api_chat: "gpt-5.6-luna"
 
 azure:
   project_endpoint: "${AZURE_AI_PROJECT_ENDPOINT}"
@@ -43,6 +44,19 @@ scheduler:
 web:
   host: "0.0.0.0"
   port: 8000
+
+# Internal-only MCP server (run_mcp.py) — exposes read-only business-domain
+# endpoints as MCP tools for the API Chat agent. Never reachable externally;
+# the api container reaches it over OIL_MCP_URL inside the Container Apps
+# environment, and this server reaches the api container over
+# OIL_API_INTERNAL_URL.
+mcp:
+  host: "0.0.0.0"
+  port: 8001
+  # oil_api_base_url is NOT read from this file — set it via the
+  # OIL_API_INTERNAL_URL environment variable (defaults to
+  # http://localhost:8000 for local dev). See run_mcp.py.
+  request_timeout_seconds: 30
 
 telegram:
   enabled: false

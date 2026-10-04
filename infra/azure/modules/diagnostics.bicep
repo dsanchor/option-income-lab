@@ -5,6 +5,7 @@ param storageAccountName string
 param containerAppsEnvironmentName string
 param apiAppName string
 param frontendAppName string
+param mcpAppName string
 param backupJobName string
 param enabled bool
 
@@ -35,6 +36,10 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' existing = {
 
 resource frontendApp 'Microsoft.App/containerApps@2024-03-01' existing = {
   name: frontendAppName
+}
+
+resource mcpApp 'Microsoft.App/containerApps@2024-03-01' existing = {
+  name: mcpAppName
 }
 
 resource backupJob 'Microsoft.App/jobs@2024-03-01' existing = {
@@ -175,6 +180,20 @@ resource backupJobDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-
     metrics: [
       {
         category: 'Basic'
+        enabled: true
+      }
+    ]
+  }
+}
+
+resource mcpDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (enabled) {
+  name: 'send-to-log-analytics'
+  scope: mcpApp
+  properties: {
+    workspaceId: workspaceId
+    metrics: [
+      {
+        category: 'AllMetrics'
         enabled: true
       }
     ]

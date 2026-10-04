@@ -17,6 +17,7 @@ AI_FUNCTIONS = {
     "monitor_assessment", "monitor_roll", "analysis", "buy_tracker",
     "supervisor", "alpha", "summary", "report", "technical_analysis",
     "plan_monitor", "chat", "symbol_chat", "activity_chat", "dps_insights",
+    "api_chat",
 }
 EXPECTED_CONTAINERS = {
     "symbols": ("/symbol", None, "symbols"),
@@ -142,7 +143,7 @@ def validate(config: dict[str, Any], check_backend: bool = True) -> None:
         fail("suffix must be 4-12 lowercase letters or digits")
 
     names = exact_keys(config["names"], {
-        "logAnalytics", "containerAppsEnvironment", "apiApp", "frontendApp",
+        "logAnalytics", "containerAppsEnvironment", "apiApp", "frontendApp", "mcpApp",
         "cosmosAccount", "foundryAccount", "foundryProject", "backupStorage",
         "backupContainer", "backupIdentity", "backupJob",
     }, "names")
@@ -218,7 +219,7 @@ def validate(config: dict[str, Any], check_backend: bool = True) -> None:
             "differ from the contract"
         )
 
-    apps = exact_keys(config["apps"], {"api", "frontend"}, "apps")
+    apps = exact_keys(config["apps"], {"api", "frontend", "mcp"}, "apps")
     api = exact_keys(
         apps["api"],
         {"ingress", "minReplicas", "maxReplicas", "cpu", "memory", "healthPath"},
@@ -242,6 +243,16 @@ def validate(config: dict[str, Any], check_backend: bool = True) -> None:
         or frontend["maxReplicas"] < frontend["minReplicas"]
     ):
         fail("frontend port/replica limits are invalid")
+    mcp = exact_keys(
+        apps["mcp"],
+        {"ingress", "minReplicas", "maxReplicas", "cpu", "memory"},
+        "apps.mcp",
+    )
+    mcp_ingress = exact_keys(mcp["ingress"], {"external", "targetPort"}, "apps.mcp.ingress")
+    if mcp_ingress != {"external": False, "targetPort": 8001}:
+        fail("MCP ingress must be internal on port 8001")
+    if mcp["minReplicas"] < 1 or mcp["maxReplicas"] < mcp["minReplicas"]:
+        fail("MCP port/replica limits are invalid")
 
     backup = exact_keys(config["backup"], {
         "schedule", "timezone", "localTime", "dailyRetentionDays",

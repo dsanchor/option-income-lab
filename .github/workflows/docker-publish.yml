@@ -10,6 +10,7 @@ env:
   AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'stock-options-manager-rg' }}
   AZURE_API_APP: ${{ vars.AZURE_API_APP || 'ca-stock-options-manager-api' }}
   AZURE_FRONT_APP: ${{ vars.AZURE_FRONT_APP || 'ca-stock-options-manager-front' }}
+  AZURE_MCP_APP: ${{ vars.AZURE_MCP_APP || 'ca-stock-options-manager-mcp' }}
   AZURE_BACKUP_JOB: ${{ vars.AZURE_BACKUP_JOB || 'ca-stock-options-manager-backup' }}
 
 jobs:
@@ -129,6 +130,53 @@ jobs:
           done
           if [ "$HEALTH" != "Healthy" ] || [ "$ACTIVE" != "true" ]; then
             echo "❌ API revision did not become healthy within 5 minutes (runningState: $PROV  healthState: $HEALTH  active: $ACTIVE)"
+            exit 1
+          fi
+
+      - name: Deploy MCP server to Container Apps
+        id: deploy-mcp
+        run: |
+          REVISION=$(az containerapp update \
+            --name "$AZURE_MCP_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image ghcr.io/dsanchor/option-income-lab-api:${{ steps.tag.outputs.tag }} \
+            --query "properties.latestRevisionName" -o tsv)
+          if [ -z "$REVISION" ]; then
+            echo "❌ Could not determine revision name from az containerapp update output"
+            exit 1
+          fi
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+          echo "MCP revision: $REVISION"
+
+      - name: Verify MCP revision is ready
+        run: |
+          REVISION="${{ steps.deploy-mcp.outputs.revision }}"
+          echo "Polling revision: $REVISION"
+          PROV="Unknown"; HEALTH="Unknown"; ACTIVE="false"
+          for i in $(seq 1 30); do
+            JSON=$(az containerapp revision show \
+              --name "$AZURE_MCP_APP" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --revision "$REVISION" \
+              -o json 2>/dev/null || echo "{}")
+            PROV=$(echo "$JSON" | jq -r '.properties.runningState // "Unknown"')
+            HEALTH=$(echo "$JSON" | jq -r '.properties.healthState // "Unknown"')
+            ACTIVE=$(echo "$JSON" | jq -r '.properties.active // false')
+            echo "Attempt $i/30 — runningState: $PROV  healthState: $HEALTH  active: $ACTIVE"
+            if [ "$HEALTH" = "Healthy" ] && [ "$ACTIVE" = "true" ]; then
+              echo "✅ MCP revision is healthy and active"
+              break
+            elif [ "$HEALTH" = "Unhealthy" ]; then
+              echo "❌ MCP revision is unhealthy"
+              exit 1
+            elif [ "$PROV" = "Failed" ] || [ "$PROV" = "Degraded" ] || [ "$PROV" = "ProvisionFailed" ] || [ "$PROV" = "ActivationFailed" ]; then
+              echo "❌ MCP revision provisioning failed (runningState: $PROV)"
+              exit 1
+            fi
+            sleep 10
+          done
+          if [ "$HEALTH" != "Healthy" ] || [ "$ACTIVE" != "true" ]; then
+            echo "❌ MCP revision did not become healthy within 5 minutes (runningState: $PROV  healthState: $HEALTH  active: $ACTIVE)"
             exit 1
           fi
 

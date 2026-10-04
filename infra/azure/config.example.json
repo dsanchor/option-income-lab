@@ -11,6 +11,7 @@
     "containerAppsEnvironment": "cae-stock-options-manager",
     "apiApp": "ca-stock-options-manager-api",
     "frontendApp": "ca-stock-options-manager-front",
+    "mcpApp": "ca-stock-options-manager-mcp",
     "cosmosAccount": "cosmos-stock-options",
     "foundryAccount": "ai-stock-options-manager-dsr2026",
     "foundryProject": "default",
@@ -68,7 +69,8 @@
         "chat": "gpt-5.4-mini",
         "symbol_chat": "gpt-5.4-mini",
         "activity_chat": "gpt-5.4-mini",
-        "dps_insights": "gpt-5.4-mini"
+        "dps_insights": "gpt-5.4-mini",
+        "api_chat": "gpt-5.6-luna"
       }
     }
   },
@@ -96,6 +98,13 @@
     },
     "frontend": {
       "targetPort": 3000,
+      "minReplicas": 1,
+      "maxReplicas": 1,
+      "cpu": 0.5,
+      "memory": "1Gi"
+    },
+    "mcp": {
+      "ingress": {"external": false, "targetPort": 8001},
       "minReplicas": 1,
       "maxReplicas": 1,
       "cpu": 0.5,

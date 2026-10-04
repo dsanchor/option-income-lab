@@ -94,6 +94,16 @@ AI_FUNCTIONS = {
         "legacy_model_section": "dps_insights",
         "default_model": "gpt-5.4-mini",
     },
+    "api_chat": {
+        "label": "API Chat",
+        "group": "Chat",
+        "description": (
+            "General-purpose assistant with live read access to business "
+            "data (symbols, portfolio, options, screeners, economics) via "
+            "the MCP server."
+        ),
+        "default_model": "gpt-5.6-luna",
+    },
 }
 
 SUPPORTED_AI_PROVIDERS = ("azure", "gemini")

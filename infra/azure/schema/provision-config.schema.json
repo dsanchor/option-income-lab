@@ -16,12 +16,13 @@
     "names": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["logAnalytics", "containerAppsEnvironment", "apiApp", "frontendApp", "cosmosAccount", "foundryAccount", "foundryProject", "backupStorage", "backupContainer", "backupIdentity", "backupJob"],
+      "required": ["logAnalytics", "containerAppsEnvironment", "apiApp", "frontendApp", "mcpApp", "cosmosAccount", "foundryAccount", "foundryProject", "backupStorage", "backupContainer", "backupIdentity", "backupJob"],
       "properties": {
         "logAnalytics": {"$ref": "#/$defs/azureName"},
         "containerAppsEnvironment": {"$ref": "#/$defs/azureName"},
         "apiApp": {"$ref": "#/$defs/containerAppName"},
         "frontendApp": {"$ref": "#/$defs/containerAppName"},
+        "mcpApp": {"$ref": "#/$defs/containerAppName"},
         "cosmosAccount": {"type": "string", "pattern": "^[a-z0-9-]{3,44}$"},
         "foundryAccount": {"type": "string", "pattern": "^[a-zA-Z0-9-]{2,64}$"},
         "foundryProject": {"$ref": "#/$defs/azureName"},
@@ -71,7 +72,7 @@
             "roles": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["monitor_assessment", "monitor_roll", "analysis", "buy_tracker", "supervisor", "alpha", "summary", "report", "technical_analysis", "plan_monitor", "chat", "symbol_chat", "activity_chat", "dps_insights"],
+              "required": ["monitor_assessment", "monitor_roll", "analysis", "buy_tracker", "supervisor", "alpha", "summary", "report", "technical_analysis", "plan_monitor", "chat", "symbol_chat", "activity_chat", "dps_insights", "api_chat"],
               "properties": {
                 "monitor_assessment": {"const": "gpt-5.6-luna"},
                 "monitor_roll": {"const": "gpt-5.6-luna"},
@@ -86,7 +87,8 @@
                 "chat": {"$ref": "#/$defs/deploymentName"},
                 "symbol_chat": {"$ref": "#/$defs/deploymentName"},
                 "activity_chat": {"$ref": "#/$defs/deploymentName"},
-                "dps_insights": {"$ref": "#/$defs/deploymentName"}
+                "dps_insights": {"$ref": "#/$defs/deploymentName"},
+                "api_chat": {"$ref": "#/$defs/deploymentName"}
               }
             }
           }
@@ -120,7 +122,7 @@
     "apps": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["api", "frontend"],
+      "required": ["api", "frontend", "mcp"],
       "properties": {
         "api": {"$ref": "#/$defs/app"},
         "frontend": {
@@ -134,7 +136,8 @@
             "cpu": {"type": "number", "minimum": 0.25},
             "memory": {"type": "string", "pattern": "^[0-9]+(Mi|Gi)$"}
           }
-        }
+        },
+        "mcp": {"$ref": "#/$defs/mcpApp"}
       }
     },
     "backup": {
@@ -226,6 +229,23 @@
         "cpu": {"type": "number", "minimum": 0.25},
         "memory": {"type": "string", "pattern": "^[0-9]+(Mi|Gi)$"},
         "healthPath": {"const": "/healthz"}
+      }
+    },
+    "mcpApp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ingress", "minReplicas", "maxReplicas", "cpu", "memory"],
+      "properties": {
+        "ingress": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["external", "targetPort"],
+          "properties": {"external": {"const": false}, "targetPort": {"const": 8001}}
+        },
+        "minReplicas": {"type": "integer", "minimum": 1},
+        "maxReplicas": {"type": "integer", "minimum": 1},
+        "cpu": {"type": "number", "minimum": 0.25},
+        "memory": {"type": "string", "pattern": "^[0-9]+(Mi|Gi)$"}
       }
     }
   }

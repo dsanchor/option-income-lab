@@ -10318,6 +10318,60 @@ async def chat_api(request: Request):
                 f"Market Data:\n{context_text}"
             )
 
+    elif mode == "api":
+        # General-purpose assistant with live MCP tool access to business
+        # data — no server-built context string, the agent fetches what it
+        # needs via tools. Returns early: this mode does not use the shared
+        # sync chat_completion path below.
+        if not messages:
+            return JSONResponse({"error": "No messages provided"}, status_code=400)
+        last_message = messages[-1]
+        if last_message.get("role") != "user":
+            return JSONResponse(
+                {"error": "Last message must be from the user"}, status_code=400
+            )
+        history = [
+            {"role": m.get("role"), "content": m.get("content")}
+            for m in messages[:-1]
+            if m.get("role") in ("user", "assistant")
+        ]
+        mcp_url = os.environ.get("OIL_MCP_URL")
+        if not mcp_url:
+            return JSONResponse(
+                {"error": "API Chat is not configured: OIL_MCP_URL is not set"},
+                status_code=503,
+            )
+
+        config_obj, err_resp = _llm_settings_response("api_chat")
+        if err_resp:
+            return err_resp
+
+        try:
+            from src.agent_runner import AgentRunner
+            from src.api_chat_instructions import build_api_chat_prompt
+
+            prompt = build_api_chat_prompt(
+                history=history,
+                message=last_message.get("content", ""),
+            )
+            runner = AgentRunner(
+                llm=config_obj.llm_config(),
+                model=config_obj.model_deployment,
+                function_llms=config_obj.function_llm_configs(),
+                function_models=config_obj.function_model_deployments(),
+            )
+            reply = await runner.run_api_chat(prompt=prompt, mcp_url=mcp_url)
+            if not reply:
+                raise RuntimeError("The configured model returned an empty response")
+            return JSONResponse({"reply": reply})
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except RuntimeError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+        except Exception as exc:
+            logger.exception("API chat failed")
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
     else:
         return JSONResponse(
             {"error": f"Invalid mode: {mode}"},

@@ -6,9 +6,10 @@
 
 `infra/azure/provision.sh` is the authoritative path for creating or adopting
 the complete production stack in one resource group. It deploys Log Analytics,
-Container Apps, serverless Cosmos DB with all eight containers, a Foundry
-account/project and the three approved model deployments, private backup
-storage/job/RBAC, diagnostics, and final delete locks.
+Container Apps (`api`, `frontend`, and an internal-only `mcp` server), serverless
+Cosmos DB with all eight containers, a Foundry account/project and the three
+approved model deployments, private backup storage/job/RBAC, diagnostics, and
+final delete locks.
 
 ### Prerequisites
 
@@ -185,6 +186,7 @@ The workflow defaults match `config.example.json`. Set these repository or
 | `AZURE_API_APP` | `ca-stock-options-manager-api` |
 | `AZURE_FRONT_APP` | `ca-stock-options-manager-front` |
 | `AZURE_BACKUP_JOB` | `ca-stock-options-manager-backup` |
+| `AZURE_MCP_APP` | `ca-stock-options-manager-mcp` |
 
 ### One-Time Azure OIDC Setup
 
@@ -849,6 +851,37 @@ az containerapp update --name "$API_APP" --resource-group "$RESOURCE_GROUP" --im
 az containerapp update --name "$WEB_APP" --resource-group "$RESOURCE_GROUP" --image "$WEB_IMAGE"
 ```
 
+## MCP Server (`mcp`)
+
+The self-contained provisioner (`infra/azure/provision.sh`) also deploys a third
+Container App, `mcp`, exposing a read-only [Model Context Protocol](https://modelcontextprotocol.io)
+server over Streamable HTTP. It reuses the same `api` image
+(`ghcr.io/<owner>/<repo>-api:...`) but overrides the container's entrypoint to run
+`python run_mcp.py` instead of `python run.py`.
+
+- **Internal ingress only**, target port `8001` — never reachable from the public
+  internet, matching the `api` app's isolation model.
+- Exposes 14 read-only business-domain tools (symbols, portfolio holdings/movements,
+  economics, options screeners, calendar, plans, alerts, DGI data) by proxying to the
+  internal `api` over the Container Apps environment's internal DNS. It exposes **no**
+  administration, configuration, or infrastructure endpoints (see
+  `backend/src/mcp_server.py`).
+- `GET /healthz` returns `200` for Container Apps liveness/readiness probes; the MCP
+  protocol itself is served at `/mcp`.
+- The `api` and `mcp` apps are wired to each other automatically by Bicep via
+  predictable internal-ingress FQDNs (string interpolation, not a resource property
+  reference, to avoid a circular ARM dependency) — see `OIL_MCP_URL` and
+  `OIL_API_INTERNAL_URL` in [Environment Variables](#environment-variables) below. No
+  manual configuration is required when using the automated provisioner or CI/CD.
+- The frontend's **API Chat** mode (`mode: "api"` in `/api/chat`) is a general-purpose
+  assistant backed by this MCP server, giving it live read access to all tracked
+  business data, independent of the existing Options Chat / Quick Analysis modes.
+
+CI/CD (`.github/workflows/docker-publish.yml`) deploys `mcp` from the same built `api`
+image — there is no separate build job — immediately after the `api` deploy step and
+before the `frontend` deploy step, using the `AZURE_MCP_APP` variable (see
+[Optional GitHub Variables](#optional-github-variables)).
+
 ## Scheduler
 
 Both the `api` container and any additional instance you run include the **in-process
@@ -881,6 +914,13 @@ Telegram, scheduler); the `web` container takes only `API_BASE_URL`.
 | `GOOGLE_API_KEY` | Gemini | Google AI API key from [AI Studio](https://aistudio.google.com/apikey) |
 | `TELEGRAM_BOT_TOKEN` | Optional | Telegram bot token (if notifications enabled) |
 | `TELEGRAM_CHAT_ID` | Optional | Telegram chat ID (if notifications enabled) |
+| `OIL_MCP_URL` | Automated provisioning | Base URL of the internal `mcp` server's `/mcp` endpoint (e.g., `https://<mcp-app>.internal.<env>.<region>.azurecontainerapps.io/mcp`), used by the `api_chat` agent to reach MCP tools. Auto-wired by Bicep when using `infra/azure/provision.sh`; set manually only for local dev or a manual deployment. |
+
+**`mcp` (`backend/run_mcp.py`, reuses the `api` image):**
+
+| Variable | Required when | Description |
+|---|---|---|
+| `OIL_API_INTERNAL_URL` | Automated provisioning | Base URL of the internal `api` app that the MCP server proxies tool calls to (e.g., `https://<api-app>.internal.<env>.<region>.azurecontainerapps.io`). Auto-wired by Bicep when using `infra/azure/provision.sh`; set manually only for local dev or a manual deployment. Defaults to `http://localhost:8000` for local dev. |
 
 **`web` (`frontend/`):**
 

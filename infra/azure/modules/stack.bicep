@@ -76,10 +76,13 @@ module apps 'apps.bicep' = {
     environmentId: environment.outputs.environmentId
     apiName: config.names.apiApp
     frontendName: config.names.frontendApp
+    mcpName: config.names.mcpApp
     apiImage: config.images.api
     frontendImage: config.images.frontend
     apiConfig: config.apps.api
     frontendConfig: config.apps.frontend
+    mcpConfig: config.apps.mcp
+    environmentDefaultDomain: environment.outputs.defaultDomain
     cosmosEndpoint: cosmos.outputs.endpoint
     cosmosKey: listKeys(resourceId('Microsoft.DocumentDB/databaseAccounts', config.names.cosmosAccount), '2024-05-15').primaryMasterKey
     foundryEndpoint: foundry.outputs.endpoint
@@ -134,6 +137,7 @@ module diagnostics 'diagnostics.bicep' = {
     containerAppsEnvironmentName: config.names.containerAppsEnvironment
     apiAppName: config.names.apiApp
     frontendAppName: config.names.frontendApp
+    mcpAppName: config.names.mcpApp
     backupJobName: config.names.backupJob
     enabled: config.diagnostics.enabled
   }
@@ -146,5 +150,6 @@ module diagnostics 'diagnostics.bicep' = {
 
 output apiFqdn string = apps.outputs.apiFqdn
 output frontendFqdn string = apps.outputs.frontendFqdn
+output mcpFqdn string = apps.outputs.mcpFqdn
 output foundryEndpoint string = foundry.outputs.endpoint
 output backupIdentityClientId string = backupIdentity.outputs.identityClientId

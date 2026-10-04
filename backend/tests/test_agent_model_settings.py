@@ -19,7 +19,7 @@ EXPECTED_FUNCTIONS = {
     "monitor_assessment", "monitor_roll", "supervisor", "alpha", "analysis",
     "buy_tracker", "summary", "report", "chat", "symbol_chat",
     "technical_analysis", "plan_monitor", "activity_chat", "dps_insights",
-    "forecast_report_chat",
+    "forecast_report_chat", "api_chat",
 }
 
 

@@ -13,11 +13,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install chromium --with-deps
 
 # Application source + config + scripts
-COPY config.yaml run.py run_web.py ./
+COPY config.yaml run.py run_web.py run_mcp.py ./
 COPY src/ src/
 COPY web/ web/
 COPY scripts/ scripts/
 
 EXPOSE 8000
+EXPOSE 8001
 
 ENTRYPOINT ["python", "run.py"]
