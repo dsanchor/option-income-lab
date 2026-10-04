@@ -1936,6 +1936,150 @@ async def api_economics_overview(request: Request,
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+def _build_invested_capital_report(
+    movements: List[Dict[str, Any]],
+    *,
+    symbol_filter: Optional[List[str]] = None,
+    account_filter: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Aggregate stock BUY/SELL movements into a yearly invested-capital evolution.
+
+    Unlike the options/dividends economics reports, this is inherently a
+    multi-year view (there is no single-year "invested capital" concept), so
+    no year/month filter is applied — only symbol/account scoping.
+    """
+    normalized_symbols = (
+        {s.strip().upper() for s in symbol_filter if s.strip()}
+        if symbol_filter
+        else None
+    )
+    normalized_accounts = (
+        {a.strip() for a in account_filter if a.strip()} if account_filter else None
+    )
+
+    yearly: Dict[int, Dict[str, float]] = {}
+    available_years: set = set()
+    available_symbols: set = set()
+    available_accounts: set = set()
+
+    for movement in movements:
+        txn_type = movement.get("txn_type")
+        if txn_type not in ("BUY", "SELL"):
+            continue
+        ticker = str(movement.get("ticker") or "").strip().upper()
+        account_id = movement.get("account_id") or "_unassigned"
+        if ticker:
+            available_symbols.add(ticker)
+        available_accounts.add(account_id)
+        if normalized_symbols is not None and ticker not in normalized_symbols:
+            continue
+        if normalized_accounts is not None and account_id not in normalized_accounts:
+            continue
+
+        parsed_date = _parse_date_value(
+            movement.get("trade_date")
+        ) or _parse_datetime_value(movement.get("trade_date"))
+        if parsed_date is None:
+            continue
+        year = parsed_date.year
+        available_years.add(year)
+
+        net_eur = abs(
+            _parse_numeric((movement.get("net") or {}).get("eur_amount")) or 0.0
+        )
+        bucket = yearly.setdefault(
+            year,
+            {"buys_eur": 0.0, "sells_eur": 0.0, "buy_count": 0, "sell_count": 0},
+        )
+        if txn_type == "BUY":
+            bucket["buys_eur"] += net_eur
+            bucket["buy_count"] += 1
+        else:
+            bucket["sells_eur"] += net_eur
+            bucket["sell_count"] += 1
+
+    yearly_rows: List[Dict[str, Any]] = []
+    cumulative_rows: List[Dict[str, Any]] = []
+    cumulative_buys = 0.0
+    cumulative_sells = 0.0
+    for year in sorted(yearly):
+        bucket = yearly[year]
+        yearly_rows.append(
+            {
+                "year": year,
+                "buys_eur": _round2(bucket["buys_eur"]),
+                "sells_eur": _round2(bucket["sells_eur"]),
+                "net_invested_eur": _round2(bucket["buys_eur"] - bucket["sells_eur"]),
+                "buy_count": bucket["buy_count"],
+                "sell_count": bucket["sell_count"],
+            }
+        )
+        cumulative_buys += bucket["buys_eur"]
+        cumulative_sells += bucket["sells_eur"]
+        cumulative_rows.append(
+            {
+                "year": year,
+                "cumulative_buys_eur": _round2(cumulative_buys),
+                "cumulative_sells_eur": _round2(cumulative_sells),
+                "cumulative_net_invested_eur": _round2(
+                    cumulative_buys - cumulative_sells
+                ),
+            }
+        )
+
+    return {
+        "yearly": yearly_rows,
+        "cumulative": cumulative_rows,
+        "filters": {
+            "years": sorted(available_years, reverse=True),
+            "symbols": sorted(available_symbols),
+            "account_ids": sorted(available_accounts),
+        },
+        "applied_filters": {
+            "symbols": symbol_filter,
+            "account_ids": account_filter,
+        },
+    }
+
+
+@app.get("/api/economics/capital")
+async def api_economics_capital(request: Request,
+                                 symbol: Optional[str] = Query(default=None),
+                                 account_id: Optional[str] = Query(default=None)):
+    try:
+        cosmos = _get_cosmos(request)
+        portfolio_container = getattr(cosmos, "portfolio_container", None)
+        if portfolio_container is None:
+            raise RuntimeError("CosmosDB portfolio container not available")
+
+        symbol_list = None
+        if symbol:
+            symbol_list = [s.strip().upper() for s in symbol.split(",") if s.strip()]
+            if not symbol_list:
+                symbol_list = None
+        account_list = None
+        if account_id:
+            account_list = [a.strip() for a in account_id.split(",") if a.strip()]
+            if not account_list:
+                account_list = None
+
+        from src.portfolio.cosmos_portfolio import CosmosPortfolioService
+
+        portfolio_svc = CosmosPortfolioService(portfolio_container, None)
+        movements = portfolio_svc.get_all_movements_for_holdings()
+        return JSONResponse(
+            _build_invested_capital_report(
+                movements,
+                symbol_filter=symbol_list,
+                account_filter=account_list,
+            )
+        )
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/api/symbols/{symbol}")
 async def api_get_symbol(request: Request, symbol: str):
     try:

@@ -355,3 +355,37 @@ export interface EconomicsAggregatedReport {
   applied_filters: EconomicsAggregatedAppliedFilters;
   meta: EconomicsAggregatedMeta;
 }
+
+export interface InvestedCapitalYearlyRow {
+  year: number;
+  buys_eur: number;
+  sells_eur: number;
+  net_invested_eur: number;
+  buy_count: number;
+  sell_count: number;
+}
+
+export interface InvestedCapitalCumulativeRow {
+  year: number;
+  cumulative_buys_eur: number;
+  cumulative_sells_eur: number;
+  cumulative_net_invested_eur: number;
+}
+
+export interface InvestedCapitalFilters {
+  years: number[];
+  symbols: string[];
+  account_ids: string[];
+}
+
+export interface InvestedCapitalAppliedFilters {
+  symbols: string[] | null;
+  account_ids: string[] | null;
+}
+
+export interface InvestedCapitalReport {
+  yearly: InvestedCapitalYearlyRow[];
+  cumulative: InvestedCapitalCumulativeRow[];
+  filters: InvestedCapitalFilters;
+  applied_filters: InvestedCapitalAppliedFilters;
+}

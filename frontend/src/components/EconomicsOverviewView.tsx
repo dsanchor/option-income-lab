@@ -5,6 +5,9 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -24,8 +27,13 @@ import type {
   EconomicsAggregatedMonthlyRow,
   EconomicsAggregatedReport,
   EconomicsAggregatedSummary,
+  InvestedCapitalReport,
+  InvestedCapitalYearlyRow,
   ScripValuationStatus,
 } from "@/types/economics";
+
+const YEAR_MONTH_CAPTION = "Shows all years · filtered by symbol/account only, not by Year/Month.";
+const LINE_COLORS = ["#5b61ff", "#00c493", "#ff9416", "#c084fc", "#38bdf8", "#f43f5e"];
 
 const MONTHS = [
   { value: "1", label: "Jan" },
@@ -104,6 +112,284 @@ function formatMonthLabel(value: string) {
   return Number.isNaN(date.getTime())
     ? value
     : new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric" }).format(date);
+}
+
+function parseYearMonth(value: string) {
+  const [yearStr, monthStr] = value.split("-");
+  return { year: Number(yearStr), month: Number(monthStr) };
+}
+
+type PassiveIncomeYoyRow = {
+  year: number;
+  priorYear: number;
+  monthsCompared: number;
+  thisYearNet: number;
+  priorYearNet: number;
+  pctChange: number | null;
+  isPartialYear: boolean;
+};
+
+/** Number of fully-elapsed calendar months in `year` as of `now` (0-12). */
+function completeMonthsForYear(year: number, now: Date): number {
+  if (year > now.getFullYear()) return 0;
+  if (year < now.getFullYear()) return 12;
+  return now.getMonth();
+}
+
+function rowsThroughMonth(rows: EconomicsAggregatedMonthlyRow[], year: number, monthLimit: number) {
+  return rows.filter((row) => {
+    const { year: rowYear, month } = parseYearMonth(row.month);
+    return rowYear === year && month <= monthLimit;
+  });
+}
+
+function sumCombinedNet(rows: EconomicsAggregatedMonthlyRow[]) {
+  return rows.reduce((total, row) => total + row.combined_net_eur, 0);
+}
+
+/**
+ * Builds year-over-year total passive income (dividends net + scrip + options)
+ * growth rows, most recent year first. Mirrors DividendsView's computeYoyGrowth
+ * but is driven by the combined_net_eur field (dividends total + options net).
+ */
+function computePassiveIncomeYoy(rows: EconomicsAggregatedMonthlyRow[]): PassiveIncomeYoyRow[] {
+  const now = new Date();
+  const years = Array.from(new Set(rows.map((row) => parseYearMonth(row.month).year))).sort((a, b) => b - a);
+  const result: PassiveIncomeYoyRow[] = [];
+  for (const year of years) {
+    const priorYear = year - 1;
+    if (!years.includes(priorYear)) continue;
+    const monthsCompared = Math.min(completeMonthsForYear(year, now), completeMonthsForYear(priorYear, now));
+    if (monthsCompared <= 0) continue;
+    const thisYearRows = rowsThroughMonth(rows, year, monthsCompared);
+    const priorYearRows = rowsThroughMonth(rows, priorYear, monthsCompared);
+    const thisYearNet = sumCombinedNet(thisYearRows);
+    const priorYearNet = sumCombinedNet(priorYearRows);
+    const pctChange = priorYearNet !== 0 ? ((thisYearNet - priorYearNet) / Math.abs(priorYearNet)) * 100 : null;
+    result.push({
+      year,
+      priorYear,
+      monthsCompared,
+      thisYearNet,
+      priorYearNet,
+      pctChange,
+      isPartialYear: monthsCompared < 12,
+    });
+  }
+  return result;
+}
+
+function PassiveIncomeYoySection({ rows }: { rows: EconomicsAggregatedMonthlyRow[] }) {
+  const growth = useMemo(() => computePassiveIncomeYoy(rows), [rows]);
+
+  return (
+    <div className="surface overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3">
+        <h2 className="text-base font-semibold">Passive Income — Year-over-Year Growth</h2>
+        <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+          {growth.length} comparisons
+        </span>
+      </div>
+      <div className="overflow-x-auto border-t border-border">
+        <table className="w-full min-w-[720px] text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
+              <th className="px-3 py-2 font-medium">Comparison</th>
+              <th className="px-3 py-2 text-right font-medium">Months Compared</th>
+              <th className="px-3 py-2 text-right font-medium">This Period Total</th>
+              <th className="px-3 py-2 text-right font-medium">Prior Period Total</th>
+              <th className="px-3 py-2 text-right font-medium">Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {growth.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-3 py-6 text-center text-text-muted">
+                  Not enough multi-year history to compute growth yet.
+                </td>
+              </tr>
+            )}
+            {growth.map((row) => (
+              <tr
+                key={row.year}
+                className="border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/40"
+              >
+                <td className="px-3 py-2 font-semibold">
+                  {row.year} vs {row.priorYear}
+                  {row.isPartialYear && (
+                    <span className="ml-2 rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-[10px] font-normal uppercase tracking-wide text-text-muted">
+                      YTD
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right font-mono">
+                  Jan–{MONTHS[row.monthsCompared - 1].label}
+                </td>
+                <td className="px-3 py-2 text-right font-mono">{eur(row.thisYearNet)}</td>
+                <td className="px-3 py-2 text-right font-mono">{eur(row.priorYearNet)}</td>
+                <td className={`px-3 py-2 text-right font-mono ${row.pctChange === null ? "text-text-muted" : signedColor(row.pctChange)}`}>
+                  {row.pctChange === null ? "—" : `${row.pctChange >= 0 ? "+" : ""}${row.pctChange.toFixed(1)}%`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="border-t border-border px-4 py-2 text-xs text-text-muted">
+        Combines net dividends, scrip, and options income. Each comparison uses the same number of complete months
+        on both sides, so the current (partial) year is never compared against a full prior year.
+      </p>
+    </div>
+  );
+}
+
+function PassiveIncomeYoyChart({ rows }: { rows: EconomicsAggregatedMonthlyRow[] }) {
+  const years = Array.from(new Set(rows.map((row) => parseYearMonth(row.month).year))).sort((a, b) => a - b);
+  if (!years.length) return <p className="text-sm text-text-muted">No multi-year data.</p>;
+
+  const byMonth = new Map<number, Record<string, number | string>>();
+  for (let month = 1; month <= 12; month += 1) {
+    byMonth.set(month, { monthLabel: MONTHS[month - 1].label });
+  }
+  for (const row of rows) {
+    const { year, month } = parseYearMonth(row.month);
+    const bucket = byMonth.get(month);
+    if (bucket) bucket[String(year)] = row.combined_net_eur;
+  }
+  const chartData = Array.from(byMonth.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([, value]) => value);
+
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-medium text-text-muted">Passive Income by Month (EUR)</h3>
+      <div style={{ height: 260 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 4, left: 2 }}>
+            <CartesianGrid stroke="rgba(148,163,184,0.08)" strokeDasharray="3 3" vertical={false} />
+            <XAxis
+              dataKey="monthLabel"
+              tick={{ fill: "#8d969e", fontSize: 10 }}
+              tickLine={false}
+              axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
+            />
+            <YAxis
+              tick={{ fill: "#8d969e", fontSize: 10 }}
+              tickLine={false}
+              axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
+              tickFormatter={(value) => eur(Number(value))}
+              width={72}
+            />
+            <Tooltip content={<ChartTooltip />} />
+            <Legend wrapperStyle={{ fontSize: 11, color: "#8d969e" }} iconType="circle" iconSize={8} />
+            {years.map((year) => (
+              <Line
+                key={year}
+                type="monotone"
+                dataKey={String(year)}
+                name={String(year)}
+                stroke={LINE_COLORS[years.indexOf(year) % LINE_COLORS.length]}
+                strokeWidth={2}
+                dot={{ r: 2 }}
+                connectNulls
+                isAnimationActive={false}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <p className="mt-2 text-xs text-text-muted">{YEAR_MONTH_CAPTION}</p>
+    </div>
+  );
+}
+
+function InvestedCapitalYearlyChart({ rows }: { rows: InvestedCapitalYearlyRow[] }) {
+  if (!rows.length) return <p className="text-sm text-text-muted">No buy/sell history.</p>;
+  const chartData = rows.map((row) => ({
+    label: String(row.year),
+    buys_eur: row.buys_eur,
+    sells_eur: row.sells_eur,
+  }));
+
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-medium text-text-muted">Buys vs Sells by Year (EUR)</h3>
+      <div style={{ height: 260 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 4, left: 2 }}>
+            <CartesianGrid stroke="rgba(148,163,184,0.08)" strokeDasharray="3 3" vertical={false} />
+            <XAxis
+              dataKey="label"
+              tick={{ fill: "#8d969e", fontSize: 10 }}
+              tickLine={false}
+              axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
+            />
+            <YAxis
+              tick={{ fill: "#8d969e", fontSize: 10 }}
+              tickLine={false}
+              axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
+              tickFormatter={(value) => eur(Number(value))}
+              width={72}
+            />
+            <ReferenceLine y={0} stroke="rgba(148,163,184,0.35)" />
+            <Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(148,163,184,0.08)" }} />
+            <Legend wrapperStyle={{ fontSize: 11, color: "#8d969e" }} iconType="circle" iconSize={8} />
+            <Bar dataKey="buys_eur" name="Buys" fill="#5b61ff" radius={[3, 3, 0, 0]} maxBarSize={28} isAnimationActive={false} />
+            <Bar dataKey="sells_eur" name="Sells" fill="#00c493" radius={[3, 3, 0, 0]} maxBarSize={28} isAnimationActive={false} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function InvestedCapitalCumulativeChart({ rows }: { rows: InvestedCapitalReport["cumulative"] }) {
+  if (!rows.length) return <p className="text-sm text-text-muted">No cumulative invested-capital history.</p>;
+  const chartData = rows.map((row) => ({
+    label: String(row.year),
+    cumulative_net_invested_eur: row.cumulative_net_invested_eur,
+  }));
+
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-medium text-text-muted">Cumulative Invested Capital — Buys − Sells (EUR)</h3>
+      <div style={{ height: 260 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData} margin={{ top: 8, right: 8, bottom: 4, left: 2 }}>
+            <CartesianGrid stroke="rgba(148,163,184,0.08)" strokeDasharray="3 3" vertical={false} />
+            <XAxis
+              dataKey="label"
+              tick={{ fill: "#8d969e", fontSize: 10 }}
+              tickLine={false}
+              axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
+            />
+            <YAxis
+              tick={{ fill: "#8d969e", fontSize: 10 }}
+              tickLine={false}
+              axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
+              tickFormatter={(value) => eur(Number(value))}
+              width={72}
+            />
+            <ReferenceLine y={0} stroke="rgba(148,163,184,0.35)" />
+            <Tooltip content={<ChartTooltip />} />
+            <Line
+              type="monotone"
+              dataKey="cumulative_net_invested_eur"
+              name="Cumulative Net Invested"
+              stroke="#5b61ff"
+              strokeWidth={2}
+              dot={{ r: 3 }}
+              isAnimationActive={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <p className="mt-2 text-xs text-text-muted">
+        Running total of stock buys minus sells across all years. Options premium cash flow is excluded — this
+        tracks capital deployed into equity positions only.
+      </p>
+    </div>
+  );
 }
 
 function buildAccountOptions(accounts: BrokerAccount[], selectedAccountIds: string[]) {
@@ -507,6 +793,8 @@ export default function EconomicsOverviewView() {
   const [accountIds, setAccountIds] = useState<string[]>(initialFilters.accountIds);
   const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
   const [data, setData] = useState<EconomicsAggregatedReport | null>(null);
+  const [comparisonData, setComparisonData] = useState<EconomicsAggregatedReport | null>(null);
+  const [capitalData, setCapitalData] = useState<InvestedCapitalReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -526,14 +814,37 @@ export default function EconomicsOverviewView() {
     if (symbols.length) params.set("symbol", symbols.join(","));
     if (accountIds.length) params.set("account_id", accountIds.join(","));
 
+    // Comparison/capital data ignore the Year filter: YoY growth and the
+    // invested-capital evolution are inherently multi-year views.
+    const comparisonParams = new URLSearchParams();
+    if (months.length) comparisonParams.set("month", months.join(","));
+    if (symbols.length) comparisonParams.set("symbol", symbols.join(","));
+    if (accountIds.length) comparisonParams.set("account_id", accountIds.join(","));
+
+    const capitalParams = new URLSearchParams();
+    if (symbols.length) capitalParams.set("symbol", symbols.join(","));
+    if (accountIds.length) capitalParams.set("account_id", accountIds.join(","));
+
     const queryString = params.toString();
     window.history.replaceState({}, "", queryString ? `/economics?${queryString}` : "/economics");
 
     try {
-      const response = await fetch(`/api/economics/overview${queryString ? `?${queryString}` : ""}`);
-      const body = await response.json().catch(() => ({}));
+      const [response, comparisonResponse, capitalResponse] = await Promise.all([
+        fetch(`/api/economics/overview${queryString ? `?${queryString}` : ""}`),
+        fetch(`/api/economics/overview${comparisonParams.toString() ? `?${comparisonParams.toString()}` : ""}`),
+        fetch(`/api/economics/capital${capitalParams.toString() ? `?${capitalParams.toString()}` : ""}`),
+      ]);
+      const [body, comparisonBody, capitalBody] = await Promise.all([
+        response.json().catch(() => ({})),
+        comparisonResponse.json().catch(() => ({})),
+        capitalResponse.json().catch(() => ({})),
+      ]);
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      if (!comparisonResponse.ok) throw new Error(comparisonBody.error || `HTTP ${comparisonResponse.status}`);
+      if (!capitalResponse.ok) throw new Error(capitalBody.error || `HTTP ${capitalResponse.status}`);
       setData(body as EconomicsAggregatedReport);
+      setComparisonData(comparisonBody as EconomicsAggregatedReport);
+      setCapitalData(capitalBody as InvestedCapitalReport);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load economics overview.");
     } finally {
@@ -648,6 +959,25 @@ export default function EconomicsOverviewView() {
               <OverviewBarChart rows={data.monthly} dataKey="dividends_total_net_eur" title="Monthly Dividends Total (EUR)" fill="#00c493" />
             </div>
           </div>
+
+          {comparisonData && <PassiveIncomeYoySection rows={comparisonData.monthly} />}
+
+          {comparisonData && (
+            <div className="surface p-4">
+              <h2 className="mb-4 text-base font-semibold">Passive Income — Year Comparison</h2>
+              <PassiveIncomeYoyChart rows={comparisonData.monthly} />
+            </div>
+          )}
+
+          {capitalData && (
+            <div className="surface p-4">
+              <h2 className="mb-4 text-base font-semibold">Invested Capital Evolution</h2>
+              <div className="grid gap-6 lg:grid-cols-2">
+                <InvestedCapitalYearlyChart rows={capitalData.yearly} />
+                <InvestedCapitalCumulativeChart rows={capitalData.cumulative} />
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
