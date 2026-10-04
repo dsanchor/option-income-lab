@@ -243,8 +243,15 @@ function PassiveIncomeYoySection({ rows }: { rows: EconomicsAggregatedMonthlyRow
   );
 }
 
-function PassiveIncomeYoyChart({ rows }: { rows: EconomicsAggregatedMonthlyRow[] }) {
+function PassiveIncomeYoyChart({
+  rows,
+  selectedYears,
+}: {
+  rows: EconomicsAggregatedMonthlyRow[];
+  selectedYears: Set<number>;
+}) {
   const years = Array.from(new Set(rows.map((row) => parseYearMonth(row.month).year))).sort((a, b) => a - b);
+  const visibleYears = years.filter((year) => selectedYears.has(year));
   if (!years.length) return <p className="text-sm text-text-muted">No multi-year data.</p>;
 
   const byMonth = new Map<number, Record<string, number | string>>();
@@ -282,7 +289,7 @@ function PassiveIncomeYoyChart({ rows }: { rows: EconomicsAggregatedMonthlyRow[]
             />
             <Tooltip content={<ChartTooltip />} />
             <Legend wrapperStyle={{ fontSize: 11, color: "#8d969e" }} iconType="circle" iconSize={8} />
-            {years.map((year) => (
+            {visibleYears.map((year) => (
               <Line
                 key={year}
                 type="monotone"
@@ -864,6 +871,32 @@ export default function EconomicsOverviewView() {
   const accountOptions = useMemo(() => buildAccountOptions(accounts, accountIds), [accountIds, accounts]);
   const coverage = data?.summary.options_coverage;
 
+  const [selectedPassiveIncomeYears, setSelectedPassiveIncomeYears] = useState<Set<number>>(new Set());
+  const passiveIncomeRows = useMemo(() => comparisonData?.monthly ?? [], [comparisonData]);
+  const availablePassiveIncomeYears = useMemo(
+    () => Array.from(new Set(passiveIncomeRows.map((row) => parseYearMonth(row.month).year))).sort((a, b) => a - b),
+    [passiveIncomeRows],
+  );
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setSelectedPassiveIncomeYears((prev) => {
+        const stillValid = prev.size > 0 && Array.from(prev).every((y) => availablePassiveIncomeYears.includes(y));
+        return stillValid ? prev : new Set(availablePassiveIncomeYears);
+      });
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [availablePassiveIncomeYears]);
+
+  function togglePassiveIncomeYear(yearValue: number) {
+    setSelectedPassiveIncomeYears((prev) => {
+      const next = new Set(prev);
+      if (next.has(yearValue)) next.delete(yearValue);
+      else next.add(yearValue);
+      return next;
+    });
+  }
+
   return (
     <div className="space-y-8">
       <div>
@@ -964,8 +997,26 @@ export default function EconomicsOverviewView() {
 
           {comparisonData && (
             <div className="surface p-4">
-              <h2 className="mb-4 text-base font-semibold">Passive Income — Year Comparison</h2>
-              <PassiveIncomeYoyChart rows={comparisonData.monthly} />
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-base font-semibold">Passive Income — Year Comparison</h2>
+                <div className="flex flex-wrap gap-1.5">
+                  {availablePassiveIncomeYears.map((yearValue) => (
+                    <button
+                      key={yearValue}
+                      type="button"
+                      onClick={() => togglePassiveIncomeYear(yearValue)}
+                      className={`rounded-[var(--radius-pill)] border px-2.5 py-0.5 text-xs transition-colors ${
+                        selectedPassiveIncomeYears.has(yearValue)
+                          ? "border-accent-blue/40 bg-accent-blue/15 text-accent-blue"
+                          : "border-border bg-bg-input text-text-muted hover:text-text"
+                      }`}
+                    >
+                      {yearValue}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <PassiveIncomeYoyChart rows={comparisonData.monthly} selectedYears={selectedPassiveIncomeYears} />
             </div>
           )}
 
