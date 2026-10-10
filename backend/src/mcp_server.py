@@ -51,11 +51,30 @@ async def _get_json(path: str, params: Optional[dict[str, Any]] = None) -> str:
     Errors are returned as a JSON error string (never raised) so the calling
     agent can see and relay them instead of the whole tool call failing silently.
     """
+    return await _request_json("GET", path, params=params)
+
+
+async def _post_json(path: str, params: Optional[dict[str, Any]] = None) -> str:
+    """Proxy a POST request (no body) to the internal oil-api.
+
+    Reserved for deterministic, read-only computations that the REST API
+    happens to expose via POST (e.g. DPS scoring) — never for endpoints with
+    side effects or that invoke an LLM.
+    """
+    return await _request_json("POST", path, params=params)
+
+
+async def _request_json(method: str, path: str, params: Optional[dict[str, Any]] = None) -> str:
+    """Proxy a request to the internal oil-api and return the raw JSON body as text.
+
+    Errors are returned as a JSON error string (never raised) so the calling
+    agent can see and relay them instead of the whole tool call failing silently.
+    """
     clean_params = {k: v for k, v in (params or {}).items() if v is not None}
     url = f"{_oil_api_base_url()}{path}"
     try:
         async with httpx.AsyncClient(timeout=_request_timeout()) as client:
-            response = await client.get(url, params=clean_params)
+            response = await client.request(method, url, params=clean_params)
         if response.status_code >= 400:
             return json.dumps({
                 "error": f"oil-api returned HTTP {response.status_code}",
@@ -87,9 +106,13 @@ def create_mcp_server() -> FastMCP:
             "Read-only tools for the Option Income Lab portfolio: symbols, "
             "holdings, movements, accounts, securities search, options "
             "screener, best-options, economics (overview/dividends), "
-            "calendar, plans, alerts, and the DGI (Dividend Growth Investing) "
-            "top list. All tools are GET-only proxies to internal business "
-            "endpoints — there are no write/mutating tools."
+            "calendar, plans, alerts, DGI (Dividend Growth Investing) top "
+            "list and single-symbol analysis, open-position roll tables, "
+            "deterministic DPS position scoring, symbol enrichment history, "
+            "full options chains, and deterministic price forecasts. All "
+            "tools are deterministic, side-effect-free proxies "
+            "to internal business endpoints — no write/mutating tools and no "
+            "tools that invoke an LLM behind the scenes."
         ),
         stateless_http=True,
         transport_security=TransportSecuritySettings(
@@ -252,6 +275,44 @@ def create_mcp_server() -> FastMCP:
     async def get_dgi_top() -> str:
         """Get the Dividend Growth Investing (DGI) screener top-ranked list."""
         return await _get_json("/api/dgi/top")
+
+    @mcp.tool()
+    async def get_dgi_analysis(symbol: str) -> str:
+        """Get the detailed DGI scoring breakdown for one symbol (metrics, technicals, quality score, category, entry tag, momentum)."""
+        return await _get_json(f"/api/dgi/analyze/{symbol}")
+
+    @mcp.tool()
+    async def get_roll_table(symbol: str, position_id: str) -> str:
+        """Get the precomputed roll scenarios table (candidates, premiums, net credit/debit) for an open option position."""
+        return await _get_json(f"/api/symbols/{symbol}/positions/{position_id}/roll-table")
+
+    @mcp.tool()
+    async def get_position_dps_analysis(symbol: str, position_id: str) -> str:
+        """Run deterministic position scoring (DPS) for an open option position (no LLM — rule-based health score)."""
+        return await _post_json(f"/api/symbols/{symbol}/positions/{position_id}/dps-analysis")
+
+    @mcp.tool()
+    async def get_enrichment_history(symbol: str) -> str:
+        """Get the rolling tech-timing / momentum history for a symbol, ordered chronologically."""
+        return await _get_json(f"/api/symbols/{symbol}/enrichment-history")
+
+    @mcp.tool()
+    async def get_options_chain(symbol: str) -> str:
+        """Get the full parsed option chain (calls/puts, all strikes/expirations, bid/ask/greeks) for a symbol."""
+        return await _get_json(f"/api/symbols/{symbol}/options-chain")
+
+    @mcp.tool()
+    async def get_price_forecasts(
+        symbol: str,
+        range: Optional[str] = "30d",
+        from_: Optional[str] = None,
+        to: Optional[str] = None,
+    ) -> str:
+        """Get the deterministic price-forecast table (per-horizon path %/endpoint predictions) and rolling hit-rate calibration for a symbol. Use `range` (1d/7d/30d/90d) or explicit `from_`/`to` (YYYY-MM-DD)."""
+        return await _get_json(
+            f"/api/symbols/{symbol}/forecasts",
+            {"range": range, "from": from_, "to": to},
+        )
 
     return mcp
 
