@@ -28,7 +28,7 @@ import { getMovementTypeLabel } from "@/lib/movementTypeLabel";
 type Snapshot = Record<string, number | string | null | undefined>;
 
 const SERIES: { key: string; field: string; label: string; color: string }[] = [
-  { key: "gap", field: "gap_pct", label: "Gap %", color: "#58d68d" },
+  { key: "gap", field: "gap_percent", label: "Gap %", color: "#58d68d" },
   { key: "rsi", field: "rsi_14", label: "RSI", color: "#5dade2" },
   { key: "macd", field: "macd_level", label: "MACD", color: "#af7ac5" },
   { key: "adx", field: "adx", label: "ADX", color: "#f5b041" },
