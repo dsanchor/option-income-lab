@@ -7781,6 +7781,18 @@ def _build_settings_config_context(
                 if timestamps:
                     return max(timestamps)
 
+            elif task_name == "symbol_pricing":
+                # Symbol Pricing: most recent pricing_cache.fetched_at across symbols
+                symbols = cosmos.list_symbols()
+                timestamps = []
+                for sym in symbols:
+                    pc = sym.get("pricing_cache") or {}
+                    ts = pc.get("fetched_at")
+                    if ts:
+                        timestamps.append(ts)
+                if timestamps:
+                    return max(timestamps)
+
             elif task_name == "best_options":
                 # Best Options: cycle_finished_at from the cache snapshot
                 try:
@@ -7898,6 +7910,14 @@ def _build_settings_config_context(
     pe_last_run_iso = resolve_last_run_iso("portfolio_enrichment", pe.get("last_run"))
     pe_next_run_iso = to_iso(pe.get("next_run"))
 
+    sp = tasks_by_name.get("symbol_pricing", {})
+    sp_enabled = sp.get("enabled", True)
+    sp_cron = sp.get("cron", "0 9-23 * * 1-5")
+    sp_last_run = resolve_last_run("symbol_pricing", sp.get("last_run"))
+    sp_next_run = fmt_time(sp.get("next_run"))
+    sp_last_run_iso = resolve_last_run_iso("symbol_pricing", sp.get("last_run"))
+    sp_next_run_iso = to_iso(sp.get("next_run"))
+
     best_options = tasks_by_name.get("best_options", {})
     best_options_enabled = best_options.get("enabled", True)
     best_options_cron = best_options.get("cron", "5 10-23 * * 1-5")
@@ -7977,6 +7997,12 @@ def _build_settings_config_context(
         "pe_next_run": pe_next_run,
         "pe_last_run_iso": pe_last_run_iso,
         "pe_next_run_iso": pe_next_run_iso,
+        "sp_enabled": sp_enabled,
+        "sp_cron": sp_cron,
+        "sp_last_run": sp_last_run,
+        "sp_next_run": sp_next_run,
+        "sp_last_run_iso": sp_last_run_iso,
+        "sp_next_run_iso": sp_next_run_iso,
         "best_options_enabled": best_options_enabled,
         "best_options_cron": best_options_cron,
         "best_options_run_on_startup": best_options_run_on_startup,
@@ -9541,6 +9567,38 @@ async def trigger_portfolio_enrichment(request: Request):
 
     threading.Thread(target=_run, daemon=True).start()
     return JSONResponse({"status": "triggered", "agent_type": "portfolio_enrichment"})
+
+
+@app.post("/api/trigger/symbol_pricing")
+async def trigger_symbol_pricing(request: Request):
+    """Manually trigger the symbol pricing refresh for all symbols."""
+    cosmos = getattr(request.app.state, "cosmos", None)
+    if cosmos is None:
+        return JSONResponse({"error": "CosmosDB not available"}, status_code=503)
+
+    state_ref = getattr(request.app.state, "_sp_status", None)
+    if state_ref is None:
+        state_ref = {"running": False, "last_result": None}
+        request.app.state._sp_status = state_ref
+
+    if state_ref.get("running"):
+        return JSONResponse({"error": "Symbol pricing already running"}, status_code=409)
+
+    state_ref["running"] = True
+
+    def _run():
+        try:
+            import asyncio
+            from src.symbol_pricing import run_symbol_pricing
+            asyncio.run(run_symbol_pricing(cosmos))
+            state_ref["last_result"] = {"status": "ok"}
+        except Exception as e:
+            state_ref["last_result"] = {"status": "error", "error": str(e)}
+        finally:
+            state_ref["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return JSONResponse({"status": "triggered", "agent_type": "symbol_pricing"})
 
 
 @app.get("/api/symbols/{symbol}/enrichment-history")

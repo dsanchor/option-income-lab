@@ -199,6 +199,8 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
       dgi_top_n: cfg.dgi_top_n,
       pe_enabled: cfg.pe_enabled,
       pe_cron: cfg.pe_cron,
+      sp_enabled: cfg.sp_enabled,
+      sp_cron: cfg.sp_cron,
       pf_enabled: cfg.pf_enabled,
       pf_cron: cfg.pf_cron,
       pf_band_confidence: cfg.pf_band_confidence,
@@ -495,6 +497,33 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
             lastIso={cfg.pe_last_run_iso}
             next={cfg.pe_next_run}
             nextIso={cfg.pe_next_run_iso}
+          />
+        </TaskCard>
+
+        {/* Symbol Pricing */}
+        <TaskCard title="Symbol Pricing" runStatus={<RunStatus id="sp" endpoint="/api/trigger/symbol_pricing" />}>
+          <Toggle
+            checked={cfg.sp_enabled}
+            onChange={(v) => set("sp_enabled", v)}
+            label="Enable symbol pricing scheduler"
+            hint="Periodically refreshes quote prices used throughout Symbols and the portfolio. Disabling this will cause quote prices to go stale."
+          />
+          <label className={labelCls}>Cron Expression</label>
+          <input
+            className={inputCls}
+            value={cfg.sp_cron}
+            onChange={(e) => set("sp_cron", e.target.value)}
+            placeholder="0 9-23 * * 1-5"
+            spellCheck={false}
+          />
+          <small className={hintCls}>
+            Example: <code>0 9-23 * * 1-5</code> = hourly 9 AM–11 PM weekdays
+          </small>
+          <RunTimes
+            last={cfg.sp_last_run}
+            lastIso={cfg.sp_last_run_iso}
+            next={cfg.sp_next_run}
+            nextIso={cfg.sp_next_run_iso}
           />
         </TaskCard>
 

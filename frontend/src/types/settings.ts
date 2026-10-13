@@ -73,6 +73,13 @@ export interface SettingsConfig {
   pe_last_run_iso: string;
   pe_next_run_iso: string;
 
+  sp_enabled: boolean;
+  sp_cron: string;
+  sp_last_run: string;
+  sp_next_run: string;
+  sp_last_run_iso: string;
+  sp_next_run_iso: string;
+
   pf_enabled: boolean;
   pf_cron: string;
   pf_band_confidence: number;
