@@ -128,6 +128,18 @@ function DpsCell({ row }: { row: AgentRow }) {
       <span className="ml-1 text-[0.72rem] text-text-muted">
         {delta(row.dps_delta_1d, "1-day change")}
       </span>
+      {row.dps_gap_warning && (
+        <span
+          className="ml-1 text-[0.72rem]"
+          style={{ color: "var(--accent-red)" }}
+          title={
+            `Gap%/DPS(avg) lines have crossed (relative scale) and DPS avg is already <=50` +
+            (row.dps_gap_distance_trend ? ` — distance ${row.dps_gap_distance_trend}` : "")
+          }
+        >
+          ⚠️ gap↔dps
+        </span>
+      )}
     </span>
   );
 }

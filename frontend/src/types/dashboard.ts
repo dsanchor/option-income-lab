@@ -31,6 +31,8 @@ export interface AgentRow {
   dps_score?: number | null;
   dps_score_smoothed?: number | null;
   dps_delta_1d?: number | null;
+  dps_gap_warning?: boolean | null;
+  dps_gap_distance_trend?: "widening" | "narrowing" | null;
   pnl_pct?: number | null;
   // buy tracker
   entry_zone?: string | null;

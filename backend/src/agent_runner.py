@@ -2907,6 +2907,23 @@ Output your activity in the required JSON format. Use the timestamp above in you
                             "If you conclude WAIT is still correct, add `dps_cliff_reviewed` to risk_flags."
                         )
                         _health_metrics = (_health_metrics + _cliff_line) if _health_metrics else _cliff_line.lstrip("\n")
+
+                    # DPS/Gap convergence signal (additive, informational --
+                    # see dps_scorer.detect_dps_gap_divergence docstring).
+                    # Reads the most recently *scored* snapshot's persisted
+                    # fields (same live-timing caveat as the cliff signal).
+                    if latest_snap.get("dps_gap_warning"):
+                        _div_line = (
+                            f"\n⚠️ DPS/GAP CONVERGENCE: the DPS-avg and Gap% lines (relative scale, "
+                            f"same as the position chart) have crossed as of {latest_snap.get('dps_gap_cross_date')} "
+                            "-- gap-implied risk has overtaken DPS-implied risk, and DPS avg is "
+                            "already <= 50. "
+                            f"Distance={latest_snap.get('dps_gap_distance')}, trend={latest_snap.get('dps_gap_distance_trend')} "
+                            "(widening = risk compounding further, narrowing = recovering). This does NOT "
+                            "mean ROLL/CLOSE is required -- explicitly justify in `reason` whether WAIT "
+                            "remains appropriate based on CURRENT gap%/delta."
+                        )
+                        _health_metrics = (_health_metrics + _div_line) if _health_metrics else _div_line.lstrip("\n")
             except Exception:
                 pass
 
@@ -3576,6 +3593,11 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         dps_status=_dps_result.get("status"),
                         dps_score_smoothed=_dps_result.get("score_smoothed"),
                         dps_status_debounced=_dps_result.get("status_debounced"),
+                        dps_gap_cross_detected=_dps_result.get("dps_gap_cross_detected"),
+                        dps_gap_distance=_dps_result.get("dps_gap_distance"),
+                        dps_gap_distance_trend=_dps_result.get("dps_gap_distance_trend"),
+                        dps_gap_cross_date=_dps_result.get("dps_gap_cross_date"),
+                        dps_gap_warning=_dps_result.get("dps_gap_warning"),
                     )
                     print(f"  📊 DPS: {symbol} ${strike} → {_dps_result.get('status', '?')} (score: {_dps_score}, smoothed: {_dps_result.get('score_smoothed')})")
         except Exception as dps_err:

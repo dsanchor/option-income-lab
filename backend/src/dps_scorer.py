@@ -1222,6 +1222,17 @@ def run_dps_analysis(
         result["score_smoothed"] = result.get("score")
         result["status_debounced"] = result.get("status")
 
+    # DPS/Gap convergence signal (additive, informational) -- see
+    # `detect_dps_gap_divergence` docstring.
+    try:
+        _divergence = detect_dps_gap_divergence(
+            snapshots, result["score_smoothed"], current_timestamp=current_timestamp,
+        )
+        if _divergence:
+            result.update(_divergence)
+    except Exception:
+        logger.debug("DPS/gap divergence check skipped for %s", symbol, exc_info=True)
+
     return result
 
 
@@ -1345,6 +1356,135 @@ def compute_dps_status_debounced(
     statuses = prior_statuses + [current_status]
     top_status, top_count = Counter(statuses).most_common(1)[0]
     return top_status if top_count >= 2 else current_status
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# DPS / Gap convergence signal
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# The position monitoring chart (PositionDetail.tsx) plots DPS avg and Gap%
+# as two independent series, each normalized to its own historical min/max so
+# they're visually comparable despite having unrelated units/scales. Users
+# watch for the two lines visually crossing as an early sign that gap-implied
+# risk (price approaching the strike) is overtaking DPS-implied risk (the
+# score dropping) -- which can happen well before the DPS score itself falls
+# below any absolute threshold (confirmed on a real position: the lines
+# crossed 4 sessions before DPS dropped under 50).
+#
+# This reproduces that same per-position relative scale (not a fixed/absolute
+# one, which would miss the early crossing), but computed *causally*: each
+# session's normalization only uses data up to and including that session, so
+# today's reading is never normalized against data that doesn't exist yet.
+#
+# `dps_gap_warning` additionally requires dps_score_smoothed <= 50 -- a
+# secondary severity flag, not a prerequisite for detecting the cross itself.
+
+_DIVERGENCE_SEVERITY_FLOOR = 50
+
+
+def _normalize_expanding(values: List[float]) -> List[float]:
+    """Normalize each value to [0, 1] using only the min/max seen so far.
+
+    Causal/expanding (not a fixed full-history window), so a value already
+    computed for an earlier session never changes as later sessions arrive.
+    """
+    out = []
+    running_min = running_max = None
+    for v in values:
+        running_min = v if running_min is None else min(running_min, v)
+        running_max = v if running_max is None else max(running_max, v)
+        span = running_max - running_min
+        out.append(0.5 if span == 0 else (v - running_min) / span)
+    return out
+
+
+def detect_dps_gap_divergence(
+    snapshots: List[Dict],
+    current_score_smoothed: float,
+    current_timestamp: Optional[str] = None,
+    window: int = _SMOOTHING_WINDOW,
+) -> Optional[Dict]:
+    """Detect DPS-avg / Gap% line convergence on their own relative scales.
+
+    Args:
+        snapshots: Prior position snapshot dicts (any order), each optionally
+            with `timestamp`, `dps_score_smoothed`, `gap_percent`.
+        current_score_smoothed: Today's freshly computed smoothed DPS score.
+        current_timestamp: Timestamp of the current reading (see
+            `compute_dps_score_smoothed` for the "today" semantics).
+        window: Sessions considered for the distance trend (default 3).
+
+    Returns:
+        Dict with `dps_gap_cross_detected` (bool -- gap has overtaken DPS on
+        the relative scale), `dps_gap_distance` (signed, DPS-norm minus
+        gap-norm; negative means crossed), `dps_gap_distance_trend`
+        ("widening"/"narrowing"/None), `dps_gap_cross_date` (timestamp of the
+        most recent sign flip, if any), and `dps_gap_warning` (bool --
+        crossed AND dps_score_smoothed <= 50). None if there isn't enough
+        history (needs >= 2 prior scored sessions) or today's gap is unknown.
+    """
+    cur_ts = _parse_snapshot_ts(current_timestamp) if current_timestamp else datetime.now(timezone.utc)
+    today_key = cur_ts.date().isoformat() if cur_ts else None
+
+    # Current gap%: the most recently recorded snapshot's value -- for the
+    # per-cycle monitor path this is today's own freshly-written reading; for
+    # the daily cron path it's the carried-over value cron writes under
+    # today's date anyway, so both agree with what will actually be stored.
+    dated = [s for s in snapshots if _parse_snapshot_ts(s.get("timestamp")) is not None]
+    if not dated:
+        return None
+    latest = max(dated, key=lambda s: _parse_snapshot_ts(s["timestamp"]))
+    current_gap = latest.get("gap_percent")
+    if current_gap is None or current_score_smoothed is None:
+        return None
+
+    scored = [
+        s for s in snapshots
+        if s.get("dps_score_smoothed") is not None and s.get("gap_percent") is not None
+        and _parse_snapshot_ts(s.get("timestamp")) is not None
+    ]
+    sessions = _latest_per_session(scored, exclude_date=today_key)
+    if len(sessions) < 2:
+        return None
+    sessions = sessions + [{
+        "timestamp": current_timestamp or cur_ts.isoformat(),
+        "dps_score_smoothed": current_score_smoothed,
+        "gap_percent": current_gap,
+    }]
+
+    dps_norm = _normalize_expanding([s["dps_score_smoothed"] for s in sessions])
+    gap_norm = _normalize_expanding([s["gap_percent"] for s in sessions])
+    distances = [d - g for d, g in zip(dps_norm, gap_norm)]
+
+    # Track the most recent transition into negative territory (gap
+    # overtaking DPS). A distance of exactly 0 (e.g. the very first session,
+    # where both series trivially normalize to the midpoint) is treated as
+    # "not yet crossed" rather than skipped, so a move straight from 0 to
+    # negative still registers as a cross.
+    cross_date = None
+    was_non_negative = True
+    for i, d in enumerate(distances):
+        if d < 0 and was_non_negative:
+            cross_date = sessions[i]["timestamp"]
+            was_non_negative = False
+        elif d >= 0:
+            was_non_negative = True
+
+    distance_now = distances[-1]
+    cross_detected = distance_now < 0
+
+    trend = None
+    window_distances = distances[-window:]
+    if len(window_distances) >= 2:
+        trend = "widening" if abs(window_distances[-1]) > abs(window_distances[0]) else "narrowing"
+
+    return {
+        "dps_gap_cross_detected": cross_detected,
+        "dps_gap_distance": round(distance_now, 3),
+        "dps_gap_distance_trend": trend,
+        "dps_gap_cross_date": cross_date,
+        "dps_gap_warning": cross_detected and current_score_smoothed <= _DIVERGENCE_SEVERITY_FLOOR,
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────

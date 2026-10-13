@@ -915,7 +915,12 @@ class CosmosDBService:
     def update_snapshot_dps(self, symbol: str, position_id: str,
                             dps_score: int, dps_status: Optional[str] = None,
                             dps_score_smoothed: Optional[float] = None,
-                            dps_status_debounced: Optional[str] = None) -> None:
+                            dps_status_debounced: Optional[str] = None,
+                            dps_gap_cross_detected: Optional[bool] = None,
+                            dps_gap_distance: Optional[float] = None,
+                            dps_gap_distance_trend: Optional[str] = None,
+                            dps_gap_cross_date: Optional[str] = None,
+                            dps_gap_warning: Optional[bool] = None) -> None:
         """Update the most recent snapshot with DPS fields (best-effort)."""
         try:
             snaps = self.get_position_snapshots(symbol, position_id, limit=1)
@@ -929,6 +934,16 @@ class CosmosDBService:
                 doc["dps_score_smoothed"] = dps_score_smoothed
             if dps_status_debounced is not None:
                 doc["dps_status_debounced"] = dps_status_debounced
+            if dps_gap_cross_detected is not None:
+                doc["dps_gap_cross_detected"] = dps_gap_cross_detected
+            if dps_gap_distance is not None:
+                doc["dps_gap_distance"] = dps_gap_distance
+            if dps_gap_distance_trend is not None:
+                doc["dps_gap_distance_trend"] = dps_gap_distance_trend
+            if dps_gap_cross_date is not None:
+                doc["dps_gap_cross_date"] = dps_gap_cross_date
+            if dps_gap_warning is not None:
+                doc["dps_gap_warning"] = dps_gap_warning
             self.container.replace_item(item=doc["id"], body=doc)
         except Exception as exc:
             logger.warning(

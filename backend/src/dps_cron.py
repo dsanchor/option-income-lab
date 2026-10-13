@@ -137,6 +137,11 @@ async def run_dps_cron(cosmos, yf_provider) -> dict:
                     "dps_risk_zone": result.get("risk_zone", ""),
                     "dps_score_smoothed": result.get("score_smoothed"),
                     "dps_status_debounced": result.get("status_debounced", ""),
+                    "dps_gap_cross_detected": result.get("dps_gap_cross_detected"),
+                    "dps_gap_distance": result.get("dps_gap_distance"),
+                    "dps_gap_distance_trend": result.get("dps_gap_distance_trend"),
+                    "dps_gap_cross_date": result.get("dps_gap_cross_date"),
+                    "dps_gap_warning": result.get("dps_gap_warning"),
                 }
 
                 # Also include current technicals if available from latest snapshot

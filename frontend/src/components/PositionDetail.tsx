@@ -6,6 +6,7 @@ import {
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -25,7 +26,7 @@ import type { BrokerAccount, LedgerMovement } from "@/types/portfolio";
 import { getMovementTypeLabel } from "@/lib/movementTypeLabel";
 
 // ── Snapshot chart ────────────────────────────────────────────────────────
-type Snapshot = Record<string, number | string | null | undefined>;
+type Snapshot = Record<string, number | string | boolean | null | undefined>;
 
 const SERIES: { key: string; field: string; label: string; color: string }[] = [
   { key: "gap", field: "gap_percent", label: "Gap %", color: "#58d68d" },
@@ -101,6 +102,16 @@ function SnapshotChart({ snapshots }: { snapshots: Snapshot[] }) {
 
   const activeSeries = SERIES.filter((s) => visible[s.key]);
 
+  // DPS/Gap convergence marker: vertical line at the most recent crossing
+  // (see dps_scorer.detect_dps_gap_divergence) — only when the latest
+  // snapshot currently flags a cross.
+  const latestRow = rows[rows.length - 1]?.s;
+  const crossDate = latestRow?.dps_gap_cross_detected ? toDate(latestRow.dps_gap_cross_date) : null;
+  const crossRow = crossDate
+    ? rows.find((r) => r.d && r.d.toDateString() === crossDate.toDateString())
+    : null;
+  const crossXLabel = crossRow ? fmtLabel(crossRow.d!) : null;
+
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-3">
@@ -173,6 +184,14 @@ function SnapshotChart({ snapshots }: { snapshots: Snapshot[] }) {
                 isAnimationActive={false}
               />
             ))}
+            {crossXLabel && (
+              <ReferenceLine
+                x={crossXLabel}
+                stroke="var(--accent-red)"
+                strokeDasharray="4 3"
+                label={{ value: "Gap↔DPS cross", position: "insideTopRight", fill: "var(--accent-red)", fontSize: 10 }}
+              />
+            )}
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -181,6 +200,13 @@ function SnapshotChart({ snapshots }: { snapshots: Snapshot[] }) {
         <span>{rows.length} snapshots</span>
         <span>{fmtLabel(rows[rows.length - 1].d!)}</span>
       </div>
+      {latestRow?.dps_gap_cross_detected && (
+        <p className="text-xs" style={{ color: "var(--accent-red)" }}>
+          ⚠️ Gap% has crossed DPS (avg) since {crossXLabel ?? "recently"} — distance{" "}
+          {numOrNull(latestRow.dps_gap_distance) ?? "—"}, {latestRow.dps_gap_distance_trend ?? "trend unknown"}
+          {latestRow.dps_gap_warning ? " (DPS avg already ≤50)" : ""}.
+        </p>
+      )}
       <div className="flex flex-wrap gap-3 text-xs">
         {activeSeries.map((s) => {
           const last = [...rows].reverse().find((r) => numOrNull(r.s[s.field]) !== null);

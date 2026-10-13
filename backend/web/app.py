@@ -4756,6 +4756,8 @@ def _build_dashboard_tables(
                 row["dps_score"] = None
                 row["dps_score_smoothed"] = None
                 row["dps_delta_1d"] = None
+                row["dps_gap_warning"] = None
+                row["dps_gap_distance_trend"] = None
                 row["pnl_pct"] = None
                 try:
                     pos_id = position.get("position_id")
@@ -4769,6 +4771,8 @@ def _build_dashboard_tables(
                             row["dps_score"] = dps_snaps[0].get("dps_score")
                             row["dps_score_smoothed"] = dps_snaps[0].get(
                                 "dps_score_smoothed", dps_snaps[0].get("dps_score"))
+                            row["dps_gap_warning"] = dps_snaps[0].get("dps_gap_warning")
+                            row["dps_gap_distance_trend"] = dps_snaps[0].get("dps_gap_distance_trend")
                             # 1d delta only -- 7d dropped: dps_score_smoothed
                             # already conveys the multi-session trend.
                             from datetime import timedelta
