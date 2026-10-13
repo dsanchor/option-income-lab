@@ -103,7 +103,7 @@ function DpsCell({ row }: { row: AgentRow }) {
       : row.dps_score >= 50
         ? "var(--accent-orange)"
         : "var(--accent-red)";
-  const delta = (v: number | null | undefined, title: string, prefix = "") =>
+  const delta = (v: number | null | undefined, title: string) =>
     v == null ? null : (
       <span
         title={title}
@@ -111,7 +111,6 @@ function DpsCell({ row }: { row: AgentRow }) {
           color: v > 0 ? "var(--accent-green)" : v < 0 ? "var(--accent-red)" : "var(--text-muted)",
         }}
       >
-        {prefix}
         {v > 0 ? `+${v}` : v}
       </span>
     );
@@ -128,7 +127,6 @@ function DpsCell({ row }: { row: AgentRow }) {
       )}
       <span className="ml-1 text-[0.72rem] text-text-muted">
         {delta(row.dps_delta_1d, "1-day change")}
-        {delta(row.dps_delta_7d, "7-day change", "/")}
       </span>
     </span>
   );

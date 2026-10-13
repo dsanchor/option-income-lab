@@ -4752,10 +4752,9 @@ def _build_dashboard_tables(
                 row["option_type"] = (
                     "call" if agent_key == "open_call_monitor" else "put"
                 )
-                # DPS score + deltas (7d / 1d) + P&L
+                # DPS score + 1-day delta + P&L
                 row["dps_score"] = None
                 row["dps_score_smoothed"] = None
-                row["dps_delta_7d"] = None
                 row["dps_delta_1d"] = None
                 row["pnl_pct"] = None
                 try:
@@ -4770,12 +4769,11 @@ def _build_dashboard_tables(
                             row["dps_score"] = dps_snaps[0].get("dps_score")
                             row["dps_score_smoothed"] = dps_snaps[0].get(
                                 "dps_score_smoothed", dps_snaps[0].get("dps_score"))
-                            # 7d and 1d deltas only
+                            # 1d delta only -- 7d dropped: dps_score_smoothed
+                            # already conveys the multi-session trend.
                             from datetime import timedelta
                             now_utc = datetime.now(timezone.utc)
-                            seven_days_ago = now_utc - timedelta(days=7)
                             one_day_ago = now_utc - timedelta(days=1)
-                            snap_7d = None
                             snap_1d = None
                             for s in dps_snaps:
                                 ts_str = s.get("timestamp", "")
@@ -4783,12 +4781,8 @@ def _build_dashboard_tables(
                                     ts_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                                 except (ValueError, TypeError):
                                     continue
-                                if snap_7d is None and ts_dt <= seven_days_ago:
-                                    snap_7d = s
                                 if snap_1d is None and ts_dt <= one_day_ago:
                                     snap_1d = s
-                            if snap_7d:
-                                row["dps_delta_7d"] = dps_snaps[0]["dps_score"] - snap_7d["dps_score"]
                             if snap_1d:
                                 row["dps_delta_1d"] = dps_snaps[0]["dps_score"] - snap_1d["dps_score"]
                 except Exception as e:

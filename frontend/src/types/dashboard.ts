@@ -30,7 +30,6 @@ export interface AgentRow {
   option_type?: string;
   dps_score?: number | null;
   dps_score_smoothed?: number | null;
-  dps_delta_7d?: number | null;
   dps_delta_1d?: number | null;
   pnl_pct?: number | null;
   // buy tracker
