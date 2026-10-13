@@ -1200,3 +1200,96 @@ def run_dps_analysis(
 
     result["ticker"] = symbol
     return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# DPS cliff early-warning (validated against full Cosmos history, Oct 2026)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_CLIFF_MIN_DROP = 25
+_CLIFF_MAX_DAYS = 1.0
+_CLIFF_GAP_THRESHOLD = 4.0
+_CLIFF_PERSISTENCE_FLOOR = 40
+
+
+def _parse_snapshot_ts(ts: str) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        s = ts.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        return None
+
+
+def detect_dps_cliff_warning(snapshots: List[Dict]) -> Optional[Dict]:
+    """Detect the validated "DPS cliff" early-warning pattern.
+
+    Backtested against the full position history in Cosmos (calls and puts):
+    a DPS drop of >= 25 points within <= 1 day, while the position is already
+    within 4% of the strike, has historically preceded defensive rolls by a
+    median of ~5 days (2/2 hit rate on genuinely late reactions with >=3 days
+    of prior monitoring). Requiring the drop to *persist* on the next scored
+    reading (dps_score <= 40, instead of bouncing back) removes most of the
+    single-cycle RSI/MACD/ADX whipsaw noise that a bare drop threshold alone
+    flags -- see backend/scripts/validate_dps_cliff_rule.py for the methodology.
+
+    This is a supplementary, informational signal only -- it does NOT
+    auto-trigger a roll. It still fires on noise ~75-85% of the time in
+    backtesting, so the assessment agent must independently justify WAIT
+    using current gap%/delta, not defer to this flag alone.
+
+    Note on live timing: DPS for the *current* monitoring cycle is scored
+    only after the assessment agent runs (see agent_runner.py), so the
+    "persistence" check here uses the most recently *scored* snapshot
+    (typically ~1 cycle old), not the live one being assessed right now.
+
+    Args:
+        snapshots: Position snapshot dicts, any order, each with at least
+            `timestamp`, `dps_score`, `gap_percent`.
+
+    Returns:
+        Dict with cliff details if the pattern fired, else None.
+    """
+    scored = [
+        s for s in snapshots
+        if s.get("dps_score") is not None and _parse_snapshot_ts(s.get("timestamp")) is not None
+    ]
+    if len(scored) < 3:
+        return None
+    scored.sort(key=lambda s: _parse_snapshot_ts(s["timestamp"]))  # oldest -> newest
+    newest = scored[-1]
+
+    # Look for a qualifying cliff among all but the newest reading (the
+    # newest is reserved for the persistence check, not the cliff itself).
+    for i in range(len(scored) - 2, 0, -1):
+        cur = scored[i]
+        gap = cur.get("gap_percent")
+        if gap is None or abs(gap) > _CLIFF_GAP_THRESHOLD:
+            continue
+        cur_ts = _parse_snapshot_ts(cur["timestamp"])
+        for j in range(i - 1, -1, -1):
+            prev = scored[j]
+            prev_ts = _parse_snapshot_ts(prev["timestamp"])
+            dt_days = (cur_ts - prev_ts).total_seconds() / 86400.0
+            if dt_days > _CLIFF_MAX_DAYS:
+                break
+            drop = prev["dps_score"] - cur["dps_score"]
+            if drop >= _CLIFF_MIN_DROP:
+                if newest["dps_score"] <= _CLIFF_PERSISTENCE_FLOOR:
+                    return {
+                        "triggered": True,
+                        "cliff_timestamp": cur["timestamp"],
+                        "dps_before": prev["dps_score"],
+                        "dps_after": cur["dps_score"],
+                        "drop": drop,
+                        "gap_percent_at_cliff": round(gap, 2),
+                        "dps_latest": newest["dps_score"],
+                        "latest_timestamp": newest["timestamp"],
+                    }
+            break
+    return None
+

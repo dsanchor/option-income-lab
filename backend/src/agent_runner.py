@@ -2861,7 +2861,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
             # Build position health metrics for agent context
             _health_metrics = ""
             try:
-                recent_snaps = cosmos.get_position_snapshots(symbol, position_id, limit=5)
+                recent_snaps = cosmos.get_position_snapshots(symbol, position_id, limit=8)
                 if recent_snaps:
                     latest_snap = recent_snaps[0]  # most recent
                     parts = []
@@ -2886,6 +2886,27 @@ Output your activity in the required JSON format. Use the timestamp above in you
                                 parts.append("DPS Trend: flat")
                     if parts:
                         _health_metrics = " | ".join(parts)
+
+                    # DPS cliff early-warning (backtested, informational only
+                    # -- see dps_scorer.detect_dps_cliff_warning docstring).
+                    # Applies identically to calls and puts: the cliff/gap%/
+                    # persistence thresholds are option-type agnostic.
+                    from .dps_scorer import detect_dps_cliff_warning
+                    _cliff = detect_dps_cliff_warning(recent_snaps)
+                    if _cliff:
+                        _cliff_line = (
+                            f"\n⚠️ DPS CLIFF SIGNAL: DPS dropped {_cliff['dps_before']}→{_cliff['dps_after']} "
+                            f"(-{_cliff['drop']} pts) within <=1 day at {_cliff['cliff_timestamp']} while "
+                            f"gap% was {_cliff['gap_percent_at_cliff']}% (within 4% of strike), and has "
+                            f"stayed low (latest DPS={_cliff['dps_latest']} at {_cliff['latest_timestamp']}) "
+                            "rather than bouncing back. Historically this pattern has preceded defensive "
+                            "rolls by a median ~5 days when it persists, but it is still noisy "
+                            "(~75-85% of firings in backtesting were not followed by a defensive roll). "
+                            "This does NOT mean ROLL/CLOSE is required -- explicitly justify in `reason` "
+                            "whether WAIT remains appropriate based on CURRENT gap%/delta (not DPS alone). "
+                            "If you conclude WAIT is still correct, add `dps_cliff_reviewed` to risk_flags."
+                        )
+                        _health_metrics = (_health_metrics + _cliff_line) if _health_metrics else _cliff_line.lstrip("\n")
             except Exception:
                 pass
 

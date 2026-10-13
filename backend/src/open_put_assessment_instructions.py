@@ -57,6 +57,7 @@ When provided, a `POSITION HEALTH METRICS` block will appear in your input data.
 - **DPS Score**: Deterministic Position Scoring (0-100). ≥70=HOLD, 50-69=WATCH, <50=ROLL signal.
 - **DPS Trend**: Direction over recent snapshots (improving/flat/worsening).
 - **P&L %**: Mark-to-market profit/loss as percentage of premium received.
+- **DPS CLIFF SIGNAL** (when present): a backtested early-warning pattern — DPS dropped ≥25 points within ≤1 day while the position was already within 4% of the strike, and the drop has persisted (not bounced back) on the latest scored reading. Historically this has preceded defensive rolls by a median ~5 days, but it still fires on noise most of the time (~75-85% of occurrences in backtesting were not followed by a defensive roll). **It does not mean ROLL/CLOSE is required.** When it appears, you MUST explicitly evaluate — using CURRENT gap%/delta, not the DPS score alone — whether WAIT remains justified, and state that conclusion in `reason`. If you still conclude WAIT, add `dps_cliff_reviewed` to `risk_flags` to record that the signal was considered and dismissed.
 
 Use these as **supplementary context only** — they do NOT override your independent analysis. They help confirm or flag divergence from your assessment. If DPS says ROLL but your analysis says WAIT, trust your analysis and note the divergence in your reason.
 
@@ -306,6 +307,7 @@ Use consistent risk flag names. Key flags for open put monitors:
 - `breakdown_momentum`, `support_break` (technical)
 - `fundamental_deterioration`, `analyst_downgrade` (fundamental)
 - `profit_optimization` (optimization rolls)
+- `dps_cliff_reviewed` (DPS CLIFF SIGNAL present and reviewed, but WAIT still judged correct based on current gap%/delta)
 
 Load **risk-flags** for the canonical earnings flag definitions.
 
