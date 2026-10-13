@@ -33,6 +33,7 @@ const SERIES: { key: string; field: string; label: string; color: string }[] = [
   { key: "macd", field: "macd_level", label: "MACD", color: "#af7ac5" },
   { key: "adx", field: "adx", label: "ADX", color: "#f5b041" },
   { key: "dps", field: "dps_score", label: "DPS", color: "#ec7063" },
+  { key: "dps_smoothed", field: "dps_score_smoothed", label: "DPS (avg)", color: "#f1948a" },
   { key: "pnl", field: "pnl_pct", label: "P&L %", color: "#00bcd4" },
 ];
 

@@ -4754,6 +4754,7 @@ def _build_dashboard_tables(
                 )
                 # DPS score + deltas (7d / 1d) + P&L
                 row["dps_score"] = None
+                row["dps_score_smoothed"] = None
                 row["dps_delta_7d"] = None
                 row["dps_delta_1d"] = None
                 row["pnl_pct"] = None
@@ -4767,6 +4768,8 @@ def _build_dashboard_tables(
                         dps_snaps = [s for s in snaps if s.get("dps_score") is not None]
                         if dps_snaps:
                             row["dps_score"] = dps_snaps[0].get("dps_score")
+                            row["dps_score_smoothed"] = dps_snaps[0].get(
+                                "dps_score_smoothed", dps_snaps[0].get("dps_score"))
                             # 7d and 1d deltas only
                             from datetime import timedelta
                             now_utc = datetime.now(timezone.utc)

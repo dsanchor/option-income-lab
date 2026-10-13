@@ -101,6 +101,8 @@ async def run_dps_cron(cosmos, yf_provider) -> dict:
                 )
                 snapshots.reverse()
 
+                ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
                 result = run_dps_analysis(
                     symbol=symbol,
                     strike=strike_f,
@@ -110,6 +112,7 @@ async def run_dps_cron(cosmos, yf_provider) -> dict:
                     snapshots=snapshots,
                     underlying_price=underlying_price,
                     premium_received=_prem,
+                    current_timestamp=ts,
                 )
 
                 if result.get("status") == "ERROR" or result.get("error"):
@@ -127,12 +130,13 @@ async def run_dps_cron(cosmos, yf_provider) -> dict:
                     continue
 
                 # Write the DPS score as a snapshot field
-                ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 snapshot_data = {
                     "timestamp": ts,
                     "dps_score": dps_score,
                     "dps_status": result.get("status", ""),
                     "dps_risk_zone": result.get("risk_zone", ""),
+                    "dps_score_smoothed": result.get("score_smoothed"),
+                    "dps_status_debounced": result.get("status_debounced", ""),
                 }
 
                 # Also include current technicals if available from latest snapshot

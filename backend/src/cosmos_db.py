@@ -913,14 +913,22 @@ class CosmosDBService:
         ))
 
     def update_snapshot_dps(self, symbol: str, position_id: str,
-                            dps_score: int) -> None:
-        """Update the most recent snapshot with the DPS score (best-effort)."""
+                            dps_score: int, dps_status: Optional[str] = None,
+                            dps_score_smoothed: Optional[float] = None,
+                            dps_status_debounced: Optional[str] = None) -> None:
+        """Update the most recent snapshot with DPS fields (best-effort)."""
         try:
             snaps = self.get_position_snapshots(symbol, position_id, limit=1)
             if not snaps:
                 return
             doc = snaps[0]
             doc["dps_score"] = dps_score
+            if dps_status is not None:
+                doc["dps_status"] = dps_status
+            if dps_score_smoothed is not None:
+                doc["dps_score_smoothed"] = dps_score_smoothed
+            if dps_status_debounced is not None:
+                doc["dps_status_debounced"] = dps_status_debounced
             self.container.replace_item(item=doc["id"], body=doc)
         except Exception as exc:
             logger.warning(

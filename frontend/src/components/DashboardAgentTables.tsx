@@ -118,6 +118,14 @@ function DpsCell({ row }: { row: AgentRow }) {
   return (
     <span className="whitespace-nowrap">
       <strong style={{ color }}>{row.dps_score}</strong>
+      {row.dps_score_smoothed != null && (
+        <span
+          className="ml-1 text-[0.72rem] text-text-muted"
+          title="DPS smoothed (3-session average)"
+        >
+          (avg {row.dps_score_smoothed})
+        </span>
+      )}
       <span className="ml-1 text-[0.72rem] text-text-muted">
         {delta(row.dps_delta_1d, "1-day change")}
         {delta(row.dps_delta_7d, "7-day change", "/")}

@@ -3567,11 +3567,17 @@ Output your activity in the required JSON format. Use the timestamp above in you
                     snapshots=_dps_snaps,
                     underlying_price=snapshot_data.get("underlying_price"),
                     premium_received=_premium_received,
+                    current_timestamp=analysis_ts,
                 )
                 _dps_score = _dps_result.get("score")
                 if _dps_score is not None:
-                    cosmos.update_snapshot_dps(symbol, position_id, _dps_score)
-                    print(f"  📊 DPS: {symbol} ${strike} → {_dps_result.get('recommendation', '?')} (score: {_dps_score})")
+                    cosmos.update_snapshot_dps(
+                        symbol, position_id, _dps_score,
+                        dps_status=_dps_result.get("status"),
+                        dps_score_smoothed=_dps_result.get("score_smoothed"),
+                        dps_status_debounced=_dps_result.get("status_debounced"),
+                    )
+                    print(f"  📊 DPS: {symbol} ${strike} → {_dps_result.get('status', '?')} (score: {_dps_score}, smoothed: {_dps_result.get('score_smoothed')})")
         except Exception as dps_err:
             logger.debug("DPS scoring skipped for %s: %s", symbol, dps_err)
 

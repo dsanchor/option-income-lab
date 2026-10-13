@@ -7,6 +7,7 @@ No LLM involved — uses fixed rules to output HOLD / WATCH / ROLL.
 import json
 import logging
 import math
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -1158,6 +1159,7 @@ def run_dps_analysis(
     snapshots: List[Dict],
     underlying_price: Optional[float] = None,
     premium_received: Optional[float] = None,
+    current_timestamp: Optional[str] = None,
 ) -> Dict:
     """Run the full DPS analysis for a position.
 
@@ -1170,6 +1172,10 @@ def run_dps_analysis(
         snapshots: List of snapshot dicts (oldest first).
         underlying_price: Current underlying price (optional, derived from snapshots).
         premium_received: Original premium received when position was opened.
+        current_timestamp: Timestamp this analysis will be persisted under (used
+            only to identify "today's session" for score/status smoothing --
+            see `compute_dps_score_smoothed`/`compute_dps_status_debounced`).
+            Defaults to now (UTC) when omitted.
 
     Returns:
         Full analysis result dict, or error dict on failure.
@@ -1199,7 +1205,146 @@ def run_dps_analysis(
         result = score_short_call(greeks, snapshots, strike, expiration, underlying_price, premium_received=premium_received)
 
     result["ticker"] = symbol
+
+    # Score smoothing / status debounce (additive, display-oriented -- the raw
+    # `score`/`status` above remain authoritative for HOLD/WATCH/ROLL alerts
+    # and the cliff warning, both of which need to react to a genuine move
+    # immediately rather than waiting for corroboration).
+    try:
+        result["score_smoothed"] = compute_dps_score_smoothed(
+            snapshots, result["score"], current_timestamp=current_timestamp,
+        )
+        result["status_debounced"] = compute_dps_status_debounced(
+            snapshots, result["status"], current_timestamp=current_timestamp,
+        )
+    except Exception:
+        logger.debug("DPS smoothing/debounce skipped for %s", symbol, exc_info=True)
+        result["score_smoothed"] = result.get("score")
+        result["status_debounced"] = result.get("status")
+
     return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# DPS score smoothing / status debounce
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# The DPS score is recomputed from scratch each run from that day's option
+# chain close (Delta/Gamma/Theta/IV) and the latest RSI/MACD/ADX *levels* --
+# only the separate trend classifiers use a window. That makes the raw score
+# sensitive to a single good/bad session. `score_smoothed` is a simple moving
+# average over the last `_SMOOTHING_WINDOW` *trading sessions* (not raw agent
+# runs -- a position can be monitored 1-3+ times within the same session, so
+# readings are first collapsed to one (the latest) per calendar date before
+# windowing, or a single noisy session would dominate the average).
+#
+# `status_debounced` applies the same session-based grouping to HOLD/WATCH/
+# ROLL via 2-of-window majority vote, so a status change needs corroboration
+# from a prior session before it "sticks" -- preventing single-session flips.
+# Both are additive/informational: callers that need an immediate reaction to
+# a real cliff (see `detect_dps_cliff_warning` below) must keep using the raw
+# `score`/`status`.
+
+_SMOOTHING_WINDOW = 3
+
+
+def _latest_per_session(scored: List[Dict], exclude_date: Optional[str] = None) -> List[Dict]:
+    """Collapse snapshot dicts to one (the latest) reading per calendar date.
+
+    Args:
+        scored: Snapshot dicts, any order, each with a parseable `timestamp`.
+        exclude_date: ISO date (YYYY-MM-DD) to drop, e.g. today's date when
+            the current call's own in-progress session already has earlier
+            runs recorded among `scored`.
+
+    Returns:
+        One dict per remaining date, oldest session first.
+    """
+    by_date: Dict[str, Dict] = {}
+    for s in scored:
+        ts = _parse_snapshot_ts(s.get("timestamp"))
+        if ts is None:
+            continue
+        date_key = ts.date().isoformat()
+        if exclude_date and date_key == exclude_date:
+            continue
+        existing = by_date.get(date_key)
+        if existing is None or ts > _parse_snapshot_ts(existing["timestamp"]):
+            by_date[date_key] = s
+    return [by_date[d] for d in sorted(by_date.keys())]
+
+
+def compute_dps_score_smoothed(
+    snapshots: List[Dict],
+    current_score: float,
+    current_timestamp: Optional[str] = None,
+    window: int = _SMOOTHING_WINDOW,
+) -> float:
+    """Simple moving average of the current score + prior scored sessions.
+
+    Args:
+        snapshots: Prior position snapshot dicts (any order), each optionally
+            with `timestamp` and `dps_score`.
+        current_score: Today's freshly computed raw DPS score.
+        current_timestamp: Timestamp of the current reading, used only to
+            identify "today" so any earlier runs from the same session in
+            `snapshots` aren't double-counted. Defaults to now (UTC).
+        window: Number of sessions to average, including today (default 3).
+
+    Returns:
+        Rounded (1 decimal) smoothed score. Degrades gracefully to the
+        average of however many prior sessions exist when history is short.
+    """
+    cur_ts = _parse_snapshot_ts(current_timestamp) if current_timestamp else datetime.now(timezone.utc)
+    today_key = cur_ts.date().isoformat() if cur_ts else None
+
+    scored = [
+        s for s in snapshots
+        if s.get("dps_score") is not None and _parse_snapshot_ts(s.get("timestamp")) is not None
+    ]
+    sessions = _latest_per_session(scored, exclude_date=today_key)
+    prior_scores = [s["dps_score"] for s in sessions[-(window - 1):]] if window > 1 else []
+    values = prior_scores + [current_score]
+    return round(sum(values) / len(values), 1)
+
+
+def compute_dps_status_debounced(
+    snapshots: List[Dict],
+    current_status: str,
+    current_timestamp: Optional[str] = None,
+    window: int = _SMOOTHING_WINDOW,
+) -> str:
+    """Debounce HOLD/WATCH/ROLL via 2-of-`window` session agreement.
+
+    A new status only "wins" once at least 2 of the last `window` sessions
+    (today's raw status plus prior scored sessions) agree on it. Falls back
+    to today's raw status when there is no majority (e.g. three different
+    statuses across three sessions), since silently holding a stale status
+    indefinitely would be worse than reacting once data is still ambiguous.
+
+    Args:
+        snapshots: Prior position snapshot dicts (any order), each optionally
+            with `timestamp` and `dps_status`.
+        current_status: Today's freshly computed raw status (HOLD/WATCH/ROLL).
+        current_timestamp: Timestamp of the current reading, used only to
+            identify "today" (see `compute_dps_score_smoothed`).
+        window: Number of sessions considered, including today (default 3).
+
+    Returns:
+        The debounced status string.
+    """
+    cur_ts = _parse_snapshot_ts(current_timestamp) if current_timestamp else datetime.now(timezone.utc)
+    today_key = cur_ts.date().isoformat() if cur_ts else None
+
+    scored = [
+        s for s in snapshots
+        if s.get("dps_status") and _parse_snapshot_ts(s.get("timestamp")) is not None
+    ]
+    sessions = _latest_per_session(scored, exclude_date=today_key)
+    prior_statuses = [s["dps_status"] for s in sessions[-(window - 1):]] if window > 1 else []
+    statuses = prior_statuses + [current_status]
+    top_status, top_count = Counter(statuses).most_common(1)[0]
+    return top_status if top_count >= 2 else current_status
 
 
 # ──────────────────────────────────────────────────────────────────────────────
