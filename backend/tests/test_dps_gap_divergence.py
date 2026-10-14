@@ -99,3 +99,20 @@ def test_distance_trend_widening_vs_narrowing():
     )
     assert result is not None
     assert result["dps_gap_distance_trend"] in ("widening", "narrowing")
+
+
+def test_cross_date_ignores_early_noise_from_expanding_scale():
+    # Early gap wiggle (12 -> 0 -> 17) must not count as a cross: on the
+    # full-range scale gap only overtakes DPS once DPS has collapsed.
+    series = [
+        (70, 12), (70, 12), (90, 0), (92, 7), (100, 17), (88, 17),
+        (90, 17), (75, 16), (60, 29), (38, 32), (18, 36), (16, 38),
+    ]
+    snaps = [
+        _snap(f"2026-09-{i + 2:02d}T00:00:00Z", dps_score_smoothed=d, gap_percent=g)
+        for i, (d, g) in enumerate(series[:-1])
+    ]
+    result = detect_dps_gap_divergence(
+        snaps, current_score_smoothed=series[-1][0], current_timestamp="2026-09-13T00:00:00Z",
+    )
+    assert result["dps_gap_cross_date"] >= "2026-09-10"

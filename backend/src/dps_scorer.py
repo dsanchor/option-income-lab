@@ -1372,9 +1372,8 @@ def compute_dps_status_debounced(
 # crossed 4 sessions before DPS dropped under 50).
 #
 # This reproduces that same per-position relative scale (not a fixed/absolute
-# one, which would miss the early crossing), but computed *causally*: each
-# session's normalization only uses data up to and including that session, so
-# today's reading is never normalized against data that doesn't exist yet.
+# one, which would miss the early crossing), computed over the history up to
+# and including today (never future data).
 #
 # `dps_gap_warning` additionally requires dps_score_smoothed <= 50 -- a
 # secondary severity flag, not a prerequisite for detecting the cross itself.
@@ -1382,20 +1381,16 @@ def compute_dps_status_debounced(
 _DIVERGENCE_SEVERITY_FLOOR = 50
 
 
-def _normalize_expanding(values: List[float]) -> List[float]:
-    """Normalize each value to [0, 1] using only the min/max seen so far.
+def _normalize_full_range(values: List[float]) -> List[float]:
+    """Normalize each value to [0, 1] using the min/max of the whole series.
 
-    Causal/expanding (not a fixed full-history window), so a value already
-    computed for an earlier session never changes as later sessions arrive.
+    Uses the full history up to today (same scale the position chart draws),
+    never future data. An expanding min/max would let the first few noisy
+    sessions fill the whole range and fabricate early crossings.
     """
-    out = []
-    running_min = running_max = None
-    for v in values:
-        running_min = v if running_min is None else min(running_min, v)
-        running_max = v if running_max is None else max(running_max, v)
-        span = running_max - running_min
-        out.append(0.5 if span == 0 else (v - running_min) / span)
-    return out
+    lo, hi = min(values), max(values)
+    span = hi - lo
+    return [0.5 if span == 0 else (v - lo) / span for v in values]
 
 
 def detect_dps_gap_divergence(
@@ -1452,8 +1447,8 @@ def detect_dps_gap_divergence(
         "gap_percent": current_gap,
     }]
 
-    dps_norm = _normalize_expanding([s["dps_score_smoothed"] for s in sessions])
-    gap_norm = _normalize_expanding([s["gap_percent"] for s in sessions])
+    dps_norm = _normalize_full_range([s["dps_score_smoothed"] for s in sessions])
+    gap_norm = _normalize_full_range([s["gap_percent"] for s in sessions])
     distances = [d - g for d, g in zip(dps_norm, gap_norm)]
 
     # Track the most recent transition into negative territory (gap
