@@ -122,23 +122,23 @@ function DpsCell({
         {v > 0 ? `+${v}` : v}
       </span>
     );
+  const clickable = !!onWarningClick && !!row.position_id;
+  const Wrapper = clickable ? "button" : "span";
   return (
-    <span className="whitespace-nowrap">
-      {onWarningClick && row.position_id ? (
-        <button
-          type="button"
-          className="cursor-pointer underline decoration-dotted underline-offset-2"
-          title="Click for monitoring history"
-          onClick={(e) => {
-            e.stopPropagation();
-            onWarningClick(row);
-          }}
-        >
-          <strong style={{ color }}>{row.dps_score}</strong>
-        </button>
-      ) : (
-        <strong style={{ color }}>{row.dps_score}</strong>
-      )}
+    <Wrapper
+      className={`whitespace-nowrap ${clickable ? "cursor-pointer rounded px-1 text-right hover:bg-bg-hover" : ""}`}
+      {...(clickable
+        ? {
+            type: "button" as const,
+            title: "Click for monitoring history",
+            onClick: (e: React.MouseEvent) => {
+              e.stopPropagation();
+              onWarningClick!(row);
+            },
+          }
+        : {})}
+    >
+      <strong style={{ color }}>{row.dps_score}</strong>
       {row.dps_score_smoothed != null && (
         <span
           className="ml-1 text-[0.72rem] text-text-muted"
@@ -151,24 +151,17 @@ function DpsCell({
         {delta(row.dps_delta_1d, "1-day change")}
       </span>
       {row.dps_gap_warning && (
-        <button
-          type="button"
-          className="ml-1 cursor-pointer text-[0.85rem] leading-none"
-          aria-label="Show monitoring history"
+        <span
+          className="ml-1 text-[0.85rem] leading-none"
           title={
             `Gap%/DPS(avg) lines have crossed (relative scale) and DPS avg is already <=50` +
-            (row.dps_gap_distance_trend ? ` — distance ${row.dps_gap_distance_trend}` : "") +
-            ` — click for monitoring history`
+            (row.dps_gap_distance_trend ? ` — distance ${row.dps_gap_distance_trend}` : "")
           }
-          onClick={(e) => {
-            e.stopPropagation();
-            onWarningClick?.(row);
-          }}
         >
           ⚠️
-        </button>
+        </span>
       )}
-    </span>
+    </Wrapper>
   );
 }
 
