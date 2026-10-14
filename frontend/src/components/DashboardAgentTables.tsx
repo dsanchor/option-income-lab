@@ -122,25 +122,28 @@ function DpsCell({
         {v > 0 ? `+${v}` : v}
       </span>
     );
-  // Cross detected: warning triangle (orange) while DPS avg <=50 or the gap is still widening;
-  // green triangle once it is narrowing and DPS avg is back above 50.
+  // Cross detected: green while DPS avg >=50; below 50 yellow if the gap is
+  // narrowing, red if widening.
   const trend = row.dps_gap_distance_trend;
   const dpsAvg = row.dps_score_smoothed ?? row.dps_score;
   const crossed = row.dps_gap_cross_detected ?? row.dps_gap_warning;
+  const trendText = trend ? ` — distance ${trend}` : "";
   const gapSignal = !crossed
     ? null
-    : (dpsAvg != null && dpsAvg <= 50) || trend === "widening"
+    : dpsAvg != null && dpsAvg >= 50
       ? {
-          color: "var(--accent-orange)",
-          title:
-            "Gap%/DPS(avg) lines have crossed" +
-            (dpsAvg != null && dpsAvg <= 50 ? " and DPS avg is <=50" : "") +
-            (trend ? ` — distance ${trend}` : ""),
-        }
-      : {
           color: "var(--accent-green)",
-          title: `Gap%/DPS(avg) crossed earlier, now recovering (distance ${trend ?? "narrowing"}, DPS avg >50)`,
-        };
+          title: `Gap%/DPS(avg) lines have crossed, DPS avg >=50${trendText}`,
+        }
+      : trend === "widening"
+        ? {
+            color: "var(--accent-red)",
+            title: `Gap%/DPS(avg) lines have crossed, DPS avg <50 and distance widening`,
+          }
+        : {
+            color: "var(--accent-yellow, #f5c518)",
+            title: `Gap%/DPS(avg) lines have crossed, DPS avg <50${trendText}`,
+          };
   const clickable = !!onWarningClick && !!row.position_id;
   const Wrapper = clickable ? "button" : "span";
   return (
