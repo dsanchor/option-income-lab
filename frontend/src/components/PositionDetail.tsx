@@ -57,7 +57,7 @@ function numOrNull(v: unknown): number | null {
   return isFinite(n) ? n : null;
 }
 
-function SnapshotChart({ snapshots }: { snapshots: Snapshot[] }) {
+export function SnapshotChart({ snapshots }: { snapshots: Snapshot[] }) {
   const [hideWeekends, setHideWeekends] = useState(true);
   const [visible, setVisible] = useState<Record<string, boolean>>(
     Object.fromEntries(SERIES.map((s) => [s.key, true])),

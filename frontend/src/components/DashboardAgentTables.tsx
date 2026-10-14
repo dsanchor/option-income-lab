@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
+import MonitoringHistoryDialog from "@/components/MonitoringHistoryDialog";
 import { useRouter } from "next/navigation";
 import { timeAgo } from "@/lib/format";
 import {
@@ -95,7 +97,13 @@ function RecentCell({
   );
 }
 
-function DpsCell({ row }: { row: AgentRow }) {
+function DpsCell({
+  row,
+  onWarningClick,
+}: {
+  row: AgentRow;
+  onWarningClick?: (row: AgentRow) => void;
+}) {
   if (row.dps_score == null) return <>—</>;
   const color =
     row.dps_score >= 70
@@ -129,16 +137,22 @@ function DpsCell({ row }: { row: AgentRow }) {
         {delta(row.dps_delta_1d, "1-day change")}
       </span>
       {row.dps_gap_warning && (
-        <span
-          className="ml-1 text-[0.72rem]"
-          style={{ color: "var(--accent-red)" }}
+        <button
+          type="button"
+          className="ml-1 cursor-pointer text-[0.85rem] leading-none"
+          aria-label="Show monitoring history"
           title={
             `Gap%/DPS(avg) lines have crossed (relative scale) and DPS avg is already <=50` +
-            (row.dps_gap_distance_trend ? ` — distance ${row.dps_gap_distance_trend}` : "")
+            (row.dps_gap_distance_trend ? ` — distance ${row.dps_gap_distance_trend}` : "") +
+            ` — click for monitoring history`
           }
+          onClick={(e) => {
+            e.stopPropagation();
+            onWarningClick?.(row);
+          }}
         >
-          ⚠️ gap↔dps
-        </span>
+          ⚠️
+        </button>
       )}
     </span>
   );
@@ -151,9 +165,18 @@ const TDNUM = `${TD} text-right font-mono`;
 
 export default function DashboardAgentTables({ tables }: { tables: AgentTable[] }) {
   const router = useRouter();
+  const [historyRow, setHistoryRow] = useState<AgentRow | null>(null);
 
   return (
     <div className="space-y-5">
+      {historyRow?.position_id && (
+        <MonitoringHistoryDialog
+          symbol={historyRow.symbol}
+          positionId={historyRow.position_id}
+          title={historyRow.display}
+          onClose={() => setHistoryRow(null)}
+        />
+      )}
       {tables.map((agent) => {
         const isPM = agent.is_position_monitor;
         const isBuy = agent.key === "buy_tracker";
@@ -310,7 +333,7 @@ export default function DashboardAgentTables({ tables }: { tables: AgentTable[] 
                               )}
                             </td>
                             <td className={TDNUM}>
-                              <DpsCell row={row} />
+                              <DpsCell row={row} onWarningClick={setHistoryRow} />
                             </td>
                           </>
                         ) : isBuy ? (
