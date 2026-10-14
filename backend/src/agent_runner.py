@@ -3573,7 +3573,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
         try:
             if position_id and snapshot_data is not None:
                 from .dps_scorer import run_dps_analysis as _run_dps
-                _dps_snaps = cosmos.get_position_snapshots(symbol, position_id, limit=20)
+                _dps_snaps = cosmos.get_position_snapshots(symbol, position_id, limit=200)
                 _dps_snaps.reverse()
                 _dps_result = _run_dps(
                     symbol=symbol,

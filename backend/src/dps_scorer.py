@@ -1150,6 +1150,9 @@ def _next_focus_call(delta, dte, adx, adx_trend, rsi_trend) -> str:
 # Public API — run full analysis
 # ──────────────────────────────────────────────────────────────────────────────
 
+_SCORING_WINDOW = 20
+
+
 def run_dps_analysis(
     symbol: str,
     strike: float,
@@ -1198,6 +1201,11 @@ def run_dps_analysis(
             "status": "ERROR",
         }
 
+    # Scoring/smoothing keep their original recent window; only the gap/DPS
+    # cross check needs the full history so its scale matches the chart.
+    full_history = snapshots
+    snapshots = snapshots[-_SCORING_WINDOW:]
+
     # Run scorer
     if option_type == "put":
         result = score_short_put(greeks, snapshots, strike, expiration, underlying_price, premium_received=premium_received)
@@ -1226,7 +1234,7 @@ def run_dps_analysis(
     # `detect_dps_gap_divergence` docstring.
     try:
         _divergence = detect_dps_gap_divergence(
-            snapshots, result["score_smoothed"], current_timestamp=current_timestamp,
+            full_history, result["score_smoothed"], current_timestamp=current_timestamp,
         )
         if _divergence:
             result.update(_divergence)

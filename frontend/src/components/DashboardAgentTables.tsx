@@ -122,6 +122,25 @@ function DpsCell({
         {v > 0 ? `+${v}` : v}
       </span>
     );
+  // Cross detected: warning triangle (orange) while DPS avg <=50 or the gap is still widening;
+  // green triangle once it is narrowing and DPS avg is back above 50.
+  const trend = row.dps_gap_distance_trend;
+  const dpsAvg = row.dps_score_smoothed ?? row.dps_score;
+  const crossed = row.dps_gap_cross_detected ?? row.dps_gap_warning;
+  const gapSignal = !crossed
+    ? null
+    : (dpsAvg != null && dpsAvg <= 50) || trend === "widening"
+      ? {
+          color: "var(--accent-orange)",
+          title:
+            "Gap%/DPS(avg) lines have crossed" +
+            (dpsAvg != null && dpsAvg <= 50 ? " and DPS avg is <=50" : "") +
+            (trend ? ` — distance ${trend}` : ""),
+        }
+      : {
+          color: "var(--accent-green)",
+          title: `Gap%/DPS(avg) crossed earlier, now recovering (distance ${trend ?? "narrowing"}, DPS avg >50)`,
+        };
   const clickable = !!onWarningClick && !!row.position_id;
   const Wrapper = clickable ? "button" : "span";
   return (
@@ -150,15 +169,13 @@ function DpsCell({
       <span className="ml-1 text-[0.72rem] text-text-muted">
         {delta(row.dps_delta_1d, "1-day change")}
       </span>
-      {row.dps_gap_warning && (
+      {gapSignal && (
         <span
-          className="ml-1 text-[0.85rem] leading-none"
-          title={
-            `Gap%/DPS(avg) lines have crossed (relative scale) and DPS avg is already <=50` +
-            (row.dps_gap_distance_trend ? ` — distance ${row.dps_gap_distance_trend}` : "")
-          }
+          className="ml-1 text-[0.95rem] leading-none"
+          style={{ color: gapSignal.color }}
+          title={gapSignal.title}
         >
-          ⚠️
+          {"\u26A0\uFE0E"}
         </span>
       )}
     </Wrapper>

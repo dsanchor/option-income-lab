@@ -97,7 +97,7 @@ async def run_dps_cron(cosmos, yf_provider) -> dict:
 
                 # Get snapshots for this position (oldest first)
                 snapshots = cosmos.get_position_snapshots(
-                    symbol, position_id, limit=20
+                    symbol, position_id, limit=200
                 )
                 snapshots.reverse()
 
