@@ -124,7 +124,21 @@ function DpsCell({
     );
   return (
     <span className="whitespace-nowrap">
-      <strong style={{ color }}>{row.dps_score}</strong>
+      {onWarningClick && row.position_id ? (
+        <button
+          type="button"
+          className="cursor-pointer underline decoration-dotted underline-offset-2"
+          title="Click for monitoring history"
+          onClick={(e) => {
+            e.stopPropagation();
+            onWarningClick(row);
+          }}
+        >
+          <strong style={{ color }}>{row.dps_score}</strong>
+        </button>
+      ) : (
+        <strong style={{ color }}>{row.dps_score}</strong>
+      )}
       {row.dps_score_smoothed != null && (
         <span
           className="ml-1 text-[0.72rem] text-text-muted"
