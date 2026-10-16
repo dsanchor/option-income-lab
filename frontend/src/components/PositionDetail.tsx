@@ -24,6 +24,7 @@ import { ROW_TINT_BG } from "@/lib/badges";
 import type { Position } from "@/types/symbol-detail";
 import type { BrokerAccount, LedgerMovement } from "@/types/portfolio";
 import { getMovementTypeLabel } from "@/lib/movementTypeLabel";
+import { isValidExpirationDate } from "@/lib/positionExpiration";
 
 // ── Snapshot chart ────────────────────────────────────────────────────────
 type Snapshot = Record<string, number | string | boolean | null | undefined>;
@@ -958,7 +959,7 @@ function RollSimulation({
   );
 }
 
-function EditableFinancialField({
+function EditablePositionField({
   symbol,
   positionId,
   label,
@@ -968,18 +969,24 @@ function EditableFinancialField({
   symbol: string;
   positionId: string;
   label: string;
-  field: "premium" | "buyback_cost";
-  value: number | null | undefined;
+  field: "premium" | "buyback_cost" | "expiration";
+  value: number | string | null | undefined;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value != null ? String(value) : "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isDate = field === "expiration";
 
   async function save() {
+    if (saving) return;
     const parsed = Number(draft);
-    if (draft.trim() === "" || !Number.isFinite(parsed) || parsed < 0) {
+    if (isDate && !isValidExpirationDate(draft)) {
+      setError("Expiration must be a real date in YYYY-MM-DD format.");
+      return;
+    }
+    if (!isDate && (draft.trim() === "" || !Number.isFinite(parsed) || parsed < 0)) {
       setError(`${label} must be a non-negative number.`);
       return;
     }
@@ -992,7 +999,7 @@ function EditableFinancialField({
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ [field]: parsed }),
+          body: JSON.stringify({ [field]: isDate ? draft : parsed }),
         },
       );
       const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -1012,12 +1019,12 @@ function EditableFinancialField({
       {editing ? (
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5">
-            <span className="text-sm text-text-muted">$</span>
+            {!isDate && <span className="text-sm text-text-muted">$</span>}
             <input
-              type="number"
-              min="0"
-              step="0.01"
-              inputMode="decimal"
+              type={isDate ? "date" : "number"}
+              min={isDate ? undefined : "0"}
+              step={isDate ? undefined : "0.01"}
+              inputMode={isDate ? undefined : "decimal"}
               aria-label={label}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
@@ -1026,14 +1033,14 @@ function EditableFinancialField({
                 if (event.key === "Enter") {
                   event.preventDefault();
                   void save();
-                } else if (event.key === "Escape") {
+                } else if (event.key === "Escape" && !saving) {
                   setEditing(false);
                   setError(null);
                 }
               }}
               disabled={saving}
               autoFocus
-              className="w-24 rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1 font-mono text-sm text-text outline-none focus:border-accent-blue disabled:opacity-60"
+              className={`${isDate ? "w-36" : "w-24"} rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1 font-mono text-sm text-text outline-none focus:border-accent-blue disabled:opacity-60`}
             />
             <button
               type="button"
@@ -1055,11 +1062,11 @@ function EditableFinancialField({
               Cancel
             </button>
           </div>
-          {error && <div className="text-xs text-accent-red">⚠️ {error}</div>}
+          {error && <div role="alert" className="text-xs text-accent-red">⚠️ {error}</div>}
         </div>
       ) : (
         <div className="flex items-center gap-2 text-sm text-text">
-          <span className="font-mono">{value != null ? `$${fmt2(value)}` : "N/A"}</span>
+          <span className="font-mono">{value != null ? (isDate ? String(value) : `$${fmt2(Number(value))}`) : "N/A"}</span>
           <button
             type="button"
             onClick={() => {
@@ -1201,13 +1208,23 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <DField label="Type">{(position.type ?? "—").toUpperCase()}</DField>
         <DField label="Strike"><span className="font-mono">${position.strike ?? "—"}</span></DField>
-        <DField label="Expiration"><span className="font-mono">{position.expiration ?? "—"}</span></DField>
+        {posId ? (
+          <EditablePositionField
+            symbol={symbol}
+            positionId={posId}
+            label="Expiration"
+            field="expiration"
+            value={position.expiration}
+          />
+        ) : (
+          <DField label="Expiration"><span className="font-mono">{position.expiration ?? "—"}</span></DField>
+        )}
         <DField label="Status">{position.status ?? "—"}</DField>
         {typeof position.contracts === "number" && <DField label="Contracts">{position.contracts}</DField>}
         <DField label="Opened"><span className="font-mono">{position.opened_at ? String(position.opened_at).slice(0, 10) : "—"}</span></DField>
         {position.closed_at ? <DField label="Closed"><span className="font-mono">{String(position.closed_at).slice(0, 10)}</span></DField> : null}
         {posId ? (
-          <EditableFinancialField
+          <EditablePositionField
             symbol={symbol}
             positionId={posId}
             label="Premium"
@@ -1218,7 +1235,7 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
           <DField label="Premium"><span className="font-mono">{position.display_premium != null ? `$${fmt2(position.display_premium)}` : "N/A"}</span></DField>
         )}
         {posId ? (
-          <EditableFinancialField
+          <EditablePositionField
             symbol={symbol}
             positionId={posId}
             label="Buyback"

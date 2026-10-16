@@ -713,6 +713,32 @@ class CosmosDBService:
         doc["updated_at"] = datetime.utcnow().isoformat() + "Z"
         return self.container.replace_item(item=doc["id"], body=doc)
 
+    def update_position_expiration(self, symbol: str, position_id: str,
+                                   expiration: str) -> dict:
+        """Correct a contract date without creating or relinking positions."""
+        from .position_expiration import validate_position_expiration
+
+        expiration = validate_position_expiration(expiration)
+        doc = self.get_symbol(symbol)
+        if doc is None:
+            raise ValueError(f"Symbol {symbol} not found")
+        position = next((p for p in doc.get("positions", [])
+                         if p.get("position_id") == position_id), None)
+        if position is None:
+            raise ValueError(f"Position {position_id} not found")
+        if position.get("expiration") == expiration:
+            return doc
+
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        position["expiration"] = expiration
+        position["expiration_corrected_at"] = timestamp
+        doc["updated_at"] = timestamp
+        # A concurrent close/roll/edit must not be overwritten by this correction.
+        return self.container.replace_item(
+            item=doc["id"], body=doc, etag=doc["_etag"],
+            match_condition=MatchConditions.IfNotModified,
+        )
+
     def set_position_paper(self, symbol: str, position_id: str,
                            is_paper: bool) -> dict:
         """Toggle the paper flag on a position."""
@@ -899,18 +925,35 @@ class CosmosDBService:
     def get_position_snapshots(self, symbol: str, position_id: str,
                                limit: int = 100) -> list:
         """Get recent position snapshots for a single position, newest first."""
+        doc = self.get_symbol(symbol) or {}
+        position = next((p for p in doc.get("positions", [])
+                         if p.get("position_id") == position_id), {})
+        parameters = [{"name": "@position_id", "value": position_id}]
+        correction_filter = ""
+        if position.get("expiration_corrected_at"):
+            # Filter before TOP so old observations cannot crowd out fresh data.
+            correction_filter = (
+                "AND c.timestamp > @corrected_at AND c.expiration = @expiration "
+            )
+            parameters.extend([
+                {"name": "@corrected_at", "value": position["expiration_corrected_at"]},
+                {"name": "@expiration", "value": position["expiration"]},
+            ])
         query = (
             f"SELECT TOP {int(limit)} * FROM c "
             "WHERE c.doc_type = 'position_snapshot' AND c.position_id = @position_id "
+            f"{correction_filter}"
             "ORDER BY c.timestamp DESC"
         )
-        return list(self.container.query_items(
+        snapshots = list(self.container.query_items(
             query=query,
-            parameters=[
-                {"name": "@position_id", "value": position_id},
-            ],
+            parameters=parameters,
             partition_key=symbol,
         ))
+        from .position_expiration import monitoring_after_expiration_correction
+
+        return [snapshot for snapshot in snapshots
+                if monitoring_after_expiration_correction(position, snapshot)]
 
     def update_snapshot_dps(self, symbol: str, position_id: str,
                             dps_score: int, dps_status: Optional[str] = None,
@@ -920,13 +963,19 @@ class CosmosDBService:
                             dps_gap_distance: Optional[float] = None,
                             dps_gap_distance_trend: Optional[str] = None,
                             dps_gap_cross_date: Optional[str] = None,
-                            dps_gap_warning: Optional[bool] = None) -> None:
+                            dps_gap_warning: Optional[bool] = None,
+                            expected_expiration: str | None = None,
+                            expected_timestamp: str | None = None) -> None:
         """Update the most recent snapshot with DPS fields (best-effort)."""
         try:
             snaps = self.get_position_snapshots(symbol, position_id, limit=1)
             if not snaps:
                 return
             doc = snaps[0]
+            if expected_expiration and doc.get("expiration") != expected_expiration:
+                return
+            if expected_timestamp and doc.get("timestamp") != expected_timestamp:
+                return
             doc["dps_score"] = dps_score
             if dps_status is not None:
                 doc["dps_status"] = dps_status

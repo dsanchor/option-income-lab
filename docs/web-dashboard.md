@@ -35,3 +35,23 @@
 - **Events Calendar** (`/symbols/calendar`) — Monthly calendar view showing earnings and ex-dividend dates for all tracked symbols. Color-coded by event type and position exposure (purple/orange for earnings, red/yellow for ex-dividend). Data cached in CosmosDB with configurable daily sync from Yahoo Finance. Includes a manual Refresh button for on-demand updates.
 
 ---
+
+## Correcting an option expiration
+
+Expand a position under **Symbol Detail → Options** and use **Expiration → Edit**.
+Choose the correct date, then **Save**, or **Cancel** (Escape also cancels).
+The date must be a real ISO `YYYY-MM-DD` date; historical dates are allowed,
+including for closed or rolled positions. This corrects the existing position:
+it does not execute a roll, reopen it, change premiums/buyback costs, alter
+linked ledger movements, or replace its ID or roll-chain links.
+
+The browser refreshes the position after saving and resets its local monitoring,
+DPS, and roll-analysis panels. Historical activities and snapshots remain stored,
+but observations from before the correction (or for a different expiration) are
+not reused as current monitoring or DPS trend inputs. New monitoring rebuilds
+those views; old-contract decisions are also excluded from monitor prompt
+context. The correction boundary is included in user-data backups.
+Shared symbol-level market-data caches remain valid and are not
+purged. If another edit changes the symbol concurrently, refresh and retry.
+The API is `PATCH /api/symbols/{symbol}/positions/{position_id}/expiration` with
+`{"expiration": "2026-10-16"}`.

@@ -2354,7 +2354,10 @@ def _compute_symbol_detail(
     for pos in doc.get("positions", []):
         p = dict(pos)
         mon = latest_monitor.get(pos.get("position_id"))
-        if mon:
+        if mon and (
+            not pos.get("expiration_corrected_at")
+            or _dashboard_legacy_position_compatible(mon, {**pos, "symbol": sym})
+        ):
             p["assignment_risk"] = mon.get("assignment_risk")
             p["moneyness"] = mon.get("moneyness")
         source = pos.get("source")
@@ -3657,6 +3660,52 @@ async def api_update_position_buyback_cost(request: Request, symbol: str,
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.patch("/api/symbols/{symbol}/positions/{position_id}/expiration")
+async def api_update_position_expiration(request: Request, symbol: str,
+                                         position_id: str):
+    """Correct an expiration in place, including historical positions."""
+    from azure.cosmos.exceptions import CosmosHttpResponseError
+    from src.position_expiration import validate_position_expiration
+
+    try:
+        cosmos = _get_cosmos(request)
+        symbol_doc = _get_symbol_doc_for_guard(cosmos, symbol)
+        if not symbol_doc:
+            return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
+        from src.us_exchange_eligibility import enforce_us_options_eligible
+        guard = enforce_us_options_eligible(symbol_doc)
+        if guard:
+            return guard
+        try:
+            body = await request.json()
+        except ValueError:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "JSON body must be an object"}, status_code=400)
+        try:
+            expiration = validate_position_expiration(body.get("expiration"))
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        doc = cosmos.update_position_expiration(
+            _ticker_from_symbol_param(symbol), position_id, expiration,
+        )
+        return JSONResponse(_clean_doc(doc))
+    except CosmosHttpResponseError as exc:
+        if exc.status_code == 412:
+            return JSONResponse(
+                {"error": "Position changed concurrently. Refresh and try again."},
+                status_code=409,
+            )
+        return JSONResponse({"error": str(exc)}, status_code=503)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=503)
+    except Exception as exc:
+        logger.exception("Expiration correction failed for %s/%s", symbol, position_id)
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
 @app.patch("/api/symbols/{symbol}/positions/{position_id}/paper")
 async def api_set_position_paper(request: Request, symbol: str,
                                  position_id: str):
@@ -4492,6 +4541,9 @@ def _dashboard_identity_value(
     aliases: tuple[str, ...],
 ):
     nested_source = doc.get("source")
+    if field == "expiration" and doc.get("expiration_corrected_at"):
+        # Source is immutable execution provenance, not the corrected contract.
+        nested_source = None
     sources = (doc, nested_source if isinstance(nested_source, dict) else {})
     normalized_values = []
     for source in sources:
@@ -4519,6 +4571,10 @@ def _dashboard_legacy_position_compatible(
     legacy_doc: dict,
     position: dict,
 ) -> bool:
+    from src.position_expiration import monitoring_after_expiration_correction
+
+    if not monitoring_after_expiration_correction(position, legacy_doc):
+        return False
     for field, aliases in _DASHBOARD_POSITION_IDENTITY_FIELDS:
         legacy_value = _dashboard_identity_value(legacy_doc, field, aliases)
         if legacy_value is _DASHBOARD_INVALID_IDENTITY:

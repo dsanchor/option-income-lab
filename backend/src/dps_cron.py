@@ -132,6 +132,7 @@ async def run_dps_cron(cosmos, yf_provider) -> dict:
                 # Write the DPS score as a snapshot field
                 snapshot_data = {
                     "timestamp": ts,
+                    "expiration": expiration,
                     "dps_score": dps_score,
                     "dps_status": result.get("status", ""),
                     "dps_risk_zone": result.get("risk_zone", ""),

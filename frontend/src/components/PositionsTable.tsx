@@ -389,7 +389,7 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
                   {detailsFor === posId && posId && (
                     <tr className="border-b border-border/60 bg-bg-input/30">
                       <td colSpan={COLS} className="px-4 py-4">
-                        <PositionDetail symbol={symbol} position={p} />
+                        <PositionDetail key={`${p.position_id}:${p.expiration}`} symbol={symbol} position={p} />
                       </td>
                     </tr>
                   )}

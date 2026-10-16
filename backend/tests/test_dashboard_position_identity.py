@@ -3,7 +3,27 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from web.app import _build_dashboard_tables, _compute_dashboard_data
+from web.app import (
+    _build_dashboard_tables,
+    _compute_dashboard_data,
+    _dashboard_legacy_position_compatible,
+)
+
+
+def test_expiration_correction_hides_old_monitoring_without_rewriting_source():
+    position = _position(
+        "pos-a", expiration="2026-11-20",
+        symbol="MSFT",
+        expiration_corrected_at="2026-10-01T10:00:00Z",
+        source={"expiration": "2026-10-16"},
+    )
+    old = _activity("pos-a", "2026-09-30T10:00:00Z", risk="high", price=501)
+    assert not _dashboard_legacy_position_compatible(old, position)
+    old["timestamp"] = "2026-10-02T10:00:00Z"
+    assert not _dashboard_legacy_position_compatible(old, position)
+    fresh = {**old, "current_expiration": "2026-11-20"}
+    assert _dashboard_legacy_position_compatible(fresh, position)
+    assert position["source"]["expiration"] == "2026-10-16"
 
 
 class _Snapshots:

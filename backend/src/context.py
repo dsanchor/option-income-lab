@@ -33,6 +33,7 @@ class ContextProvider:
         agent_type: str,
         max_entries: int = 2,
         position_id: str | None = None,
+        position: dict | None = None,
     ) -> str:
         """Return formatted context string for prompt injection.
 
@@ -45,6 +46,7 @@ class ContextProvider:
             agent_type: Agent type key.
             max_entries: Number of recent activities (0–5, default 2).
             position_id: Optional position filter for monitor agents.
+            position: Current contract, used to exclude pre-correction context.
 
         Returns:
             Human-readable context string, or a "no history" message.
@@ -55,6 +57,15 @@ class ContextProvider:
         activities = self.cosmos.get_recent_activities(
             symbol, agent_type, max_entries, position_id
         )
+        if position and position.get("expiration_corrected_at"):
+            from .position_expiration import monitoring_after_expiration_correction
+
+            activities = [
+                activity for activity in activities
+                if monitoring_after_expiration_correction(position, activity)
+                and (activity.get("current_expiration") or activity.get("expiration"))
+                == position.get("expiration")
+            ]
         if not activities:
             return "No previous activities recorded."
 

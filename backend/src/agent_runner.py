@@ -2689,6 +2689,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
 
         result = {
             "timestamp": timestamp,
+            "expiration": expiration,
             "underlying_price": round(current_price, 4),
             "strike": strike_value,
             "gap_absolute": round(gap_absolute, 4),
@@ -2796,6 +2797,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
             previous_context = context_provider.get_context(
                 symbol, agent_type, max_entries=max_activity_entries,
                 position_id=position_id,
+                position=position,
             )
 
             data = await fetcher.fetch_all(symbol, force_refresh=True)
@@ -3598,6 +3600,8 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         dps_gap_distance_trend=_dps_result.get("dps_gap_distance_trend"),
                         dps_gap_cross_date=_dps_result.get("dps_gap_cross_date"),
                         dps_gap_warning=_dps_result.get("dps_gap_warning"),
+                        expected_expiration=expiration,
+                        expected_timestamp=analysis_ts,
                     )
                     print(f"  📊 DPS: {symbol} ${strike} → {_dps_result.get('status', '?')} (score: {_dps_score}, smoothed: {_dps_result.get('score_smoothed')})")
         except Exception as dps_err:
