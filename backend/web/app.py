@@ -6406,8 +6406,12 @@ def _classify_share_status(total_shares: int, free_lots: int) -> str:
      return "available"
 
 
-def _build_share_availability_map(docs: list) -> dict:
-     """Compute per-symbol share-availability metadata from Cosmos docs.
+def _build_share_availability_map(
+     docs: list, portfolio_shares_by_ticker: dict | None = None,
+) -> dict:
+     """Compute availability from current holdings and active call positions.
+     Legacy config totals are used only when no portfolio snapshot is supplied.
+     An absent ticker in a supplied snapshot has zero shares.
      Returns a dict keyed by symbol (uppercase) with total_shares,
      active_call_count, committed_shares, free_shares, free_lots, share_status.
      """
@@ -6417,8 +6421,13 @@ def _build_share_availability_map(docs: list) -> dict:
          if not symbol:
              continue
          try:
-             total_shares = max(int(doc.get("total_shares", 0) or 0), 0)
-         except (TypeError, ValueError):
+             shares = (
+                 portfolio_shares_by_ticker.get(symbol, 0)
+                 if portfolio_shares_by_ticker is not None
+                 else doc.get("total_shares", 0)
+             )
+             total_shares = max(int(shares or 0), 0)
+         except (TypeError, ValueError, OverflowError):
              total_shares = 0
          active_positions = [
              p for p in doc.get("positions", [])
@@ -6810,7 +6819,11 @@ async def api_screener_options(
 
      # Per-row enrichment: attach share-availability metadata to call rows;
      # put rows never receive these fields.
-     share_avail_map = _build_share_availability_map(docs)
+     share_avail_map = _build_share_availability_map(
+         docs,
+         portfolio_shares_by_ticker
+         if getattr(cosmos, "portfolio_container", None) is not None else None,
+     )
      stale_by_symbol = {sym: entry.get("chain_stale_at_compute", False) for sym, entry in precomputed_entries.items()}
 
      for row in rows:

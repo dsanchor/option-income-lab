@@ -13,10 +13,10 @@ export type ScreenerSide = "call" | "put";
 export type ScreenerPreference = "Preferred" | "Acceptable" | "Avoid";
 
 /** Share availability status for covered-call rows only (never present on put
- * rows). Computed once per symbol in app.py from position state (Cosmos) and
- * stamped identically on every call row for that symbol:
+ * rows). Computed once per symbol in app.py from current portfolio holdings
+ * and active call positions, stamped identically on every call row:
  *   "available"        — at least one full lot (100 shares) free for a new call
- *   "shares_committed" — ≥100 shares owned, but all lots tied to active calls
+ *   "shares_committed" — ≥100 total shares owned, but fewer than 100 free
  *   "no_shares"        — fewer than 100 total shares owned */
 export type ShareStatus = "available" | "shares_committed" | "no_shares";
 
@@ -77,7 +77,8 @@ export interface ScreenerOptionRow {
   stale: boolean;
   /** Call rows only: classification of share availability for covered calls. */
   share_status?: ShareStatus;
-  /** Call rows only: total shares held for this symbol (clamped ≥0). */
+  /** Call rows only: current portfolio shares (clamped ≥0); legacy config
+   * total is used only when portfolio storage is not configured. */
   total_shares?: number;
   /** Call rows only: number of active call positions consuming lots. */
   active_call_count?: number;

@@ -579,6 +579,62 @@ class TestShareStatusPutSideDefect:
 class TestShareAvailabilityFilter:
     """Filter correctness: each value, combinations, defaults, invalid input."""
 
+    @pytest.mark.parametrize(
+        "portfolio_shares,config_shares,has_call,expected_status,free_shares",
+        [
+            ("200.000000", 100, True, "available", 100),
+            ("199.000000", 200, True, "shares_committed", 99),
+            ("100.000000", 0, False, "available", 100),
+            ("100.000000", 200, True, "shares_committed", 0),
+            (None, 200, False, "no_shares", 0),
+        ],
+    )
+    def test_filter_uses_current_portfolio_shares(
+        self, client, monkeypatch, portfolio_shares, config_shares,
+        has_call, expected_status, free_shares,
+    ):
+        from src.portfolio.holdings_service import HoldingsService
+
+        symbol = "LIVE_SHARES"
+        _setup_cache(symbol)
+        cosmos = FakeShareAvailabilityCosmos()
+        cosmos.add_symbol(
+            symbol, total_shares=config_shares,
+            positions=[_active_call()] if has_call else [],
+        )
+        cosmos.portfolio_container = object()
+        cosmos.container = object()
+        holdings = (
+            [{"ticker": symbol, "total_shares": portfolio_shares}]
+            if portfolio_shares is not None else []
+        )
+        monkeypatch.setattr(
+            HoldingsService, "compute_holdings", lambda self: {"holdings": holdings},
+        )
+        _set_cosmos(client, cosmos)
+
+        response = client.get("/api/screener/options", params={"side": "call"})
+        assert response.status_code == 200
+        rows = response.json()["rows"]
+        assert rows
+        for row in rows:
+            assert row["total_shares"] == int(float(portfolio_shares or 0))
+            assert row["committed_shares"] == (100 if has_call else 0)
+            assert row["free_shares"] == free_shares
+            assert row["free_lots"] == free_shares // 100
+            assert row["share_status"] == expected_status
+
+        for status in ("available", "shares_committed", "no_shares"):
+            filtered = client.get(
+                "/api/screener/options",
+                params={"side": "call", "share_availability": status, "limit": 1},
+            )
+            assert filtered.status_code == 200
+            body = filtered.json()
+            matching = len(rows) if status == expected_status else 0
+            assert body["pagination"]["total_matching"] == matching
+            assert len(body["rows"]) == min(matching, 1)
+
     @pytest.fixture
     def three_symbol_client(self, client):
         """Three symbols: AVAIL (200 shares, 1 call), COMMT (100 shares, 1 call),
