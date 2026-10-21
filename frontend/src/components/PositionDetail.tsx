@@ -561,7 +561,7 @@ function RollTableView({ symbol, positionId }: { symbol: string; positionId: str
         {cp.premium_received ? (
           <span><span className="text-text-muted">Premium rcvd:</span> <span className="font-mono">${fmt2(cp.premium_received)}</span></span>
         ) : null}
-        <span><span className="text-text-muted">Buyback:</span> <span className="font-mono">${fmt2(data.buyback_cost)} (${fmt2(data.buyback_per_share)}/sh)</span></span>
+        <span title="Estimated at the current contract's mid; not an executable quote."><span className="text-text-muted">Buyback (mid):</span> <span className="font-mono">${fmt2(data.buyback_cost)} (${fmt2(data.buyback_per_share)}/sh)</span></span>
         {pct !== null && (
           <span>
             <span className="text-text-muted">Captured:</span>{" "}

@@ -4,7 +4,7 @@ Deterministic roll table calculator.
 Given a parsed options chain and the parameters of the current short option
 position, computes:
 
-  - Buy-back cost of the current short (executable ask × 100 × contracts)
+  - Estimated buy-back cost of the current short (mid × 100 × contracts)
   - Profit-capture percentage and 70% gate flag
   - Roll scenarios across the next N expirations (strictly after the current
     expiration) and up to 3 strike targets (ATM / +offset% / -offset%)
@@ -49,7 +49,7 @@ from src.options_chain_filters import (
     parse_strike_decimal,
 )
 from src.options_chain_view import usable_greek, usable_quote
-from src.options_math import executable_buyback_ask, robust_mid_optional
+from src.options_math import robust_mid_optional
 
 logger = logging.getLogger(__name__)
 
@@ -538,9 +538,9 @@ def compute_roll_table(
     -------
     dict
         {
-          "buyback_cost":         float | None, # total executable cost to close
-          "buyback_per_share":    float | None, # executable ask of current contract
-          "pct_captured":         float | None, # null when buyback ask is unavailable
+          "buyback_cost":         float | None, # total estimated cost to close
+          "buyback_per_share":    float | None, # two-sided robust mid of current contract
+          "pct_captured":         float | None, # null when buyback mid is unavailable
           "profit_target_reached":bool,    # pct_captured >= 0.70
           "buyback_available":    bool,
           "incomplete_data":      bool,
@@ -583,13 +583,14 @@ def compute_roll_table(
 
     # ── 1. Buy-back cost (current short position) ──────────────────────────
     current_contract = get_contract(chain, current_strike, current_expiration, option_type)
-    if current_contract is not None:
-        buyback_per_share = executable_buyback_ask(usable_quote(current_contract, "ask"))
-    else:
+    try:
+        buyback_per_share = float(_two_sided_midpoint(current_contract, leg="current"))
+    except RollSimulationError as exc:
         logger.warning(
-            "roll_table: current contract not found (strike=%.2f, exp=%s) — buyback unavailable",
+            "roll_table: buyback midpoint unavailable (strike=%.2f, exp=%s): %s",
             current_strike,
             current_expiration,
+            exc,
         )
         buyback_per_share = None
 
