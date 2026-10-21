@@ -57,7 +57,7 @@ Each position monitor run captures a **snapshot** of the position's key indicato
 - **MACD** — MACD line value (daily)
 - **ADX** — average directional index (trend strength)
 - **Midprice** — current contract mid-price (from options chain)
-- **P&L %** — mark-to-market profit/loss: `(premium_received - midprice) / premium_received × 100`
+- **P&L %** — mark-to-market profit/loss for both calls and puts: `(premium_received - midprice) / premium_received × 100`. The mid is an informational valuation, not a guaranteed execution price; executable buyback estimates still use the ask. P&L is unavailable when no usable mid can be obtained. Existing historical snapshots are not recalculated.
 - Underlying price, premium_received, timestamp
 
 **Chart visualization:** The symbol detail page renders an interactive Chart.js time series with all indicators on dual y-axes (Gap%/P&L% on left, RSI/MACD/ADX/DPS on right). Features include tooltip with all values, weekend filtering (hidden by default), color-coded lines per indicator, and **per-attribute toggle checkboxes** to show/hide individual lines. Charts are also visible on closed positions (read-only mode, no DPS button).

@@ -31,7 +31,7 @@ from .options_chain_filters import (
     exclude_contract,
     get_contract,
 )
-from .options_math import executable_buyback_ask, robust_mid
+from .options_math import executable_buyback_ask, robust_mid_optional
 from .volatility import format_volatility_block
 from .yfinance_data_provider import YFinanceDataProvider, create_provider, get_shared_provider, OPTIONS_CHAIN_SCHEMA_DESCRIPTION
 from .supervisor_instructions import get_supervisor_instructions, SUPERVISOR_OUTPUT_SCHEMA
@@ -2666,7 +2666,6 @@ Output your activity in the required JSON format. Use the timestamp above in you
         )
         gap_percent = (gap_absolute / strike_value * 100.0) if strike_value else None
 
-        # Keep robust mid informational; short-call P&L requires executable ask.
         midprice = None
         buyback_ask = None
         pnl_pct = None
@@ -2681,9 +2680,9 @@ Output your activity in the required JSON format. Use the timestamp above in you
             elif greeks:
                 bid = _to_float(greeks.get("bid"))
                 ask = _to_float(greeks.get("ask"))
-                midprice = robust_mid(bid, ask)
+                midprice = robust_mid_optional(bid, ask)
 
-        pnl_mark = buyback_ask if position_type == "call" else midprice
+        pnl_mark = midprice
         if pnl_mark is not None and premium_received is not None and premium_received > 0:
             pnl_pct = round((premium_received - pnl_mark) / premium_received * 100, 2)
 

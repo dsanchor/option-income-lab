@@ -87,18 +87,18 @@ def _market_data(*, bid=0.0, ask=_MISSING, last=2.40, mid=0.0) -> dict:
 
 
 @pytest.mark.parametrize(
-    ("bid", "ask", "last"),
+    ("bid", "ask", "last", "expected_mid"),
     [
-        pytest.param(0.0, 0.0, 2.40, id="zero-market-positive-last"),
-        pytest.param(1.10, _MISSING, 2.40, id="missing-ask"),
-        pytest.param(0.80, 0.0, 2.40, id="positive-bid-zero-ask"),
-        pytest.param(0.80, -0.10, 2.40, id="negative-ask"),
-        pytest.param(0.80, float("nan"), 2.40, id="nan-ask"),
-        pytest.param(0.80, float("inf"), 2.40, id="infinite-ask"),
+        pytest.param(0.0, 0.0, 2.40, None, id="zero-market-positive-last"),
+        pytest.param(1.10, _MISSING, 2.40, 1.10, id="missing-ask"),
+        pytest.param(0.80, 0.0, 2.40, 0.80, id="positive-bid-zero-ask"),
+        pytest.param(0.80, -0.10, 2.40, 0.80, id="negative-ask"),
+        pytest.param(0.80, float("nan"), 2.40, 0.80, id="nan-ask"),
+        pytest.param(0.80, float("inf"), 2.40, 0.80, id="infinite-ask"),
     ],
 )
-def test_position_snapshot_does_not_infer_pnl_without_executable_ask(
-    bid, ask, last
+def test_position_snapshot_separates_mid_pnl_from_unavailable_executable_ask(
+    bid, ask, last, expected_mid
 ):
     snapshot = AgentRunner._build_position_snapshot_data(
         _market_data(bid=bid, ask=ask, last=last),
@@ -112,12 +112,19 @@ def test_position_snapshot_does_not_infer_pnl_without_executable_ask(
     assert snapshot is not None
     assert snapshot.get("buyback_ask") is None
     assert snapshot.get("buyback_per_share") is None
-    assert snapshot.get("pnl_pct") is None
+    if expected_mid is None:
+        assert snapshot.get("midprice") is None
+        assert snapshot.get("pnl_pct") is None
+    else:
+        assert snapshot["midprice"] == pytest.approx(expected_mid)
+        assert snapshot["pnl_pct"] == pytest.approx(
+            round((3.20 - expected_mid) / 3.20 * 100, 2)
+        )
     assert snapshot["buyback_available"] is False
     assert snapshot["incomplete_data"] is True
 
 
-def test_position_snapshot_uses_positive_ask_not_midpoint():
+def test_position_snapshot_uses_mid_for_pnl_and_ask_for_buyback():
     snapshot = AgentRunner._build_position_snapshot_data(
         _market_data(bid=0.0, ask=1.20, last=9.99, mid=0.10),
         strike=420.0,
@@ -130,9 +137,36 @@ def test_position_snapshot_uses_positive_ask_not_midpoint():
     assert snapshot is not None
     assert snapshot["buyback_ask"] == pytest.approx(1.20)
     assert snapshot["midprice"] == pytest.approx(0.10)
-    assert snapshot["pnl_pct"] == pytest.approx(62.5)
+    assert snapshot["pnl_pct"] == pytest.approx(96.88)
     assert snapshot["buyback_available"] is True
     assert snapshot["incomplete_data"] is False
+
+
+@pytest.mark.parametrize("position_type", ["call", "put"])
+@pytest.mark.parametrize("stored_mid", [1.0, 0.0])
+def test_position_snapshot_call_and_put_pnl_use_same_mid(position_type, stored_mid):
+    data = _market_data(bid=0.80, ask=1.20, mid=stored_mid)
+    if position_type == "put":
+        chain = json.loads(data["options_chain"])
+        chain["puts"] = chain["calls"]
+        chain["calls"] = {}
+        data["options_chain"] = json.dumps(chain)
+
+    snapshot = AgentRunner._build_position_snapshot_data(
+        data,
+        strike=420.0,
+        position_type=position_type,
+        timestamp="2026-08-17T14:00:00Z",
+        expiration=EXPIRATION,
+        premium_received=3.20,
+    )
+
+    assert snapshot is not None
+    assert snapshot["midprice"] == pytest.approx(1.0)
+    assert snapshot["pnl_pct"] == pytest.approx(68.75)
+    if position_type == "call":
+        assert snapshot["buyback_ask"] == pytest.approx(1.20)
+        assert snapshot["buyback_per_share"] == pytest.approx(1.20)
 
 
 class _FakeContext:
