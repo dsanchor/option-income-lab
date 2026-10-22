@@ -19,6 +19,15 @@ export interface Enrichment {
   [k: string]: unknown;
 }
 
+export interface PositionContractCount {
+  count: number | null;
+  status: "resolved" | "unknown" | "error";
+  source: string | null;
+  warnings: string[];
+  code?: string;
+  message?: string;
+}
+
 export interface Position {
   position_id?: string;
   type?: string;
@@ -26,10 +35,14 @@ export interface Position {
   expiration?: string;
   status?: string;
   coverage_status?: "linked" | "unlinked" | "unresolved_security" | "account_filtered_out" | "paper" | null;
-  contracts?: number | string;
-  quantity?: number | string;
-  open_contracts?: number | string;
-  contracts_open?: number | string;
+  contracts?: number | string | null;
+  quantity?: number | string | null;
+  open_contracts?: number | string | null;
+  contracts_open?: number | string | null;
+  contract_counts?: {
+    total: PositionContractCount;
+    remaining: PositionContractCount;
+  };
   assignment_risk?: string | null;
   moneyness?: string | null;
   display_premium?: number | null;

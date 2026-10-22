@@ -1,7 +1,7 @@
 import pytest
-
 from src.position_contracts import (
     PositionContractCountError,
+    position_contract_counts,
     resolve_open_contract_count,
 )
 
@@ -122,3 +122,62 @@ def test_never_reads_another_position():
     other = {"position_id": "other", "contracts": 99}
     assert selected.contracts == 2
     assert other["contracts"] == 99
+
+
+@pytest.mark.parametrize(
+    ("position", "total", "remaining"),
+    [
+        (_legacy_position(), 1, 1),
+        (_legacy_position(quantity="-4"), 4, 4),
+        (_legacy_position(contracts=7, contracts_open="2"), 7, 2),
+        (_legacy_position(contracts=7, status="closed", close_reason="assigned"), 7, 0),
+        (_legacy_position(quantity="3", status="rolled", rolled_to="next"), 3, 0),
+        (_legacy_position(open_contracts="2"), None, 2),
+        (_legacy_position(status="closed"), None, 0),
+        (_legacy_position(position_schema_version=2), None, None),
+        (_legacy_position(contracts=None), None, None),
+        (_legacy_position(contracts=True), None, None),
+        (_legacy_position(contracts="1.5"), None, None),
+        (_legacy_position(contracts="NaN"), None, None),
+        (_legacy_position(contracts=2, quantity=3), None, None),
+    ],
+)
+def test_read_projection_preserves_total_remaining_and_raw_data(position, total, remaining):
+    import copy
+
+    before = copy.deepcopy(position)
+    counts = position_contract_counts(position)
+    assert counts["total"]["count"] == total
+    assert counts["remaining"]["count"] == remaining
+    if total is None:
+        assert counts["total"]["status"] in {"unknown", "error"}
+        assert counts["total"]["message"]
+    if total == 1:
+        assert counts["total"]["source"] == "legacy_implicit_one"
+        assert counts["total"]["warnings"]
+    assert position == before
+
+
+def test_remaining_cannot_exceed_valid_original_total_in_reads_or_rolls():
+    position = _legacy_position(contracts=2, open_contracts=3)
+    with pytest.raises(PositionContractCountError, match="exceed"):
+        resolve_open_contract_count(position)
+    assert position_contract_counts(position)["remaining"]["status"] == "error"
+
+
+def test_partial_assignment_requires_remaining_but_preserves_known_total():
+    position = _legacy_position(quantity="5", assigned_contracts=2)
+    counts = position_contract_counts(position)
+    assert counts["total"]["count"] == 5
+    assert counts["remaining"]["status"] == "unknown"
+    with pytest.raises(PositionContractCountError, match="partial-close"):
+        resolve_open_contract_count(position)
+    position["open_contracts"] = 3
+    assert resolve_open_contract_count(position).contracts == 3
+
+
+@pytest.mark.parametrize("field", ["closed_contracts", "contracts_closed", "assigned_contracts", "contracts_assigned", "partial_closes", "partial_assignments"])
+def test_partial_evidence_without_authoritative_quantity_cannot_default(field):
+    position = _legacy_position(**{field: 1})
+    with pytest.raises(PositionContractCountError):
+        resolve_open_contract_count(position)

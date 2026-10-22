@@ -4,6 +4,7 @@ import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CoverageStatusBadge, WarningBadge } from "@/components/OptionLinkageBadges";
 import PositionDetail from "@/components/PositionDetail";
+import PositionContractCounts from "@/components/PositionContractCounts";
 import type { Position } from "@/types/symbol-detail";
 
 const STATUS_FILTERS = [
@@ -182,7 +183,7 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
     }
   }
 
-  const COLS = 10;
+  const COLS = 11;
 
   return (
     <section className="space-y-3">
@@ -238,6 +239,7 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
               <th className="px-4 py-3 font-medium">Risk</th>
               <th className="px-4 py-3 font-medium">Moneyness</th>
               <th className="px-4 py-3 font-medium">Status</th>
+              <th className="px-4 py-3 font-medium">Contracts</th>
               <th className="px-4 py-3 font-medium">Opened</th>
               <th className="px-4 py-3 text-right font-medium">Premium</th>
               <th className="px-4 py-3 font-medium">Notes</th>
@@ -304,6 +306,7 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
                         <WarningBadge warnings={warnings} />
                       </span>
                     </td>
+                    <td className="px-4 py-3"><PositionContractCounts position={p} /></td>
                     <td className="px-4 py-3 font-mono">{p.opened_at ? String(p.opened_at).slice(0, 10) : "—"}</td>
                     <td className="px-4 py-3 text-right font-mono">
                       {p.display_premium != null ? `$${num(p.display_premium)}` : "—"}

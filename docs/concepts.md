@@ -253,7 +253,7 @@ The Alpha Advisor is a separate LLM instance that identifies the **single blocki
 **When it runs:** Same triggers as the Supervisor (alerts, prolonged WAITs, on-demand). Runs in parallel with the Supervisor as Phase 3b.
 
 **Philosophy:**
-- **Diagnostic first:** Identifies exactly which parameter blocked the trade (premium, IV, delta, technical, DTE)
+- **Diagnostic first:** Identifies exactly which parameter blocked the trade (premium, IV, delta, technical, DTE, theta)
 - **Minimal relaxation:** Only bends ONE constraint — all other rules remain enforced
 - **NONE is valid:** If no safe relaxation exists, it says so — not every WAIT has a viable alternative
 - **Trade-off transparency:** Every alternative clearly states what is being sacrificed
@@ -264,6 +264,24 @@ The Alpha Advisor is a separate LLM instance that identifies the **single blocki
 - `delta_outside_category_range` — Delta outside the category's preferred range
 - `technical_borderline` — RSI/momentum slightly outside ideal
 - `dte_below_ideal` — DTE acceptable but shorter than preferred
+- `theta_below_minimum` — Absolute daily theta below the required minimum
+
+**Best Options contract validation:** Alpha first evaluates the exact requested
+symbol, side, strike and expiration. For WAIT, it considers relaxing the same
+soft criterion that blocked the primary decision. If justified, it recommends
+that **same contract** as STRONG/MODERATE and stops, quantifying the threshold,
+observed value, gap and trade-off. For example, theta 0.042/day versus 0.050/day
+is a 16% shortfall, not an automatic approval. Only if that contract cannot
+safely be relaxed may Alpha search a nearby strike OR expiration, explaining
+why the requested contract was unsuitable. Hard gates remain non-relaxable.
+NONE preserves the primary decision; it never turns WAIT into approval.
+
+Same-contract recommendations still require Supervisor approval and deterministic
+safety validation. An accepted entry is persisted as SELL with
+`selection_source=requested_relaxed`, distinct from an unrelaxed
+`requested_approved` or a different `alpha_alternative`. Opening a position
+remains a separate manual action. Normal watchlist alternatives and held-position
+roll/no-op constraints are unchanged.
 
 **Hard gates (never relaxed):** Earnings within window, DTE > 45, fundamental quality failures, free-fall conditions (RSI < 25 + negative momentum), delta > 0.50.
 
@@ -273,7 +291,7 @@ The Alpha Advisor is a separate LLM instance that identifies the **single blocki
 ```json
 {
   "opportunity_strength": "STRONG | MODERATE | NONE",
-  "relaxed_parameter": "premium_below_category_minimum | iv_below_category_threshold | delta_outside_category_range | technical_borderline | dte_below_ideal | none",
+  "relaxed_parameter": "premium_below_category_minimum | iv_below_category_threshold | delta_outside_category_range | technical_borderline | dte_below_ideal | theta_below_minimum | none",
   "alternative": {
     "action": "What the relaxed alternative recommends",
     "rationale": "Technical/quantitative evidence supporting this",

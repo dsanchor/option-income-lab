@@ -17,6 +17,15 @@ document (CosmosDB).
 # Output schema — importable by agent_runner.py for response parsing
 # ---------------------------------------------------------------------------
 
+RELAXABLE_PARAMETERS = (
+    "premium_below_category_minimum",
+    "iv_below_category_threshold",
+    "delta_outside_category_range",
+    "technical_borderline",
+    "dte_below_ideal",
+    "theta_below_minimum",
+)
+
 ALPHA_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -35,14 +44,7 @@ ALPHA_OUTPUT_SCHEMA = {
         },
         "relaxed_parameter": {
             "type": "string",
-            "enum": [
-                "premium_below_category_minimum",
-                "iv_below_category_threshold",
-                "delta_outside_category_range",
-                "technical_borderline",
-                "dte_below_ideal",
-                "none",
-            ],
+            "enum": [*RELAXABLE_PARAMETERS, "none"],
             "description": (
                 "Which specific parameter was relaxed to produce the "
                 "alternative. 'none' when opportunity_strength is NONE."
@@ -173,6 +175,10 @@ Explore these angles (suggest only if data supports it, max 1 alternative):
 3. **Strike adjustment:** "The current strike is far OTM with minimal
    premium left. A closer strike at $X captures $Y more premium."
    Relaxed parameter: `delta_outside_category_range`.
+4. **Theta minimum:** If the primary reason explicitly identifies daily
+   theta below its minimum, map that blocker to `theta_below_minimum`.
+   Compare actual absolute theta with the threshold and explain the
+   trade-off; a percentage shortfall alone does not justify relaxation.
 """,
 
     "ROLL_UP": """\
@@ -298,6 +304,7 @@ which criterion was not met:
 | Delta outside range / no strike in range | `delta_outside_category_range` |
 | Technicals borderline / momentum concern | `technical_borderline` |
 | DTE too short / no ideal expiration | `dte_below_ideal` |
+| Theta / daily time decay below minimum | `theta_below_minimum` |
 
 **Step 2 — Find the best trade relaxing ONLY that parameter.**
 Scan the options chain for the contract that:
@@ -325,6 +332,10 @@ Explore these relaxation angles (suggest only 1, the best):
    but orderly. Strike $X at 8% OTM gives buffer for continued upside."
 5. **DTE slightly short:** "Only 27 DTE available vs 30 minimum. Premium
    at $X is 0.9% — theta/day is actually higher than a 35 DTE equivalent."
+6. **Theta below minimum:** Compare the observed absolute daily theta
+   with the required minimum. Explain the income/decay sacrificed and
+   why the remaining risk/reward does or does not justify that gap.
+   A small percentage gap alone is NOT sufficient justification.
 
 ⚠️ HARD GATES — NEVER relax these (set opportunity_strength = NONE):
 - Earnings Gate BLOCKED (earnings risk is binary, non-diversifiable)
@@ -383,8 +394,9 @@ _AGENT_CONTEXT: dict[str, str] = {
         "It scans for opportunities to SELL new call options against "
         "owned stock. When the agent says WAIT, identify which specific "
         "parameter blocked the trade (premium too low, IV below "
-        "threshold, delta outside range, technicals borderline, or "
-        "DTE too short) and offer the best available trade that relaxes "
+        "threshold, delta outside range, technicals borderline, "
+        "DTE too short, or theta below minimum) and offer the best "
+        "available trade that relaxes "
         "ONLY that parameter."
     ),
     "cash_secured_put": (
@@ -392,8 +404,9 @@ _AGENT_CONTEXT: dict[str, str] = {
         "It scans for opportunities to SELL new put options backed by "
         "cash. When the agent says WAIT, identify which specific "
         "parameter blocked the trade (premium too low, IV below "
-        "threshold, delta outside range, technicals borderline, or "
-        "DTE too short) and offer the best available trade that relaxes "
+        "threshold, delta outside range, technicals borderline, "
+        "DTE too short, or theta below minimum) and offer the best "
+        "available trade that relaxes "
         "ONLY that parameter. Never suggest relaxing fundamental "
         "quality — you don't want to own a bad stock."
     ),
@@ -501,7 +514,7 @@ action.
    agent's output carefully — what specific criterion was not met?
    Map it to one of: `premium_below_category_minimum`,
    `iv_below_category_threshold`, `delta_outside_category_range`,
-   `technical_borderline`, `dte_below_ideal`.
+   `technical_borderline`, `dte_below_ideal`, `theta_below_minimum`.
 2. **Only relax ONE parameter.** All other criteria must still pass.
    If multiple parameters fail, pick the one closest to its threshold.
 3. **Quantify the gap precisely.** "Category requires ≥0.8%, best is
@@ -563,7 +576,7 @@ outside the JSON):
 
 {{{{{{{{
     "opportunity_strength": "STRONG | MODERATE | NONE",
-    "relaxed_parameter": "premium_below_category_minimum | iv_below_category_threshold | delta_outside_category_range | technical_borderline | dte_below_ideal | none",
+    "relaxed_parameter": "premium_below_category_minimum | iv_below_category_threshold | delta_outside_category_range | technical_borderline | dte_below_ideal | theta_below_minimum | none",
     "parameter_detail": "Category (Balanced) requires ≥0.8%, best available is 0.6%",
     "alternative": {{{{{{{{
         "action": "SELL at $185 strike, exp 2026-07-18 — premium 0.2pp below threshold but all other criteria pass",
@@ -611,26 +624,47 @@ VALIDATION_CONTEXT_ADDENDUM = """
 
 ## VALIDATION CONTEXT (Contract Validation Mode)
 
-You are validating a specific contract selected by the user from the Best
-Options page. The contract is identified as the "requested contract" in the
-decision data. You have the full options chain for this symbol/side.
+This section overrides the generic candidate-search order above. This is a
+new-position contract review, NOT monitoring or rolling an existing position.
+The user selected an EXACT contract from Best Options. Keep its symbol, side,
+strike and expiration unchanged for your FIRST evaluation. Read the requested
+coordinates and quote/Greeks from the VALIDATED CONTRACT EVIDENCE section.
 
-**If the requested contract is already optimal** (all criteria pass or nearly
-pass), set `opportunity_strength` to `NONE` — this endorses the user's selection.
+1. **Review the requested contract first.** For a primary WAIT, identify the
+   SAME blocking criterion in the primary reason/waiting_for. Do not substitute
+   another criterion just because a different strike offers more premium.
+2. **Consider relaxing only that soft parameter on the SAME contract.** All
+   other criteria and every hard gate must still pass. Quantify the observed
+   value, required threshold, absolute/relative gap and resulting trade-off;
+   explain whether the risk/reward justifies accepting it, not merely that
+   the gap is small.
+3. **If that relaxation is viable, recommend the SAME requested contract**
+   with STRONG or MODERATE, the actual relaxed_parameter and explicit
+   parameter_detail/rationale/trade_off. Put the SAME strike/expiration and
+   chain-derived premium/delta/DTE in alternative. Then STOP: do not search
+   for another contract. NONE does NOT mean a WAIT contract passed its failed
+   criterion; it means no safe relaxation was recommended.
+4. **Only if the requested contract cannot safely be relaxed**, explain WHY
+   in alternative.rationale before considering another strike OR expiration
+   (never both). The fallback must relax at most one soft parameter, exist in
+   the chain and respect all hard gates. If a hard gate caused the primary
+   WAIT, return NONE; do not bypass it by searching another contract.
 
-**If a nearby contract** (same side, different strike OR different expiration,
-not both) offers meaningfully better risk/reward by relaxing one parameter,
-suggest it as your alternative. The alternative MUST exist in the supplied
-chain — verify strike/expiration/premium/delta against the chain data.
+Example to REASON ABOUT, not automatic approval: absolute theta 0.042/day vs
+minimum 0.050/day (gap 0.008/day, 16%). Evaluate accepting the lower theta on
+the exact requested contract with theta_below_minimum. Do NOT jump to another
+strike with higher delta before deciding whether that theta gap is justified.
+A 16% gap alone does not establish viability or require STRONG/MODERATE.
 
-**Do NOT suggest an alternative that changes both strike AND expiration
-simultaneously** — only one parameter may be relaxed.
+For a primary SELL, endorse an already optimal requested contract with NONE.
+For any recommendation, keep symbol and side fixed; another contract may
+change only strike OR expiration, never both.
 
 **Do NOT fabricate quote or Greeks data** — all premium and delta values must
 be read directly from the options chain provided in the market data.
 
-When you endorse the requested contract (`opportunity_strength: "NONE"`), you
-are approving the user's selection for SELL. When you suggest an alternative
-(`opportunity_strength: "STRONG"` or `"MODERATE"`), that alternative may become
-the selected contract if it passes deterministic safety validation.
+STRONG/MODERATE recommendations, including SAME-contract relaxations, remain
+subject to deterministic safety validation. You never authorize a trade
+automatically. NONE preserves the primary decision: SELL stays SELL, WAIT
+stays WAIT.
 """

@@ -190,6 +190,25 @@ class TestChainSnapshotSummary:
 class TestAlternativeValidation:
     """Test deterministic alternative validation gates."""
 
+    @pytest.mark.parametrize(
+        ("field", "value", "reason_fragment"),
+        [("theta", None, "theta unavailable"), ("delta", 0.65, "delta out of band")],
+    )
+    def test_requested_relaxation_does_not_bypass_evidence_or_hard_delta(
+        self, sample_chain, field, value, reason_fragment,
+    ):
+        sample_chain["calls"]["20260919"]["150.0"][field] = value
+        valid, reason, _ = _validate_alpha_alternative(
+            chain=sample_chain, side="call", requested_strike=150.0,
+            requested_expiration="2026-09-19",
+            alternative={"strike": 150.0, "expiration": "2026-09-19"},
+            category="balanced", underlying_price=150.0, next_earnings_date=None,
+            now=datetime(2026, 8, 30, tzinfo=timezone.utc),
+            requested_relaxation="theta_below_minimum",
+        )
+        assert not valid
+        assert reason_fragment in reason.lower()
+
     def test_g1_contract_must_exist(self, sample_chain):
         """G1: Alternative contract must exist in chain."""
         alternative = {"strike": 999.0, "expiration": "2026-09-19"}

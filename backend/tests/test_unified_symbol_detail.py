@@ -199,6 +199,44 @@ def client():
         yield c, fake_cosmos
 
 
+def test_position_contract_read_projection_is_shared_without_storage_mutation(client):
+    import copy
+
+    c, cosmos = client
+    raw = [
+        {"position_id": "partial", "type": "call", "status": "active", "contracts": "5", "open_contracts": "-2"},
+        {"position_id": "assigned", "type": "put", "status": "closed", "close_reason": "assigned", "quantity": "-3"},
+        {"position_id": "modern-missing", "type": "call", "status": "active", "position_schema_version": 2},
+        {"position_id": "null", "type": "put", "status": "active", "contracts": None},
+    ]
+    cosmos.container.seed_config("AAPL", {"positions": raw})
+    before = copy.deepcopy(cosmos.get_symbol("AAPL"))
+    responses = [
+        c.get("/api/symbols"),
+        c.get("/api/symbols/AAPL"),
+        c.get("/api/symbols/AAPL/detail"),
+    ]
+    projected = []
+    for response in responses:
+        assert response.status_code == 200
+        payload = response.json()
+        projected.append((payload[0] if isinstance(payload, list) else payload)["positions"])
+    assert [
+        [position["contract_counts"] for position in positions]
+        for positions in projected
+    ] == [[position["contract_counts"] for position in projected[0]]] * 3
+    partial, assigned, missing, null = projected[0]
+    assert partial["contracts"] == "5"
+    assert partial["open_contracts"] == "-2"
+    assert partial["contract_counts"]["total"]["count"] == 5
+    assert partial["contract_counts"]["remaining"]["count"] == 2
+    assert assigned["contract_counts"]["total"]["count"] == 3
+    assert assigned["contract_counts"]["remaining"]["count"] == 0
+    assert missing["contract_counts"]["total"]["status"] == "unknown"
+    assert null["contract_counts"]["total"]["status"] == "error"
+    assert cosmos.get_symbol("AAPL") == before
+
+
 def _add_ledger_buy(fake_cosmos, security_id: str, account_id: str = "_unassigned",
                     quantity: str = "100", gross_eur: str = "10000",
                     doc_id: str = None, deleted: bool = False):

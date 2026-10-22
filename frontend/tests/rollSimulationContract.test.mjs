@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -8,8 +9,61 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const source = (path) => readFileSync(join(root, path), "utf8");
 const detail = source("src/components/PositionDetail.tsx");
 const route = source("src/app/api/symbols/[symbol]/positions/[positionId]/roll-simulation/route.ts");
+const require = createRequire(import.meta.url);
+const ts = require("typescript");
+const { createElement } = require("react");
+const { renderToStaticMarkup } = require("react-dom/server");
+const countModule = { exports: {} };
+const countCode = ts.transpileModule(source("src/components/PositionContractCounts.tsx"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+}).outputText;
+new Function("require", "module", "exports", countCode)(require, countModule, countModule.exports);
+const renderCounts = (position) => renderToStaticMarkup(createElement(countModule.exports.default, { position }));
 
 describe("simulate a roll frontend contract", () => {
+  it("renders original totals separately from partial and terminal remaining counts", () => {
+    const resolved = (count, source) => ({ count, source, status: "resolved", warnings: [] });
+    const partial = renderCounts({
+      contract_counts: { total: resolved(5, "quantity"), remaining: resolved(2, "open_contracts") },
+    });
+    assert.match(partial, /Total: <span[^>]*>5<\/span>/);
+    assert.match(partial, /Remaining: <span[^>]*>2<\/span>/);
+    assert.match(partial, /Source: open_contracts/);
+    const closed = renderCounts({
+      contract_counts: { total: resolved(5, "contracts"), remaining: resolved(0, "terminal_status") },
+    });
+    assert.match(closed, /Remaining: <span[^>]*>0<\/span>/);
+  });
+
+  it("visibly preserves unknown/error and historical warnings without raw-value fallback", () => {
+    const error = { count: null, status: "error", source: null, warnings: [], message: "Conflicting quantity aliases" };
+    const unknown = renderCounts({ contracts: 99, contract_counts: { total: error, remaining: error } });
+    assert.match(unknown, /Unknown/);
+    assert.match(unknown, /Conflicting quantity aliases/);
+    assert.doesNotMatch(unknown, />99</);
+    assert.match(renderCounts({ contracts: 1 }), /Unknown/);
+    const historical = { count: 1, status: "resolved", source: "legacy_implicit_one", warnings: ["Historical default"] };
+    const markup = renderCounts({ contract_counts: { total: historical, remaining: historical } });
+    assert.match(markup, /historical estimate/);
+    assert.match(markup, /Historical default/);
+    assert.match(markup, /Total: <span[^>]*>1<\/span>/);
+  });
+
+  it("uses the same backend-resolved total and remaining display in list and detail", () => {
+    const counts = source("src/components/PositionContractCounts.tsx");
+    const table = source("src/components/PositionsTable.tsx");
+    assert.match(detail, /<PositionContractCounts position=\{position\}/);
+    assert.match(table, /<PositionContractCounts position=\{p\}/);
+    assert.match(table, />Contracts<\/th>/);
+    assert.match(counts, /position\.contract_counts\?\.\[kind\]/);
+    assert.match(counts, /"total", "remaining"/);
+    assert.match(counts, /"Unknown"/);
+    assert.match(counts, /value\?\.message/);
+    assert.match(counts, /historical estimate/);
+    assert.doesNotMatch(counts, /position\.(contracts|quantity|open_contracts|contracts_open)\b|\|\| 1|\?\? 1/);
+    assert.doesNotMatch(detail, /typeof position\.contracts === "number"/);
+  });
+
   it("renders immediately after Roll Scenarios for active exact positions", () => {
     const rollScenarios = detail.indexOf("🔄 Roll Scenarios");
     const simulator = detail.indexOf("Simulate a Roll", rollScenarios);

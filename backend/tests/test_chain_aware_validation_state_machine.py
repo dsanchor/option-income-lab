@@ -10,9 +10,17 @@ Comprehensive coverage of fail-closed WAIT/SELL state machine per design §2.2:
 Plus: schema fields, supervisor/alpha approval semantics, prompt partitioning, incomplete alternatives.
 """
 
+import json
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, call
 from src.agent_runner import AgentRunner
+from src.alpha_instructions import ALPHA_OUTPUT_SCHEMA
+from src.contract_validation_integration import (
+    _persist_validation_activity,
+    _validate_alpha_alternative,
+)
 
 
 @pytest.fixture
@@ -484,6 +492,143 @@ class TestPromptPartitioning:
         supervisor_call_kwargs = mock_supervisor.call_args.kwargs
         assert "market_data" in supervisor_call_kwargs
         assert chain_context not in supervisor_call_kwargs["market_data"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent_type", "validation"),
+    [("covered_call", True), ("covered_call", False), ("open_call_monitor", False)],
+)
+async def test_requested_first_theta_prompt_is_validation_only(runner, agent_type, validation):
+    alpha = {
+        "opportunity_strength": "NONE",
+        "relaxed_parameter": "none",
+        "alternative": {"action": "No safe relaxation"},
+        "one_liner": "No safe relaxation",
+    }
+    agent = AsyncMock()
+    agent.run.return_value = MagicMock(text=json.dumps(alpha))
+    with (
+        patch.object(runner, "_get_client"),
+        patch.object(runner, "_record_trace"),
+        patch("src.agent_runner.Agent", return_value=agent) as factory,
+    ):
+        await runner._run_alpha_review(
+            activity_payload={"symbol": "NEE", "activity": "WAIT"},
+            market_data="requested contract evidence",
+            previous_context="",
+            agent_type=agent_type,
+            is_validation_context=validation,
+        )
+    instructions = factory.call_args.kwargs["instructions"]
+    assert "theta_below_minimum" in ALPHA_OUTPUT_SCHEMA["properties"]["relaxed_parameter"]["enum"]
+    assert "theta_below_minimum" in instructions
+    assert ("Review the requested contract first" in instructions) is validation
+    if validation:
+        assert "SAME blocking criterion" in instructions
+        assert "Then STOP" in instructions
+        assert "Only if the requested contract cannot safely be relaxed" in instructions
+        assert "A 16% gap alone does not establish viability" in instructions
+        assert "HOLD this open position" not in instructions
+    else:
+        assert "Rolling or re-selling into the IDENTICAL strike AND" in instructions
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("strength", "earnings", "trade_off", "supervisor", "expected"),
+    [
+        ("STRONG", None, "Lower daily decay, with delta and premium unchanged", "ORIGINAL_HOLDS", "SELL"),
+        ("MODERATE", None, "Lower daily decay, with delta and premium unchanged", "ORIGINAL_HOLDS", "SELL"),
+        ("NONE", None, "Theta gap not justified", "ORIGINAL_HOLDS", "WAIT"),
+        ("MODERATE", "2026-10-30", "Lower daily decay", "ORIGINAL_HOLDS", "WAIT"),
+        ("MODERATE", None, "", "ORIGINAL_HOLDS", "WAIT"),
+        ("MODERATE", None, "Lower daily decay", "RECONSIDER", "WAIT"),
+    ],
+)
+async def test_requested_theta_relaxation_safety_and_persistence(
+    runner, mock_cosmos, mock_context_provider, valid_evidence,
+    strength, earnings, trade_off, supervisor, expected,
+):
+    contract = {
+        "strike": 85.0, "bid": 0.67, "ask": 0.75, "delta": 0.285,
+        "theta": -0.042, "iv": 0.25, "_meta": {"greeks_valid": True},
+    }
+    evidence = {
+        **valid_evidence,
+        "underlying_price": 81.81,
+        "contract_data": contract,
+        "next_earnings_date": earnings,
+    }
+    primary = {
+        "symbol": "NEE", "activity": "WAIT", "strike": 85.0,
+        "expiration": "2026-11-13", "premium": 0.67,
+        "reason": "Absolute theta 0.042/day below 0.050/day minimum",
+    }
+    alpha = {
+        "opportunity_strength": strength,
+        "relaxed_parameter": "theta_below_minimum" if strength != "NONE" else "none",
+        "parameter_detail": "0.042 vs 0.050/day: 0.008/day (16%) shortfall",
+        "alternative": {
+            "strike": 85.0, "expiration": "2026-11-13", "premium": 99.0,
+            "delta": 0.9, "trade_off": trade_off,
+            "rationale": "Accept lower decay while retaining the OTM buffer and unchanged risk exposure",
+        },
+    }
+    agent = AsyncMock()
+    agent.run.return_value = MagicMock(text=json.dumps(primary))
+    callback_calls = []
+
+    def validate(**kwargs):
+        callback_calls.append(kwargs)
+        return _validate_alpha_alternative(
+            chain={"calls": {"20261113": {"85.0": contract}}, "puts": {}},
+            now=datetime(2026, 10, 22, tzinfo=timezone.utc),
+            **kwargs,
+        )
+
+    with (
+        patch.object(runner, "_get_client"),
+        patch("src.agent_runner.Agent", return_value=agent),
+        patch.object(runner, "_run_supervisor_review", return_value={"net_assessment": supervisor}),
+        patch.object(runner, "_run_alpha_review", return_value=alpha) as review,
+        patch.object(runner, "_record_trace", return_value="trace-theta"),
+        patch("src.agent_runner.build_rule_evaluation", return_value={}),
+    ):
+        result = await runner.run_contract_validation(
+            symbol="NEE", side="call", strike=85.0, expiration="2026-11-13",
+            evidence_snapshot=evidence, cosmos=mock_cosmos,
+            context_provider=mock_context_provider,
+            validated_alternative_callback=validate,
+        )
+    assert review.call_args.kwargs["is_validation_context"] is True
+    assert review.call_args.kwargs["activity_payload"]["requested_contract"]["strike"] == 85.0
+    assert result["activity"] == expected
+    assert result["is_alert"] is (expected == "SELL")
+    assert result["selected_contract"]["strike"] == 85.0
+    if expected == "SELL":
+        assert callback_calls[0]["requested_relaxation"] == "theta_below_minimum"
+        assert result["selection_source"] == "requested_relaxed"
+        assert result["relaxed_parameter"] == "theta_below_minimum"
+        assert result["selected_contract"]["premium"] == 0.67
+        assert result["activity_data"]["activity"] == "SELL"
+        assert result["activity_data"]["delta"] == 0.285
+    else:
+        assert result["selection_source"] != "requested_relaxed"
+    await _persist_validation_activity(
+        cosmos=mock_cosmos, run_id="validation-theta", symbol="NEE", side="call",
+        strike=85.0, expiration="2026-11-13", source="best_options",
+        displayed_snapshot=None, evaluated_snapshot=evidence, result=result,
+    )
+    persisted = mock_cosmos.write_activity.call_args.kwargs["activity_data"]
+    assert persisted["activity"] == expected
+    assert persisted["is_alert"] is (expected == "SELL")
+    assert persisted["strike"] == 85.0
+    assert persisted["expiration"] == "2026-11-13"
+    assert persisted["note"] == result["note"]
+    if expected == "SELL":
+        assert persisted["selection_source"] == "requested_relaxed"
+        assert persisted["relaxed_parameter"] == "theta_below_minimum"
 
 
 class TestIncompleteAlternative:

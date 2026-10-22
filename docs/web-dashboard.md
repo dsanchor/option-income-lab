@@ -55,3 +55,31 @@ Shared symbol-level market-data caches remain valid and are not
 purged. If another edit changes the symbol concurrently, refresh and retry.
 The API is `PATCH /api/symbols/{symbol}/positions/{position_id}/expiration` with
 `{"expiration": "2026-10-16"}`.
+
+## Position contract quantities
+
+The positions table and expanded detail show the same backend-resolved **Total**
+and **Remaining** contract counts, including an explicit **Unknown** with the
+resolution error rather than hiding missing/null/invalid data or defaulting it
+to one. Sources are available in the quantity tooltip. Historical estimates
+carry a visible warning. Symbol list, raw symbol, detail, and position-mutation
+responses add a read-only `contract_counts` projection; persisted `contracts`,
+aliases, premiums, buybacks, and ledger accounting are unchanged by reads.
+
+Original totals use `contracts` / `quantity`; same-tier aliases must agree.
+Remaining counts use `open_contracts` / `contracts_open` first, as do both roll
+views and roll persistence. Signed short counts and numeric strings normalize
+through the shared Python resolver. A remaining-only count does not establish
+the original total. Closed (including assigned/expired) and rolled positions
+have zero remaining, not zero original total. Explicit partial-close/assignment
+evidence without an authoritative remaining alias is unknown and cannot roll;
+remaining quantity cannot exceed an otherwise valid original total.
+
+The only implicit-one fallback remains the verified **active** historical
+writer shape: no schema marker, CALL/PUT, positive finite strike, valid expiry,
+notes field, generated `pos_..._YYYYMMDD_HHMMSS` identity and timezone-aware
+`opened_at` matching the same UTC second, both strictly before
+`2026-09-26T10:44:42Z`. Partial evidence disables that fallback. This is the
+historical writer's one-contract convention, not a reconstruction of the
+investor's intended manual quantity. Closed/rolled documents without explicit
+quantity evidence remain unknown and are **not** guessed or reopened.

@@ -35,7 +35,7 @@ from .options_math import executable_buyback_ask, robust_mid_optional
 from .volatility import format_volatility_block
 from .yfinance_data_provider import YFinanceDataProvider, create_provider, get_shared_provider, OPTIONS_CHAIN_SCHEMA_DESCRIPTION
 from .supervisor_instructions import get_supervisor_instructions, SUPERVISOR_OUTPUT_SCHEMA
-from .alpha_instructions import get_alpha_instructions, ALPHA_OUTPUT_SCHEMA
+from .alpha_instructions import get_alpha_instructions, ALPHA_OUTPUT_SCHEMA, RELAXABLE_PARAMETERS
 from .rule_evaluator import (
     build_buy_tracker_evidence,
     build_rule_evaluation,
@@ -1598,7 +1598,12 @@ Provide your supervisor audit in the JSON format specified above."""
             }
             alpha_agent_type = _AGENT_TYPE_MAP.get(agent_type, agent_type)
 
-            instructions = get_alpha_instructions(alpha_agent_type, decision_type)
+            playbook_decision = (
+                "NOT_NOW"
+                if is_validation_context and decision_type == "WAIT"
+                else decision_type
+            )
+            instructions = get_alpha_instructions(alpha_agent_type, playbook_decision)
 
             # Append validation context addendum if in validation mode
             if is_validation_context:
@@ -4357,6 +4362,7 @@ All market data has been pre-fetched above. Please analyze this data and generat
                 activity_data["premium"] = selected_contract["premium"]
             if "delta" in selected_contract:
                 activity_data["delta"] = selected_contract["delta"]
+            activity_data["activity"] = result["activity"]
 
     async def run_contract_validation(
         self,
@@ -4438,7 +4444,7 @@ All market data has been pre-fetched above. Please analyze this data and generat
                 - selected_contract: dict | None (strike, expiration, premium, delta)
                 - relaxed_parameter: str | None
                 - comparison_rationale: str | None
-                - selection_source: str | None ("requested_approved" | "alpha_alternative")
+                - selection_source: str | None ("requested_approved" | "requested_relaxed" | "alpha_alternative")
 
         Raises:
             ValueError: Invalid evidence_snapshot structure or missing required fields
@@ -4668,7 +4674,14 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
                 alpha_market_data = market_data_text + "\n\n" + chain_context_text
 
             alpha_view = await self._run_alpha_review(
-                activity_payload=activity_data,
+                activity_payload={
+                    **activity_data,
+                    "requested_contract": {
+                        "symbol": symbol,
+                        "side": side,
+                        **result["requested_contract"],
+                    },
+                },
                 market_data=alpha_market_data,
                 previous_context=previous_context,
                 agent_type=agent_type,
@@ -4676,7 +4689,7 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
                 cosmos=cosmos,
                 run_id=run_id,
                 parent_trace_id=primary_trace_id,
-                is_validation_context=bool(chain_context_text),
+                is_validation_context=True,
             )
 
             if alpha_view is None:
@@ -4724,6 +4737,36 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
                 result["selection_source"] = None
                 return result
 
+            try:
+                same_requested_contract = (
+                    alpha_has_alternative
+                    and float(alpha_alternative["strike"]) == float(strike)
+                    and alpha_alternative["expiration"] == expiration
+                )
+            except (TypeError, ValueError):
+                same_requested_contract = False
+            requested_relaxation_options = {}
+            if same_requested_contract:
+                explained_relaxation = (
+                    alpha_relaxed_param in RELAXABLE_PARAMETERS
+                    and all(
+                        isinstance(value, str) and value.strip()
+                        for value in (
+                            alpha_view.get("parameter_detail"),
+                            alpha_alternative.get("rationale"),
+                            alpha_alternative.get("trade_off"),
+                        )
+                    )
+                )
+                if not explained_relaxation:
+                    result["activity"] = "WAIT"
+                    result["is_alert"] = False
+                    result["validation_status"] = "review_incomplete"
+                    result["note"] = "Requested-contract relaxation missing a soft parameter or explanation"
+                    result["selected_contract"] = selected_contract
+                    return result
+                requested_relaxation_options["requested_relaxation"] = alpha_relaxed_param
+
             # Primary decision from agent
             primary_said_sell = (activity == "SELL")
 
@@ -4759,6 +4802,7 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
                             category=category,
                             underlying_price=underlying_price,
                             next_earnings_date=evidence_snapshot.get("next_earnings_date"),
+                            **requested_relaxation_options,
                         )
                     except Exception as e:
                         logger.warning("D4 validation callback failed: %s", e)
@@ -4779,8 +4823,12 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
                     }
                     relaxed_parameter = alpha_relaxed_param
                     comparison_rationale = alpha_alternative.get("rationale", "")
-                    selection_source = "alpha_alternative"
-                    result["note"] = "Alpha improved on approved contract (alternative validated)"
+                    selection_source = "requested_relaxed" if same_requested_contract else "alpha_alternative"
+                    result["note"] = (
+                        "Alpha recommended a validated relaxation of the requested contract"
+                        if same_requested_contract
+                        else "Alpha improved on approved contract (alternative validated)"
+                    )
                 else:
                     # D4 failed or incomplete - fall back to requested contract (still valid, primary approved it)
                     logger.info(
@@ -4818,6 +4866,7 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
                             category=category,
                             underlying_price=underlying_price,
                             next_earnings_date=evidence_snapshot.get("next_earnings_date"),
+                            **requested_relaxation_options,
                         )
                     except Exception as e:
                         logger.warning("D4 validation callback failed: %s", e)
@@ -4834,12 +4883,16 @@ Use the timestamp above in your JSON output; do NOT generate your own."""
                     }
                     relaxed_parameter = alpha_relaxed_param
                     comparison_rationale = alpha_alternative.get("rationale", "")
-                    selection_source = "alpha_alternative"
+                    selection_source = "requested_relaxed" if same_requested_contract else "alpha_alternative"
 
                     result["activity"] = "SELL"
                     result["is_alert"] = True
                     result["validation_status"] = "approved"
-                    result["note"] = "Alpha rescued WAIT with validated alternative"
+                    result["note"] = (
+                        "Alpha relaxed the requested contract's blocking criterion (safety validated)"
+                        if same_requested_contract
+                        else "Alpha rescued WAIT with validated alternative"
+                    )
                     result["selected_contract"] = selected_contract
                     result["relaxed_parameter"] = relaxed_parameter
                     result["comparison_rationale"] = comparison_rationale

@@ -22,6 +22,7 @@ import { listAccounts, getMovements, setPositionPaper } from "@/lib/portfolio-ap
 import { renderMarkdown } from "@/lib/markdown";
 import { ROW_TINT_BG } from "@/lib/badges";
 import type { Position } from "@/types/symbol-detail";
+import PositionContractCounts from "@/components/PositionContractCounts";
 import type { BrokerAccount, LedgerMovement } from "@/types/portfolio";
 import { getMovementTypeLabel } from "@/lib/movementTypeLabel";
 import { isValidExpirationDate } from "@/lib/positionExpiration";
@@ -1220,7 +1221,7 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
           <DField label="Expiration"><span className="font-mono">{position.expiration ?? "—"}</span></DField>
         )}
         <DField label="Status">{position.status ?? "—"}</DField>
-        {typeof position.contracts === "number" && <DField label="Contracts">{position.contracts}</DField>}
+        <DField label="Contracts"><PositionContractCounts position={position} /></DField>
         <DField label="Opened"><span className="font-mono">{position.opened_at ? String(position.opened_at).slice(0, 10) : "—"}</span></DField>
         {position.closed_at ? <DField label="Closed"><span className="font-mono">{String(position.closed_at).slice(0, 10)}</span></DField> : null}
         {posId ? (

@@ -204,7 +204,13 @@ def test_endpoint_corrects_historical_date_and_round_trips(client):
         "/api/symbols/aapl/positions/target/expiration", json={"expiration": "2024-02-29"},
     )
     assert response.status_code == 200
-    assert response.json()["positions"] == cosmos.get_symbol("AAPL")["positions"]
+    positions = response.json()["positions"]
+    assert [
+        {key: value for key, value in position.items() if key != "contract_counts"}
+        for position in positions
+    ] == cosmos.get_symbol("AAPL")["positions"]
+    assert all("contract_counts" in position for position in positions)
+    assert all("contract_counts" not in position for position in cosmos.get_symbol("AAPL")["positions"])
     assert response.json()["positions"][1]["expiration"] == "2024-02-29"
 
 

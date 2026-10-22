@@ -32,6 +32,7 @@ from src.options_chain_filters import filter_options_chain_by_type, filter_optio
 from src.greeks_calculator import _fetch_risk_free_rate
 from src.best_options import DEFAULT_DTE_MIN, DEFAULT_DTE_MAX, _atm_iv
 from src.yfinance_data_provider import OPTIONS_CHAIN_SCHEMA_DESCRIPTION
+from src.alpha_instructions import RELAXABLE_PARAMETERS
 
 logger = logging.getLogger(__name__)
 
@@ -396,6 +397,8 @@ def _validate_alpha_alternative(
     underlying_price: float,
     next_earnings_date: Optional[str],
     now: datetime,
+    *,
+    requested_relaxation: str | None = None,
 ) -> tuple[bool, Optional[str], Optional[dict]]:
     """Validate Alpha's proposed alternative against the real chain.
 
@@ -412,6 +415,8 @@ def _validate_alpha_alternative(
         underlying_price: Current underlying price
         next_earnings_date: Next earnings date (YYYY-MM-DD) or None
         now: Current datetime
+        requested_relaxation: Explicit soft-parameter relaxation of the requested
+            new-position contract. Absent by default, preserving no-op rejection.
 
     Returns:
         (is_valid, rejection_reason, normalized_contract)
@@ -438,19 +443,22 @@ def _validate_alpha_alternative(
     if alt_contract is None:
         return False, f"Alternative contract not found in chain: {alt_strike} {alt_expiration}", None
 
-    # G3: Must NOT be identical to requested contract
-    if alt_strike == requested_strike and alt_expiration == requested_expiration:
+    # A same-contract soft relaxation is an entry review, never a monitor roll.
+    same_contract = alt_strike == requested_strike and alt_expiration == requested_expiration
+    if same_contract and requested_relaxation not in RELAXABLE_PARAMETERS:
         return False, "Alternative identical to requested contract", None
+    if (
+        same_contract
+        and requested_relaxation == "theta_below_minimum"
+        and usable_greek(alt_contract, "theta") is None
+    ):
+        return False, "Requested contract theta unavailable", None
 
-    # G4: Single-parameter relaxation (exactly one of strike OR expiration differs)
+    # G4: A fallback contract may change strike OR expiration, never both.
     strike_differs = alt_strike != requested_strike
     expiration_differs = alt_expiration != requested_expiration
     if strike_differs and expiration_differs:
         return False, "Alternative changes both strike AND expiration (two parameters)", None
-    if not strike_differs and not expiration_differs:
-        # Already caught by G3, but defensive
-        return False, "Alternative identical to requested contract", None
-
     # G5: Proximity checks
     # Strike proximity: within ±20% or ≤5 strikes away in chain
     if strike_differs:
@@ -1001,6 +1009,7 @@ async def _execute_validation(
                 underlying_price=kwargs["underlying_price"],
                 next_earnings_date=kwargs["next_earnings_date"],
                 now=now,  # Closed over from outer scope
+                requested_relaxation=kwargs.get("requested_relaxation"),
             )
 
         # Step 6: Run validation engine
@@ -1106,6 +1115,7 @@ async def _persist_validation_activity(
 
     # Ensure activity_data is a mutable copy
     activity_data = dict(activity_data)
+    activity_data["activity"] = result.get("activity", activity_data.get("activity", "WAIT"))
 
     # Augment with validation-specific metadata (minimal, non-interfering fields)
     # These are for tracing/debugging and do NOT alter the canonical activity schema
@@ -1113,6 +1123,8 @@ async def _persist_validation_activity(
     activity_data["run_trigger"] = "best_option_validation"
     activity_data["validation_status"] = result.get("validation_status")
     activity_data["is_alert"] = result.get("is_alert", False)
+    if result.get("note"):
+        activity_data["note"] = result["note"]
 
     # Add rule_evaluation if not already in activity_data (include even if empty dict)
     if "rule_evaluation" not in activity_data and result.get("rule_evaluation") is not None:

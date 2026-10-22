@@ -26,6 +26,10 @@ class OpenContractCount:
 _REMAINING_FIELDS = ("open_contracts", "contracts_open")
 _BASE_FIELDS = ("contracts", "quantity")
 CURRENT_POSITION_SCHEMA_VERSION = 2
+_PARTIAL_EVIDENCE_FIELDS = (
+    "closed_contracts", "contracts_closed", "assigned_contracts",
+    "contracts_assigned", "partial_closes", "partial_assignments",
+)
 
 # Quantity persistence was introduced immediately after repository baseline
 # 62f4ad5 (2026-09-26T10:44:42Z). Unversioned documents at or after this
@@ -80,6 +84,8 @@ def _valid_legacy_position(position: Mapping[str, Any]) -> bool:
     """
     if "position_schema_version" in position:
         return False
+    if any(field in position for field in _PARTIAL_EVIDENCE_FIELDS):
+        return False
     position_id = position.get("position_id")
     if not isinstance(position_id, str) or not position_id.startswith("pos_"):
         return False
@@ -125,6 +131,14 @@ def resolve_open_contract_count(position: Mapping[str, Any]) -> OpenContractCoun
             "position_quantity_invalid",
             "Position data is malformed; expected an object containing an open contract count.",
         )
+    if (
+        any(field in position for field in _PARTIAL_EVIDENCE_FIELDS)
+        and not any(field in position for field in _REMAINING_FIELDS)
+    ):
+        raise PositionContractCountError(
+            "position_quantity_missing",
+            "Position has partial-close or assignment evidence but no authoritative remaining contract count. Set 'open_contracts' on this exact position.",
+        )
 
     allow_negative = str(position.get("type") or position.get("option_type") or "").strip().lower() in {
         "call",
@@ -146,7 +160,26 @@ def resolve_open_contract_count(position: Mapping[str, Any]) -> OpenContractCoun
                 f"Position contract-count fields {names} disagree; correct the position before simulating a roll.",
             )
         source, count = parsed[0]
-        return OpenContractCount(contracts=count, quantity_source=source)
+        if fields == _REMAINING_FIELDS:
+            try:
+                totals = {
+                    _parse_contract_count(position[field], field=field, allow_negative=allow_negative)
+                    for field in _BASE_FIELDS if field in position
+                }
+            except PositionContractCountError:
+                totals = set()
+            if len(totals) == 1 and count > next(iter(totals)):
+                raise PositionContractCountError(
+                    "position_quantity_conflict",
+                    "Remaining contracts exceed the original total; correct this exact position before simulating a roll.",
+                )
+        repair = position.get("contract_count_repair")
+        warnings = (
+            ("Historical implicit one-contract count was materialized by repair.",)
+            if isinstance(repair, Mapping) and repair.get("source") == "legacy_implicit_one"
+            else ()
+        )
+        return OpenContractCount(contracts=count, quantity_source=source, warnings=warnings)
 
     if _valid_legacy_position(position):
         return OpenContractCount(
@@ -161,3 +194,54 @@ def resolve_open_contract_count(position: Mapping[str, Any]) -> OpenContractCoun
         "position_quantity_missing",
         "Position is missing an open contract count. Set 'contracts' (or 'open_contracts' after a partial close) on this exact position before simulating a roll.",
     )
+
+
+def position_contract_counts(position: Mapping[str, Any]) -> dict[str, Any]:
+    """Read-only total/remaining projection; never replace the persisted fields.
+
+    Original quantity cannot be inferred from a remaining-only alias. Terminal
+    lifecycle status means no contracts remain, not that the original total
+    was zero. The historical fallback remains active-only, exactly as for rolls.
+    """
+    def resolve(data: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            value = resolve_open_contract_count(data)
+        except PositionContractCountError as exc:
+            return {
+                "count": None,
+                "status": "unknown" if exc.code == "position_quantity_missing" else "error",
+                "source": None,
+                "warnings": [],
+                "code": exc.code,
+                "message": str(exc),
+            }
+        return {
+            "count": value.contracts,
+            "status": "resolved",
+            "source": value.quantity_source,
+            "warnings": list(value.warnings),
+        }
+
+    total_data = {k: v for k, v in position.items() if k not in _REMAINING_FIELDS}
+    if any(field in position for field in _BASE_FIELDS):
+        # Partial lifecycle evidence affects remaining quantity, not a recorded
+        # original total. Both still use the same alias parser/conflict rules.
+        for field in _PARTIAL_EVIDENCE_FIELDS:
+            total_data.pop(field, None)
+    if any(field in position for field in _REMAINING_FIELDS):
+        # Prevent a remaining-only historical document from inventing a total.
+        total_data.setdefault("position_schema_version", CURRENT_POSITION_SCHEMA_VERSION)
+    total = resolve(total_data)
+    if position.get("status") in {"closed", "rolled"}:
+        remaining = {
+            "count": 0, "status": "resolved", "source": "terminal_status", "warnings": [],
+        }
+    elif position.get("status") == "active":
+        remaining = resolve(position)
+    else:
+        remaining = {
+            "count": None, "status": "unknown", "source": None, "warnings": [],
+            "code": "position_status_unknown",
+            "message": "Remaining contracts require an active, closed, or rolled position status.",
+        }
+    return {"total": total, "remaining": remaining}

@@ -100,7 +100,7 @@ export interface ValidationStatusCompleted {
   selected_contract?: ContractRef | null;
   relaxed_parameter?: string | null;
   comparison_rationale?: string | null;
-  selection_source?: "requested_approved" | "alpha_alternative" | null;
+  selection_source?: "requested_approved" | "requested_relaxed" | "alpha_alternative" | null;
   // Backward compatibility
   note?: string | null;
 }

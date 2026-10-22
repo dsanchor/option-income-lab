@@ -192,20 +192,36 @@ function ContractSelectionPanel({ activity }: { activity: ActivityDoc }) {
   };
 
   if (!isDifferent) {
-    // Same contract: show validated confirmation
+    const isRelaxed = activity.selection_source === "requested_relaxed";
+    const isApproved = activity.validation_status === "approved" && activity.activity === "SELL";
     return (
       <section className="space-y-3 rounded-[var(--radius)] border border-border bg-bg-card p-4">
         <div className="flex items-center gap-2">
           <span>📝</span>
           <h2 className="text-lg font-semibold">Contract Selection</h2>
-          <Badge text="Validated ✓" className="border-accent-green/40 bg-accent-green/10 text-accent-green" />
+          <Badge
+            text={isApproved ? (isRelaxed ? "Requested contract · relaxed" : "Validated ✓") : "Not approved for entry"}
+            className={isApproved && !isRelaxed
+              ? "border-accent-green/40 bg-accent-green/10 text-accent-green"
+              : "border-accent-orange/40 bg-accent-orange/10 text-accent-orange"}
+          />
         </div>
         <div className="rounded-[var(--radius)] bg-bg-input px-3 py-2 font-mono text-sm">
           {formatContract(sel)}
         </div>
         <div className="text-sm text-text-muted">
-          The requested contract passed all validation gates.
+          {isApproved
+            ? isRelaxed
+              ? "Alpha recommends the requested contract with one explicit parameter relaxation; safety validation passed."
+              : "The requested contract passed all validation gates."
+            : "The requested contract remains selected for review, but is not approved for entry."}
         </div>
+        {isRelaxed && activity.relaxed_parameter && (
+          <div className="text-sm text-text-muted">
+            <strong>Relaxed Parameter:</strong> {titleCase(activity.relaxed_parameter)}
+            {activity.comparison_rationale && <> — {activity.comparison_rationale}</>}
+          </div>
+        )}
       </section>
     );
   }

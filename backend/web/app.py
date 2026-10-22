@@ -1192,7 +1192,19 @@ _COSMOS_SYSTEM_KEYS = {"_rid", "_self", "_etag", "_attachments", "_ts"}
 
 def _clean_doc(doc: dict) -> dict:
     """Strip CosmosDB system properties for API responses."""
-    return {k: v for k, v in doc.items() if k not in _COSMOS_SYSTEM_KEYS}
+    from src.position_contracts import position_contract_counts
+
+    clean = {k: v for k, v in doc.items() if k not in _COSMOS_SYSTEM_KEYS}
+    if isinstance(doc.get("positions"), list):
+        clean["positions"] = [
+            {
+                **{k: v for k, v in position.items() if k not in _COSMOS_SYSTEM_KEYS},
+                "contract_counts": position_contract_counts(position),
+            }
+            if isinstance(position, dict) else position
+            for position in doc["positions"]
+        ]
+    return clean
 
 
 def _sort_by_updated_at_desc(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -2400,10 +2412,7 @@ def _compute_symbol_detail(
     watchlist = doc.get("watchlist") or {}
     enr = doc.get("enrichment") or {}
 
-    clean = _clean_doc(doc)
-    clean["positions"] = [
-        {k: v for k, v in p.items() if k not in _COSMOS_SYSTEM_KEYS} for p in positions
-    ]
+    clean = _clean_doc({**doc, "positions": positions})
 
     # ── Security master lookup (canonical identity) ───────────────────────
     security_doc = None
