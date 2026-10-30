@@ -239,6 +239,87 @@ def _add_option(fake_cosmos, security_id: str, txn_type: str, account_id: str = 
     fake_cosmos.portfolio_container._store[did] = doc
 
 
+@pytest.mark.parametrize(
+    ("shares", "positions", "open_options", "call_capacity"),
+    [
+        ("99", [], False, False),
+        ("100", [], False, True),
+        (None, [], False, False),
+        ("100", [{"type": "call", "status": "active", "contracts": 1}], True, False),
+        ("100", [{"type": "put", "status": "active", "quantity": "-2"}], True, True),
+        ("100", [{"type": "call", "status": "closed", "contracts": 2}], False, True),
+        ("100", [{"type": "put", "status": "rolled", "contracts": 2}], False, True),
+        ("300", [{"type": "call", "status": "active", "contracts": 3}], True, False),
+        ("300", [{"type": "call", "status": "active", "contracts": 3, "open_contracts": 2}], True, True),
+        ("299.9999", [{"type": "call", "status": "active", "contracts": 3, "contracts_open": "-2"}], True, False),
+        ("100", [{"type": "call", "status": "active", "contracts": 3, "is_paper": True}], True, True),
+        ("100", [{"type": "put", "status": "active", "contracts": 1, "is_paper": True}], True, True),
+        ("200", [{
+            "position_id": "pos_AAPL_call_200_20270115_20260901_120000",
+            "type": "call", "status": "active", "strike": 200,
+            "expiration": "2027-01-15", "opened_at": "2026-09-01T12:00:00Z",
+            "notes": "",
+        }], True, True),
+        ("100", [{"type": "call", "status": "active", "contracts": 3, "open_contracts": 0}], False, False),
+        ("100", [{"type": "call", "status": "active"}], False, False),
+        ("100", [{"type": "call", "status": "active", "contracts": 3, "closed_contracts": 1}], False, False),
+    ],
+)
+def test_position_filter_projections_use_remaining_options_and_real_free_shares(
+    client, shares, positions, open_options, call_capacity,
+):
+    import copy
+
+    c, fake = client
+    fake.container.seed_config("AAPL", {
+        "positions": positions,
+        # Neither a manual override nor agent enrollment proves real capacity.
+        "total_shares": 1000,
+        "watchlist": {"covered_call": True, "cash_secured_put": True},
+    })
+    if shares is not None:
+        _add_buy(fake, "XNYS:AAPL", quantity=shares)
+    before = copy.deepcopy(fake.container._store)
+
+    response = c.get("/api/symbols/overview")
+
+    assert response.status_code == 200
+    data = response.json()
+    row = data["rows"][0]
+    assert row["has_open_options"] is open_options
+    assert row["can_open_covered_calls"] is call_capacity
+    section = "portfolio_rows" if shares is not None else "watchlist_rows"
+    assert data[section][0] == row
+    assert fake.container._store == before
+
+
+def test_position_filter_counts_accumulate_live_calls_and_keep_option_only_puts(client):
+    c, fake = client
+    fake.container.seed_config("AAPL", {"positions": [
+        {"type": "call", "status": "active", "contracts": 3, "open_contracts": 1},
+        {"type": "call", "status": "active", "quantity": "-2"},
+        {"type": "put", "status": "active", "contracts": 4},
+        {"type": "call", "status": "active", "contracts": 20, "is_paper": True},
+        {"type": "call", "status": "closed", "contracts": 20},
+    ]})
+    _add_buy(fake, "XNYS:AAPL", quantity="399")
+    fake.container.seed_config("PUTONLY", {"positions": [
+        {"type": "put", "status": "active", "contracts": 1},
+    ]})
+
+    response = c.get("/api/symbols/overview")
+    assert response.status_code == 200
+    rows = {r["symbol"]: r for r in response.json()["rows"]}
+    assert rows["AAPL"]["has_open_options"] is True
+    assert rows["AAPL"]["can_open_covered_calls"] is False
+    assert rows["PUTONLY"]["has_open_options"] is True
+    assert rows["PUTONLY"]["can_open_covered_calls"] is False
+
+    _add_buy(fake, "XNYS:AAPL", quantity="400")
+    rows = {r["symbol"]: r for r in c.get("/api/symbols/overview").json()["rows"]}
+    assert rows["AAPL"]["can_open_covered_calls"] is True
+
+
 # ---------------------------------------------------------------------------
 # §5.4 — Two-section partition
 # ---------------------------------------------------------------------------

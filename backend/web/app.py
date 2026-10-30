@@ -1484,6 +1484,10 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
         except Exception:
             _screener_shares[_t] = _Dsc("0")
     screener_universe: set = _compute_screener_universe(symbols, _screener_shares)
+    # Always supply the real holdings snapshot: config share overrides must
+    # never qualify a symbol for a covered call on the Symbols page.
+    share_availability = _build_share_availability_map(symbols, _screener_shares)
+    from src.position_contracts import position_contract_counts
 
     total_call_exposure = 0.0
     total_put_exposure = 0.0
@@ -1570,6 +1574,14 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
             "price": metrics.get("current_price"),
             "total_shares": s.get("total_shares", 0) or 0,
             "active_count": len(active),
+            # Like the Positions table, open options include the paper lane.
+            "has_open_options": any(
+                (position_contract_counts(p)["remaining"]["count"] or 0) > 0
+                for p in active if p.get("type") in {"call", "put"}
+            ),
+            "can_open_covered_calls": (
+                share_availability.get(sym, {}).get("free_lots") or 0
+            ) > 0,
             "in_calls": in_calls,
             "put_exposure": put_exposure,
             "call_exposure": call_exposure,
@@ -6454,7 +6466,7 @@ _SCREENER_SORT_FIELDS = {
 }
 
 
-_SHARE_AVAILABILITY_VALUES = frozenset({"no_shares", "shares_committed", "available"})
+_SHARE_AVAILABILITY_VALUES = frozenset({"no_shares", "shares_committed", "available", "unknown"})
 
 
 def _classify_share_status(total_shares: int, free_lots: int) -> str:
@@ -6471,9 +6483,13 @@ def _build_share_availability_map(
      """Compute availability from current holdings and active call positions.
      Legacy config totals are used only when no portfolio snapshot is supplied.
      An absent ticker in a supplied snapshot has zero shares.
+     Only real calls reserve shares, using authoritative remaining contracts.
+     Unresolved real-call quantities make availability unknown, never available.
      Returns a dict keyed by symbol (uppercase) with total_shares,
      active_call_count, committed_shares, free_shares, free_lots, share_status.
      """
+     from src.position_contracts import position_contract_counts
+
      share_availability: dict = {}
      for doc in docs:
          symbol = (doc.get("symbol") or "").strip().upper()
@@ -6491,18 +6507,27 @@ def _build_share_availability_map(
          active_positions = [
              p for p in doc.get("positions", [])
              if p.get("status") == "active" and p.get("type") == "call"
+             and not p.get("is_paper")
          ]
          active_call_count = len(active_positions)
-         committed_shares = active_call_count * 100
-         free_shares = max(total_shares - committed_shares, 0)
-         free_lots = free_shares // 100
+         remaining_counts = [
+             position_contract_counts(p)["remaining"]["count"]
+             for p in active_positions
+         ]
+         quantity_known = all(count is not None for count in remaining_counts)
+         committed_shares = sum(remaining_counts) * 100 if quantity_known else None
+         free_shares = max(total_shares - committed_shares, 0) if quantity_known else None
+         free_lots = free_shares // 100 if free_shares is not None else None
          share_availability[symbol] = {
              "total_shares": total_shares,
              "active_call_count": active_call_count,
              "committed_shares": committed_shares,
              "free_shares": free_shares,
              "free_lots": free_lots,
-             "share_status": _classify_share_status(total_shares, free_lots),
+             "share_status": (
+                 _classify_share_status(total_shares, free_lots)
+                 if quantity_known else "unknown"
+             ),
          }
      return share_availability
 

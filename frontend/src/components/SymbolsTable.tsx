@@ -17,6 +17,11 @@ import {
   type SymbolMomentumFilter,
 } from "@/lib/symbolMomentum";
 import { symbolHref } from "@/lib/symbolEncoding";
+import {
+  ALL_SYMBOL_POSITIONS,
+  matchesSymbolPositions,
+  type SymbolPositionFilters,
+} from "@/lib/symbolPositionFilters";
 import SymbolInfoModal from "@/components/SymbolInfoModal";
 import type { SymbolRow } from "@/types/symbols";
 
@@ -157,6 +162,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
   const [dir, setDir] = useState<"asc" | "desc">("asc");
   const [suitabilityFilter, setSuitabilityFilter] = useState<SymbolSuitabilityFilter>("all");
   const [momentumFilters, setMomentumFilters] = useState<Set<SymbolMomentumFilter>>(new Set());
+  const [positionFilters, setPositionFilters] = useState<SymbolPositionFilters>(ALL_SYMBOL_POSITIONS);
   const [hideHistorical, setHideHistorical] = useState(true);
   const [modalSymbol, setModalSymbol] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("portfolio");
@@ -246,7 +252,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
     const query = q.trim().toUpperCase();
     let out = rows.filter((r) => {
       if (removedSymbols.has(r.symbol)) return false;
-      return true;
+      return matchesSymbolPositions(r, positionFilters);
     });
     if (query) {
       out = out.filter((r) => matchesSearchQuery(r, query));
@@ -277,7 +283,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       return dir === "asc" ? cmp : -cmp;
     });
     return sorted;
-  }, [rows, q, sort, dir, suitabilityFilter, momentumFilters, removedSymbols]);
+  }, [rows, q, sort, dir, suitabilityFilter, momentumFilters, positionFilters, removedSymbols]);
 
   /** Columns visible in the current view mode (no-modes = always visible). */
   const visibleColumns = useMemo(
@@ -541,6 +547,35 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
               {label}
             </button>
           ))}
+        </div>
+        <div role="group" aria-label="Filter Symbols by positions" className="flex flex-wrap gap-1.5">
+          {([
+            { key: null, label: "All positions", title: "Clear position filters" },
+            { key: "openOptions", label: "Open options", title: "Active calls or puts with remaining contracts, including paper positions" },
+            { key: "coveredCallCapacity", label: "Can open calls", title: "At least 100 real portfolio shares free after reserving remaining live call contracts; paper positions do not reserve shares" },
+          ] as const).map(({ key, label, title }) => {
+            const pressed = key === null
+              ? !positionFilters.openOptions && !positionFilters.coveredCallCapacity
+              : positionFilters[key];
+            return (
+              <button
+                key={key ?? "all"}
+                type="button"
+                aria-pressed={pressed}
+                title={title}
+                onClick={() => setPositionFilters((current) => key === null
+                  ? ALL_SYMBOL_POSITIONS
+                  : { ...current, [key]: !current[key] })}
+                className={`rounded-[var(--radius-pill)] border px-3 py-1 text-xs transition-colors ${
+                  pressed
+                    ? "border-accent-blue bg-accent-blue/15 text-accent-blue"
+                    : "border-border bg-bg-input text-text-muted hover:border-border hover:text-text"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
         <details className="group min-w-0 max-w-full open:basis-full">
           <summary

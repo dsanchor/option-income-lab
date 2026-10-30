@@ -41,6 +41,10 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import {
+  ALL_SYMBOL_POSITIONS,
+  matchesSymbolPositions,
+} from "../src/lib/symbolPositionFilters.ts";
 
 // ─── Inline mirrors ───────────────────────────────────────────────────────────
 
@@ -121,12 +125,13 @@ function matchesSymbolSuitability(entryTag, momentum, filter) {
  * @returns {{ filteredPortfolio: object[], filteredWatchlist: object[] }}
  */
 function applySharedFilter(portfolioRows, watchlistRows, filterState) {
-  const { q = "", suitabilityFilter = "all", hideZero = true } = filterState;
+  const { q = "", suitabilityFilter = "all", hideZero = true,
+    positionFilters = ALL_SYMBOL_POSITIONS } = filterState;
 
   function filterSection(rows) {
     let out = rows.filter((r) => {
       if (hideZero && isHiddenZeroRow(r)) return false;
-      return true;
+      return matchesSymbolPositions(r, positionFilters);
     });
     if (q.trim()) {
       out = out.filter((r) => matchesSearch(r, q));
@@ -144,6 +149,60 @@ function applySharedFilter(portfolioRows, watchlistRows, filterState) {
     filteredWatchlist: filterSection(watchlistRows),
   };
 }
+
+describe("position filters use authoritative projections in both sections", () => {
+  const portfolio = [
+    { symbol: "CALL", display_name: "Call Co", portfolio_shares: "200", has_open_options: true, can_open_covered_calls: true, entry_tag: "Hold", momentum: "Neutral" },
+    { symbol: "PUT", portfolio_shares: "100", has_open_options: true, can_open_covered_calls: false, entry_tag: "Buy", momentum: "Bullish" },
+    { symbol: "FREE", portfolio_shares: "100", has_open_options: false, can_open_covered_calls: true, entry_tag: "Hold", momentum: "Neutral" },
+    { symbol: "CLOSED", portfolio_shares: "99", has_open_options: false, can_open_covered_calls: false },
+  ];
+  const watchlist = [
+    { symbol: "PUTONLY", portfolio_shares: null, has_open_options: true, can_open_covered_calls: false },
+    { symbol: "LEGACY", total_shares: 1000, active_count: 2, in_calls: 100, watchlist: { covered_call: true } },
+  ];
+  const symbols = (result) => [
+    result.filteredPortfolio.map((r) => r.symbol),
+    result.filteredWatchlist.map((r) => r.symbol),
+  ];
+
+  test("open options includes calls and puts, excluding closed/absent projections", () => {
+    assert.deepEqual(symbols(applySharedFilter(portfolio, watchlist, {
+      positionFilters: { openOptions: true, coveredCallCapacity: false },
+    })), [["CALL", "PUT"], ["PUTONLY"]]);
+  });
+
+  test("covered-call capacity uses real free-share projection, not config or flags", () => {
+    assert.deepEqual(symbols(applySharedFilter(portfolio, watchlist, {
+      positionFilters: { openOptions: false, coveredCallCapacity: true },
+    })), [["CALL", "FREE"], []]);
+  });
+
+  test("both position toggles intersect, and All positions restores both sections", () => {
+    const before = structuredClone([portfolio, watchlist]);
+    assert.deepEqual(symbols(applySharedFilter(portfolio, watchlist, {
+      positionFilters: { openOptions: true, coveredCallCapacity: true },
+    })), [["CALL"], []]);
+    const reset = applySharedFilter(portfolio, watchlist, {
+      positionFilters: ALL_SYMBOL_POSITIONS,
+    });
+    assert.deepEqual(reset, { filteredPortfolio: portfolio, filteredWatchlist: watchlist });
+    assert.deepEqual([portfolio, watchlist], before);
+  });
+
+  test("search and suitability intersect with position filters; clearing positions preserves them", () => {
+    const otherFilters = { q: "call co", suitabilityFilter: "ideal_calls" };
+    assert.deepEqual(symbols(applySharedFilter(portfolio, watchlist, {
+      ...otherFilters, positionFilters: { openOptions: true, coveredCallCapacity: true },
+    })), [["CALL"], []]);
+    assert.deepEqual(symbols(applySharedFilter(portfolio, watchlist, {
+      ...otherFilters, positionFilters: ALL_SYMBOL_POSITIONS,
+    })), [["CALL"], []]);
+    assert.deepEqual(symbols(applySharedFilter(portfolio, watchlist, {
+      q: "PUTONLY", positionFilters: { openOptions: true, coveredCallCapacity: true },
+    })), [[], []]);
+  });
+});
 
 /**
  * Splits a flat backend row array into Portfolio and Watchlist sections.

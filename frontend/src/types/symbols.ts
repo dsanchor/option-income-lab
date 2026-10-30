@@ -17,6 +17,10 @@ export interface SymbolRow {
   price: number | null;
   total_shares: number;
   active_count: number;
+  /** Active CALL or PUT with resolved remaining contracts, including paper. */
+  has_open_options?: boolean;
+  /** At least 100 real ledger shares not reserved by remaining live calls. */
+  can_open_covered_calls?: boolean;
   in_calls: number;
   put_exposure: number;
   call_exposure: number;

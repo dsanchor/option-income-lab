@@ -901,7 +901,11 @@ describe("CW: Column width contract — proportional, overflow-safe, no clipping
   });
 
   it("CW-11: All COLUMNS labels are concise (≤ 12 chars) — long labels force wide minimum column widths", () => {
-    const labels = [...src.matchAll(/label:\s*["']([^"']+)["']/g)].map(m => m[1]);
+    const columnStart = src.indexOf("const COLUMNS:");
+    const columnEnd = src.indexOf("\n];", columnStart);
+    assert.ok(columnStart >= 0 && columnEnd > columnStart, "COLUMNS declaration must exist");
+    const columns = src.slice(columnStart, columnEnd);
+    const labels = [...columns.matchAll(/label:\s*["']([^"']+)["']/g)].map(m => m[1]);
     assert.ok(labels.length >= 8, `CW-11: Expected ≥ 8 column labels in source, found ${labels.length}`);
     for (const label of labels) {
       assert.ok(label.length <= 12,

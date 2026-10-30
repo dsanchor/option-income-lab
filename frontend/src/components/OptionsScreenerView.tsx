@@ -41,6 +41,7 @@ const SHARE_AVAILABILITY_OPTIONS: MultiSelectOption[] = [
   { value: "available", label: "✅ 100+ shares free" },
   { value: "shares_committed", label: "🔒 Shares committed" },
   { value: "no_shares", label: "⚠️ <100 total shares" },
+  { value: "unknown", label: "⚠️ Availability unknown" },
 ];
 const DEFAULT_PREFERENCES: ScreenerPreference[] = ["Preferred", "Acceptable"];
 const DEFAULT_DTE_MIN = 0;
@@ -701,6 +702,14 @@ function ResultsTable({
                           className="rounded border border-accent-orange/40 bg-accent-orange/10 px-1 py-0.5 text-[10px] text-accent-orange"
                         >
                           🔒 Shares committed
+                        </span>
+                      )}
+                      {row.share_status === "unknown" && (
+                        <span
+                          title="Remaining live call contracts could not be resolved; covered-call capacity is unknown"
+                          className="rounded border border-accent-orange/40 bg-accent-orange/10 px-1 py-0.5 text-[10px] text-accent-orange"
+                        >
+                          ⚠️ Availability unknown
                         </span>
                       )}
                       {row.share_status === "no_shares" && (

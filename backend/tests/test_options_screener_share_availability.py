@@ -177,7 +177,7 @@ def _snapshot(entries: dict) -> dict:
 
 
 def _active_call() -> dict:
-    return {"status": "active", "type": "call"}
+    return {"status": "active", "type": "call", "contracts": 1}
 
 
 def _closed_call() -> dict:
@@ -185,7 +185,7 @@ def _closed_call() -> dict:
 
 
 def _active_put() -> dict:
-    return {"status": "active", "type": "put"}
+    return {"status": "active", "type": "put", "contracts": 1}
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +288,46 @@ def _make_scenario(
     cosmos = FakeShareAvailabilityCosmos()
     cosmos.add_symbol(symbol, total_shares=total_shares, positions=positions)
     _set_cosmos(client, cosmos)
+
+
+def test_share_availability_reserves_remaining_live_contracts_not_position_rows(client):
+    _make_scenario(client, "REMAINING", total_shares=400, positions=[
+        {**_active_call(), "contracts": 5, "open_contracts": "-2"},
+        _active_call(),
+        {**_active_call(), "contracts": 20, "is_paper": True},
+        {**_closed_call(), "contracts": 20},
+        _active_put(),
+    ])
+    response = client.get("/api/screener/options", params={
+        "side": "call", "share_availability": "available",
+    })
+    assert response.status_code == 200
+    rows = response.json()["rows"]
+    assert rows
+    for row in rows:
+        assert row["active_call_count"] == 2
+        assert row["committed_shares"] == 300
+        assert row["free_shares"] == 100
+        assert row["free_lots"] == 1
+        assert row["share_status"] == "available"
+
+
+def test_unresolved_call_quantity_is_unknown_and_never_qualifies_as_available(client):
+    _make_scenario(client, "UNKNOWN", total_shares=1000, positions=[
+        {"status": "active", "type": "call"},
+    ])
+    params = {"side": "call", "share_availability": "unknown"}
+    response = client.get("/api/screener/options", params=params)
+    assert response.status_code == 200
+    rows = response.json()["rows"]
+    assert rows
+    for row in rows:
+        assert row["share_status"] == "unknown"
+        assert row["committed_shares"] is None
+        assert row["free_shares"] is None
+        assert row["free_lots"] is None
+    params["share_availability"] = "available"
+    assert client.get("/api/screener/options", params=params).json()["rows"] == []
 
 
 # ---------------------------------------------------------------------------

@@ -17,8 +17,9 @@ export type ScreenerPreference = "Preferred" | "Acceptable" | "Avoid";
  * and active call positions, stamped identically on every call row:
  *   "available"        — at least one full lot (100 shares) free for a new call
  *   "shares_committed" — ≥100 total shares owned, but fewer than 100 free
- *   "no_shares"        — fewer than 100 total shares owned */
-export type ShareStatus = "available" | "shares_committed" | "no_shares";
+ *   "no_shares"        — fewer than 100 total shares owned
+ *   "unknown"          — remaining real-call quantity cannot be resolved */
+export type ShareStatus = "available" | "shares_committed" | "no_shares" | "unknown";
 
 /** Presentation-layer sort keys the API accepts (`sort`/`dir` query params) --
  * "default" is the aggregator's own canonical order (score desc, DTE asc,
@@ -80,14 +81,14 @@ export interface ScreenerOptionRow {
   /** Call rows only: current portfolio shares (clamped ≥0); legacy config
    * total is used only when portfolio storage is not configured. */
   total_shares?: number;
-  /** Call rows only: number of active call positions consuming lots. */
+  /** Call rows only: number of active real call positions consuming lots. */
   active_call_count?: number;
-  /** Call rows only: shares committed to active calls (active_call_count * 100). */
-  committed_shares?: number;
+  /** Remaining real call contracts × 100; null when quantity is unresolved. */
+  committed_shares?: number | null;
   /** Call rows only: shares free for a new covered call (total_shares - committed_shares, ≥ 0). */
-  free_shares?: number;
+  free_shares?: number | null;
   /** Call rows only: free lots available for a new covered call (free_shares // 100). */
-  free_lots?: number;
+  free_lots?: number | null;
   chain_stale: boolean;
   entry_stale?: boolean;
 }
