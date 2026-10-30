@@ -739,6 +739,33 @@ class CosmosDBService:
             match_condition=MatchConditions.IfNotModified,
         )
 
+    def update_position_strike(self, symbol: str, position_id: str,
+                               strike: float) -> dict:
+        """Correct an open option's strike without changing execution history."""
+        from .position_expiration import validate_position_strike
+
+        strike = validate_position_strike(strike)
+        doc = self.get_symbol(symbol)
+        if doc is None:
+            raise ValueError(f"Symbol {symbol} not found")
+        position = next((p for p in doc.get("positions", [])
+                         if p.get("position_id") == position_id), None)
+        if position is None:
+            raise ValueError(f"Position {position_id} not found")
+        if position.get("status") != "active" or position.get("type") not in {"call", "put"}:
+            raise ValueError("Only active option positions can have their strike corrected")
+        if position.get("strike") == strike:
+            return doc
+
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        position["strike"] = strike
+        position["strike_corrected_at"] = timestamp
+        doc["updated_at"] = timestamp
+        return self.container.replace_item(
+            item=doc["id"], body=doc, etag=doc["_etag"],
+            match_condition=MatchConditions.IfNotModified,
+        )
+
     def set_position_paper(self, symbol: str, position_id: str,
                            is_paper: bool) -> dict:
         """Toggle the paper flag on a position."""
@@ -930,15 +957,22 @@ class CosmosDBService:
                          if p.get("position_id") == position_id), {})
         parameters = [{"name": "@position_id", "value": position_id}]
         correction_filter = ""
-        if position.get("expiration_corrected_at"):
+        corrected_at = max(
+            position.get("expiration_corrected_at") or "",
+            position.get("strike_corrected_at") or "",
+        )
+        if corrected_at:
             # Filter before TOP so old observations cannot crowd out fresh data.
             correction_filter = (
                 "AND c.timestamp > @corrected_at AND c.expiration = @expiration "
             )
             parameters.extend([
-                {"name": "@corrected_at", "value": position["expiration_corrected_at"]},
+                {"name": "@corrected_at", "value": corrected_at},
                 {"name": "@expiration", "value": position["expiration"]},
             ])
+            if position.get("strike_corrected_at"):
+                correction_filter += "AND c.strike = @strike "
+                parameters.append({"name": "@strike", "value": position["strike"]})
         query = (
             f"SELECT TOP {int(limit)} * FROM c "
             "WHERE c.doc_type = 'position_snapshot' AND c.position_id = @position_id "

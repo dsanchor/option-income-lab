@@ -51,6 +51,8 @@ class Container:
             rows = [s for s in rows
                     if s["timestamp"] > params["@corrected_at"]
                     and s.get("expiration") == params["@expiration"]]
+        if "@strike" in params:
+            rows = [s for s in rows if s.get("strike") == params["@strike"]]
         limit = int(query.split("TOP ")[1].split()[0])
         return sorted(rows, key=lambda s: s["timestamp"], reverse=True)[:limit]
 
@@ -265,3 +267,128 @@ def test_non_us_options_guard_is_preserved(client):
         "/api/symbols/AAPL/positions/target/expiration", json={"expiration": "2024-02-29"},
     ).status_code == 403
     assert cosmos.container.writes == []
+
+
+@pytest.mark.parametrize("option_type", ["call", "put"])
+def test_strike_correction_round_trips_without_rewriting_identity_or_finances(client, option_type):
+    http, cosmos = client
+    position = cosmos.container.doc["positions"][1]
+    position["type"] = option_type
+    position["source"]["strike"] = 200
+    before = deepcopy(cosmos.container.doc)
+    response = http.patch(
+        "/api/symbols/aapl/positions/target/strike", json={"strike": 205.125},
+    )
+    assert response.status_code == 200
+    result = cosmos.get_symbol("AAPL")
+    expected = deepcopy(before)
+    expected["positions"][1]["strike"] = 205.125
+    expected["positions"][1]["strike_corrected_at"] = result["updated_at"]
+    expected["updated_at"] = result["updated_at"]
+    assert result == expected
+    assert response.json()["positions"][1]["strike"] == 205.125
+    assert response.json()["positions"][1]["contract_counts"]["total"]["count"] == 2
+    assert cosmos.container.writes[0][2] == {
+        "etag": "v1", "match_condition": MatchConditions.IfNotModified,
+    }
+    assert cosmos.update_position_strike("AAPL", "target", 205.125) == result
+    assert len(cosmos.container.writes) == 1
+    result["positions"][1].pop("account_id")
+    target = next(record for record in project_positions(result, include_paper=True)
+                  if record["position_id"] == "target")
+    validate_record("option_positions", target)
+    assert target["strike"] == "205.125"
+    assert target["strike_corrected_at"] == result["updated_at"]
+
+
+@pytest.mark.parametrize("value", [None, True, False, "", "bad", 0, -1, "NaN", "Infinity", [], {}])
+def test_invalid_strike_rejected_by_service_and_endpoint_without_write(client, value):
+    http, cosmos = client
+    with pytest.raises(ValueError, match="finite, positive"):
+        cosmos.update_position_strike("AAPL", "target", value)
+    response = http.patch(
+        "/api/symbols/AAPL/positions/target/strike", json={"strike": value},
+    )
+    assert response.status_code == 400
+    assert cosmos.container.writes == []
+
+
+@pytest.mark.parametrize("content", ["{", "[]", "{}", "null", '{"strike": NaN}', '{"strike": Infinity}'])
+def test_invalid_strike_body_is_400(client, content):
+    http, cosmos = client
+    assert http.patch(
+        "/api/symbols/AAPL/positions/target/strike",
+        content=content, headers={"Content-Type": "application/json"},
+    ).status_code == 400
+    assert cosmos.container.writes == []
+
+
+@pytest.mark.parametrize("path", ["AAPL/positions/missing", "MISSING/positions/target"])
+def test_strike_missing_position_or_symbol_is_404(client, path):
+    http, cosmos = client
+    assert http.patch(
+        f"/api/symbols/{path}/strike", json={"strike": 210},
+    ).status_code == 404
+    assert cosmos.container.writes == []
+
+
+@pytest.mark.parametrize("status", ["closed", "rolled", "expired"])
+def test_strike_correction_is_only_for_open_positions(client, status):
+    http, cosmos = client
+    cosmos.container.doc["positions"][1]["status"] = status
+    assert http.patch(
+        "/api/symbols/AAPL/positions/target/strike", json={"strike": 210},
+    ).status_code == 409
+    assert cosmos.container.writes == []
+
+
+def test_strike_concurrent_edit_and_exchange_guards(client, monkeypatch):
+    http, cosmos = client
+
+    def conflict(**kwargs):
+        raise CosmosHttpResponseError(status_code=412, message="ETag mismatch")
+
+    monkeypatch.setattr(cosmos.container, "replace_item", conflict)
+    assert http.patch(
+        "/api/symbols/AAPL/positions/target/strike", json={"strike": 210},
+    ).status_code == 409
+    assert cosmos.get_symbol("AAPL")["positions"][1]["strike"] == 200
+    cosmos.container.doc["exchange"] = "XLON"
+    assert http.patch(
+        "/api/symbols/AAPL/positions/target/strike", json={"strike": 210},
+    ).status_code == 403
+    assert cosmos.container.writes == []
+
+
+def test_strike_correction_excludes_stale_snapshots_context_and_dashboard_activity():
+    from web.app import _dashboard_legacy_position_compatible
+
+    cosmos = service()
+    position = cosmos.container.doc["positions"][1]
+    position["strike"] = 210
+    position["source"]["strike"] = 200
+    position["strike_corrected_at"] = "2026-10-01T10:00:00Z"
+    rows = [
+        {"id": name, "position_id": "target", "strike": strike,
+         "current_strike": strike, "expiration": "2026-11-20",
+         "timestamp": timestamp, "reason": name}
+        for name, strike, timestamp in [
+            ("pre-correction", 210, "2026-09-30T10:00:00Z"),
+            ("old-in-flight", 200, "2026-10-02T10:00:00Z"),
+            ("missing-strike", None, "2026-10-02T10:00:00Z"),
+            ("fresh-contract", 210, "2026-10-03T10:00:00Z"),
+        ]
+    ]
+    cosmos.container.snapshots = deepcopy(rows)
+    assert [s["id"] for s in cosmos.get_position_snapshots("AAPL", "target")] == ["fresh-contract"]
+    assert len(cosmos.container.snapshots) == 4
+    assert "c.strike = @strike" in cosmos.container.queries[0][0]
+    cosmos.get_recent_activities = lambda *args: rows
+    context = ContextProvider(cosmos).get_context(
+        "AAPL", "open_call_monitor", position_id="target", position=position,
+    )
+    assert "fresh-contract" in context
+    for row in rows:
+        assert _dashboard_legacy_position_compatible(row, position) == (row["id"] == "fresh-contract")
+        if row["id"] != "fresh-contract":
+            assert row["id"] not in context

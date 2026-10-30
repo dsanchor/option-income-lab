@@ -970,7 +970,7 @@ function EditablePositionField({
   symbol: string;
   positionId: string;
   label: string;
-  field: "premium" | "buyback_cost" | "expiration";
+  field: "premium" | "buyback_cost" | "expiration" | "strike";
   value: number | string | null | undefined;
 }) {
   const router = useRouter();
@@ -989,6 +989,10 @@ function EditablePositionField({
     }
     if (!isDate && (draft.trim() === "" || !Number.isFinite(parsed) || parsed < 0)) {
       setError(`${label} must be a non-negative number.`);
+      return;
+    }
+    if (field === "strike" && parsed <= 0) {
+      setError("Strike must be a positive number.");
       return;
     }
 
@@ -1024,7 +1028,7 @@ function EditablePositionField({
             <input
               type={isDate ? "date" : "number"}
               min={isDate ? undefined : "0"}
-              step={isDate ? undefined : "0.01"}
+              step={isDate ? undefined : field === "strike" ? "any" : "0.01"}
               inputMode={isDate ? undefined : "decimal"}
               aria-label={label}
               value={draft}
@@ -1067,7 +1071,7 @@ function EditablePositionField({
         </div>
       ) : (
         <div className="flex items-center gap-2 text-sm text-text">
-          <span className="font-mono">{value != null ? (isDate ? String(value) : `$${fmt2(Number(value))}`) : "N/A"}</span>
+          <span className="font-mono">{value != null ? (isDate ? String(value) : `$${field === "strike" ? value : fmt2(Number(value))}`) : "N/A"}</span>
           <button
             type="button"
             onClick={() => {
@@ -1208,7 +1212,17 @@ export default function PositionDetail({ symbol, position }: { symbol: string; p
       {/* Detail grid */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <DField label="Type">{(position.type ?? "—").toUpperCase()}</DField>
-        <DField label="Strike"><span className="font-mono">${position.strike ?? "—"}</span></DField>
+        {posId && isActive && (position.type === "call" || position.type === "put") ? (
+          <EditablePositionField
+            symbol={symbol}
+            positionId={posId}
+            label="Strike"
+            field="strike"
+            value={position.strike}
+          />
+        ) : (
+          <DField label="Strike"><span className="font-mono">${position.strike ?? "—"}</span></DField>
+        )}
         {posId ? (
           <EditablePositionField
             symbol={symbol}

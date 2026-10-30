@@ -76,10 +76,10 @@ test("inline date correction uses save/cancel/error flow and resets contract-dep
   assert.match(detail, /setEditing\(false\);\s+router\.refresh\(\)/);
   assert.match(detail, /event\.key === "Escape" && !saving/);
   assert.match(detail, /role="alert"/);
-  assert.match(table, /<PositionDetail key=\{`\$\{p\.position_id\}:\$\{p\.expiration\}`\}/);
+  assert.match(table, /<PositionDetail key=\{`\$\{p\.position_id\}:\$\{p\.expiration\}:\$\{p\.strike\}`\}/);
 });
 
-function editorHarness() {
+function editorHarness(field = "expiration", value = "2026-11-20") {
   const state = [];
   let cursor = 0;
   let refreshes = 0;
@@ -104,13 +104,14 @@ function editorHarness() {
     render() {
       cursor = 0;
       const nodes = elements(EditablePositionField({
-        symbol: "AAPL", positionId: "pos/1", label: "Expiration",
-        field: "expiration", value: "2026-11-20",
+        symbol: "AAPL", positionId: "pos/1", label: field === "strike" ? "Strike" : "Expiration",
+        field, value,
       }));
       return {
         button: (label) => nodes.find((n) => n.type === "button" && n.props.children === label),
         input: nodes.find((n) => n.type === "input"),
         alert: nodes.find((n) => n.props?.role === "alert"),
+        display: nodes.find((n) => n.type === "span" && n.props.className === "font-mono"),
       };
     },
     get refreshes() { return refreshes; },
@@ -162,4 +163,96 @@ test("inline editor preserves failed draft, displays errors, and cancels without
   editor.render().input.props.onKeyDown({ key: "Escape", stopPropagation() {} });
   assert.ok(editor.render().button("Edit"));
   assert.equal(fetch.mock.callCount(), 1);
+});
+
+test("strike editor saves positive fractional strikes through the existing PATCH workflow", async (t) => {
+  const editor = editorHarness("strike", 200.125);
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    assert.equal(url, "/api/symbols/AAPL/positions/pos%2F1/strike");
+    assert.equal(init.method, "PATCH");
+    assert.deepEqual(JSON.parse(init.body), { strike: 205.125 });
+    return Response.json({ positions: [{ strike: 205.125 }] });
+  });
+  assert.equal(editor.render().display.props.children, "$200.125");
+  editor.render().button("Edit").props.onClick();
+  assert.equal(editor.render().input.props.value, "200.125");
+  assert.equal(editor.render().input.props.step, "any");
+  editor.render().input.props.onChange({ target: { value: "205.125" } });
+  editor.render().button("Save").props.onClick();
+  await settle();
+  assert.ok(editor.render().button("Edit"));
+  assert.equal(editor.refreshes, 1);
+});
+
+test("strike editing is offered only for identified open option positions", () => {
+  const { default: PositionDetail } = loadModule("src/components/PositionDetail.tsx", {
+    react: {
+      useState: (initial) => [initial, () => {}],
+      useCallback: (callback) => callback,
+      useEffect: () => {},
+      useRef: (current) => ({ current }),
+    },
+    "next/navigation": { useRouter: () => ({ refresh() {} }) },
+  });
+  function elements(node) {
+    if (Array.isArray(node)) return node.flatMap(elements);
+    if (!node || typeof node !== "object") return [];
+    return [node, ...elements(node.props?.children)];
+  }
+  for (const [position, editable] of [
+    [{ position_id: "pos1", status: "active", type: "call" }, true],
+    [{ position_id: "pos1", status: "active", type: "put" }, true],
+    [{ position_id: "pos1", status: "closed", type: "call" }, false],
+    [{ position_id: "pos1", status: "rolled", type: "put" }, false],
+    [{ status: "active", type: "call" }, false],
+  ]) {
+    const nodes = elements(PositionDetail({ symbol: "AAPL", position: { strike: 200, ...position } }));
+    assert.equal(nodes.some((node) => node.props.field === "strike"), editable);
+  }
+});
+
+test("strike editor rejects invalid values and preserves failed drafts for retry or cancel", async (t) => {
+  const editor = editorHarness("strike", 200);
+  const fetch = t.mock.method(globalThis, "fetch", async () => (
+    Response.json({ error: "Position changed concurrently" }, { status: 409 })
+  ));
+  editor.render().button("Edit").props.onClick();
+  for (const value of ["", " ", "0", "-1", "NaN", "Infinity", "invalid"]) {
+    editor.render().input.props.onChange({ target: { value } });
+    editor.render().button("Save").props.onClick();
+    assert.ok(editor.render().alert);
+  }
+  assert.equal(fetch.mock.callCount(), 0);
+  editor.render().input.props.onChange({ target: { value: "210" } });
+  editor.render().button("Save").props.onClick();
+  assert.equal(editor.render().button("Cancel").props.disabled, true);
+  await settle();
+  assert.equal(editor.render().input.props.value, "210");
+  assert.match(JSON.stringify(editor.render().alert.props.children), /Position changed concurrently/);
+  assert.equal(editor.refreshes, 0);
+  editor.render().button("Cancel").props.onClick();
+  assert.ok(editor.render().button("Edit"));
+});
+
+test("strike proxy forwards symbol identity, body and upstream errors unchanged", async (t) => {
+  const { PATCH: patchStrike } = loadModule(
+    "src/app/api/symbols/[symbol]/positions/[positionId]/strike/route.ts",
+    {
+      "next/server": { NextResponse: { json: (body, init) => Response.json(body, init) } },
+      "@/lib/api": { API_BASE_URL: "https://backend.invalid" },
+      "@/lib/symbolEncoding": { decodeSymbolParam: decodeURIComponent },
+    },
+  );
+  const body = JSON.stringify({ strike: 205.125 });
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    assert.equal(url, "https://backend.invalid/api/symbols/XNAS%3AAAPL/positions/pos%2F1/strike");
+    assert.equal(init.method, "PATCH");
+    assert.equal(init.body, body);
+    return Response.json({ error: "Invalid strike" }, { status: 400 });
+  });
+  const response = await patchStrike(new Request("https://frontend.invalid", {
+    method: "PATCH", body,
+  }), { params: Promise.resolve({ symbol: "XNAS%3AAAPL", positionId: "pos/1" }) });
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: "Invalid strike" });
 });

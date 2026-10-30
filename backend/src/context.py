@@ -57,7 +57,7 @@ class ContextProvider:
         activities = self.cosmos.get_recent_activities(
             symbol, agent_type, max_entries, position_id
         )
-        if position and position.get("expiration_corrected_at"):
+        if position and (position.get("expiration_corrected_at") or position.get("strike_corrected_at")):
             from .position_expiration import monitoring_after_expiration_correction
 
             activities = [
