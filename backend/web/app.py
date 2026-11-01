@@ -2792,6 +2792,172 @@ async def api_option_timing_history(
         return JSONResponse({"error": "Option timing history unavailable"}, status_code=503)
 
 
+@app.post("/api/symbols/{symbol}/option-timing/explain")
+async def api_option_timing_explain(request: Request, symbol: str):
+    """Explain the requested persisted observation; never refresh or rescore."""
+    from src.option_timing_explain_instructions import (
+        FUNCTION_ID,
+        MAX_OUTPUT_CHARS,
+        build_option_timing_explain_prompt,
+    )
+    from src.option_timing_sessions import freshness
+    from src.option_timing_store import OptionTimingStore, read_current
+    from src.portfolio.cosmos_securities import CosmosSecuritiesService
+    from src.us_exchange_eligibility import enforce_us_options_eligible
+
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        return JSONResponse({"error": "Content-Type must be application/json"}, status_code=400)
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > 4096:
+            return JSONResponse({"error": "Request body is too large"}, status_code=413)
+
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate request field")
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(body, object_pairs_hook=unique_fields)
+        if not isinstance(payload, dict) or set(payload) != {"side", "snapshot_id"}:
+            raise ValueError("Exactly side and snapshot_id are required")
+        side = payload["side"]
+        snapshot_id = payload["snapshot_id"]
+        if side not in ("covered_call", "cash_secured_put"):
+            raise ValueError("Invalid option timing side")
+        if not isinstance(snapshot_id, str) or not re.fullmatch(r"[0-9a-f]{32}", snapshot_id):
+            raise ValueError("snapshot_id must be a saved 32-character hexadecimal ID")
+    except (ValueError, TypeError, UnicodeDecodeError):
+        return JSONResponse({"error": "Invalid option timing explanation request"}, status_code=400)
+
+    ticker = _ticker_from_symbol_param(symbol)
+    started = time.monotonic()
+    try:
+        cosmos = _get_cosmos(request)
+        symbol_doc = _get_symbol_doc_for_guard(cosmos, symbol)
+        if not symbol_doc:
+            return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
+        securities = CosmosSecuritiesService(cosmos.container)
+        if ":" in symbol:
+            security_id = symbol.strip().upper()
+            security = securities.get_security(security_id)
+            if not security:
+                return JSONResponse({"error": f"Security {symbol} not found"}, status_code=404)
+        else:
+            matches = [
+                item for item in securities.list_securities()
+                if item.get("ticker", "").upper() == ticker
+            ]
+            if len(matches) > 1:
+                return JSONResponse(
+                    {"error": "Ambiguous ticker; use a canonical MIC:TICKER"}, status_code=409,
+                )
+            security = matches[0] if matches else None
+            security_id = (security or {}).get("security_id") or symbol_doc.get("security_id")
+        if not security_id or symbol_doc.get("security_id") != security_id:
+            return JSONResponse({"error": "Security identity mismatch"}, status_code=409)
+        if security and (
+            security.get("security_id") != security_id
+            or security.get("ticker", "").upper() != ticker
+        ):
+            return JSONResponse({"error": "Security identity mismatch"}, status_code=409)
+        guard = enforce_us_options_eligible(symbol_doc, security)
+        if guard:
+            return guard
+        saved = OptionTimingStore(cosmos.container).read(ticker)
+        if not saved:
+            return JSONResponse({"error": "Option timing snapshot not found"}, status_code=404)
+        if saved.get("security_id") != security_id or saved.get("symbol") != ticker:
+            return JSONResponse({"error": "Option timing security identity mismatch"}, status_code=409)
+        now = datetime.now(timezone.utc)
+        current = saved.get("current") or {}
+        if current.get("snapshot_id") == snapshot_id:
+            point = read_current(ticker, security_id, True, saved, now)
+        else:
+            selected = next(
+                (item for item in saved.get("points", []) if item.get("snapshot_id") == snapshot_id),
+                None,
+            )
+            if selected is None:
+                return JSONResponse({"error": "Option timing snapshot not found"}, status_code=404)
+            point = copy.deepcopy(selected)
+            point["freshness"] = freshness(point, now)
+    except Exception as exc:  # noqa: BLE001 - storage failures must fail closed before charging
+        logger.warning(
+            "Option timing explanation storage unavailable function_id=%s symbol=%s "
+            "side=%s elapsed=%.2fs error_type=%s",
+            FUNCTION_ID, ticker, side, time.monotonic() - started, type(exc).__name__,
+        )
+        return JSONResponse({"error": "Option timing storage is unavailable"}, status_code=503)
+
+    try:
+        prompt = build_option_timing_explain_prompt(
+            symbol=ticker, security_id=security_id, side=side, point=point,
+            recent_points=saved.get("points", []),
+        )
+    except OverflowError:
+        return JSONResponse({"error": "Saved timing context exceeds explanation limit"}, status_code=413)
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse(
+            {"error": "Selected option timing snapshot has no valid explainable score"}, status_code=409,
+        )
+    try:
+        from src.agent_runner import AgentRunner
+        from src.llm import validate_llm_config
+
+        config_obj = _config_with_persisted_ai_overrides(cosmos)
+        llm = config_obj.llm_config_for_function(FUNCTION_ID)
+        llm_error = validate_llm_config(llm)
+        if llm_error:
+            return JSONResponse({"error": llm_error}, status_code=503)
+        model = config_obj.model_for(FUNCTION_ID)
+        runner = AgentRunner(
+            llm=config_obj.llm_config(),
+            model=config_obj.model_deployment,
+            function_llms=config_obj.function_llm_configs(),
+            function_models=config_obj.function_model_deployments(),
+        )
+        reply = await asyncio.wait_for(
+            runner.run_option_timing_explain(symbol=ticker, prompt=prompt), timeout=60,
+        )
+        if not isinstance(reply, str) or not reply.strip():
+            raise RuntimeError("The configured model returned an empty response")
+        reply = reply.strip()
+        if len(reply) > MAX_OUTPUT_CHARS:
+            raise RuntimeError("The configured model response exceeded the output limit")
+    except Exception as exc:  # noqa: BLE001 - provider failures must return explicit non-success
+        logger.warning(
+            "Option timing explanation failed function_id=%s symbol=%s side=%s "
+            "elapsed=%.2fs error_type=%s",
+            FUNCTION_ID, ticker, side, time.monotonic() - started, type(exc).__name__,
+        )
+        unavailable = any(
+            marker in type(exc).__name__.lower()
+            for marker in ("connection", "timeout", "serviceunavailable")
+        )
+        return JSONResponse(
+            {"error": "Configured LLM is unavailable" if unavailable else "Option timing explanation failed"},
+            status_code=503 if unavailable else 500,
+        )
+    return JSONResponse({
+        "reply": reply,
+        "side": side,
+        "snapshot_id": point["snapshot_id"],
+        "score": point[side]["score"],
+        "as_of": point["as_of"],
+        "provisional": point["provisional"],
+        "freshness": point["freshness"],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "ai_function": FUNCTION_ID,
+        "model": model,
+        "provider": llm.provider,
+    })
+
+
 @app.put("/api/symbols/{symbol}")
 async def api_update_symbol(request: Request, symbol: str):
     try:

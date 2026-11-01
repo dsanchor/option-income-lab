@@ -139,10 +139,10 @@ test("card gauges expose actual side values, preserve zero, and mute missing or 
   assert.doesNotMatch(cards, /<button\b[^>]*>(?:(?!<\/button>)[\s\S])*role="meter"/);
 });
 
-test("compact cards omit redundant copy, keep warnings and open details from a single card-wide native control", () => {
+test("compact cards keep warnings and independent small header Info and Explain controls", () => {
   let activeSide = null;
   const { default: Cards, OptionTimingModal } = load("components/OptionTiming.tsx", {
-    react: { ...React, useState: () => [activeSide, (value) => { activeSide = value; }] },
+    react: { ...React, useCallback: (fn) => fn, useRef: (value) => ({ current: value }), useEffect() {}, useState: () => [activeSide, (value) => { activeSide = value; }] },
   });
   const saved = snapshot("current", first.as_of, 60, { freshness: "stale", provisional: true });
   saved.covered_call.label = "CALL Timing";
@@ -160,12 +160,20 @@ test("compact cards omit redundant copy, keep warnings and open details from a s
   assert.doesNotMatch(html, /CALL Timing|PUT Timing|Source|Band:|Bands:|Independent technical context|linear-gradient|text-accent-green/);
   const render = () => elements(Cards({ symbol: "MSFT", snapshot: saved }));
   const buttons = render().filter((node) => node.type === "button");
-  assert.equal(buttons.length, 2);
+  assert.equal(buttons.length, 4);
   for (const [index, key] of ["covered_call", "cash_secured_put"].entries()) {
-    assert.equal(buttons[index].props.type, "button");
-    assert.match(buttons[index].props["aria-label"], /timing details/);
-    assert.match(buttons[index].props.className, /absolute inset-0/);
-    buttons[index].props.onClick();
+    const info = buttons[index * 2];
+    const explain = buttons[index * 2 + 1];
+    assert.equal(info.props.type, "button");
+    assert.equal(info.props.children, "Info");
+    assert.match(info.props["aria-label"], /timing details/);
+    assert.doesNotMatch(info.props.className, /absolute inset-0/);
+    assert.match(info.props.className, /text-xs/);
+    assert.equal(explain.props.children, "Explain");
+    assert.equal(explain.props.type, "button");
+    assert.equal(explain.props.disabled, false);
+    assert.match(explain.props["aria-label"], /Explain/);
+    info.props.onClick();
     assert.equal(render().find((node) => node.type === OptionTimingModal).props.initialSide, key);
   }
   const unavailable = snapshot("missing", first.as_of, null);
@@ -236,6 +244,282 @@ test("history BFF awaits params, preserves canonical symbol/range, status and ab
     globalThis.fetch = async () => { throw new Error("Backend unavailable"); };
     const failed = await GET({ url: "http://frontend/api/history", signal }, { params: Promise.resolve({ symbol: "XNYS:AAPL" }) });
     assert.equal(failed.status, 502);
+  } finally { globalThis.fetch = previous; }
+});
+
+function aiReply(saved = first, key = "covered_call", extra = {}) {
+  return {
+    reply: "## Saved context\n**Trend** supports the score.\n- Event cap remains in force.\n<script>bad()</script>",
+    side: key, snapshot_id: saved.snapshot_id, score: saved[key].score, as_of: saved.as_of,
+    provisional: saved.provisional, freshness: saved.freshness, generated_at: "2026-11-01T09:00:00Z",
+    ai_function: "option_timing_explain", model: "configured-model", provider: "configured-provider", ...extra,
+  };
+}
+
+function cardsHarness() {
+  const hooks = [];
+  let cursor = 0;
+  const react = {
+    ...React, useId: () => "explain-title", useCallback: (fn) => fn,
+    useState(initial) {
+      const index = cursor++;
+      if (!(index in hooks)) hooks[index] = initial;
+      return [hooks[index], (value) => { hooks[index] = typeof value === "function" ? value(hooks[index]) : value; }];
+    },
+    useRef(initial) {
+      const index = cursor++;
+      if (!(index in hooks)) hooks[index] = { current: initial };
+      return hooks[index];
+    },
+    useEffect(effect, deps) {
+      const index = cursor++;
+      const previous = hooks[index];
+      if (!previous || deps.some((value, i) => value !== previous.deps[i])) {
+        previous?.cleanup?.();
+        hooks[index] = { deps, cleanup: effect() };
+      }
+    },
+  };
+  const components = load("components/OptionTiming.tsx", { react });
+  return {
+    ...components,
+    render(saved = first, symbol = "XNYS%3AAAPL") {
+      cursor = 0;
+      return elements(components.default({ snapshot: saved, symbol }));
+    },
+    unmount() { for (const hook of hooks) hook?.cleanup?.(); },
+  };
+}
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+test("Explain is disabled for missing source or invalid side scores, but zero and stale scores remain valid", () => {
+  const { default: Cards } = load("components/OptionTiming.tsx");
+  for (const saved of [
+    undefined, null, { ...first, snapshot_id: "" }, { ...first, snapshot_id: undefined }, { ...first, input_timestamp_available: false },
+    { ...first, as_of: "invalid" }, snapshot("missing", first.as_of, null),
+    snapshot("nan", first.as_of, NaN), snapshot("infinity", first.as_of, Infinity),
+    snapshot("negative", first.as_of, -1), snapshot("too-high", first.as_of, 101),
+    { ...first, covered_call: { ...first.covered_call, status: "not_applicable" } },
+  ]) {
+    assert.equal(helpers.canExplainOptionTiming(saved, "covered_call"), false);
+    const html = renderToStaticMarkup(React.createElement(Cards, { symbol: "AAPL", snapshot: saved }));
+    assert.match(html, /<button[^>]*disabled=""[^>]*aria-label="Explain Covered CALL timing"/);
+    assert.doesNotMatch(html, /<button[^>]*disabled=""[^>]*aria-label="View Covered CALL timing details"/);
+  }
+  assert.equal(helpers.canExplainOptionTiming(first, "covered_call"), true);
+  assert.equal(helpers.canExplainOptionTiming({ ...first, freshness: "stale" }, "covered_call"), true);
+});
+
+test("Explain starts only on explicit click, deduplicates in-flight requests and caches exact symbol/side/snapshot success", async () => {
+  const previous = globalThis.fetch;
+  const harness = cardsHarness();
+  const calls = [];
+  let resolve;
+  globalThis.fetch = (url, options) => {
+    calls.push({ url, options });
+    return new Promise((done) => { resolve = done; });
+  };
+  try {
+    let tree = harness.render();
+    assert.equal(calls.length, 0);
+    const info = tree.find((node) => node.type === "button" && node.props.children === "Info");
+    info.props.onClick();
+    tree = harness.render();
+    assert.equal(tree.find((node) => node.type === harness.OptionTimingModal).props.initialSide, "covered_call");
+    assert.equal(calls.length, 0);
+    const explain = tree.find((node) => node.type === "button" && node.props.children === "Explain");
+    explain.props.onClick();
+    explain.props.onClick();
+    tree = harness.render();
+    const popup = tree.find((node) => node.type === harness.OptionTimingExplainModal);
+    assert.equal(tree.filter((node) => [harness.OptionTimingModal, harness.OptionTimingExplainModal].includes(node.type)).length, 1);
+    assert.equal(popup.props.state.snapshot.snapshot_id, "first");
+    assert.equal(popup.props.state.side, "covered_call");
+    assert.equal(popup.props.state.loading, true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "/api/symbols/XNYS%3AAAPL/option-timing/explain");
+    assert.deepEqual(JSON.parse(calls[0].options.body), { side: "covered_call", snapshot_id: "first" });
+    assert.equal(calls[0].options.method, "POST");
+    assert.equal(calls[0].options.cache, "no-store");
+    assert.ok(calls[0].options.signal instanceof AbortSignal);
+    resolve({ ok: true, json: async () => aiReply() });
+    await settle();
+    tree = harness.render();
+    const ready = tree.find((node) => node.type === harness.OptionTimingExplainModal);
+    assert.equal(ready.props.state.result.score, 0);
+    ready.props.onClose();
+    harness.render().find((node) => node.type === "button" && node.props.children === "Explain").props.onClick();
+    assert.equal(calls.length, 1);
+    assert.equal(harness.render().find((node) => node.type === harness.OptionTimingExplainModal).props.state.loading, false);
+    harness.render().filter((node) => node.type === "button" && node.props.children === "Explain")[1].props.onClick();
+    assert.equal(calls.length, 2);
+    assert.deepEqual(JSON.parse(calls[1].options.body), { side: "cash_secured_put", snapshot_id: "first" });
+    assert.equal(harness.render().find((node) => node.type === harness.OptionTimingExplainModal).props.state.side, "cash_secured_put");
+    resolve({ ok: true, json: async () => aiReply(first, "cash_secured_put") });
+    await settle();
+    harness.render(last).find((node) => node.type === "button" && node.props.children === "Explain").props.onClick();
+    assert.equal(calls.length, 3);
+    assert.equal(JSON.parse(calls[2].options.body).snapshot_id, "last");
+  } finally { harness.unmount(); globalThis.fetch = previous; }
+});
+
+test("Explain errors show friendly server errors, never auto-retry, and manual retry uses the clicked snapshot", async () => {
+  const previous = globalThis.fetch;
+  const harness = cardsHarness();
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return calls.length === 1
+      ? { ok: false, status: 503, json: async () => ({ error: "Configured provider is unavailable" }) }
+      : { ok: true, json: async () => aiReply() };
+  };
+  try {
+    harness.render().find((node) => node.type === "button" && node.props.children === "Explain").props.onClick();
+    await settle();
+    let popup = harness.render(last).find((node) => node.type === harness.OptionTimingExplainModal);
+    assert.equal(popup.props.state.error, "Configured provider is unavailable");
+    assert.equal(calls.length, 1);
+    const { OptionTimingExplainModal } = load("components/OptionTiming.tsx");
+    const html = renderToStaticMarkup(React.createElement(OptionTimingExplainModal, popup.props));
+    assert.match(html, /role="alert"[\s\S]*Configured provider is unavailable/);
+    assert.match(html, />Retry<\/button>/);
+    popup.props.onRetry();
+    await settle();
+    popup = harness.render(last).find((node) => node.type === harness.OptionTimingExplainModal);
+    assert.equal(calls.length, 2);
+    assert.equal(JSON.parse(calls[1].options.body).snapshot_id, "first");
+    assert.equal(popup.props.state.result.snapshot_id, "first");
+    assert.equal(popup.props.state.error, undefined);
+  } finally { harness.unmount(); globalThis.fetch = previous; }
+});
+
+test("closing or changing symbol aborts Explain and ignores late results from another snapshot or side", async () => {
+  const previous = globalThis.fetch;
+  const harness = cardsHarness();
+  const requests = [];
+  globalThis.fetch = (url, options) => new Promise((resolve) => requests.push({ url, options, resolve }));
+  try {
+    const click = (tree, index = 0) => tree.filter((node) => node.type === "button" && node.props.children === "Explain")[index].props.onClick();
+    click(harness.render());
+    harness.render().find((node) => node.type === harness.OptionTimingExplainModal).props.onClose();
+    assert.equal(requests[0].options.signal.aborted, true);
+    requests[0].resolve({ ok: true, json: async () => aiReply() });
+    await settle();
+    assert.ok(!harness.render().some((node) => node.type === harness.OptionTimingExplainModal));
+    click(harness.render(), 1);
+    click(harness.render(last));
+    assert.equal(requests[1].options.signal.aborted, true);
+    requests[1].resolve({ ok: true, json: async () => aiReply(first, "cash_secured_put") });
+    await settle();
+    let popup = harness.render(last).find((node) => node.type === harness.OptionTimingExplainModal);
+    assert.equal(popup.props.state.snapshot.snapshot_id, "last");
+    assert.equal(popup.props.state.loading, true);
+    assert.ok(!harness.render(last, "MSFT").some((node) => node.type === harness.OptionTimingExplainModal));
+    assert.equal(requests[2].options.signal.aborted, true);
+    requests[2].resolve({ ok: true, json: async () => aiReply(last) });
+    await settle();
+    assert.ok(!harness.render(last, "MSFT").some((node) => node.type === harness.OptionTimingExplainModal));
+    click(harness.render(last, "MSFT"));
+    harness.unmount();
+    assert.equal(requests[3].options.signal.aborted, true);
+  } finally { globalThis.fetch = previous; }
+});
+
+test("AI popup renders natural Markdown, saved zero, stale/provisional source and configured response metadata", () => {
+  const { OptionTimingExplainModal } = load("components/OptionTiming.tsx");
+  const saved = { ...first, freshness: "stale", provisional: true };
+  const state = { kind: "explain", symbol: "AAPL", side: "covered_call", snapshot: saved, loading: false, result: aiReply(saved, "covered_call", { freshness: "fresh" }) };
+  const html = renderToStaticMarkup(React.createElement(OptionTimingExplainModal, { state, onClose() {}, onRetry() {} }));
+  assert.match(html, /AAPL · CALL Explain/);
+  assert.match(html, /AI explanation of the saved technical score/);
+  assert.match(html, />0<\/span>/);
+  assert.match(html, /\/ 100/);
+  assert.match(html, /PROVISIONAL/);
+  assert.match(html, /STALE/);
+  assert.match(html, /Last valid saved score; source data is stale/);
+  assert.match(html, /Source as of \(local\): <time dateTime="2026-10-30T14:00:00Z"/i);
+  assert.match(html, /<strong>Trend<\/strong>/);
+  assert.match(html, /<h2[^>]*>Saved context<\/h2>/);
+  assert.match(html, /&lt;script&gt;bad\(\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>|Regenerate|textarea/);
+  assert.match(html, /configured-model · configured-provider · AI generated \(local\)/);
+  const loading = renderToStaticMarkup(React.createElement(OptionTimingExplainModal, { state: { ...state, result: undefined, loading: true }, onClose() {}, onRetry() {} }));
+  assert.match(loading, /role="status"[\s\S]*Generating explanation/);
+  assert.doesNotMatch(loading, /Retry|configured-model/);
+});
+
+test("Explain fetch rejects malformed or drifting responses and preserves server availability errors", async () => {
+  const previous = globalThis.fetch;
+  try {
+    for (const response of [
+      {}, null, aiReply(first, "cash_secured_put"), aiReply(last),
+      aiReply(first, "covered_call", { reply: " " }), aiReply(first, "covered_call", { score: NaN }),
+      aiReply(first, "covered_call", { score: 101 }), aiReply(first, "covered_call", { ai_function: "other" }),
+      aiReply(first, "covered_call", { freshness: "new" }), aiReply(first, "covered_call", { model: "" }),
+    ]) {
+      globalThis.fetch = async () => ({ ok: true, json: async () => response });
+      await assert.rejects(helpers.fetchOptionTimingExplain("AAPL", "covered_call", "first"), /Unsupported|mismatched/);
+    }
+    globalThis.fetch = async () => ({ ok: true, json: async () => { throw new SyntaxError("Empty JSON"); } });
+    await assert.rejects(helpers.fetchOptionTimingExplain("AAPL", "covered_call", "first"), /Unsupported/);
+    for (const status of [404, 409, 503]) {
+      globalThis.fetch = async () => ({ ok: false, status, json: async () => ({ error: `Saved snapshot unavailable (${status})` }) });
+      await assert.rejects(helpers.fetchOptionTimingExplain("AAPL", "covered_call", "first"), new RegExp(`Saved snapshot unavailable \\(${status}\\)`));
+    }
+  } finally { globalThis.fetch = previous; }
+});
+
+test("Explain rejects a changed score or source timestamp despite matching snapshot identity", async () => {
+  const previous = globalThis.fetch;
+  const harness = cardsHarness();
+  try {
+    for (const extra of [{ score: 5 }, { as_of: last.as_of }]) {
+      globalThis.fetch = async () => ({ ok: true, json: async () => aiReply(first, "covered_call", extra) });
+      harness.render().find((node) => node.type === "button" && node.props.children === "Explain").props.onClick();
+      await settle();
+      const popup = harness.render().find((node) => node.type === harness.OptionTimingExplainModal);
+      assert.match(popup.props.state.error, /does not match the saved technical score/);
+      assert.equal(popup.props.state.result, undefined);
+      popup.props.onClose();
+    }
+  } finally { harness.unmount(); globalThis.fetch = previous; }
+});
+
+test("Explain BFF canonicalizes symbol and forwards exact POST body, status, errors and abort without empty JSON fallback", async () => {
+  const previous = globalThis.fetch;
+  const signal = new AbortController().signal;
+  const { POST } = load("app/api/symbols/[symbol]/option-timing/explain/route.ts", {
+    "@/lib/api": { API_BASE_URL: "http://mock-backend" },
+    "next/server": { NextResponse: { json: (data, options) => ({ data, ...options }) } },
+  });
+  const body = JSON.stringify({ side: "covered_call", snapshot_id: "exact-id" });
+  const request = { text: async () => body, signal };
+  try {
+    for (const [status, upstreamBody, contentType] of [
+      [200, JSON.stringify(aiReply()), "application/json"],
+      [404, '{"error":"No saved snapshot"}', "application/json"],
+      [409, '{"error":"Snapshot changed"}', "application/json"],
+      [503, '{"error":"Provider unavailable"}', "application/json"],
+      [200, "", "application/json"], [204, "", "application/json"], [502, "Upstream offline", "text/plain"],
+    ]) {
+      globalThis.fetch = async (url, options) => {
+        assert.equal(url, "http://mock-backend/api/symbols/XNYS%3AAAPL/option-timing/explain");
+        assert.equal(options.method, "POST");
+        assert.equal(options.body, body);
+        assert.equal(options.signal, signal);
+        assert.equal(options.cache, "no-store");
+        return new Response(status === 204 ? null : upstreamBody, { status, headers: { "Content-Type": contentType } });
+      };
+      const result = await POST(request, { params: Promise.resolve({ symbol: "XNYS%3AAAPL" }) });
+      assert.equal(result.status, status);
+      assert.equal(await result.text(), upstreamBody);
+      assert.equal(result.headers.get("Content-Type"), contentType);
+      assert.equal(result.headers.get("Cache-Control"), "no-store");
+    }
+    globalThis.fetch = async () => { throw new Error("Upstream connection failed"); };
+    const error = await POST(request, { params: Promise.resolve({ symbol: "XNYS:AAPL" }) });
+    assert.equal(error.status, 502);
+    assert.equal(error.data.error, "Upstream connection failed");
   } finally { globalThis.fetch = previous; }
 });
 

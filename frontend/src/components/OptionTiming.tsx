@@ -1,14 +1,15 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CartesianGrid, ReferenceArea, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from "recharts";
 import AccessibleDialog from "@/components/AccessibleDialog";
 import { fmtTime } from "@/lib/options-row-format";
 import { timeAgo } from "@/lib/format";
 import { decodeSymbolParam } from "@/lib/symbolEncoding";
-import { fetchOptionTimingHistory, OPTION_TIMING_SIDES, optionTimingPoints, optionTimingScore } from "@/lib/optionTiming";
-import type { OptionTimingBand, OptionTimingPoint, OptionTimingSideKey, OptionTimingSnapshot } from "@/types/option-timing";
+import { renderMarkdown } from "@/lib/markdown";
+import { canExplainOptionTiming, fetchOptionTimingExplain, fetchOptionTimingHistory, OPTION_TIMING_SIDES, optionTimingPoints, optionTimingScore } from "@/lib/optionTiming";
+import type { OptionTimingBand, OptionTimingExplainResponse, OptionTimingPoint, OptionTimingSideKey, OptionTimingSnapshot } from "@/types/option-timing";
 
 const BAND_CLASSES: Record<OptionTimingBand, string> = {
   red: "text-accent-red",
@@ -120,20 +121,82 @@ export function OptionTimingExplanation({ snapshot, side }: {
   );
 }
 
+type ExplainState = {
+  kind: "explain";
+  symbol: string;
+  side: OptionTimingSideKey;
+  snapshot: OptionTimingSnapshot;
+  loading: boolean;
+  result?: OptionTimingExplainResponse;
+  error?: string;
+};
+
 export default function OptionTiming({ symbol, snapshot }: {
   symbol: string;
   snapshot?: OptionTimingSnapshot | null;
 }) {
-  const [side, setSide] = useState<OptionTimingSideKey | null>(null);
+  const [popup, setPopup] = useState<ExplainState | { kind: "info"; symbol: string; side: OptionTimingSideKey } | null>(null);
+  const canonicalSymbol = decodeSymbolParam(symbol);
+  const requestRef = useRef<{ key: string; controller: AbortController } | null>(null);
+  const cacheRef = useRef(new Map<string, { result: OptionTimingExplainResponse; expires: number }>());
+  useEffect(() => () => {
+    requestRef.current?.controller.abort();
+    requestRef.current = null;
+  }, [canonicalSymbol]);
+
+  function close() {
+    requestRef.current?.controller.abort();
+    requestRef.current = null;
+    setPopup(null);
+  }
+
+  const explain = useCallback(async (side: OptionTimingSideKey, saved: OptionTimingSnapshot | null | undefined) => {
+    if (!canExplainOptionTiming(saved, side)) return;
+    const key = JSON.stringify([canonicalSymbol, side, saved.snapshot_id]);
+    if (requestRef.current?.key === key) return;
+    requestRef.current?.controller.abort();
+    requestRef.current = null;
+    const cached = cacheRef.current.get(key);
+    const next: ExplainState = { kind: "explain", symbol: canonicalSymbol, side, snapshot: saved, loading: true };
+    if (cached && cached.expires > Date.now()) {
+      setPopup({ ...next, loading: false, result: cached.result });
+      return;
+    }
+    const controller = new AbortController();
+    requestRef.current = { key, controller };
+    setPopup(next);
+    try {
+      const result = await fetchOptionTimingExplain(canonicalSymbol, side, saved.snapshot_id, controller.signal);
+      if (controller.signal.aborted || requestRef.current?.controller !== controller) return;
+      if (result.score !== optionTimingScore(saved, side) || Date.parse(result.as_of) !== Date.parse(saved.as_of)) {
+        throw new Error("The explanation does not match the saved technical score.");
+      }
+      for (const [cacheKey, entry] of cacheRef.current) {
+        if (entry.expires <= Date.now()) cacheRef.current.delete(cacheKey);
+      }
+      if (cacheRef.current.size >= 10) cacheRef.current.delete(cacheRef.current.keys().next().value!);
+      cacheRef.current.set(key, { result, expires: Date.now() + 5 * 60_000 });
+      setPopup({ ...next, loading: false, result });
+    } catch (error) {
+      if (controller.signal.aborted || requestRef.current?.controller !== controller) return;
+      setPopup({ ...next, loading: false, error: error instanceof Error ? error.message : "Could not explain Option Timing." });
+    } finally {
+      if (requestRef.current?.controller === controller) requestRef.current = null;
+    }
+  }, [canonicalSymbol]);
+
   return (
     <>
       <div className="grid gap-3 md:grid-cols-2">
         {OPTION_TIMING_SIDES.map((item) => (
           <div key={item.key} className="relative rounded-[var(--radius)] border border-border bg-bg-input p-4 transition-colors hover:bg-bg-hover">
-            <button type="button" onClick={() => setSide(item.key)} aria-label={`View ${item.label} timing details`} className="absolute inset-0 z-10 rounded-[var(--radius)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue">
-              <span className="sr-only">View {item.label} timing details</span>
-            </button>
-            <span className="mb-3 flex items-center justify-between gap-2"><span className="font-medium">{item.label}</span><span className="text-xs text-accent-blue">Info</span></span>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <span className="font-medium">{item.label}</span>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => { close(); setPopup({ kind: "info", symbol: canonicalSymbol, side: item.key }); }} aria-label={`View ${item.label} timing details`} className="rounded-[var(--radius)] border border-border bg-bg-card px-2 py-1 text-xs text-accent-blue transition-colors hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent-blue">Info</button>
+                <button type="button" onClick={() => void explain(item.key, snapshot)} disabled={!canExplainOptionTiming(snapshot, item.key)} aria-label={`Explain ${item.label} timing`} className="rounded-[var(--radius)] border border-border bg-bg-card px-2 py-1 text-xs text-accent-blue transition-colors hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent-blue disabled:cursor-not-allowed disabled:opacity-50">Explain</button>
+              </div>
+            </div>
             <span className="flex flex-wrap items-baseline gap-2">
               <span className="text-2xl"><OptionTimingValue snapshot={snapshot} side={item.key} /></span>
               <span className="text-xs text-text-muted">/ 100</span>
@@ -143,8 +206,56 @@ export default function OptionTiming({ symbol, snapshot }: {
           </div>
         ))}
       </div>
-      {side && <OptionTimingModal symbol={symbol} snapshot={snapshot} initialSide={side} onClose={() => setSide(null)} />}
+      {popup?.symbol === canonicalSymbol && (popup.kind === "info"
+        ? <OptionTimingModal symbol={symbol} snapshot={snapshot} initialSide={popup.side} onClose={close} />
+        : <OptionTimingExplainModal state={popup} onClose={close} onRetry={() => void explain(popup.side, popup.snapshot)} />)}
     </>
+  );
+}
+
+export function OptionTimingExplainModal({ state, onClose, onRetry }: {
+  state: ExplainState;
+  onClose: () => void;
+  onRetry: () => void;
+}) {
+  const titleId = useId();
+  const item = OPTION_TIMING_SIDES.find((item) => item.key === state.side)!;
+  const result = state.result;
+  const snapshot = state.snapshot;
+  const freshness = snapshot.freshness === "stale" || result?.freshness === "stale"
+    ? "stale" : snapshot.freshness === "unknown" || result?.freshness === "unknown" ? "unknown" : "fresh";
+  return (
+    <AccessibleDialog titleId={titleId} onClose={onClose}>
+      <div className="mb-3 flex items-start justify-between gap-4 border-b border-border pb-4">
+        <div>
+          <h2 id={titleId} className="text-lg font-semibold">{state.symbol} · {item.short} Explain</h2>
+          <p className="mt-2 text-xs text-text-muted">AI explanation of the saved technical score</p>
+        </div>
+        <button type="button" autoFocus onClick={onClose} aria-label="Close Option Timing explanation" className="rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm transition-colors hover:bg-bg-hover">Close</button>
+      </div>
+      <div className="space-y-4">
+        <section aria-label="Saved technical score" className="rounded-[var(--radius)] border border-border bg-bg-input p-4">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <OptionTimingValue snapshot={{ ...snapshot, freshness, provisional: snapshot.provisional || !!result?.provisional }} side={state.side} />
+            <span className="text-xs text-text-muted">/ 100</span>
+          </div>
+          <p className="text-xs text-text-muted">Source as of (local): <time dateTime={snapshot.as_of}>{fmtTime(snapshot.as_of)}</time></p>
+          {freshness === "stale" && <p className="mt-3 text-xs text-accent-orange">Last valid saved score; source data is stale. This explanation is not a fresh score.</p>}
+          {freshness === "unknown" && <p className="mt-3 text-xs text-text-muted">Source freshness is unknown.</p>}
+        </section>
+        <section aria-label="AI interpretation" aria-live="polite" className="rounded-[var(--radius)] border border-border bg-bg-card p-4">
+          {state.loading && <p role="status" className="text-sm text-text-muted">Generating explanation…</p>}
+          {state.error && <div role="alert" className="space-y-3 text-sm">
+            <p className="text-accent-red">{state.error}</p>
+            <button type="button" disabled={state.loading} onClick={onRetry} className="rounded-[var(--radius)] border border-border bg-bg-input px-3 py-1.5 text-xs hover:bg-bg-hover disabled:opacity-50">Retry</button>
+          </div>}
+          {result && <>
+            <div className="text-sm leading-relaxed [&_a]:text-accent-blue [&_strong]:text-text" dangerouslySetInnerHTML={{ __html: renderMarkdown(result.reply) }} />
+            <p className="mt-4 border-t border-border pt-3 text-xs text-text-muted">{result.model} · {result.provider} · AI generated (local): <time dateTime={result.generated_at}>{fmtTime(result.generated_at)}</time></p>
+          </>}
+        </section>
+      </div>
+    </AccessibleDialog>
   );
 }
 

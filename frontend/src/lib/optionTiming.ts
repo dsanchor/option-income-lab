@@ -1,4 +1,5 @@
 import type {
+  OptionTimingExplainResponse,
   OptionTimingHistory,
   OptionTimingPoint,
   OptionTimingSideKey,
@@ -44,4 +45,44 @@ export async function fetchOptionTimingHistory(symbol: string, range: string, si
   const data = await res.json() as OptionTimingHistory;
   if (data.schema_version !== 1 || !Array.isArray(data.points)) throw new Error("Unsupported Option Timing history response.");
   return data;
+}
+
+export function canExplainOptionTiming(snapshot: OptionTimingSnapshot | null | undefined, side: OptionTimingSideKey): snapshot is OptionTimingSnapshot {
+  return typeof snapshot?.snapshot_id === "string" && !!snapshot.snapshot_id.trim() && snapshot.input_timestamp_available !== false
+    && Number.isFinite(Date.parse(snapshot.as_of)) && optionTimingScore(snapshot, side) !== null;
+}
+
+export async function fetchOptionTimingExplain(
+  symbol: string,
+  side: OptionTimingSideKey,
+  snapshotId: string,
+  signal?: AbortSignal,
+): Promise<OptionTimingExplainResponse> {
+  const res = await fetch(`/api/symbols/${encodeURIComponent(decodeSymbolParam(symbol))}/option-timing/explain`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ side, snapshot_id: snapshotId }),
+    signal,
+    cache: "no-store",
+  });
+  const data: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const error = data && typeof data === "object" && "error" in data ? data.error : null;
+    throw new Error(typeof error === "string" && error.trim()
+      ? error : `Could not explain Option Timing (HTTP ${res.status}).`);
+  }
+  if (!data || typeof data !== "object") throw new Error("Unsupported Option Timing explanation response.");
+  const value = data as Partial<OptionTimingExplainResponse>;
+  if (typeof value.reply !== "string" || !value.reply.trim()
+    || value.side !== side || value.snapshot_id !== snapshotId
+    || typeof value.score !== "number" || !Number.isFinite(value.score) || value.score < 0 || value.score > 100
+    || typeof value.as_of !== "string" || !Number.isFinite(Date.parse(value.as_of))
+    || typeof value.provisional !== "boolean" || !["fresh", "stale", "unknown"].includes(value.freshness ?? "")
+    || value.ai_function !== "option_timing_explain"
+    || typeof value.model !== "string" || !value.model.trim()
+    || typeof value.provider !== "string" || !value.provider.trim()
+    || typeof value.generated_at !== "string" || !Number.isFinite(Date.parse(value.generated_at))) {
+    throw new Error("Unsupported or mismatched Option Timing explanation response.");
+  }
+  return value as OptionTimingExplainResponse;
 }

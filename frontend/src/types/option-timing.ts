@@ -52,3 +52,17 @@ export interface OptionTimingHistory {
   methodology: string;
   points: OptionTimingPoint[];
 }
+
+export interface OptionTimingExplainResponse {
+  reply: string;
+  side: OptionTimingSideKey;
+  snapshot_id: string;
+  score: number;
+  as_of: string;
+  provisional: boolean;
+  freshness: "fresh" | "stale" | "unknown";
+  generated_at: string;
+  ai_function: "option_timing_explain";
+  model: string;
+  provider: string;
+}

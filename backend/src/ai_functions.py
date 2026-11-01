@@ -57,6 +57,15 @@ AI_FUNCTIONS = {
         ),
         "default_model": "gpt-5.6-luna",
     },
+    "option_timing_explain": {
+        "label": "Option Timing Explanation",
+        "group": "Analysis & Reports",
+        "description": (
+            "Human-readable interpretation of saved Covered CALL and "
+            "Cash-Secured PUT timing scores and evidence."
+        ),
+        "default_model": "gpt-5.4-mini",
+    },
     "technical_analysis": {
         "label": "Technical Analysis",
         "group": "Reporting",

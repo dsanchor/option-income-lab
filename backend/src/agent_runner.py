@@ -4187,6 +4187,34 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
         )
         return reply
 
+    async def run_option_timing_explain(self, *, symbol: str, prompt) -> str:
+        """Explain one saved timing point without tools or score changes."""
+        from src.option_timing_explain_instructions import FUNCTION_ID, MAX_OUTPUT_CHARS
+
+        run_start = time.time()
+        agent = Agent(
+            client=self._get_client(model=None, function_id=FUNCTION_ID),
+            name="OptionTimingExplainAgent",
+            instructions=prompt.instructions,
+        )
+        deployment = self._resolve_model_deployment(model=None, function_id=FUNCTION_ID)
+        options = {"max_tokens": prompt.max_completion_tokens}
+        if "luna" not in deployment.lower():
+            options["temperature"] = prompt.temperature
+        result = await agent.run(prompt.message, options=options)
+        reply = getattr(result, "text", None)
+        if not isinstance(reply, str) or not reply.strip():
+            raise RuntimeError("The configured model returned an empty response")
+        reply = reply.strip()
+        if len(reply) > MAX_OUTPUT_CHARS:
+            raise RuntimeError("The configured model response exceeded the output limit")
+        logger.info(
+            "Option timing explanation completed function_id=%s symbol=%s side=%s "
+            "duration=%.2fs output_chars=%d",
+            FUNCTION_ID, symbol, prompt.side, time.time() - run_start, len(reply),
+        )
+        return reply
+
     # ------------------------------------------------------------------
     # API Chat Agent (MCP-backed general business-data assistant)
     # ------------------------------------------------------------------
