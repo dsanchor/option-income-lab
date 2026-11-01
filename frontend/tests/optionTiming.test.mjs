@@ -345,7 +345,27 @@ test("overview wiring is options-only, after Tech, reuses snapshot and does not 
   assert.match(source, /event\.stopPropagation\(\); setTimingModal/);
   assert.match(source, /snapshot=\{timingModal\.row\.option_timing\}/);
   assert.doesNotMatch(source, /fetchOptionTimingHistory/);
-  assert.match(source, /matchesSymbolSuitability\(r\.entry_tag, r\.momentum, suitabilityFilter\)/);
+  assert.match(source, /matchesSymbolSuitability\(r\.option_timing, suitabilityFilter\)/);
+  assert.doesNotMatch(source, /matchesSymbolSuitability\(r\.entry_tag/);
+});
+
+test("shared timing filter controls name favorable categories and explain fresh technical thresholds", () => {
+  const source = readFileSync(join(root, "src/components/SymbolsTable.tsx"), "utf8");
+  for (const [key, label, side, threshold] of [
+    ["ideal_puts", "Favorable Puts", "cash-secured PUT", ">=75"],
+    ["ideal_calls", "Favorable Calls", "covered CALL", ">=75"],
+    ["no_puts", "Unfavorable Puts", "cash-secured PUT", "<25"],
+    ["no_calls", "Unfavorable Calls", "covered CALL", "<25"],
+  ]) {
+    const control = source.match(new RegExp(`key: "${key}", label: "([^"]+)", title: "([^"]+)"`));
+    assert.ok(control, `${key} defines a visible label and tooltip`);
+    assert.equal(control[1], label);
+    assert.ok(control[2].includes(`Fresh ${side} Option Timing ${threshold}`));
+    assert.match(control[2], /technical context only, not trade permission/);
+  }
+  assert.match(source, /SUITABILITY_FILTERS\.map\(\(\{ key, label, title \}\)/);
+  assert.match(source, /title=\{title\}[\s\S]*?aria-label=\{`\$\{label\}: \$\{title\}`\}/);
+  assert.doesNotMatch(source, /label: "(?:Ideal|No) (?:Calls|Puts)"/);
 });
 
 test("settings Option Timing card edits and saves both fields, maps timestamps and reports queued or failed runs", async () => {

@@ -123,12 +123,12 @@ function formatPrice(price: number | null | undefined, currency: string | null |
   return `${num(price, 2)} ${currency}`;
 }
 
-const SUITABILITY_FILTERS: { key: SymbolSuitabilityFilter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "ideal_puts", label: "Ideal Puts" },
-  { key: "ideal_calls", label: "Ideal Calls" },
-  { key: "no_puts", label: "No Puts" },
-  { key: "no_calls", label: "No Calls" },
+const SUITABILITY_FILTERS: { key: SymbolSuitabilityFilter; label: string; title: string }[] = [
+  { key: "all", label: "All", title: "No Option Timing filter; includes missing and non-fresh snapshots" },
+  { key: "ideal_puts", label: "Favorable Puts", title: "Fresh cash-secured PUT Option Timing >=75; technical context only, not trade permission" },
+  { key: "ideal_calls", label: "Favorable Calls", title: "Fresh covered CALL Option Timing >=75; technical context only, not trade permission" },
+  { key: "no_puts", label: "Unfavorable Puts", title: "Fresh cash-secured PUT Option Timing <25; technical context only, not trade permission" },
+  { key: "no_calls", label: "Unfavorable Calls", title: "Fresh covered CALL Option Timing <25; technical context only, not trade permission" },
 ];
 
 type ViewMode = "portfolio" | "options";
@@ -265,7 +265,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       out = out.filter((r) => matchesSearchQuery(r, query));
     }
     if (suitabilityFilter !== "all") {
-      out = out.filter((r) => matchesSymbolSuitability(r.entry_tag, r.momentum, suitabilityFilter));
+      out = out.filter((r) => matchesSymbolSuitability(r.option_timing, suitabilityFilter));
     }
     if (momentumFilters.size > 0) {
       out = out.filter((r) => matchesSymbolMomentum(r.momentum, momentumFilters));
@@ -557,10 +557,12 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
           ))}
         </div>
         <div className="flex flex-wrap gap-1.5">
-          {SUITABILITY_FILTERS.map(({ key, label }) => (
+          {SUITABILITY_FILTERS.map(({ key, label, title }) => (
             <button
               key={key}
               type="button"
+              title={title}
+              aria-label={`${label}: ${title}`}
               onClick={() => setSuitabilityFilter(key)}
               className={`rounded-[var(--radius-pill)] border px-3 py-1 text-xs transition-colors ${
                 suitabilityFilter === key

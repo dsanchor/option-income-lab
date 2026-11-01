@@ -1,3 +1,6 @@
+import type { OptionTimingSnapshot } from "@/types/option-timing";
+import { optionTimingScore } from "@/lib/optionTiming";
+
 export type SymbolSuitabilityFilter =
   | "all"
   | "ideal_puts"
@@ -5,39 +8,15 @@ export type SymbolSuitabilityFilter =
   | "no_puts"
   | "no_calls";
 
-function normalize(value: string | null | undefined): string {
-  return (value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
-}
-
 export function matchesSymbolSuitability(
-  entryTag: string | null | undefined,
-  momentum: string | null | undefined,
+  snapshot: OptionTimingSnapshot | null | undefined,
   filter: SymbolSuitabilityFilter,
 ): boolean {
   if (filter === "all") return true;
+  if (snapshot?.freshness !== "fresh" || snapshot.input_timestamp_available === false) return false;
 
-  const entry = normalize(entryTag);
-  const normalizedMomentum = normalize(momentum);
-  const baseMomentum = normalizedMomentum.split("(", 1)[0].trim();
-  const isOversold = normalizedMomentum.includes("oversold");
-  const isOverextended = normalizedMomentum.includes("overextended");
-
-  switch (filter) {
-    case "ideal_puts":
-      return (
-        (["strong buy", "buy"].includes(entry) &&
-          ["bullish", "neutral", "weakening"].includes(baseMomentum)) ||
-        isOversold
-      );
-    case "ideal_calls":
-      return (
-        (["hold", "wait"].includes(entry) &&
-          ["weakening", "bearish", "neutral"].includes(baseMomentum)) ||
-        isOverextended
-      );
-    case "no_puts":
-      return ["strong buy", "buy"].includes(entry) && normalizedMomentum === "bearish";
-    case "no_calls":
-      return entry === "wait" && normalizedMomentum === "bullish";
-  }
+  const side = filter === "ideal_calls" || filter === "no_calls" ? "covered_call" : "cash_secured_put";
+  const score = optionTimingScore(snapshot, side);
+  if (score === null) return false;
+  return filter === "ideal_calls" || filter === "ideal_puts" ? score >= 75 : score < 25;
 }
