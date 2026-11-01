@@ -199,6 +199,8 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
       dgi_top_n: cfg.dgi_top_n,
       pe_enabled: cfg.pe_enabled,
       pe_cron: cfg.pe_cron,
+      option_timing_enabled: cfg.option_timing_enabled,
+      option_timing_cron: cfg.option_timing_cron,
       sp_enabled: cfg.sp_enabled,
       sp_cron: cfg.sp_cron,
       pf_enabled: cfg.pf_enabled,
@@ -497,6 +499,32 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
             lastIso={cfg.pe_last_run_iso}
             next={cfg.pe_next_run}
             nextIso={cfg.pe_next_run_iso}
+          />
+        </TaskCard>
+
+        <TaskCard title="Option Timing" runStatus={<RunStatus id="option_timing" endpoint="/api/trigger/option_timing" />}>
+          <Toggle
+            checked={cfg.option_timing_enabled}
+            onChange={(v) => set("option_timing_enabled", v)}
+            label="Enable option timing scheduler"
+            hint="Deterministic covered CALL and cash-secured PUT timing scores — no AI/LLM. Scores are provisional while the session is in progress."
+          />
+          <label className={labelCls}>Cron Expression (UTC)</label>
+          <input
+            className={inputCls}
+            value={cfg.option_timing_cron}
+            onChange={(e) => set("option_timing_cron", e.target.value)}
+            placeholder="0 14,17,20 * * 1-5"
+            spellCheck={false}
+          />
+          <small className={hintCls}>
+            Default: <code>0 14,17,20 * * 1-5</code> = 14:00, 17:00 and 20:00 UTC, Monday–Friday
+          </small>
+          <RunTimes
+            last={cfg.option_timing_last_run}
+            lastIso={cfg.option_timing_last_run_iso}
+            next={cfg.option_timing_next_run}
+            nextIso={cfg.option_timing_next_run_iso}
           />
         </TaskCard>
 

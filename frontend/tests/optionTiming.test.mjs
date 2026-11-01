@@ -285,3 +285,115 @@ test("overview wiring is options-only, after Tech, reuses snapshot and does not 
   assert.doesNotMatch(source, /fetchOptionTimingHistory/);
   assert.match(source, /matchesSymbolSuitability\(r\.entry_tag, r\.momentum, suitabilityFilter\)/);
 });
+
+test("settings Option Timing card edits and saves both fields, maps timestamps and reports queued or failed runs", async () => {
+  const states = [];
+  let cursor = 0;
+  const mockReact = { ...React, useState: (initial) => {
+    const index = cursor++;
+    if (!(index in states)) states[index] = initial;
+    return [states[index], (value) => {
+      states[index] = typeof value === "function" ? value(states[index]) : value;
+    }];
+  } };
+  const { default: Settings } = load("components/SettingsConfigView.tsx", { react: mockReact });
+  const initial = {
+    option_timing_enabled: false, option_timing_cron: "15 16 * * 1-5",
+    option_timing_last_run: "Last timing run", option_timing_next_run: "Next timing run",
+    option_timing_last_run_iso: "2026-10-30T14:00:00+00:00",
+    option_timing_next_run_iso: "2026-10-30T17:00:00+00:00",
+    monitoring_enabled: true, cron_expr: "0 * * * *",
+  };
+  const render = () => { cursor = 0; return elements(Settings({ initial })); };
+  let tree = render();
+  const card = () => render().find((node) => node.props?.title === "Option Timing");
+  const cardNodes = () => elements(card().props.children);
+  assert.ok(tree.findIndex((node) => node.props?.title === "Watchlist Enrichment") <
+    tree.findIndex((node) => node.props?.title === "Option Timing"));
+  let nodes = cardNodes();
+  const timingCard = card();
+  const html = renderToStaticMarkup(timingCard.type(timingCard.props));
+  assert.match(html, /Option Timing/);
+  assert.match(html, /Last Run[\s\S]*Last timing run[\s\S]*Next Run[\s\S]*Next timing run/);
+  assert.match(html, /Run Now/);
+  const toggle = nodes.find((node) => node.props?.label === "Enable option timing scheduler");
+  assert.equal(toggle.props.checked, false);
+  assert.match(toggle.props.hint, /Deterministic covered CALL and cash-secured PUT/);
+  assert.match(toggle.props.hint, /no AI\/LLM.*provisional/);
+  assert.ok(nodes.some((node) => node.props?.children === "Cron Expression (UTC)"));
+  const cron = nodes.find((node) => node.type === "input");
+  assert.equal(cron.props.value, initial.option_timing_cron);
+  assert.equal(cron.props.placeholder, "0 14,17,20 * * 1-5");
+  const times = nodes.find((node) => node.props?.last === initial.option_timing_last_run);
+  assert.deepEqual(
+    [times.props.last, times.props.lastIso, times.props.next, times.props.nextIso],
+    [initial.option_timing_last_run, initial.option_timing_last_run_iso,
+      initial.option_timing_next_run, initial.option_timing_next_run_iso],
+  );
+  toggle.props.onChange(true);
+  cron.props.onChange({ target: { value: "30 18 * * 1-5" } });
+  nodes = cardNodes();
+  assert.equal(nodes.find((node) => node.props?.label === toggle.props.label).props.checked, true);
+  assert.equal(nodes.find((node) => node.type === "input").props.value, "30 18 * * 1-5");
+
+  const previous = globalThis.fetch;
+  const calls = [];
+  let fail = false;
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: !fail,
+      json: async () => fail ? { error: "Option Timing is disabled" } :
+        url === "/api/settings/config" ? { success: true, saved: ["Option Timing"] } :
+          { success: true, status: "queued", message: "Option Timing queued for execution" },
+    };
+  };
+  try {
+    tree = render();
+    await tree.find((node) => node.type === "button" &&
+      Array.isArray(node.props.children) && node.props.children.includes("Save")).props.onClick();
+    const payload = JSON.parse(calls[0].options.body);
+    assert.equal(calls[0].url, "/api/settings/config");
+    assert.equal(payload.option_timing_enabled, true);
+    assert.equal(payload.option_timing_cron, "30 18 * * 1-5");
+    assert.equal(payload.monitoring_enabled, true);
+    assert.equal(payload.cron_expr, "0 * * * *");
+    const runNodes = () => {
+      const status = card().props.runStatus;
+      return elements(status.type(status.props));
+    };
+    await runNodes().find((node) => node.type === "button").props.onClick();
+    assert.equal(calls[1].url, "/api/trigger/option_timing");
+    assert.equal(calls[1].options.method, "POST");
+    assert.ok(runNodes().some((node) => node.props?.children === "✅ queued"));
+    fail = true;
+    await runNodes().find((node) => node.type === "button").props.onClick();
+    assert.ok(runNodes().some((node) => node.props?.children === "❌ Option Timing is disabled"));
+  } finally { globalThis.fetch = previous; }
+});
+
+test("generic trigger BFF forwards Option Timing queued and rejected responses unchanged", async () => {
+  const previous = globalThis.fetch;
+  const { POST } = load("app/api/trigger/[name]/route.ts", {
+    "@/lib/api": { API_BASE_URL: "http://mock-backend" },
+    "next/server": { NextResponse: { json: (data, options) => ({ data, ...options }) } },
+  });
+  try {
+    for (const [status, body] of [
+      [200, { success: true, status: "queued" }],
+      [400, { error: "Option Timing is already running" }],
+      [503, { error: "Scheduler not running" }],
+    ]) {
+      globalThis.fetch = async (url, options) => {
+        assert.equal(url, "http://mock-backend/api/trigger/option_timing");
+        assert.equal(options.method, "POST");
+        return { status, json: async () => body };
+      };
+      const response = await POST({ text: async () => "" }, {
+        params: Promise.resolve({ name: "option_timing" }),
+      });
+      assert.equal(response.status, status);
+      assert.deepEqual(response.data, body);
+    }
+  } finally { globalThis.fetch = previous; }
+});

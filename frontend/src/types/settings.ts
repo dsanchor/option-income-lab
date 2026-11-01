@@ -73,6 +73,13 @@ export interface SettingsConfig {
   pe_last_run_iso: string;
   pe_next_run_iso: string;
 
+  option_timing_enabled: boolean;
+  option_timing_cron: string;
+  option_timing_last_run: string;
+  option_timing_next_run: string;
+  option_timing_last_run_iso: string;
+  option_timing_next_run_iso: string;
+
   sp_enabled: boolean;
   sp_cron: string;
   sp_last_run: string;

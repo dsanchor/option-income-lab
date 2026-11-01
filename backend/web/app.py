@@ -7140,6 +7140,29 @@ async def api_trigger_best_options(request: Request):
     return JSONResponse({"message": result.get("message", "Best Options precompute triggered")})
 
 
+@app.post("/api/trigger/option_timing")
+async def api_trigger_option_timing(request: Request):
+    """Queue Option Timing on the existing scheduler worker."""
+    scheduler = getattr(request.app.state, "scheduler", None)
+    registry = getattr(scheduler, "registry", None)
+    if (
+        registry is None
+        or not getattr(scheduler, "running", True)
+        or getattr(registry, "_shutdown", False)
+    ):
+        return JSONResponse({"error": "Scheduler not running"}, status_code=503)
+    if registry.get_task("option_timing") is None:
+        return JSONResponse({"error": "Option Timing task not registered"}, status_code=503)
+
+    result = registry.trigger_task_now("option_timing")
+    if not result.get("success"):
+        return JSONResponse(
+            {"error": result.get("message", "Failed to queue Option Timing")},
+            status_code=400,
+        )
+    return JSONResponse({**result, "status": "queued"})
+
+
 @app.get("/api/health/best-options")
 async def api_health_best_options(request: Request):
     """Best Options cache health observability (§5). Always returns HTTP 200
@@ -8153,6 +8176,12 @@ def _build_settings_config_context(
     pe_last_run_iso = resolve_last_run_iso("portfolio_enrichment", pe.get("last_run"))
     pe_next_run_iso = to_iso(pe.get("next_run"))
 
+    from src.option_timing import DEFAULT_CRON as option_timing_default_cron
+
+    option_timing_cfg = dict(_load_config().get("option_timing", {}))
+    option_timing_cfg.update(config.get("option_timing", {}))
+    option_timing = tasks_by_name.get("option_timing", {})
+
     sp = tasks_by_name.get("symbol_pricing", {})
     sp_enabled = sp.get("enabled", True)
     sp_cron = sp.get("cron", "0 9-23 * * 1-5")
@@ -8187,6 +8216,16 @@ def _build_settings_config_context(
         "saved": saved or [],
         "server_time": _format_time(_local_now()),
         "scheduler_tasks": scheduler_tasks,  # NEW: unified task list for template
+        "option_timing_enabled": option_timing.get(
+            "enabled", option_timing_cfg.get("enabled", True)
+        ),
+        "option_timing_cron": option_timing.get(
+            "cron", option_timing_cfg.get("cron", option_timing_default_cron)
+        ),
+        "option_timing_last_run": fmt_time(option_timing.get("last_run")),
+        "option_timing_next_run": fmt_time(option_timing.get("next_run")),
+        "option_timing_last_run_iso": to_iso(option_timing.get("last_run")),
+        "option_timing_next_run_iso": to_iso(option_timing.get("next_run")),
         "monitoring_enabled": monitoring_enabled,
         "cron_expr": cron_expr,
         "monitor_covered_call_enabled": monitor_agent_enabled["covered_call"],
@@ -8274,6 +8313,22 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
     (Starlette ``FormData`` for the form route, or a small dict-like wrapper for
     JSON). Booleans are represented as the string ``"true"`` when set."""
     saved: List[str] = []
+
+    # Validate before any section can persist changes.
+    option_timing_enabled_value = form.get("option_timing_enabled", None)
+    option_timing_cron_value = form.get("option_timing_cron", None)
+    option_timing_requested = (
+        option_timing_enabled_value is not None or option_timing_cron_value is not None
+    )
+    option_timing_cron = None
+    if option_timing_cron_value is not None:
+        option_timing_cron = str(option_timing_cron_value).strip()
+        if not option_timing_cron:
+            raise ValueError("Option Timing cron expression must not be blank")
+        try:
+            croniter(option_timing_cron)
+        except (ValueError, KeyError) as exc:
+            raise ValueError("Invalid Option Timing cron expression") from exc
 
     # Monitoring agent enabled toggle
     monitoring_enabled = form.get("monitoring_enabled") == "true"
@@ -8542,6 +8597,33 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
                 scheduler.registry.update_task_enabled("portfolio_enrichment", pe_enabled, scheduler.config)
         except (ValueError, KeyError):
             pass
+
+    if option_timing_requested:
+        from src.option_timing import DEFAULT_CRON as option_timing_default_cron
+
+        config = _load_config()
+        cosmos_settings = _load_settings_from_cosmos(cosmos) or {}
+        option_timing_cfg = dict(config.get("option_timing", {}))
+        option_timing_cfg.update(cosmos_settings.get("option_timing", {}))
+        option_timing_cfg.setdefault("enabled", True)
+        option_timing_cfg.setdefault("cron", option_timing_default_cron)
+        if option_timing_enabled_value is not None:
+            option_timing_cfg["enabled"] = option_timing_enabled_value == "true"
+        if option_timing_cron is not None:
+            option_timing_cfg["cron"] = option_timing_cron
+        if cosmos:
+            cosmos_settings["option_timing"] = dict(option_timing_cfg)
+            _save_settings_to_cosmos(cosmos, cosmos_settings)
+        config["option_timing"] = dict(option_timing_cfg)
+        _write_config(config)
+        saved.append("Option Timing")
+
+        scheduler = getattr(request.app.state, "scheduler", None)
+        if scheduler is not None and getattr(scheduler, "registry", None) is not None:
+            scheduler.reschedule_option_timing(option_timing_cfg["cron"])
+            scheduler.registry.update_task_enabled(
+                "option_timing", option_timing_cfg["enabled"], scheduler.config
+            )
 
     # Symbol Pricing settings
     sp_enabled = form.get("sp_enabled") == "true"
