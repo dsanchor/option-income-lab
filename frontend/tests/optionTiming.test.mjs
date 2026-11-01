@@ -84,11 +84,15 @@ test("synthetic unavailable timestamps are never appended as observations, real 
   const { default: Cards, OptionTimingExplanation } = load("components/OptionTiming.tsx");
   for (const component of [Cards, OptionTimingExplanation]) {
     const html = renderToStaticMarkup(React.createElement(component, { snapshot: synthetic, symbol: "MSFT", side: "covered_call" }));
-    assert.match(html, /Source (?:as of \(local\)|\(local\)):[\s\S]*?Unavailable/);
     assert.doesNotMatch(html, /2099|datetime=/i);
     if (component === OptionTimingExplanation) {
+      assert.match(html, /Source as of \(local\):[\s\S]*?Unavailable/);
       assert.match(html, /Source session:[\s\S]*?Unavailable/);
       assert.match(html, /availability response, not an input observation/);
+    } else {
+      assert.doesNotMatch(html, /Source/);
+      assert.match(html, /Unavailable:[\s\S]*?missing market data/);
+      assert.match(html, /Freshness unknown/);
     }
   }
   const actual = renderToStaticMarkup(React.createElement(OptionTimingExplanation, { snapshot: first, side: "covered_call" }));
@@ -107,6 +111,16 @@ test("card gauges expose actual side values, preserve zero, and mute missing or 
     assert.match(html, new RegExp(`aria-valuenow="${score}"`));
     assert.match(html, new RegExp(`left:${score}%`));
     assert.match(html, /linear-gradient[\s\S]*accent-red[\s\S]*accent-orange[\s\S]*yellow-400[\s\S]*accent-green/);
+    const gradient = html.match(/style="([^"]*linear-gradient[^"]*)"/)[1];
+    assert.equal((gradient.match(/color-mix\(in srgb/g) ?? []).length, 4);
+    assert.match(gradient, /var\(--bg-input, #[0-9a-f]+\)/);
+    assert.doesNotMatch(gradient, /\d+%\s+\d+%/);
+    const theme = readFileSync(join(root, "src/app/globals.css"), "utf8");
+    for (const [, token, fallback] of gradient.matchAll(/var\((--[\w-]+), (#[0-9a-f]+)\)/g)) {
+      assert.match(fallback, /^#[0-9a-f]{6}$/);
+      if (token !== "--color-yellow-400") assert.ok(theme.includes(`${token}:`), `Theme defines ${token}`);
+    }
+    assert.doesNotMatch(html, /Covered CALL:|Unavailable/);
   }
   assert.match(render(first, "cash_secured_put"), /aria-label="Cash-secured PUT timing"[\s\S]*aria-valuenow="80"/);
   for (const freshness of ["stale", "unknown"]) {
@@ -117,12 +131,47 @@ test("card gauges expose actual side values, preserve zero, and mute missing or 
   }
   for (const value of [undefined, { ...middle, freshness: "fresh" }]) {
     const html = render(value);
-    assert.match(html, /Covered CALL: Unavailable/);
+    assert.match(html, /<span>0<\/span><span>100<\/span>/);
     assert.doesNotMatch(html, /role="meter"|aria-valuenow|left:|linear-gradient/);
   }
   const cards = renderToStaticMarkup(React.createElement(Cards, { symbol: "MSFT", snapshot: first }));
   assert.equal((cards.match(/role="meter"/g) ?? []).length, 2);
   assert.doesNotMatch(cards, /<button\b[^>]*>(?:(?!<\/button>)[\s\S])*role="meter"/);
+});
+
+test("compact cards omit redundant copy, keep warnings and open details from a single card-wide native control", () => {
+  let activeSide = null;
+  const { default: Cards, OptionTimingModal } = load("components/OptionTiming.tsx", {
+    react: { ...React, useState: () => [activeSide, (value) => { activeSide = value; }] },
+  });
+  const saved = snapshot("current", first.as_of, 60, { freshness: "stale", provisional: true });
+  saved.covered_call.label = "CALL Timing";
+  saved.cash_secured_put.label = "PUT Timing";
+  saved.covered_call.band = "green";
+  saved.cash_secured_put.band = "green";
+  const html = renderToStaticMarkup(React.createElement(Cards, { symbol: "MSFT", snapshot: saved }));
+  assert.match(html, /Covered CALL/);
+  assert.match(html, /Cash-secured PUT/);
+  assert.match(html, />60<\/span>/);
+  assert.match(html, />80<\/span>/);
+  assert.equal((html.match(/\/ 100<\/span>/g) ?? []).length, 2);
+  assert.match(html, /PROVISIONAL/);
+  assert.match(html, /STALE/);
+  assert.doesNotMatch(html, /CALL Timing|PUT Timing|Source|Band:|Bands:|Independent technical context|linear-gradient|text-accent-green/);
+  const render = () => elements(Cards({ symbol: "MSFT", snapshot: saved }));
+  const buttons = render().filter((node) => node.type === "button");
+  assert.equal(buttons.length, 2);
+  for (const [index, key] of ["covered_call", "cash_secured_put"].entries()) {
+    assert.equal(buttons[index].props.type, "button");
+    assert.match(buttons[index].props["aria-label"], /timing details/);
+    assert.match(buttons[index].props.className, /absolute inset-0/);
+    buttons[index].props.onClick();
+    assert.equal(render().find((node) => node.type === OptionTimingModal).props.initialSide, key);
+  }
+  const unavailable = snapshot("missing", first.as_of, null);
+  unavailable.covered_call.status = "not_applicable";
+  const missingHtml = renderToStaticMarkup(React.createElement(load("components/OptionTiming.tsx").default, { symbol: "MSFT", snapshot: unavailable }));
+  assert.match(missingHtml, /Not applicable:[\s\S]*?missing market data/);
 });
 
 test("explanations render the selected snapshot's score, evidence, caps and model, not current data", () => {
@@ -134,6 +183,9 @@ test("explanations render the selected snapshot's score, evidence, caps and mode
   assert.match(html, /Contribution 10/);
   assert.match(html, /Weight 50%/);
   assert.match(html, /Cap 25/);
+  assert.match(html, /<section aria-label="Factors"[\s\S]*?<h3[^>]*>Factors<\/h3>[\s\S]*?<h4[^>]*>Trend<\/h4>[\s\S]*?<ul/);
+  assert.match(html, /<section aria-label="Guards and caps"[\s\S]*?<h4[^>]*>Event guard<\/h4>/);
+  assert.match(html, /<dt[^>]*>Model:<\/dt><dd[^>]*>v1 · Schema 1/);
   assert.doesNotMatch(html, /Evidence for last/);
   assert.match(render(middle), /missing market data/);
   const stale = snapshot("stale", first.as_of, 80, { freshness: "stale", provisional: true });
@@ -210,6 +262,16 @@ test("popup point selector switches explanations, side selector independent, err
   });
   const render = () => { cursor = 0; return elements(OptionTimingModal({ symbol: "XNYS:AAPL", snapshot: last, initialSide: "covered_call", onClose() {} })); };
   let tree = render();
+  assert.deepEqual(tree.filter((node) => node.type === "section").map((node) => node.props["aria-label"]), ["Evolution", "Selected score", "Methodology"]);
+  for (const panel of tree.filter((node) => node.type === "section")) {
+    assert.ok(elements(panel.props.children).some((node) => node.type === "h3" && node.props.children === panel.props["aria-label"]));
+  }
+  const selectedPanel = tree.find((node) => node.type === "section" && node.props["aria-label"] === "Selected score");
+  assert.equal(selectedPanel.props["aria-live"], "polite");
+  assert.ok(elements(selectedPanel.props.children).some((node) => node.type === OptionTimingExplanation));
+  const methodology = tree.find((node) => node.type === "section" && node.props["aria-label"] === "Methodology");
+  assert.ok(elements(methodology.props.children).some((node) => node.type === "p" && node.props.children === "Saved methodology"));
+  assert.ok(!tree.some((node) => typeof node.props?.children === "string" && /Bands:|Technical context only/.test(node.props.children)));
   const range = tree.find((node) => node.type === "select" && node.props.value === "90d");
   assert.deepEqual(elements(range.props.children).filter((node) => node.type === "option").map((node) => node.props.value), ["30d", "90d"]);
   range.props.onChange({ target: { value: "30d" } });

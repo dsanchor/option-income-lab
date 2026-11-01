@@ -49,11 +49,11 @@ export function OptionTimingGauge({ snapshot, side }: {
         aria-valuemax={score === null ? undefined : 100}
         aria-valuenow={score ?? undefined}
         aria-valuetext={score === null ? undefined : `${score} / 100${fresh ? "" : ` · ${snapshot?.freshness ?? "unknown"}`}`}
-        style={score !== null && fresh ? { background: "linear-gradient(to right, var(--accent-red) 0% 25%, var(--accent-orange) 25% 50%, var(--color-yellow-400, #facc15) 50% 75%, var(--accent-green) 75% 100%)" } : undefined}>
+        style={score !== null && fresh ? { background: "linear-gradient(to right, color-mix(in srgb, var(--accent-red, #ff4d5e) 45%, var(--bg-input, #2b2f36)) 0%, color-mix(in srgb, var(--accent-orange, #ff9416) 45%, var(--bg-input, #2b2f36)) 33%, color-mix(in srgb, var(--color-yellow-400, #facc15) 45%, var(--bg-input, #2b2f36)) 67%, color-mix(in srgb, var(--accent-green, #00c493) 45%, var(--bg-input, #2b2f36)) 100%)" } : undefined}>
         {score !== null && <span aria-hidden="true" className="absolute top-1/2 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded bg-text ring-1 ring-bg-input" style={{ left: `${score}%` }} />}
       </span>
       <span className="mt-1 flex justify-between text-[10px] text-text-muted">
-        <span>0</span><span>{label}: {score === null ? "Unavailable" : `${score} / 100`}</span><span>100</span>
+        <span>0</span><span>100</span>
       </span>
     </span>
   );
@@ -66,7 +66,7 @@ export function OptionTimingExplanation({ snapshot, side }: {
   const value = snapshot?.[side];
   const score = optionTimingScore(snapshot, side);
   return (
-    <div className="space-y-3 text-sm">
+    <div className="space-y-5 text-sm leading-relaxed">
       <div className="flex flex-wrap items-center gap-2">
         <OptionTimingValue snapshot={snapshot} side={side} />
         <span>{value?.label || (score === null ? "Unavailable" : "Technical context")}</span>
@@ -80,31 +80,41 @@ export function OptionTimingExplanation({ snapshot, side }: {
       )}
       {score !== null && !!value?.reason_codes.length && <p>Context: {value.reason_codes.join(", ").replace(/_/g, " ")}</p>}
       {snapshot && (
-        <dl className="grid gap-1 text-xs text-text-muted">
-          <div><dt className="inline">Source as of (local): </dt><dd className="inline">{snapshot.input_timestamp_available === false ? "Unavailable" : <><time dateTime={snapshot.as_of}>{fmtTime(snapshot.as_of)}</time> · {timeAgo(snapshot.as_of)}</>}</dd></div>
-          <div><dt className="inline">Source session: </dt><dd className="inline">{snapshot.input_timestamp_available === false ? "Unavailable" : snapshot.source_session}</dd></div>
-          <div><dt className="inline">Model: </dt><dd className="inline">{snapshot.model_version} · Schema {snapshot.schema_version}</dd></div>
-          <div><dt className="inline">Snapshot: </dt><dd className="inline break-all">{snapshot.snapshot_id}</dd></div>
-          <div><dt className="inline">Computed (local): </dt><dd className="inline">{fmtTime(snapshot.computed_at)} {snapshot.input_timestamp_available === false ? "(availability response, not an input observation)" : "(not source freshness)"}</dd></div>
+        <dl className="grid gap-4 rounded-[var(--radius)] border border-border bg-bg-input p-4 text-xs sm:grid-cols-2">
+          <div><dt className="mb-2 text-text-muted">Source as of (local):</dt><dd>{snapshot.input_timestamp_available === false ? "Unavailable" : <><time dateTime={snapshot.as_of}>{fmtTime(snapshot.as_of)}</time> · {timeAgo(snapshot.as_of)}</>}</dd></div>
+          <div><dt className="mb-2 text-text-muted">Source session:</dt><dd>{snapshot.input_timestamp_available === false ? "Unavailable" : snapshot.source_session}</dd></div>
+          <div><dt className="mb-2 text-text-muted">Model:</dt><dd className="break-words">{snapshot.model_version} · Schema {snapshot.schema_version}</dd></div>
+          <div><dt className="mb-2 text-text-muted">Snapshot:</dt><dd className="break-all">{snapshot.snapshot_id}</dd></div>
+          <div className="sm:col-span-2"><dt className="mb-2 text-text-muted">Computed (local):</dt><dd>{fmtTime(snapshot.computed_at)} <span className="text-text-muted">{snapshot.input_timestamp_available === false ? "(availability response, not an input observation)" : "(not source freshness)"}</span></dd></div>
         </dl>
       )}
       {!!value?.factors.length && (
-        <div className="space-y-2">
-          <h3 className="font-medium">Factors</h3>
+        <section aria-label="Factors" className="space-y-3">
+          <h3 className="mb-3 font-medium">Factors</h3>
           {value.factors.map((factor) => (
-            <div key={factor.key} className="rounded border border-border p-3">
-              <p className="font-medium">{factor.label}</p>
-              <p className="text-xs text-text-muted">Score {factor.score} / 100 · Weight {factor.weight * 100}% · Contribution {factor.contribution}</p>
-              <ul className="mt-1 list-inside list-disc text-xs">{factor.evidence.map((evidence, index) => <li key={index}>{evidence}</li>)}</ul>
+            <div key={factor.key} className="rounded-[var(--radius)] border border-border bg-bg-input p-4">
+              <h4 className="mb-2 font-medium">{factor.label}</h4>
+              <div className="mb-3 flex flex-wrap gap-2 text-xs text-text-muted">
+                <span className="rounded border border-border bg-bg-card px-2 py-1">Score {factor.score} / 100</span>
+                <span className="rounded border border-border bg-bg-card px-2 py-1">Weight {factor.weight * 100}%</span>
+                <span className="rounded border border-border bg-bg-card px-2 py-1">Contribution {factor.contribution}</span>
+              </div>
+              <ul className="list-disc space-y-2 pl-4 text-xs leading-relaxed [overflow-wrap:anywhere]">{factor.evidence.map((evidence, index) => <li key={index}>{evidence}</li>)}</ul>
             </div>
           ))}
-        </div>
+        </section>
       )}
       {!!value?.adjustments.length && (
-        <div className="space-y-2">
-          <h3 className="font-medium">Guards and caps</h3>
-          {value.adjustments.map((adjustment) => <p key={adjustment.key}>{adjustment.label}: {adjustment.reason} · {adjustment.cap === null ? "No numeric cap" : `Cap ${adjustment.cap}`}</p>)}
-        </div>
+        <section aria-label="Guards and caps">
+          <h3 className="mb-3 font-medium">Guards and caps</h3>
+          <div className="space-y-3">
+            {value.adjustments.map((adjustment) => <div key={adjustment.key} className="rounded-[var(--radius)] border border-border bg-bg-input p-4">
+              <h4 className="mb-2 font-medium">{adjustment.label}</h4>
+              <p className="text-xs leading-relaxed text-text-muted [overflow-wrap:anywhere]">{adjustment.reason}</p>
+              <p className="mt-2 text-xs">{adjustment.cap === null ? "No numeric cap" : `Cap ${adjustment.cap}`}</p>
+            </div>)}
+          </div>
+        </section>
       )}
     </div>
   );
@@ -117,23 +127,22 @@ export default function OptionTiming({ symbol, snapshot }: {
   const [side, setSide] = useState<OptionTimingSideKey | null>(null);
   return (
     <>
-      <p className="mb-3 text-xs text-text-muted">Independent technical context (0–100), not contract profitability, probability, or a trade recommendation.</p>
       <div className="grid gap-3 md:grid-cols-2">
         {OPTION_TIMING_SIDES.map((item) => (
-          <div key={item.key} className="rounded-[var(--radius)] border border-border bg-bg-input p-4 transition-colors hover:border-accent-blue">
-            <button type="button" onClick={() => setSide(item.key)} className="block w-full rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue">
-            <span className="mb-3 flex items-center justify-between gap-2"><span className="font-medium">{item.label}</span><span className="text-xs text-accent-blue">Info</span></span>
-            <OptionTimingValue snapshot={snapshot} side={item.key} />
-            {optionTimingScore(snapshot, item.key) !== null && snapshot?.[item.key].band && <span className="ml-2 text-xs text-text-muted">Band: {snapshot[item.key].band}</span>}
-            <span className="mt-2 block text-xs text-text-muted">{snapshot?.[item.key].label || "No persisted score available"}</span>
-            {optionTimingScore(snapshot, item.key) === null && <span className="mt-1 block text-xs text-text-muted">{snapshot?.[item.key].reason_codes.join(", ").replace(/_/g, " ") || "Unavailable: no persisted score available"}</span>}
-            {snapshot && <span className="mt-2 block text-xs text-text-muted">Source (local): {snapshot.input_timestamp_available === false ? "Unavailable" : fmtTime(snapshot.as_of)}</span>}
+          <div key={item.key} className="relative rounded-[var(--radius)] border border-border bg-bg-input p-4 transition-colors hover:bg-bg-hover">
+            <button type="button" onClick={() => setSide(item.key)} aria-label={`View ${item.label} timing details`} className="absolute inset-0 z-10 rounded-[var(--radius)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue">
+              <span className="sr-only">View {item.label} timing details</span>
             </button>
+            <span className="mb-3 flex items-center justify-between gap-2"><span className="font-medium">{item.label}</span><span className="text-xs text-accent-blue">Info</span></span>
+            <span className="flex flex-wrap items-baseline gap-2">
+              <span className="text-2xl"><OptionTimingValue snapshot={snapshot} side={item.key} /></span>
+              <span className="text-xs text-text-muted">/ 100</span>
+            </span>
+            {optionTimingScore(snapshot, item.key) === null && <span className="mt-2 block text-xs text-text-muted">{snapshot?.[item.key].status === "not_applicable" ? "Not applicable" : "Unavailable"}: {snapshot?.[item.key].reason_codes.join(", ").replace(/_/g, " ") || "no persisted score available"}</span>}
             <OptionTimingGauge snapshot={snapshot} side={item.key} />
           </div>
         ))}
       </div>
-      <p className="mt-3 text-xs text-text-muted">Bands: red 0–&lt;25 · orange 25–&lt;50 · yellow 50–&lt;75 · green 75–100.</p>
       {side && <OptionTimingModal symbol={symbol} snapshot={snapshot} initialSide={side} onClose={() => setSide(null)} />}
     </>
   );
@@ -170,55 +179,60 @@ export function OptionTimingModal({ symbol, snapshot, initialSide, onClose }: {
 
   return (
     <AccessibleDialog titleId={titleId} onClose={onClose}>
-      <div className="mb-4 flex items-center justify-between gap-3">
+      <div className="mb-6 flex items-start justify-between gap-4 border-b border-border pb-5">
         <h2 id={titleId} className="text-lg font-semibold">{symbol} · Option Timing</h2>
-        <button type="button" autoFocus onClick={onClose} aria-label="Close Option Timing" className="rounded border border-border px-3 py-1">Close</button>
+        <button type="button" autoFocus onClick={onClose} aria-label="Close Option Timing" className="rounded-[var(--radius)] border border-border bg-bg-input px-3 py-2 text-sm transition-colors hover:bg-bg-hover">Close</button>
       </div>
-      <p className="mb-4 text-xs text-text-muted">Technical context only. Scores are persisted by the backend, not profitability or probability estimates. Session in progress is marked PROVISIONAL.</p>
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <label className="text-sm">Side <select value={side} onChange={(event) => setSide(event.target.value as OptionTimingSideKey)} className="rounded border border-border bg-bg-input p-1">{OPTION_TIMING_SIDES.map((item) => <option key={item.key} value={item.key}>{item.short}</option>)}</select></label>
-        <label className="text-sm">History range <select value={range} onChange={(event) => { setRange(event.target.value); setSelectedId(null); }} className="rounded border border-border bg-bg-input p-1">{["30d", "90d"].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+      <div className="mb-6 grid gap-4 sm:grid-cols-2">
+        <label className="block text-sm"><span className="mb-2 block text-text-muted">Side</span><select value={side} onChange={(event) => setSide(event.target.value as OptionTimingSideKey)} className="block w-full rounded-[var(--radius)] border border-border bg-bg-input p-3">{OPTION_TIMING_SIDES.map((item) => <option key={item.key} value={item.key}>{item.short}</option>)}</select></label>
+        <label className="block text-sm"><span className="mb-2 block text-text-muted">History range</span><select value={range} onChange={(event) => { setRange(event.target.value); setSelectedId(null); }} className="block w-full rounded-[var(--radius)] border border-border bg-bg-input p-3">{["30d", "90d"].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
       </div>
-      {history.isPending && <div role="status" aria-label="Loading Option Timing history" className="mb-4 h-48 animate-pulse rounded bg-bg-input p-3 text-text-muted">Loading history…</div>}
-      {history.isError && <div role="alert" className="mb-4 text-sm text-accent-red">{history.error.message} <button type="button" disabled={history.isFetching} onClick={() => void history.refetch()} className="underline">Retry</button></div>}
-      {!history.isPending && points.length > 0 && (
-        <div className="mb-4 h-64 w-full min-w-0" aria-label="Option Timing evolution, 0 to 100, local date and time">
-          <ResponsiveContainer width="100%" height="100%">
-            <ScatterChart margin={{ top: 10, right: 15, bottom: 15, left: 0 }}>
-              <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
-              <XAxis dataKey="timestamp" type="number" domain={["dataMin", "dataMax"]} tickFormatter={(value) => fmtTime(new Date(value).toISOString())} tick={{ fontSize: 10 }} />
-              <YAxis dataKey="score" type="number" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fontSize: 11 }} />
-              <ReferenceArea y1={0} y2={25} fill="var(--accent-red)" fillOpacity={0.06} />
-              <ReferenceArea y1={25} y2={50} fill="var(--accent-orange)" fillOpacity={0.06} />
-              <ReferenceArea y1={50} y2={75} fill="#facc15" fillOpacity={0.06} />
-              <Tooltip cursor={{ strokeDasharray: "3 3" }} content={({ payload }) => {
-                const point = payload?.[0]?.payload?.point as OptionTimingPoint | undefined;
-                return point ? <div className="rounded border border-border bg-bg-card p-2 text-xs">{fmtTime(point.as_of)}<br />{optionTimingScore(point, side) ?? "—"} / 100 · {point.model_version} · {point.history_kind}{point.provisional ? " · PROVISIONAL" : ""}{point.freshness !== "fresh" ? ` · ${point.freshness}` : ""}</div> : null;
-              }} />
-              {groups.map((group, index) => <Scatter key={group} name={group} data={chartData.filter((entry) => entry.score !== null && `${entry.point.model_version}:${entry.point.history_kind}` === group)} fill={["#60a5fa", "#a78bfa", "#fb923c", "#22d3ee"][index % 4]} shape={group.endsWith(":reconstructed") ? "diamond" : "circle"} onClick={selectChartPoint} />)}
-            </ScatterChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-      <p className="mb-3 text-xs text-text-muted">Exact source timestamps; points are not interpolated or joined across missing data or model versions. Circles: observed; diamonds: reconstructed. Select a point to inspect its saved explanation.</p>
-      {history.data?.points.length === 0 && <p className="mb-3 text-sm text-text-muted">No historical points available. Showing the current persisted snapshot when available.</p>}
-      {points.length > 0 && (
-        <label className="mb-4 block text-sm">Historical snapshot (local date and time)
-          <select className="mt-1 block w-full rounded border border-border bg-bg-input p-2" value={selected?.snapshot_id ?? ""} onChange={(event) => setSelectedId(event.target.value)}>
-            {points.map((point) => <option key={point.snapshot_id} value={point.snapshot_id}>{fmtTime(point.as_of)} · {optionTimingScore(point, side) ?? "Unavailable"} · {point.model_version} · {point.history_kind}{point.provisional ? " · PROVISIONAL" : ""}{point.freshness !== "fresh" ? ` · ${point.freshness}` : ""}</option>)}
-          </select>
-        </label>
-      )}
-      <div aria-live="polite">
-        {selected && <p className="mb-2 text-xs text-text-muted">{selected.history_kind === "reconstructed" ? "Reconstructed historical snapshot (not an observed live score)." : "Observed snapshot."}</p>}
+      <section aria-label="Evolution" className="mb-6 rounded-[var(--radius)] border border-border p-4 sm:p-5">
+        <h3 className="mb-3 font-medium">Evolution</h3>
+        {history.isPending && <div role="status" aria-label="Loading Option Timing history" className="mb-4 h-48 animate-pulse rounded bg-bg-input p-3 text-text-muted">Loading history…</div>}
+        {history.isError && <div role="alert" className="mb-4 text-sm text-accent-red">{history.error.message} <button type="button" disabled={history.isFetching} onClick={() => void history.refetch()} className="underline">Retry</button></div>}
+        {!history.isPending && points.length > 0 && (
+          <div className="mb-4 h-64 w-full min-w-0" aria-label="Option Timing evolution, 0 to 100, local date and time">
+            <ResponsiveContainer width="100%" height="100%">
+              <ScatterChart margin={{ top: 10, right: 15, bottom: 15, left: 0 }}>
+                <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
+                <XAxis dataKey="timestamp" type="number" domain={["dataMin", "dataMax"]} tickFormatter={(value) => fmtTime(new Date(value).toISOString())} tick={{ fontSize: 10 }} />
+                <YAxis dataKey="score" type="number" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fontSize: 11 }} />
+                <ReferenceArea y1={0} y2={25} fill="var(--accent-red)" fillOpacity={0.06} />
+                <ReferenceArea y1={25} y2={50} fill="var(--accent-orange)" fillOpacity={0.06} />
+                <ReferenceArea y1={50} y2={75} fill="#facc15" fillOpacity={0.06} />
+                <Tooltip cursor={{ strokeDasharray: "3 3" }} content={({ payload }) => {
+                  const point = payload?.[0]?.payload?.point as OptionTimingPoint | undefined;
+                  return point ? <div className="rounded border border-border bg-bg-card p-2 text-xs">{fmtTime(point.as_of)}<br />{optionTimingScore(point, side) ?? "—"} / 100 · {point.model_version} · {point.history_kind}{point.provisional ? " · PROVISIONAL" : ""}{point.freshness !== "fresh" ? ` · ${point.freshness}` : ""}</div> : null;
+                }} />
+                {groups.map((group, index) => <Scatter key={group} name={group} data={chartData.filter((entry) => entry.score !== null && `${entry.point.model_version}:${entry.point.history_kind}` === group)} fill={["#60a5fa", "#a78bfa", "#fb923c", "#22d3ee"][index % 4]} shape={group.endsWith(":reconstructed") ? "diamond" : "circle"} onClick={selectChartPoint} />)}
+              </ScatterChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+        <p className="mb-3 text-xs leading-relaxed text-text-muted">Exact source timestamps; points are not interpolated or joined across missing data or model versions. Circles: observed; diamonds: reconstructed. Select a point to inspect its saved explanation.</p>
+        {history.data?.points.length === 0 && <p className="mb-3 text-sm text-text-muted">No historical points available. Showing the current persisted snapshot when available.</p>}
+        {points.length > 0 && (
+          <label className="block text-sm"><span className="mb-2 block text-text-muted">Historical snapshot (local date and time)</span>
+            <select className="block w-full rounded-[var(--radius)] border border-border bg-bg-input p-3" value={selected?.snapshot_id ?? ""} onChange={(event) => setSelectedId(event.target.value)}>
+              {points.map((point) => <option key={point.snapshot_id} value={point.snapshot_id}>{fmtTime(point.as_of)} · {optionTimingScore(point, side) ?? "Unavailable"} · {point.model_version} · {point.history_kind}{point.provisional ? " · PROVISIONAL" : ""}{point.freshness !== "fresh" ? ` · ${point.freshness}` : ""}</option>)}
+            </select>
+          </label>
+        )}
+      </section>
+      <section aria-label="Selected score" aria-live="polite" className="mb-6 rounded-[var(--radius)] border border-border p-4 sm:p-5">
+        <h3 className="mb-3 font-medium">Selected score</h3>
+        {selected && <p className="mb-4 text-xs leading-relaxed text-text-muted">{selected.history_kind === "reconstructed" ? "Reconstructed historical snapshot (not an observed live score)." : "Observed snapshot."}</p>}
         <OptionTimingExplanation snapshot={selected ?? snapshot} side={side} />
-      </div>
-      <div className="mt-4 border-t border-border pt-3 text-xs text-text-muted">
-        <h3 className="font-medium text-text">Methodology</h3>
-        <p className="whitespace-pre-wrap">{history.data?.methodology || "Methodology unavailable until history is loaded."}</p>
-        {history.data && <p>History model: {history.data.model_version} · Schema {history.data.schema_version}</p>}
-        <p className="mt-1">Bands: red 0–&lt;25 · orange 25–&lt;50 · yellow 50–&lt;75 · green 75–100. Source freshness and availability are independent of the score.</p>
-      </div>
+      </section>
+      <section aria-label="Methodology" className="rounded-[var(--radius)] border border-border bg-bg-input p-4 text-xs leading-relaxed text-text-muted sm:p-5">
+        <h3 className="mb-3 font-medium text-text">Methodology</h3>
+        <div className="space-y-3">
+          <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{history.data?.methodology || "Methodology unavailable until history is loaded."}</p>
+          {history.data && <p className="break-words">History model: {history.data.model_version} · Schema {history.data.schema_version}</p>}
+          <p>Session in progress is marked PROVISIONAL. Source freshness and availability are independent of the score.</p>
+        </div>
+      </section>
     </AccessibleDialog>
   );
 }
