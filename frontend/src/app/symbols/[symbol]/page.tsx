@@ -15,6 +15,7 @@ import StockTransactionsTable from "@/components/StockTransactionsTable";
 import SymbolDisambiguation from "@/components/SymbolDisambiguation";
 import SymbolConfigurationCard from "@/components/SymbolConfigurationCard";
 import SymbolDetailTabs from "@/components/SymbolDetailTabs";
+import OptionTiming from "@/components/OptionTiming";
 import type { SymbolDetail, SymbolDisambiguationResult } from "@/types/symbol-detail";
 import type { Plan as PlanRow } from "@/types/plans";
 
@@ -152,7 +153,11 @@ export default async function SymbolDetailPage({
         />
       </DetailSection>
 
-      {/* Symbol configuration — always visible, directly below Summary */}
+      <DetailSection title="Option Timing">
+        <OptionTiming symbol={d.security?.security_id ?? d.security_id ?? symbol} snapshot={d.option_timing} />
+      </DetailSection>
+
+      {/* Symbol configuration — always visible, below Option Timing */}
       {d.security && (
         <SymbolConfigurationCard
           symbol={symbol}

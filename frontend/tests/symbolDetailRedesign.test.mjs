@@ -3,7 +3,7 @@
  *
  * Requirements (2026-09-07 directive):
  *   AP — Symbol Configuration is always visible (moved out of the Stocks-tab-only
- *         guard, directly below Summary); Portfolio Holdings remains gated to the
+ *         guard, below Summary and Option Timing); Portfolio Holdings remains gated to the
  *         Stocks tab and stays ordered after Config.
  *   AT — Agent & Alert Toggles section and all toggle controls ABSENT from
  *         SymbolConfigurationCard (backend fields may still exist elsewhere).
@@ -57,7 +57,7 @@ describe("AP: Arrangement — SymbolConfigurationCard before Portfolio Holdings 
 
   it("AP-2: SymbolConfigurationCard is always visible (rendered before the stocksSecurityId guard); PortfolioHoldingsCard remains inside the Stocks tab guard", () => {
     // 2026-09-08 update: Config card moved out of the Stocks-tab-only guard so it's
-    // always visible directly below Summary, regardless of active tab. Holdings stays
+    // always visible below Summary and Option Timing, regardless of active tab. Holdings stays
     // gated to the Stocks tab since it needs stocksSecurityId to query movements.
     const guardIdx = pageSrc.indexOf("stocksSecurityId &&");
     const cfgIdx   = pageSrc.indexOf("<SymbolConfigurationCard");
@@ -67,6 +67,15 @@ describe("AP: Arrangement — SymbolConfigurationCard before Portfolio Holdings 
       "AP-2 DEFECT: <SymbolConfigurationCard must be always visible (before the stocksSecurityId guard)");
     assert.ok(phIdx > guardIdx,
       "AP-2 DEFECT: <PortfolioHoldingsCard must remain inside the stocksSecurityId guard");
+  });
+
+  it("AP-4: independent Option Timing section is directly between Summary and Configuration", () => {
+    const summaryEnd = pageSrc.indexOf("</DetailSection>", pageSrc.indexOf('<DetailSection title="Summary">'));
+    const timing = pageSrc.indexOf('<DetailSection title="Option Timing">');
+    const config = pageSrc.indexOf("<SymbolConfigurationCard");
+    assert.ok(summaryEnd < timing && timing < config);
+    assert.match(pageSrc.slice(summaryEnd, config), /snapshot=\{d\.option_timing\}/);
+    assert.ok(!pageSrc.slice(summaryEnd, timing).includes("<SymbolConfigurationCard"));
   });
 
   it("AP-3: No alternative Holdings component inserted between Config and Holdings in Stocks source", () => {

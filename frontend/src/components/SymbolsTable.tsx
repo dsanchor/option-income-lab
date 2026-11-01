@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 import { usd } from "@/lib/format";
+import { fmtTime } from "@/lib/options-row-format";
 import { categoryClass, entryClass } from "@/lib/badges";
 import {
   matchesSymbolSuitability,
@@ -23,6 +24,9 @@ import {
   type SymbolPositionFilters,
 } from "@/lib/symbolPositionFilters";
 import SymbolInfoModal from "@/components/SymbolInfoModal";
+import { OptionTimingModal, OptionTimingValue } from "@/components/OptionTiming";
+import { compareOptionTiming, optionTimingScore, OPTION_TIMING_SIDES } from "@/lib/optionTiming";
+import type { OptionTimingSideKey } from "@/types/option-timing";
 import type { SymbolRow } from "@/types/symbols";
 
 function num(n: number | null | undefined, digits = 1): string {
@@ -74,7 +78,7 @@ function isPortfolioRow(r: SymbolRow): boolean {
 }
 
 type SortKey =
-  | "symbol" | "category" | "dgi_score" | "tech_timing" | "entry_tag"
+  | "symbol" | "category" | "dgi_score" | "tech_timing" | "call_timing" | "put_timing" | "entry_tag"
   | "momentum" | "price" | "price_eur" | "total_shares" | "in_calls" | "put_exposure"
   | "portfolio_shares" | "portfolio_avg_cost_eur" | "portfolio_invested_eur"
   | "current_value_eur" | "gain_loss_pct" | "portfolio_dividends_eur";
@@ -141,6 +145,8 @@ const COLUMNS: {
   { key: "category",                 label: "Category",  width: "110px" },
   { key: "dgi_score",               label: "DGI",      modes: ["options"], align: "right", width: "64px",  nowrap: true },
   { key: "tech_timing",             label: "Tech",     modes: ["options"], align: "right", width: "64px",  nowrap: true },
+  { key: "call_timing",             label: "CALL Timing", modes: ["options"], align: "right", width: "140px", nowrap: true },
+  { key: "put_timing",              label: "PUT Timing", modes: ["options"], align: "right", width: "140px", nowrap: true },
   { key: "entry_tag",               label: "Entry",    modes: ["options"],                 width: "88px",  nowrap: true },
   { key: "momentum",                 label: "Momentum",                                     width: "104px", nowrap: true },
   { key: "price",                    label: "Price",     align: "right",                    width: "96px",  nowrap: true },
@@ -165,6 +171,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
   const [positionFilters, setPositionFilters] = useState<SymbolPositionFilters>(ALL_SYMBOL_POSITIONS);
   const [hideHistorical, setHideHistorical] = useState(true);
   const [modalSymbol, setModalSymbol] = useState<string | null>(null);
+  const [timingModal, setTimingModal] = useState<{ row: SymbolRow; side: OptionTimingSideKey } | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("portfolio");
 
   // Inline shares editing (watchlist-only rows)
@@ -264,6 +271,10 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       out = out.filter((r) => matchesSymbolMomentum(r.momentum, momentumFilters));
     }
     const sorted = [...out].sort((a, b) => {
+      if (sort === "call_timing" || sort === "put_timing") {
+        const side = sort === "call_timing" ? "covered_call" : "cash_secured_put";
+        return compareOptionTiming(optionTimingScore(a.option_timing, side), optionTimingScore(b.option_timing, side), dir);
+      }
       let cmp: number;
       if (sort === "gain_loss_pct") {
         const av = gainLossPct(a);
@@ -375,6 +386,19 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
         {viewMode === "options" && (
           <td className="px-3 py-3 text-right font-mono whitespace-nowrap">{num(r.tech_timing)}</td>
         )}
+        {viewMode === "options" && OPTION_TIMING_SIDES.map((item) => (
+          <td key={item.key} className="px-3 py-3 text-right">
+            <button
+              type="button"
+              aria-label={`${r.symbol} ${item.short} Timing ${optionTimingScore(r.option_timing, item.key) ?? "unavailable"}: Info`}
+              title={`${r.option_timing?.[item.key].label || "No persisted score available"}${r.option_timing?.[item.key].reason_codes.length ? ` · ${r.option_timing[item.key].reason_codes.join(", ").replace(/_/g, " ")}` : ""}${r.option_timing ? ` · Source (local): ${fmtTime(r.option_timing.as_of)}` : ""}`}
+              onClick={(event) => { event.stopPropagation(); setTimingModal({ row: r, side: item.key }); }}
+              className="rounded px-1 hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue"
+            >
+              <OptionTimingValue snapshot={r.option_timing} side={item.key} />
+            </button>
+          </td>
+        ))}
         {viewMode === "options" && (
           <td className="px-3 py-3 whitespace-nowrap"><Pill text={r.entry_tag} className={entryClass(r.entry_tag)} /></td>
         )}
@@ -652,7 +676,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
                   onClick={() => toggleSort(c.key)}
                   className={`cursor-pointer select-none px-3 py-3 font-medium transition-colors hover:text-text ${c.align === "right" ? "text-right" : ""}${c.nowrap ? " whitespace-nowrap" : ""}`}
                 >
-                  {c.label}
+                  {c.key === "call_timing" || c.key === "put_timing" ? <button type="button" onClick={(event) => { event.stopPropagation(); toggleSort(c.key); }} aria-label={`Sort by ${c.label}`} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue">{c.label}</button> : c.label}
                   <span className="ml-1 text-[0.65rem]">{sort === c.key ? (dir === "asc" ? "▲" : "▼") : ""}</span>
                 </th>
               ))}
@@ -695,6 +719,14 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
 
       {modalSymbol && (
         <SymbolInfoModal symbol={modalSymbol} onClose={() => setModalSymbol(null)} />
+      )}
+      {timingModal && (
+        <OptionTimingModal
+          symbol={timingModal.row.security_id ?? timingModal.row.symbol}
+          snapshot={timingModal.row.option_timing}
+          initialSide={timingModal.side}
+          onClose={() => setTimingModal(null)}
+        />
       )}
     </div>
   );

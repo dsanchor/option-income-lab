@@ -1,3 +1,5 @@
+import type { OptionTimingSnapshot } from "@/types/option-timing";
+
 export interface EnrichmentMetrics {
   current_price?: number | null;
   [k: string]: unknown;
@@ -201,6 +203,7 @@ export interface SymbolDisambiguationResult {
 }
 
 export interface SymbolDetail {
+  option_timing?: OptionTimingSnapshot | null;
   symbol: string;
   display_name: string;
   exchange: string;

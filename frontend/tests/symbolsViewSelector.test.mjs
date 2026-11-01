@@ -57,13 +57,13 @@ const PORTFOLIO_ONLY_KEYS = [
 
 const OPTIONS_ONLY_KEYS = [
   // DGI, Tech, Entry moved from "common" to Options-only per 2026-09-07 revision
-  "dgi_score", "tech_timing", "entry_tag",
+  "dgi_score", "tech_timing", "call_timing", "put_timing", "entry_tag",
   "in_calls", "put_exposure",
 ];
 
 // Keys that must be ABSENT from Portfolio mode (per new contract)
 const PORTFOLIO_HIDDEN_KEYS = [
-  "dgi_score", "tech_timing", "entry_tag", "in_calls", "put_exposure",
+  "dgi_score", "tech_timing", "call_timing", "put_timing", "entry_tag", "in_calls", "put_exposure",
 ];
 
 // Keys that must be ABSENT from Options mode (portfolio-specific columns)
@@ -250,9 +250,9 @@ describe("CC: Column contract — Portfolio and Options column sets", () => {
       `CC-5: Portfolio must have 11 columns (symbol,category,momentum,price + 7 portfolio-specific), got ${PORTFOLIO_COLUMN_KEYS.length}: ${PORTFOLIO_COLUMN_KEYS.join(", ")}`);
   });
 
-  it("CC-6: Options column count: 9 columns (4 common + 5 options-specific)", () => {
-    assert.equal(OPTIONS_COLUMN_KEYS.length, 9,
-      `CC-6: Options must have 9 columns (symbol,category,momentum,price + dgi,tech,entry,in_calls,puts), got ${OPTIONS_COLUMN_KEYS.length}: ${OPTIONS_COLUMN_KEYS.join(", ")}`);
+  it("CC-6: Options column count: 11 columns (4 common + 7 options-specific)", () => {
+    assert.equal(OPTIONS_COLUMN_KEYS.length, 11,
+      `CC-6: Options must include both independent Timing columns, got ${OPTIONS_COLUMN_KEYS.length}: ${OPTIONS_COLUMN_KEYS.join(", ")}`);
   });
 
   it("CC-7: Source marks dgi_score/tech_timing/entry_tag with modes:[\"options\"] — rejects common/portfolio annotation", () => {
@@ -495,11 +495,11 @@ describe("CS: ColSpan/alignment — header and body cell counts match active col
       `CS-2: Portfolio 11 data columns + 1 Actions = 12; got ${PORTFOLIO_COLUMN_KEYS.length + 1}`);
   });
 
-  it("CS-3: Options column count + Actions = 10 total table cells", () => {
+  it("CS-3: Options column count + Actions = 12 total table cells", () => {
     assert.equal(
       OPTIONS_COLUMN_KEYS.length + 1,  // +1 for Actions
-      10,
-      `CS-3: Options 9 data columns + 1 Actions = 10; got ${OPTIONS_COLUMN_KEYS.length + 1}`
+      12,
+      `CS-3: Options 11 data columns + 1 Actions = 12; got ${OPTIONS_COLUMN_KEYS.length + 1}`
     );
   });
 
@@ -888,11 +888,11 @@ describe("CW: Column width contract — proportional, overflow-safe, no clipping
       "CW-9b DEFECT: truncate must not appear near numeric cells — financial data must be fully visible.");
   });
 
-  it("CW-10: Portfolio (11 cols) and Options (9 cols) have different column counts — widths must adapt", () => {
+  it("CW-10: Portfolio and Options have 11 columns with different column sets — widths must adapt", () => {
     assert.strictEqual(PORTFOLIO_COLUMN_KEYS.length, 11, "CW-10: Portfolio must have 11 data columns");
-    assert.strictEqual(OPTIONS_COLUMN_KEYS.length,   9,  "CW-10: Options must have 9 data columns");
-    assert.notStrictEqual(PORTFOLIO_COLUMN_KEYS.length, OPTIONS_COLUMN_KEYS.length,
-      "CW-10: Column counts must differ so widths adapt per mode rather than being fixed-equal.");
+    assert.strictEqual(OPTIONS_COLUMN_KEYS.length, 11, "CW-10: Options must have 11 data columns");
+    assert.notDeepEqual(PORTFOLIO_COLUMN_KEYS, OPTIONS_COLUMN_KEYS,
+      "CW-10: Column sets differ even when their counts match.");
   });
 
   it("CW-10b: Symbol column is present in both mode sets (needs flexible width in all modes)", () => {
@@ -1091,13 +1091,12 @@ describe("MW: Mode-aware min-width — no stale layout on Portfolio \u21d4 Optio
       "MW-3 DEFECT: tableMinWidth must use cols.reduce — same cols ref as colgroup and header.");
   });
 
-  it("MW-4: Portfolio computed minWidth > Options computed minWidth (Options cols are fewer/narrower)", () => {
+  it("MW-4: Options width accounts for the two new Timing columns without changing Portfolio", () => {
     const w = parseColumnsMinWidths(src);
     assert.ok(w.portfolio > 0 && w.options > 0,
       `MW-4: COLUMNS parse yielded zero widths (portfolio=${w.portfolio}, options=${w.options}).`);
-    assert.ok(w.portfolio > w.options,
-      `MW-4 DEFECT: Portfolio minWidth (${w.portfolio}px) must exceed Options (${w.options}px). ` +
-      "Options omits 6 wider portfolio-specific columns; switching to Options must shrink the table minimum.");
+    assert.equal(w.portfolio, 1086, "Portfolio widths must remain unchanged.");
+    assert.equal(w.options, 1170, "Options includes the two 140px Timing columns.");
   });
 
   it("MW-5: Min-width difference equals portfolio-only width minus options-only width (exact accounting)", () => {

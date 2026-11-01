@@ -116,6 +116,10 @@ class OptionsAgentScheduler:
         """Update portfolio enrichment cron expression."""
         self.registry.reschedule("portfolio_enrichment", new_cron, self.config)
 
+    def reschedule_option_timing(self, new_cron: str):
+        """Update the dedicated UTC option timing schedule."""
+        self.registry.reschedule("option_timing", new_cron, self.config)
+
     def reschedule_symbol_pricing(self, new_cron: str):
         """Update symbol pricing cron expression."""
         self.registry.reschedule("symbol_pricing", new_cron, self.config)
@@ -480,6 +484,20 @@ class OptionsAgentScheduler:
         """Execute portfolio enrichment (bridges async to sync for scheduler)."""
         _run_async(self._run_portfolio_enrichment_async())
 
+    def run_option_timing_job(self):
+        """Calculate and atomically publish deterministic timing, without AI."""
+        _run_async(self._run_option_timing_async())
+
+    async def _run_option_timing_async(self):
+        if not self.config.config.get("option_timing", {}).get("enabled", True):
+            return
+        from .option_timing_job import run_option_timing
+        from .yfinance_data_provider import get_shared_provider
+
+        return await run_option_timing(
+            self.cosmos, get_shared_provider(self.config.config.get("yfinance"))
+        )
+
     async def _run_portfolio_enrichment_async(self):
         """Run portfolio enrichment if enabled in config."""
         pe_config = self.config.config.get('portfolio_enrichment', {})
@@ -838,6 +856,15 @@ class OptionsAgentScheduler:
             "0 9-23 * * 1-5",
             self.run_symbol_pricing_job,
             has_extra_config=False,
+        )
+        from .option_timing import DEFAULT_CRON as option_timing_cron
+        self.registry.register(
+            "option_timing",
+            "Option Timing",
+            "option_timing",
+            option_timing_cron,
+            self.run_option_timing_job,
+            cron_timezone="UTC",
         )
         self.registry.register(
             "price_forecast",

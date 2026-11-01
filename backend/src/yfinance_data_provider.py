@@ -297,7 +297,9 @@ class YFinanceDataProvider:
         """
         try:
             ticker = yf.Ticker(symbol)
-            history = ticker.history(period=period)
+            history = ticker.history(
+                period=period, interval="1d", auto_adjust=True, prepost=False,
+            )
         except Exception as exc:
             logger.warning("get_ohlcv_history failed for %s: %s", symbol, exc)
             return None

@@ -5,6 +5,7 @@ Replaces per-task boilerplate with a unified registry-based approach.
 
 from dataclasses import dataclass
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Callable, Optional
 from croniter import croniter
 import inspect
@@ -35,6 +36,7 @@ class ScheduledTask:
     last_run: Optional[datetime] = None  # Last execution timestamp
     has_extra_config: bool = False     # Whether task has task-specific config beyond the 5 standard fields
     running: bool = False              # True if a job execution is in progress
+    cron_timezone: str | None = None  # None preserves existing local schedules
 
 
 class TaskRegistry:
@@ -62,6 +64,7 @@ class TaskRegistry:
         default_cron: str,
         job_func: Callable,
         has_extra_config: bool = False,
+        cron_timezone: str | None = None,
     ) -> None:
         """Register a new task."""
         task = ScheduledTask(
@@ -71,6 +74,7 @@ class TaskRegistry:
             default_cron=default_cron,
             job_func=job_func,
             has_extra_config=has_extra_config,
+            cron_timezone=cron_timezone,
         )
         self.tasks[name] = task
     
@@ -89,7 +93,8 @@ class TaskRegistry:
             return False
         
         try:
-            task.cron_obj = croniter(task.cron_expr, now_tz)
+            base = now_tz.astimezone(ZoneInfo(task.cron_timezone)) if task.cron_timezone else now_tz
+            task.cron_obj = croniter(task.cron_expr, base)
             task.next_run = task.cron_obj.get_next(datetime)
             return True
         except (ValueError, KeyError) as e:
@@ -152,7 +157,8 @@ class TaskRegistry:
                     task.cron_expr = task_config.get('cron', task.default_cron)
                 
                 try:
-                    task.cron_obj = croniter(task.cron_expr, now_tz)
+                    base = now_tz.astimezone(ZoneInfo(task.cron_timezone)) if task.cron_timezone else now_tz
+                    task.cron_obj = croniter(task.cron_expr, base)
                     task.next_run = task.cron_obj.get_next(datetime)
                     
                     # Re-read enabled state
@@ -361,6 +367,7 @@ class TaskRegistry:
                 "last_run": task.last_run.isoformat() if task.last_run else None,
                 "next_run": task.next_run.isoformat() if task.next_run else None,
                 "has_extra_config": task.has_extra_config,
+                "timezone": task.cron_timezone,
             })
         return result
     
@@ -385,7 +392,8 @@ class TaskRegistry:
             try:
                 from croniter import croniter
                 now_tz = datetime.now().astimezone()
-                task.cron_obj = croniter(task.cron_expr, now_tz)
+                base = now_tz.astimezone(ZoneInfo(task.cron_timezone)) if task.cron_timezone else now_tz
+                task.cron_obj = croniter(task.cron_expr, base)
                 task.next_run = task.cron_obj.get_next(datetime)
             except Exception as e:
                 logger.warning("Failed to reinitialize cron for %s: %s", name, e)

@@ -1401,7 +1401,19 @@ async def api_list_symbols(request: Request):
     try:
         cosmos = _get_cosmos(request)
         symbols = cosmos.list_symbols()
-        return JSONResponse([_clean_doc(s) for s in symbols])
+        from src.option_timing_store import load_current_rows, read_current
+        timing_rows, timing_error = load_current_rows(cosmos)
+        rows = []
+        for s in symbols:
+            row = _clean_doc(s)
+            ticker = s.get("symbol", "")
+            row["option_timing"] = read_current(
+                ticker, s.get("security_id"),
+                _is_us_options_eligible(_resolve_screener_mic(s.get("exchange"))),
+                timing_rows.get(ticker), read_error=timing_error,
+            )
+            rows.append(row)
+        return JSONResponse(rows)
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
@@ -1449,6 +1461,8 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
     ``watchlist_count``) are preserved for backward-compatible rollout.
     """
     symbols = cosmos.list_symbols() if cosmos else []
+    from src.option_timing_store import load_current_rows, read_current
+    timing_rows, timing_error = load_current_rows(cosmos)
 
     # ── Load portfolio holdings for classification and enrichment ──────────
     holdings_by_ticker: Dict[str, Any] = {}
@@ -1602,6 +1616,10 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
             # screener_eligible:   MIC ∈ {XNYS, XNAS} ∧ (shares>0 ∨ explicit watchlist member)
             "us_options_eligible": us_options_eligible,
             "screener_eligible": screener_eligible,
+            "option_timing": read_current(
+                sym, s.get("security_id"), us_options_eligible,
+                timing_rows.get(sym), read_error=timing_error,
+            ),
         }
 
         # ── Pricing cache fields (Phase 3, contract §8) ────────────────────
@@ -2112,7 +2130,13 @@ async def api_get_symbol(request: Request, symbol: str):
         if not doc:
             return JSONResponse({"error": f"Symbol {symbol} not found"},
                                 status_code=404)
-        return JSONResponse(_clean_doc(doc))
+        from src.option_timing_store import load_current
+        clean = _clean_doc(doc)
+        clean["option_timing"] = load_current(
+            cosmos, doc["symbol"], doc.get("security_id"),
+            _is_us_options_eligible(_resolve_screener_mic(doc.get("exchange"))),
+        )
+        return JSONResponse(clean)
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
@@ -2223,6 +2247,7 @@ def _compute_symbol_detail(
     """
     sym = _ticker_from_symbol_param(symbol)
     doc = cosmos.get_symbol(sym)
+    from src.option_timing_store import load_current
 
     # ── portfolio_only path: no symbol_config but may have security + ledger ──
     if doc is None:
@@ -2345,6 +2370,9 @@ def _compute_symbol_detail(
             "portfolio": portfolio_field,
             "symbol_state": symbol_state,
             "us_options_eligible": _is_elig(_po_mic),
+            "option_timing": load_current(
+                cosmos, sym, security_doc.get("security_id"), _is_elig(_po_mic),
+            ),
             "tradingview_symbol": _po_tv_symbol,
         }
 
@@ -2604,6 +2632,9 @@ def _compute_symbol_detail(
         "symbol_state": symbol_state,
         # US-options eligibility (Amendment J)
         "us_options_eligible": us_options_eligible,
+        "option_timing": load_current(
+            cosmos, sym, security_id_from_config, us_options_eligible,
+        ),
         # TradingView symbol (danny-tradingview-symbol-contract.md)
         "tradingview_symbol": tradingview_symbol,
     }
@@ -2703,6 +2734,62 @@ async def api_symbol_detail(request: Request, symbol: str):
     except Exception as e:
         logger.exception("api_symbol_detail failed for %s", symbol)
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/symbols/{symbol}/option-timing/history")
+async def api_option_timing_history(
+    request: Request, symbol: str,
+    range_value: str = Query(default="90d", alias="range", pattern=r"^(?:[1-9]|[1-8][0-9]|90)d$"),
+):
+    """Persisted explanations at their observed times; never recompute on reads."""
+    try:
+        from datetime import timezone
+
+        from src.option_timing_store import OptionTimingStore
+        from src.portfolio.cosmos_securities import CosmosSecuritiesService
+
+        cosmos = _get_cosmos(request)
+        securities = CosmosSecuritiesService(cosmos.container)
+        ticker = _ticker_from_symbol_param(symbol)
+        if ":" in symbol:
+            security_id = symbol.upper()
+            security = securities.get_security(security_id)
+            if security is None:
+                return JSONResponse({"error": f"Security {symbol} not found"}, status_code=404)
+        else:
+            matches = [
+                s for s in securities.list_securities()
+                if s.get("ticker", "").upper() == ticker
+            ]
+            if len(matches) > 1:
+                choices = [
+                    {"security_id": s.get("security_id"),
+                     "company_name": s.get("company_name"),
+                     "exchange_mic": s.get("exchange_mic")}
+                    for s in matches
+                ]
+                return JSONResponse(
+                    {"multiple_choices": choices, "candidates": choices,
+                     "choices": choices, "query": ticker}, status_code=300,
+                )
+            config = cosmos.get_symbol(ticker)
+            security_id = (matches[0].get("security_id") if matches else
+                           (config or {}).get("security_id"))
+            if not security_id:
+                return JSONResponse({"error": f"Symbol {symbol} not found"}, status_code=404)
+        doc = cosmos.get_symbol(ticker)
+        if doc and doc.get("security_id") and doc["security_id"] != security_id:
+            return JSONResponse({"error": "Security identity mismatch"}, status_code=409)
+        return JSONResponse(OptionTimingStore(cosmos.container).history(
+            ticker, security_id, int(range_value[:-1]), datetime.now(timezone.utc),
+        ))
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=503)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except Exception:
+        logger.exception("Option timing history read failed for %s", symbol)
+        return JSONResponse({"error": "Option timing history unavailable"}, status_code=503)
 
 
 @app.put("/api/symbols/{symbol}")

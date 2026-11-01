@@ -1,3 +1,5 @@
+import type { OptionTimingSnapshot } from "@/types/option-timing";
+
 export interface SymbolWatchlistFlags {
   covered_call: boolean;
   cash_secured_put: boolean;
@@ -12,6 +14,7 @@ export interface SymbolRow {
   category: string;
   dgi_score: number | null;
   tech_timing: number | null;
+  option_timing?: OptionTimingSnapshot | null;
   entry_tag: string;
   momentum: string;
   price: number | null;
