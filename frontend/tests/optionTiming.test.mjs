@@ -36,7 +36,7 @@ function load(relative, overrides = {}) {
 
 const helpers = load("lib/optionTiming.ts");
 function side(score = 0, label = "Saved context") {
-  return { score, band: score === null ? null : "red", label, status: score === null ? "unavailable" : "available", reason_codes: score === null ? ["missing_market_data"] : [], factors: [{ key: "trend", label: "Trend", score: 20, weight: 0.5, contribution: 10, evidence: [`Evidence for ${label}`] }], adjustments: [{ key: "guard", label: "Event guard", cap: 25, reason: `Reason for ${label}` }] };
+  return { score, band: score === null ? null : score < 25 ? "red" : score < 50 ? "orange" : score < 75 ? "yellow" : "green", label, status: score === null ? "unavailable" : "available", reason_codes: score === null ? ["missing_market_data"] : [], factors: [{ key: "trend", label: "Trend", score: 20, weight: 0.5, contribution: 10, evidence: [`Evidence for ${label}`] }], adjustments: [{ key: "guard", label: "Event guard", cap: 25, reason: `Reason for ${label}` }] };
 }
 function snapshot(id, time, score = 0, extra = {}) {
   return { schema_version: 1, snapshot_id: id, model_version: "v1", as_of: time, computed_at: "2026-10-30T21:00:00Z", source_session: "2026-10-30", provisional: false, freshness: "fresh", covered_call: side(score, id), cash_secured_put: side(80, `PUT ${id}`), ...extra };
@@ -100,26 +100,27 @@ test("synthetic unavailable timestamps are never appended as observations, real 
 });
 
 test("card gauges expose actual side values, preserve zero, and mute missing or non-fresh scores", () => {
-  const { default: Cards, OptionTimingGauge } = load("components/OptionTiming.tsx");
+  const { default: Cards, OptionTimingGauge, OptionTimingValue } = load("components/OptionTiming.tsx");
   const render = (snapshot, side = "covered_call") => renderToStaticMarkup(React.createElement(OptionTimingGauge, { snapshot, side }));
-  for (const score of [0, 25, 50, 75, 100]) {
-    const html = render(snapshot(`score-${score}`, first.as_of, score));
+  for (const [score, band] of [[0, "red"], [24.9, "red"], [25, "orange"], [40, "orange"], [49.9, "orange"], [50, "yellow"], [70, "yellow"], [74.9, "yellow"], [75, "green"], [100, "green"]]) {
+    const saved = snapshot(`score-${score}`, first.as_of, score);
+    const html = render(saved);
     assert.match(html, /role="meter"/);
     assert.match(html, /aria-label="Covered CALL timing"/);
     assert.match(html, /aria-valuemin="0"/);
     assert.match(html, /aria-valuemax="100"/);
     assert.match(html, new RegExp(`aria-valuenow="${score}"`));
-    assert.match(html, new RegExp(`left:${score}%`));
-    assert.match(html, /linear-gradient[\s\S]*accent-red[\s\S]*accent-orange[\s\S]*yellow-400[\s\S]*accent-green/);
+    assert.match(html, new RegExp(`width:${score}%`));
+    assert.match(html, /bg-border/);
+    assert.match(html, /aria-hidden="true" class="block h-full rounded-full/);
+    assert.doesNotMatch(html, /left:|absolute|ring-|<span>0<\/span>|<span>100<\/span>/);
     const gradient = html.match(/style="([^"]*linear-gradient[^"]*)"/)[1];
-    assert.equal((gradient.match(/color-mix\(in srgb/g) ?? []).length, 4);
-    assert.match(gradient, /var\(--bg-input, #[0-9a-f]+\)/);
-    assert.doesNotMatch(gradient, /\d+%\s+\d+%/);
-    const theme = readFileSync(join(root, "src/app/globals.css"), "utf8");
-    for (const [, token, fallback] of gradient.matchAll(/var\((--[\w-]+), (#[0-9a-f]+)\)/g)) {
-      assert.match(fallback, /^#[0-9a-f]{6}$/);
-      if (token !== "--color-yellow-400") assert.ok(theme.includes(`${token}:`), `Theme defines ${token}`);
-    }
+    const token = band === "yellow" ? "--color-yellow-400" : `--accent-${band}`;
+    assert.deepEqual([...gradient.matchAll(/var\((--(?:accent-[\w-]+|color-yellow-400))\)/g)].map((match) => match[1]), [token, token]);
+    assert.match(gradient, /color-mix\(in srgb/);
+    assert.match(gradient, /var\(--bg-input\)/);
+    const value = renderToStaticMarkup(React.createElement(OptionTimingValue, { snapshot: saved, side: "covered_call" }));
+    assert.ok(value.includes(band === "yellow" ? "text-yellow-400" : `text-accent-${band}`));
     assert.doesNotMatch(html, /Covered CALL:|Unavailable/);
   }
   assert.match(render(first, "cash_secured_put"), /aria-label="Cash-secured PUT timing"[\s\S]*aria-valuenow="80"/);
@@ -127,14 +128,22 @@ test("card gauges expose actual side values, preserve zero, and mute missing or 
     const html = render({ ...last, freshness });
     assert.match(html, /aria-valuenow="60"/);
     assert.match(html, new RegExp(`aria-valuetext="60 / 100 · ${freshness}"`));
-    assert.doesNotMatch(html, /linear-gradient|accent-green/);
+    assert.match(html, /bg-text-muted\/40/);
+    assert.match(html, /width:60%/);
+    assert.doesNotMatch(html, /background:|linear-gradient|accent-green/);
   }
-  for (const value of [undefined, { ...middle, freshness: "fresh" }]) {
+  const noBand = snapshot("no-band", first.as_of, 60);
+  noBand.covered_call.band = null;
+  assert.doesNotMatch(render(noBand), /background:|linear-gradient/);
+  const unavailable = snapshot("unavailable", first.as_of, 80);
+  unavailable.covered_call.status = "not_applicable";
+  for (const value of [undefined, { ...middle, freshness: "fresh" }, unavailable, snapshot("invalid", first.as_of, 101)]) {
     const html = render(value);
-    assert.match(html, /<span>0<\/span><span>100<\/span>/);
-    assert.doesNotMatch(html, /role="meter"|aria-valuenow|left:|linear-gradient/);
+    assert.match(html, /bg-border/);
+    assert.doesNotMatch(html, /role="meter"|aria-valuenow|width:|left:|linear-gradient|aria-hidden/);
   }
   const cards = renderToStaticMarkup(React.createElement(Cards, { symbol: "MSFT", snapshot: first }));
+  assert.match(cards, /<section aria-label="Option Timing" class="grid gap-3 sm:grid-cols-2"/);
   assert.equal((cards.match(/role="meter"/g) ?? []).length, 2);
   assert.doesNotMatch(cards, /<button\b[^>]*>(?:(?!<\/button>)[\s\S])*role="meter"/);
 });

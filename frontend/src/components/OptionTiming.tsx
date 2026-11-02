@@ -18,6 +18,13 @@ const BAND_CLASSES: Record<OptionTimingBand, string> = {
   green: "text-accent-green",
 };
 
+const BAND_COLORS: Record<OptionTimingBand, string> = {
+  red: "var(--accent-red)",
+  orange: "var(--accent-orange)",
+  yellow: "var(--color-yellow-400)",
+  green: "var(--accent-green)",
+};
+
 export function OptionTimingValue({ snapshot, side }: {
   snapshot?: OptionTimingSnapshot | null;
   side: OptionTimingSideKey;
@@ -41,20 +48,21 @@ export function OptionTimingGauge({ snapshot, side }: {
   const score = optionTimingScore(snapshot, side);
   const label = OPTION_TIMING_SIDES.find((item) => item.key === side)!.label;
   const fresh = snapshot?.freshness === "fresh";
+  const band = snapshot?.[side].band;
+  const color = fresh && band ? BAND_COLORS[band] : null;
   return (
-    <span className="mt-3 block">
-      <span className="relative block h-2 rounded bg-border"
+    <span className="mt-2 block">
+      <span className="block h-1.5 overflow-hidden rounded-full bg-border"
         role={score === null ? undefined : "meter"}
         aria-label={`${label} timing`}
         aria-valuemin={score === null ? undefined : 0}
         aria-valuemax={score === null ? undefined : 100}
         aria-valuenow={score ?? undefined}
-        aria-valuetext={score === null ? undefined : `${score} / 100${fresh ? "" : ` · ${snapshot?.freshness ?? "unknown"}`}`}
-        style={score !== null && fresh ? { background: "linear-gradient(to right, color-mix(in srgb, var(--accent-red, #ff4d5e) 45%, var(--bg-input, #2b2f36)) 0%, color-mix(in srgb, var(--accent-orange, #ff9416) 45%, var(--bg-input, #2b2f36)) 33%, color-mix(in srgb, var(--color-yellow-400, #facc15) 45%, var(--bg-input, #2b2f36)) 67%, color-mix(in srgb, var(--accent-green, #00c493) 45%, var(--bg-input, #2b2f36)) 100%)" } : undefined}>
-        {score !== null && <span aria-hidden="true" className="absolute top-1/2 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded bg-text ring-1 ring-bg-input" style={{ left: `${score}%` }} />}
-      </span>
-      <span className="mt-1 flex justify-between text-[10px] text-text-muted">
-        <span>0</span><span>100</span>
+        aria-valuetext={score === null ? undefined : `${score} / 100${fresh ? "" : ` · ${snapshot?.freshness ?? "unknown"}`}`}>
+        {score !== null && <span aria-hidden="true" className="block h-full rounded-full bg-text-muted/40" style={{
+          width: `${score}%`,
+          ...(color ? { background: `linear-gradient(135deg, color-mix(in srgb, ${color} 70%, var(--bg-input)), ${color})` } : {}),
+        }} />}
       </span>
     </span>
   );
@@ -187,25 +195,25 @@ export default function OptionTiming({ symbol, snapshot }: {
 
   return (
     <>
-      <div className="grid gap-3 md:grid-cols-2">
+      <section aria-label="Option Timing" className="grid gap-3 sm:grid-cols-2">
         {OPTION_TIMING_SIDES.map((item) => (
-          <div key={item.key} className="relative rounded-[var(--radius)] border border-border bg-bg-input p-4 transition-colors hover:bg-bg-hover">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <span className="font-medium">{item.label}</span>
+          <div key={item.key} className="rounded-[var(--radius)] border border-border bg-bg-input p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-medium">{item.label}</span>
               <div className="flex gap-2">
                 <button type="button" onClick={() => { close(); setPopup({ kind: "info", symbol: canonicalSymbol, side: item.key }); }} aria-label={`View ${item.label} timing details`} className="rounded-[var(--radius)] border border-border bg-bg-card px-2 py-1 text-xs text-accent-blue transition-colors hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent-blue">Info</button>
                 <button type="button" onClick={() => void explain(item.key, snapshot)} disabled={!canExplainOptionTiming(snapshot, item.key)} aria-label={`Explain ${item.label} timing`} className="rounded-[var(--radius)] border border-border bg-bg-card px-2 py-1 text-xs text-accent-blue transition-colors hover:bg-bg-hover focus-visible:ring-2 focus-visible:ring-accent-blue disabled:cursor-not-allowed disabled:opacity-50">Explain</button>
               </div>
             </div>
             <span className="flex flex-wrap items-baseline gap-2">
-              <span className="text-2xl"><OptionTimingValue snapshot={snapshot} side={item.key} /></span>
+              <span className="text-xl"><OptionTimingValue snapshot={snapshot} side={item.key} /></span>
               <span className="text-xs text-text-muted">/ 100</span>
             </span>
             {optionTimingScore(snapshot, item.key) === null && <span className="mt-2 block text-xs text-text-muted">{snapshot?.[item.key].status === "not_applicable" ? "Not applicable" : "Unavailable"}: {snapshot?.[item.key].reason_codes.join(", ").replace(/_/g, " ") || "no persisted score available"}</span>}
             <OptionTimingGauge snapshot={snapshot} side={item.key} />
           </div>
         ))}
-      </div>
+      </section>
       {popup?.symbol === canonicalSymbol && (popup.kind === "info"
         ? <OptionTimingModal symbol={symbol} snapshot={snapshot} initialSide={popup.side} onClose={close} />
         : <OptionTimingExplainModal state={popup} onClose={close} onRetry={() => void explain(popup.side, popup.snapshot)} />)}

@@ -151,13 +151,10 @@ export default async function SymbolDetailPage({
           summary={d.summary}
           totalShares={d.total_shares}
         />
-      </DetailSection>
-
-      <DetailSection title="Option Timing">
         <OptionTiming symbol={d.security?.security_id ?? d.security_id ?? symbol} snapshot={d.option_timing} />
       </DetailSection>
 
-      {/* Symbol configuration — always visible, below Option Timing */}
+      {/* Symbol configuration — always visible, below Summary */}
       {d.security && (
         <SymbolConfigurationCard
           symbol={symbol}

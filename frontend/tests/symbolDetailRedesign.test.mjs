@@ -3,7 +3,7 @@
  *
  * Requirements (2026-09-07 directive):
  *   AP — Symbol Configuration is always visible (moved out of the Stocks-tab-only
- *         guard, below Summary and Option Timing); Portfolio Holdings remains gated to the
+ *         guard, below Summary including Option Timing); Portfolio Holdings remains gated to the
  *         Stocks tab and stays ordered after Config.
  *   AT — Agent & Alert Toggles section and all toggle controls ABSENT from
  *         SymbolConfigurationCard (backend fields may still exist elsewhere).
@@ -57,7 +57,7 @@ describe("AP: Arrangement — SymbolConfigurationCard before Portfolio Holdings 
 
   it("AP-2: SymbolConfigurationCard is always visible (rendered before the stocksSecurityId guard); PortfolioHoldingsCard remains inside the Stocks tab guard", () => {
     // 2026-09-08 update: Config card moved out of the Stocks-tab-only guard so it's
-    // always visible below Summary and Option Timing, regardless of active tab. Holdings stays
+    // always visible below Summary including Option Timing, regardless of active tab. Holdings stays
     // gated to the Stocks tab since it needs stocksSecurityId to query movements.
     const guardIdx = pageSrc.indexOf("stocksSecurityId &&");
     const cfgIdx   = pageSrc.indexOf("<SymbolConfigurationCard");
@@ -69,13 +69,20 @@ describe("AP: Arrangement — SymbolConfigurationCard before Portfolio Holdings 
       "AP-2 DEFECT: <PortfolioHoldingsCard must remain inside the stocksSecurityId guard");
   });
 
-  it("AP-4: independent Option Timing section is directly between Summary and Configuration", () => {
-    const summaryEnd = pageSrc.indexOf("</DetailSection>", pageSrc.indexOf('<DetailSection title="Summary">'));
-    const timing = pageSrc.indexOf('<DetailSection title="Option Timing">');
+  it("AP-4: Option Timing is inside Summary after the unchanged table and before Configuration", () => {
+    const summaryStart = pageSrc.indexOf('<DetailSection title="Summary">');
+    const summaryEnd = pageSrc.indexOf("</DetailSection>", summaryStart);
+    const table = pageSrc.indexOf("<SymbolSummary", summaryStart);
+    const tableEnd = pageSrc.indexOf("/>", table);
+    const timing = pageSrc.indexOf("<OptionTiming ", summaryStart);
     const config = pageSrc.indexOf("<SymbolConfigurationCard");
-    assert.ok(summaryEnd < timing && timing < config);
-    assert.match(pageSrc.slice(summaryEnd, config), /snapshot=\{d\.option_timing\}/);
-    assert.ok(!pageSrc.slice(summaryEnd, timing).includes("<SymbolConfigurationCard"));
+    assert.ok(summaryStart !== -1 && table > summaryStart && tableEnd < timing && timing < summaryEnd && summaryEnd < config);
+    assert.match(pageSrc.slice(timing, summaryEnd), /symbol=\{d\.security\?\.security_id \?\? d\.security_id \?\? symbol\} snapshot=\{d\.option_timing\}/);
+    assert.doesNotMatch(pageSrc, /<DetailSection title="Option Timing">/);
+    assert.equal((pageSrc.match(/<OptionTiming /g) ?? []).length, 1);
+    const summarySrc = readFileSync(join(root, "src/components/SymbolSummary.tsx"), "utf8");
+    assert.doesNotMatch(summarySrc, /OptionTiming|Covered CALL|Cash-secured PUT/);
+    assert.match(summarySrc, /const HEAD = \["Category", "DGI Score", "Tech Timing", "Entry", "Momentum", "Price", "Shares", "In Calls", "Puts \$"\]/);
   });
 
   it("AP-3: No alternative Holdings component inserted between Config and Holdings in Stocks source", () => {
