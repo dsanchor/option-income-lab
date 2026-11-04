@@ -21,7 +21,7 @@ export async function GET(
   try {
     const res = await fetch(
       `${API_BASE_URL}/api/symbols/${encodeURIComponent(symbol)}/best-options${qs ? `?${qs}` : ""}`,
-      { headers: { Accept: "application/json" }, cache: "no-store" },
+      { headers: { Accept: "application/json" }, cache: "no-store", signal: req.signal },
     );
     const data = await res.json().catch(() => ({}));
     return NextResponse.json(data, { status: res.status });

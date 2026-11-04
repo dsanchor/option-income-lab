@@ -272,19 +272,35 @@ type ViewState =
  *
  * Precomputed-only handling: `{status: "unavailable"}` renders the explicit
  * "not yet precomputed" state with next_run timestamp.
+ *
+ * Manual refresh waits for a new completed Best Options generation (not an
+ * old "ok" envelope), retaining disabled tables until completion or failure.
+ * It refreshes the options chain and screen, not Option Timing.
  */
 export default function BestOptionsView({ symbol }: { symbol: string }) {
+  return <BestOptionsContent key={symbol} symbol={symbol} />;
+}
+
+function BestOptionsContent({ symbol }: { symbol: string }) {
   const [state, setState] = useState<ViewState>({ kind: "loading" });
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const operationRef = useRef<AbortController | null>(null);
+  const refreshingRef = useRef(false);
 
   const load = useCallback(async () => {
+    if (refreshingRef.current) return;
+    operationRef.current?.abort();
+    const controller = new AbortController();
+    operationRef.current = controller;
     try {
       const res = await fetch(
         `/api/symbols/${encodeURIComponent(symbol)}/best-options?side=both`,
-        { cache: "no-store" },
+        { cache: "no-store", signal: controller.signal },
       );
       const body = await res.json().catch(() => ({}));
+      if (controller.signal.aborted) return;
       if (!res.ok) {
         setState({ kind: "error", message: body?.error || `HTTP ${res.status}` });
         return;
@@ -303,15 +319,23 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
         return;
       }
       setState({ kind: "ok", data: body as BestOptionsResponse });
-      setRefreshing(false);
     } catch (err) {
+      if (controller.signal.aborted) return;
       setState({ kind: "error", message: err instanceof Error ? err.message : "Failed to load Best Options" });
-      setRefreshing(false);
     }
   }, [symbol]);
 
   useEffect(() => {
-    load();
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (active) void load();
+    });
+    return () => {
+      active = false;
+      operationRef.current?.abort();
+      operationRef.current = null;
+      refreshingRef.current = false;
+    };
   }, [load]);
 
   // Manual retry/refresh affordances (buttons) are event handlers, not
@@ -319,91 +343,98 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
   // unlike the initial mount effect above and the warming auto-retry timer
   // below, which intentionally never set state synchronously themselves.
   const retry = useCallback(() => {
+    if (refreshingRef.current) return;
+    setRefreshError(null);
     setState({ kind: "loading" });
     load();
   }, [load]);
 
   const refresh = useCallback(async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    operationRef.current?.abort();
+    if (timerRef.current) clearTimeout(timerRef.current);
+    const controller = new AbortController();
+    operationRef.current = controller;
     setRefreshing(true);
+    setRefreshError(null);
+    const deadline = setTimeout(() => controller.abort(), 120_000);
+    controller.signal.addEventListener("abort", () => clearTimeout(deadline), { once: true });
+    const url = `/api/symbols/${encodeURIComponent(symbol)}/best-options`;
+    const read = async () => {
+      const res = await fetch(`${url}?side=both`, {
+        cache: "no-store", signal: controller.signal,
+      });
+      const body = await res.json();
+      controller.signal.throwIfAborted();
+      if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+      return body as BestOptionsResponse & { error?: string; reason?: string };
+    };
+    const pause = (ms: number) => new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(controller.signal.reason);
+      };
+      const timer = setTimeout(() => {
+        controller.signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+      if (controller.signal.aborted) onAbort();
+    });
     try {
-      const res = await fetch(`/api/symbols/${encodeURIComponent(symbol)}/best-options/refresh`, {
+      // Snapshot the server, not just displayed data: another refresh may have
+      // completed since the table loaded. Old results can remain "ok" in flight.
+      const baseline = (await read()).cache;
+      const res = await fetch(`${url}/refresh`, {
         method: "POST",
         cache: "no-store",
+        signal: controller.signal,
       });
       const data = await res.json().catch(() => ({}));
-
-      if (res.status === 409) {
-        // Already refreshing - just poll
-        console.log("Refresh already in progress");
-      } else if (!res.ok) {
-        console.error("Refresh failed:", data.error || "Unknown error");
-        setState({ kind: "error", message: data.error || `Refresh failed: HTTP ${res.status}` });
-        setRefreshing(false);
-        return;
+      controller.signal.throwIfAborted();
+      if (res.status !== 409 && !res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
       }
-
-      // 202 Accepted or 409 Conflict - start polling
-      // Poll more aggressively at first, then back off
-      let pollAttempt = 0;
-      const maxPolls = 30; // Max 30 polls over ~60 seconds
-
-      const pollForResult = async () => {
-        pollAttempt++;
-        try {
-          const pollRes = await fetch(
-            `/api/symbols/${encodeURIComponent(symbol)}/best-options?side=both`,
-            { cache: "no-store" }
-          );
-          const pollBody = await pollRes.json().catch(() => ({}));
-
-          // Check if refresh completed
-          if (pollBody?.status === "ok" || pollBody?.status === "stale") {
-            // Success - entry now available
-            setState({ kind: "ok", data: pollBody });
-            setRefreshing(false);
-          } else if (pollBody?.cache?.refresh_error || pollBody?.cache?.chain_refresh_error) {
-            // Refresh failed with error
-            const error = pollBody.cache.refresh_error || pollBody.cache.chain_refresh_error;
-            setState({ kind: "error", message: `Refresh failed: ${error}` });
-            setRefreshing(false);
-          } else if (pollBody?.status === "warming" && pollAttempt < maxPolls) {
-            // Still warming - keep polling with backoff
-            const delay = pollAttempt < 5 ? 2000 : pollAttempt < 10 ? 3000 : 4000;
-            setTimeout(pollForResult, delay);
-          } else if (pollAttempt >= maxPolls) {
-            // Timeout - stop polling but don't error (might still be processing)
-            setState({ kind: "warming", retryAfter: 15, reason: "Refresh in progress - still processing" });
-            setRefreshing(false);
-          } else {
-            // Unexpected state - keep polling
-            setTimeout(pollForResult, 3000);
-          }
-        } catch (err) {
-          console.error("Poll failed:", err);
-          if (pollAttempt < maxPolls) {
-            setTimeout(pollForResult, 3000);
-          } else {
-            setRefreshing(false);
-          }
+      for (let attempt = 0; attempt < 30; attempt++) {
+        await pause(attempt < 5 ? 2000 : 3000);
+        const body = await read();
+        if (body.error) throw new Error(body.error);
+        const cache = body.cache;
+        const completed = cache?.refreshing === false &&
+          !!cache.refresh_completed_at &&
+          cache.refresh_completed_at !== baseline?.refresh_completed_at;
+        if (!completed) continue;
+        const errors = [...new Set([cache.refresh_error, cache.chain_refresh_error].filter(Boolean))];
+        if (errors.length) throw new Error(errors.join("; "));
+        if ((body.status === "ok" || body.status === "stale") &&
+            (cache.generation ?? 0) > (baseline?.generation ?? 0)) {
+          setState({ kind: "ok", data: body });
+          return;
         }
-      };
-
-      // Start polling after 2 seconds
-      setTimeout(pollForResult, 2000);
+      }
+      throw new Error("Timed out waiting for fresh Best Options. The server may still be processing; try Refresh again.");
     } catch (err) {
-      console.error("Refresh request failed:", err);
-      setState({ kind: "error", message: err instanceof Error ? err.message : "Network error" });
-      setRefreshing(false);
+      if (operationRef.current !== controller) return;
+      setRefreshError(controller.signal.aborted
+        ? "Refresh timed out. The server may still be processing; try Refresh again."
+        : `Refresh failed: ${err instanceof Error ? err.message : "Network error"}`);
+    } finally {
+      clearTimeout(deadline);
+      if (operationRef.current === controller) {
+        refreshingRef.current = false;
+        setRefreshing(false);
+      }
     }
-  }, [symbol, load]);
+  }, [symbol]);
 
   useEffect(() => {
-    if (state.kind !== "warming") return;
+    if (state.kind !== "warming" || refreshing || refreshError) return;
     timerRef.current = setTimeout(load, Math.max(1, state.retryAfter) * 1000);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [state, load]);
+  }, [state, load, refreshing, refreshError]);
 
   return (
     <div className="space-y-6">
@@ -418,14 +449,25 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
         </div>
         <button
           type="button"
-          onClick={state.kind === "ok" && !refreshing ? refresh : retry}
-          disabled={state.kind === "loading" || (refreshing && state.kind === "ok")}
+          onClick={state.kind === "ok" ? refresh : retry}
+          disabled={state.kind === "loading" || refreshing}
           className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border border-border bg-bg-input px-3 py-1.5 text-xs text-text-muted transition hover:bg-bg-hover disabled:opacity-50"
         >
           <RefreshCw aria-hidden="true" size={13} className={(state.kind === "loading" || refreshing) ? "animate-spin" : ""} />
-          {state.kind === "ok" ? "Refresh" : "Retry"}
+          {refreshing ? "Refreshing…" : state.kind === "ok" ? "Refresh" : "Retry"}
         </button>
       </div>
+
+      {refreshing && (
+        <p role="status" className="text-sm text-text-muted">
+          Fetching the options chain and recalculating Best Options… Existing results are temporarily disabled.
+        </p>
+      )}
+      {refreshError && (
+        <p role="alert" className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-3 py-2 text-sm text-accent-red">
+          {refreshError} {state.kind === "ok" && "Previous results are still shown; they have not been refreshed."}
+        </p>
+      )}
 
       {state.kind === "ok" && (
         <div className="rounded-[var(--radius)] border border-accent-blue/40 bg-accent-blue/10 px-3 py-2 text-xs text-accent-blue">
@@ -468,8 +510,8 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
           </div>
           <p className="font-medium text-accent-orange">Warming up the option chain cache…</p>
           <p className="text-xs text-text-muted">
-            {state.reason || `No data cached yet for ${symbol} — a background refresh has started.`} Retrying automatically in{" "}
-            {state.retryAfter}s.
+            {state.reason || `No data cached yet for ${symbol} — a background refresh has started.`}
+            {!refreshing && !refreshError && ` Retrying automatically in ${state.retryAfter}s.`}
             {state.nextRun && ` Next scheduled processing: ${state.nextRun}.`}
           </p>
           <button
@@ -489,6 +531,7 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
           <button
             type="button"
             onClick={retry}
+            disabled={refreshing}
             className="inline-flex items-center gap-1.5 rounded-[var(--radius-pill)] border border-accent-red/40 bg-accent-red/10 px-3 py-1.5 text-xs text-accent-red transition hover:bg-accent-red/20"
           >
             <RefreshCw aria-hidden="true" size={13} /> Retry
@@ -497,7 +540,11 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
       )}
 
       {state.kind === "ok" && (
-        <>
+        <div
+          aria-busy={refreshing}
+          inert={refreshing}
+          className={`space-y-6 transition-opacity ${refreshing ? "pointer-events-none opacity-50" : ""}`}
+        >
           <BestOptionsParams parameters={state.data.parameters} />
           <div className="rounded-[var(--radius)] border border-border bg-bg-card px-3 py-2 text-xs">
             <span className="font-medium text-text-muted">Analyzed underlying price:</span>{" "}
@@ -512,7 +559,7 @@ export default function BestOptionsView({ symbol }: { symbol: string }) {
           </div>
           <OptionsTable symbol={symbol} side="call" data={state.data.calls} underlyingPrice={state.data.parameters.underlying.price} />
           <OptionsTable symbol={symbol} side="put" data={state.data.puts} underlyingPrice={state.data.parameters.underlying.price} />
-        </>
+        </div>
       )}
     </div>
   );

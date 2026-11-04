@@ -183,7 +183,7 @@ export interface BestOptionsSide {
 
 export interface BestOptionsResponse {
   symbol: string;
-  status: "ok";
+  status: "ok" | "stale";
   schema_version: number;
   parameters: BestOptionsParameters;
   calls: BestOptionsSide;
@@ -199,6 +199,7 @@ export interface BestOptionsResponse {
     refresh_started_at?: string | null;
     refresh_completed_at?: string | null;
     refresh_error?: string | null;
+    chain_refresh_error?: string | null;
     reason?: string;
   };
 }
