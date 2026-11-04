@@ -1,5 +1,6 @@
 """Exercise upstream HTTP sessions without invoking Finnhub or needing a real key."""
 
+import http.client
 import json
 import sys
 import time
@@ -13,7 +14,7 @@ def smoke(base):
             with urllib.request.urlopen(f"{base}/health", timeout=3) as response:
                 assert json.load(response)["status"] == "healthy"
             break
-        except urllib.error.URLError:
+        except (OSError, http.client.HTTPException):
             if attempt == 29:
                 raise
             time.sleep(1)
