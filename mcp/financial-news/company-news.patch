@@ -1,0 +1,326 @@
+--- a/src/tools/financial-news.ts
++++ b/src/tools/financial-news.ts
+@@ -1,58 +1,78 @@
+ import axios from 'axios';
+-import * as cheerio from 'cheerio';
+ import { getFinnhubConfig, validateConfig } from '../config.js';
+ import { IncomingHttpHeaders } from 'http';
+
++class NewsInputError extends Error {}
++
+ export const getFinancialNews = {
+   name: "get_financial_news",
+-  description: "Fetch the latest financial news based on search query. Returns relevant financial news articles from various sources.",
++  description: "Fetch up to 10 news articles from the last 7 days. Supply symbol for company news (query is optional context, not a filter). For general market topics supply concise query keywords; matches any meaningful keyword in Finnhub's limited general feed, not a web search.",
+   parameters: {
+     type: "object",
+     properties: {
+       query: {
+         type: "string",
+-        description: "Search query for financial news topics (e.g., 'Apple earnings', 'Federal Reserve', 'cryptocurrency')"
++        minLength: 1,
++        maxLength: 300,
++        description: "Optional public topic/context with symbol; otherwise concise general-news keywords."
++      },
++      symbol: {
++        type: "string",
++        pattern: "^[A-Za-z]{1,6}([.-][A-Za-z]{1,3})?$",
++        maxLength: 10,
++        description: "Public US ticker, e.g. MSFT, NEE, BRK.B. Use this for company news, not a sentence in query."
+       }
+     },
+-    required: ["query"]
++    anyOf: [{ required: ["symbol"] }, { required: ["query"] }],
++    additionalProperties: false
+   },
+
+   async run(args: {
+-    query: string;
++    query?: string;
++    symbol?: string;
+   }, headers?: IncomingHttpHeaders) {
++    const started = Date.now();
++    const mode = args?.symbol === undefined ? "general" : "company";
+     try {
+-      // Parameter validation
+-      if (!args.query || args.query.trim() === "") {
+-        throw new Error("Query parameter is required and cannot be empty");
++      if (!args || typeof args !== "object"
++          || (args.query !== undefined && (typeof args.query !== "string"
++            || !args.query.trim() || args.query.length > 300))
++          || (args.symbol !== undefined && (typeof args.symbol !== "string"
++            || !/^[A-Za-z]{1,6}([.-][A-Za-z]{1,3})?$/.test(args.symbol)))
++          || (!args.symbol && !args.query?.trim())) {
++        throw new NewsInputError("Provide a valid public US symbol or a non-empty query (maximum 300 characters).");
+       }
+
+-      const query = args.query.trim();
+-      const limit = 10; // Fixed limit for simplicity
++      const symbol = args.symbol?.toUpperCase();
++      const query = args.query?.trim() || "";
++      const limit = 10;
+
+-      console.log(`Fetching financial news for query: "${query}"`);
+-
+-      // Get configuration from headers or environment
+       const config = getFinnhubConfig(headers);
+       const validation = validateConfig(config);
+
+       if (!validation.isValid) {
+-        throw new Error(validation.error);
++        throw new NewsInputError("Financial news provider is not configured.");
+       }
+
+-      const newsArticles = await fetchNewsFromSources(query, limit, config);
++      console.log(JSON.stringify({ event: "financial_news_started", mode }));
++      const newsArticles = await fetchFromFinnhub(query, limit, config, symbol);
++      console.log(JSON.stringify({
++        event: "financial_news_completed", mode, count: newsArticles.length,
++        durationMs: Date.now() - started
++      }));
+
+       if (newsArticles.length === 0) {
+         return {
+           content: [{
+             type: "text",
+-            text: "❌ No financial news found for the specified criteria. Please try different search terms."
++            text: "No recent articles returned for this request in Finnhub's last-7-day coverage. This does not mean no events occurred."
+           }],
+           isError: false
+         };
+       }
+
+       // Format the news articles
+-      const formattedNews = formatNewsArticles(newsArticles, query);
++      const formattedNews = formatNewsArticles(newsArticles, symbol || query);
+
+       return {
+         content: [{
+@@ -63,48 +83,23 @@
+       };
+
+     } catch (error) {
+-      console.error("Error fetching financial news:", error);
+-
+-      let errorMessage = "❌ Failed to fetch financial news.";
+-
+-      if (error instanceof Error) {
+-        if (error.message.includes('Finnhub API key not configured')) {
+-          errorMessage += "\n\n🔧 **Configuration Required:**\n";
+-          errorMessage += "Please provide your Finnhub API key via one of these methods:\n\n";
+-          errorMessage += "**Option 1 - Environment Variable:**\n";
+-          errorMessage += "1. Sign up at: https://finnhub.io/register\n";
+-          errorMessage += "2. Get your free API key\n";
+-          errorMessage += "3. Add `FINNHUB_API_KEY=your_key_here` to your `.env` file\n";
+-          errorMessage += "4. Restart the server\n\n";
+-          errorMessage += "**Option 2 - MCP Configuration Headers:**\n";
+-          errorMessage += "Add headers to your MCP client configuration:\n";
+-          errorMessage += '```json\n';
+-          errorMessage += '{\n';
+-          errorMessage += '  "mcpServers": {\n';
+-          errorMessage += '    "financenews-mcp": {\n';
+-          errorMessage += '      "type": "streamableHttp",\n';
+-          errorMessage += '      "url": "http://localhost:3000/mcp",\n';
+-          errorMessage += '      "headers": {\n';
+-          errorMessage += '        "X-Finnhub-API-Key": "your_api_key_here"\n';
+-          errorMessage += '      }\n';
+-          errorMessage += '    }\n';
+-          errorMessage += '  }\n';
+-          errorMessage += '}\n';
+-          errorMessage += '```\n\n';
+-          errorMessage += "💡 Free tier: 60 requests/minute";
+-        } else if (error.message.includes('No articles found')) {
+-          errorMessage += "\n\n📭 **No Results Found:**\n";
+-          errorMessage += "Try different keywords or check if Finnhub has news for your query.\n";
+-          errorMessage += "Example queries: 'Apple', 'Tesla', 'Federal Reserve', 'Bitcoin'";
+-        } else {
+-          errorMessage += `\n\n🔍 **Error Details:** ${error.message}`;
+-        }
+-      }
++      // Axios errors contain credentials in config/URLs. Never serialize them.
++      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
++      const timedOut = axios.isAxiosError(error)
++        && (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT");
++      const reason = error instanceof NewsInputError ? error.message
++        : timedOut ? "Financial news provider timed out."
++        : status ? `Financial news provider failed (HTTP ${status}).`
++        : "Financial news provider request or response failed.";
++      console.error(JSON.stringify({
++        event: "financial_news_failed", mode, status, timedOut,
++        durationMs: Date.now() - started
++      }));
+
+       return {
+         content: [{
+           type: "text",
+-          text: errorMessage
++          text: reason
+         }],
+         isError: true
+       };
+@@ -112,34 +107,6 @@
+   }
+ };
+
+-// Helper function to fetch news from Finnhub only
+-async function fetchNewsFromSources(
+-  query: string,
+-  limit: number,
+-  config: any
+-): Promise<NewsArticle[]> {
+-  const articles: NewsArticle[] = [];
+-
+-  try {
+-    console.log('🔍 Fetching financial news from Finnhub...');
+-
+-    // Try Finnhub News
+-    try {
+-      const finnhubArticles = await fetchFromFinnhub(query, limit, config);
+-      articles.push(...finnhubArticles);
+-    } catch (error) {
+-      console.warn('Finnhub failed:', error);
+-      throw error; // Re-throw to preserve error handling
+-    }
+-
+-  } catch (error) {
+-    console.error(`Error fetching news:`, error);
+-    throw error; // Re-throw the error instead of using sample data
+-  }
+-
+-  return articles.slice(0, limit);
+-}
+-
+ // Helper function to format news articles for display
+ function formatNewsArticles(articles: NewsArticle[], query: string): string {
+   const header = `# 📰 Financial News Results for "${query}"`;
+@@ -148,18 +115,16 @@
+     const timeAgo = getTimeAgo(article.publishedAt);
+     return `## ${index + 1}. ${article.title}
+
+-**Source:** ${article.source} | **Published:** ${timeAgo}
++**Source:** ${article.source} | **Published:** ${article.publishedAt.toISOString()} (${timeAgo})
+
+ ${article.description}
+
+-**Impact:** ${article.impact || 'Neutral'}
+-
+ [Read more](${article.url})
+
+ ---`;
+   }).join('\n\n');
+
+-  const footer = `\n\n*📊 Total articles: ${articles.length} | Last updated: ${new Date().toLocaleString()}*`;
++  const footer = `\n\n*📊 Total articles: ${articles.length} | Coverage: last 7 days | Retrieved at: ${new Date().toISOString()}*`;
+
+   return `${header}\n\n${newsItems}${footer}`;
+ }
+@@ -184,60 +149,56 @@
+ }
+
+ // Finnhub API integration function
+-async function fetchFromFinnhub(query: string, limit: number, config: any): Promise<NewsArticle[]> {
+-  const response = await axios.get(`${config.baseUrl}/news`, {
+-    params: {
+-      category: 'general',
+-      token: config.apiKey
+-    },
+-    timeout: config.timeout
++async function fetchFromFinnhub(query: string, limit: number, config: any, symbol?: string): Promise<NewsArticle[]> {
++  const now = Date.now();
++  const from = now - 7 * 24 * 60 * 60 * 1000;
++  const stopWords = new Set("a an and are as at by for from in is it of on or the to why stock today up down corporation company news".split(" "));
++  const keywords = [...new Set((query.toLowerCase().match(/[a-z0-9]+/g) || [])
++    .filter(word => word.length > 1 && !stopWords.has(word) && !/^\d+$/.test(word)))];
++  if (!symbol && keywords.length === 0) {
++    throw new NewsInputError("Provide meaningful general-topic keywords or an explicit public symbol.");
++  }
++  const response = await axios.get(`${config.baseUrl}/${symbol ? "company-news" : "news"}`, {
++    params: symbol ? {
++      symbol, from: new Date(from).toISOString().slice(0, 10),
++      to: new Date(now).toISOString().slice(0, 10), token: config.apiKey
++    } : { category: 'general', token: config.apiKey },
++    timeout: Math.min(config.timeout, 8000)
+   });
++  if (!Array.isArray(response.data)) {
++    throw new Error("Invalid provider response");
++  }
+
+   return response.data
+-    .filter((article: any) =>
+-      article.headline?.toLowerCase().includes(query.toLowerCase()) ||
+-      article.summary?.toLowerCase().includes(query.toLowerCase())
+-    )
++    .filter((article: any) => {
++      if (!article || typeof article.datetime !== "number"
++          || article.datetime * 1000 < from || article.datetime * 1000 > now
++          || !Number.isFinite(article.datetime)
++          || typeof article.headline !== "string" || !article.headline.trim()
++          || typeof article.url !== "string" || article.url.length > 2000
++          || !/^https?:\/\/[^\s]+$/i.test(article.url)) return false;
++      if (symbol) {
++        // The company endpoint establishes relevance; context is not a literal filter.
++        return !article.related || (typeof article.related === "string"
++          && article.related.split(",").some((value: string) => value.trim().toUpperCase() === symbol));
++      }
++      const words = new Set(`${article.headline} ${typeof article.summary === "string" ? article.summary : ""}`
++        .toLowerCase().match(/[a-z0-9]+/g) || []);
++      return keywords.some(word => words.has(word));
++    })
++    .sort((a: any, b: any) => b.datetime - a.datetime)
++    .filter((article: any, index: number, articles: any[]) =>
++      articles.findIndex(other => other.url === article.url) === index)
+     .slice(0, limit)
+     .map((article: any) => ({
+-      title: article.headline || 'No Title',
+-      description: article.summary || 'No description available',
+-      source: article.source || 'Finnhub',
+-      url: article.url || '#',
+-      publishedAt: new Date(article.datetime * 1000),
+-      impact: determineImpact(query, article.headline + ' ' + article.summary)
++      title: article.headline.slice(0, 300),
++      description: typeof article.summary === "string" ? article.summary.slice(0, 1500) : 'No description available',
++      source: typeof article.source === "string" && article.source ? article.source.slice(0, 100) : 'Finnhub',
++      url: article.url,
++      publishedAt: new Date(article.datetime * 1000)
+     }));
+ }
+
+-// Helper function to determine impact level based on content
+-function determineImpact(query: string, content: string): string {
+-  const highImpactKeywords = ['federal reserve', 'fed', 'interest rate', 'recession', 'crash', 'bankruptcy', 'merger', 'acquisition', 'earnings', 'surprise'];
+-  const mediumImpactKeywords = ['growth', 'profit', 'revenue', 'investment', 'trading', 'market', 'economy', 'inflation'];
+-
+-  const contentLower = content.toLowerCase();
+-  const queryLower = query.toLowerCase();
+-
+-  // Check for high impact keywords
+-  if (highImpactKeywords.some(keyword => contentLower.includes(keyword))) {
+-    return 'High';
+-  }
+-
+-  // Check for medium impact keywords
+-  if (mediumImpactKeywords.some(keyword => contentLower.includes(keyword))) {
+-    return 'Medium';
+-  }
+-
+-  // Check if query terms appear prominently
+-  const queryWords = queryLower.split(' ').filter(word => word.length > 2);
+-  const matches = queryWords.filter(word => contentLower.includes(word)).length;
+-
+-  if (matches >= 2) {
+-    return 'Medium';
+-  }
+-
+-  return 'Low';
+-}
+-
+ // Interface for news articles
+ interface NewsArticle {
+   title: string;
+@@ -245,5 +206,4 @@
+   source: string;
+   url: string;
+   publishedAt: Date;
+-  impact?: string;
+ }
+\ No newline at end of file

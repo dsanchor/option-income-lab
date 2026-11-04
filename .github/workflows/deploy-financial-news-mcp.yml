@@ -49,6 +49,12 @@ jobs:
             -e FINNHUB_API_KEY=smoke-test-not-a-live-key financial-news-mcp:smoke)
           trap 'docker stop "$container" >/dev/null' EXIT
           python3 mcp/financial-news/smoke.py http://127.0.0.1:3000
+      - name: Test provider requests and discovery with real MCP SDK (no live key)
+        run: |
+          docker run --rm \
+            -v "$PWD/mcp/financial-news/tests/news.test.mjs:/app/news.test.mjs:ro" \
+            -v "$PWD/mcp/financial-news/tests/fixture-provider.mjs:/app/fixture-provider.mjs:ro" \
+            financial-news-mcp:smoke node --test news.test.mjs
       - name: Publish image
         id: build
         uses: docker/build-push-action@v6
@@ -89,6 +95,19 @@ jobs:
           AZURE_CONTAINER_APPS_ENVIRONMENT: ${{ vars.AZURE_CONTAINER_APPS_ENVIRONMENT || 'cae-stock-options-manager' }}
           AZURE_FINANCIAL_NEWS_APP: ${{ vars.AZURE_FINANCIAL_NEWS_APP || 'ca-stock-options-financial-news' }}
         run: python3 mcp/financial-news/deploy.py
+      - name: Verify live public MSFT and NEE news inside the internal app
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'stock-options-manager-rg' }}
+          APP_NAME: ${{ vars.AZURE_FINANCIAL_NEWS_APP || 'ca-stock-options-financial-news' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # ACA exec requires a terminal. No credential is read by this runner.
+          printf -v command 'az containerapp exec --resource-group %q --name %q --command %q' \
+            "$RESOURCE_GROUP" "$APP_NAME" 'node /app/live-smoke.mjs'
+          trap 'rm -f financial-news-probe.log' EXIT
+          timeout 90s script -q -e -c "$command" /dev/null | tee financial-news-probe.log
+          grep -q 'FINANCIAL_NEWS_LIVE_SMOKE_OK' financial-news-probe.log
       - name: Azure logout
         if: always()
         run: az logout || true

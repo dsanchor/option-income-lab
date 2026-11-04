@@ -38,3 +38,10 @@ def test_news_instructions_preserve_privacy_and_evidence_boundary():
     assert "source URLs and publication dates when present" in API_CHAT_INSTRUCTIONS
     assert "unrelated search hits are not company news" in API_CHAT_INSTRUCTIONS
     assert "not that no events occurred" in API_CHAT_INSTRUCTIONS
+
+
+def test_company_news_uses_explicit_symbol_instead_of_sentence_search():
+    assert '{"symbol":"MSFT"}' in API_CHAT_INSTRUCTIONS
+    assert '{"symbol":"NEE"}' in API_CHAT_INSTRUCTIONS
+    assert "it does not filter company articles" in API_CHAT_INSTRUCTIONS
+    assert "not a historical-date search" in API_CHAT_INSTRUCTIONS

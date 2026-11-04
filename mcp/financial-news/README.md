@@ -2,10 +2,43 @@
 
 Isolated deployment of [FinanceNews-MCP](https://github.com/guangxiangdebizi/FinanceNews-MCP),
 as listed on [MCP Market](https://mcpmarket.com/server/finance-news).
-The Dockerfile builds unmodified upstream commit
+The Dockerfile builds upstream commit
 `6243c388da63d94562cf8286b00fbed03076d217` (package 1.1.0), verifies its archive SHA-256,
 and installs its locked dependencies with `npm ci`. Upstream source and Apache-2.0
-license are retained in the image. No financial-news logic is reimplemented.
+license are retained in the image. `company-news.patch` is a focused, checked-in
+compatibility patch against that exact source, applied with zero fuzz (builds
+fail if it no longer applies); the MCP server/framework is unchanged.
+
+## Company-news compatibility fix
+
+Upstream queried only Finnhub `/news?category=general` and required the **entire
+query sentence** to occur contiguously in a headline/summary. Company+ticker+topic
+sentences therefore normally returned nothing, and even a ticker alone searched
+the wrong, narrow general-market feed.
+
+`get_financial_news` now accepts either:
+
+- `{"symbol":"MSFT"}` or `{"symbol":"NEE","query":"earnings"}`: explicit public
+  US ticker (case-insensitive, class/exchange suffix allowed). Calls Finnhub
+  [`/company-news`](https://finnhub.io/docs/api/company-news) with `symbol`,
+  `from` and `to` in `YYYY-MM-DD` UTC format. Optional query is context only:
+  it never filters away company news. No arbitrary sentence-to-ticker guessing.
+- `{"query":"Federal Reserve"}`: backward-compatible general-feed search,
+  matching any meaningful normalized keyword rather than the whole sentence.
+  This is a limited feed filter, not semantic search or a web search.
+
+Both return at most 10 unique articles from the last seven rolling days,
+newest first. Invalid/future/stale timestamps and unusable URLs are excluded;
+provider-supplied related tickers, when present, must include the requested
+symbol. Queries are bounded to 300 characters; output fields are bounded too.
+Publication times include exact provider UTC timestamps and sources/URLs.
+The upstream heuristic “Impact” label is removed: it was not provider evidence.
+Empty coverage is a non-error, explicitly distinct from failures. Authentication,
+rate-limit, timeout and malformed-response failures remain `isError: true`.
+No samples, fabricated fallback, or credentials in logs/errors. Safe completion
+logs include mode/count/duration; failures include HTTP status/timeout only,
+not the query, article content, Axios config or key. Provider requests time out
+after eight seconds, within the API Chat MCP timeout.
 
 ## Deployment
 
@@ -116,9 +149,9 @@ The existing Agent Framework 1.4.0 SDK handles transport, sessions, discovery,
 and invocation. Upstream negotiates MCP `2024-11-05`, supports no prompts, and
 rejects `ping` with HTTP 400 (which aborts the SDK transport). A news-only
 subclass skips that optional SDK connectivity probe; prompts and session DELETE
-are disabled. Real SDK smoke against the unmodified pinned server validated
+are disabled. Real SDK smoke against the patched pinned server validates
 session-bound discovery and local validation-error propagation without calling
-Finnhub or an LLM. No raw JSON-RPC client or upstream fork is introduced.
+Finnhub or an LLM. No replacement MCP framework is introduced.
 
 ## Validation
 
@@ -129,12 +162,27 @@ docker run --rm -p 127.0.0.1:3000:3000 \
   -e FINNHUB_API_KEY=smoke-test-not-a-live-key financial-news-mcp:local
 # In another terminal:
 python3 mcp/financial-news/smoke.py http://127.0.0.1:3000
+docker run --rm \
+  -v "$PWD/mcp/financial-news/tests/news.test.mjs:/app/news.test.mjs:ro" \
+  -v "$PWD/mcp/financial-news/tests/fixture-provider.mjs:/app/fixture-provider.mjs:ro" \
+  financial-news-mcp:local node --test news.test.mjs
 ```
 
 CI runs the smoke test against the built image. It checks `/health`, MCP initialize,
 session-bound `tools/list`, and rejection without a session. It deliberately does
-not invoke Finnhub or claim validation of live market data. Deploy-time health
-uses the platform probes, since the runner cannot reach an internal-only service.
+not invoke Finnhub or claim validation of live market data. The separate real
+MCP SDK fixture test discovers the symbol schema and calls the actual patched
+provider code with a test-only Axios adapter, including endpoint/date assertions,
+company-context queries, general matching, empty results and sanitized errors.
+No live key, base-URL override or model call is used for these tests.
+
+After platform probes report healthy, deployment runs `live-smoke.mjs` **inside**
+the app with ACA exec (terminal required), using its existing environment. Two
+public MSFT/NEE calls verify actual MCP discovery and provider retrieval. Only
+counts/latest UTC timestamps and sanitized failure categories are printed;
+the key never leaves the app. A successful health check alone is not evidence
+of live news. Missing articles, provider errors or unavailable exec fail this
+verification step without claiming retrieval worked or rolling back deployment.
 
 To upgrade, intentionally change the upstream commit and archive SHA-256 in the
 Dockerfile together, review upstream changes/license, and rerun the tests. Keep

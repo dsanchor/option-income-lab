@@ -135,10 +135,11 @@ async def test_real_sdk_supports_upstream_session_protocol_without_ping_or_promp
                 "description": "Fetch financial news",
                 "inputSchema": {"type": "object", "properties": {
                     "query": {"type": "string"},
-                }, "required": ["query"]},
+                    "symbol": {"type": "string"},
+                }, "anyOf": [{"required": ["symbol"]}, {"required": ["query"]}]},
             }]}
         elif method == "tools/call":
-            assert body["params"]["arguments"] == {"query": "Apple AAPL earnings"}
+            assert body["params"]["arguments"] == {"symbol": "MSFT", "query": "earnings"}
             result = {
                 "content": [{"type": "text", "text": "Upstream news failed" if call_error else "Article"}],
                 "isError": call_error,
@@ -166,9 +167,9 @@ async def test_real_sdk_supports_upstream_session_protocol_without_ping_or_promp
         assert "tools/call" not in methods
         if call_error:
             with pytest.raises(ToolExecutionException, match="Upstream news failed"):
-                await tool.call_tool("get_financial_news", query="Apple AAPL earnings")
+                await tool.call_tool("get_financial_news", symbol="MSFT", query="earnings")
         else:
-            result = await tool.call_tool("get_financial_news", query="Apple AAPL earnings")
+            result = await tool.call_tool("get_financial_news", symbol="MSFT", query="earnings")
             assert result[0].text == "Article"
     assert "ping" not in methods
     assert "prompts/list" not in methods

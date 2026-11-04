@@ -1,2 +1,4 @@
 **
 !Dockerfile
+!company-news.patch
+!live-smoke.mjs
