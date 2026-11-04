@@ -26,8 +26,17 @@ try {
     clientInfo: { name: 'live-news-smoke', version: '1.0' },
   });
   const listed = await rpc('tools/list', {});
+  for (const tool of listed.tools) {
+    const schema = tool.inputSchema;
+    if (schema?.type !== 'object'
+        || ['oneOf', 'anyOf', 'allOf', 'enum', 'const', 'not']
+          .some(key => Object.hasOwn(schema, key))) {
+      throw new Error('Provider-incompatible tool schema');
+    }
+  }
   if (!listed.tools.some(tool => tool.name === 'get_financial_news'
       && tool.inputSchema.properties.symbol)) throw new Error('Missing symbol schema');
+  console.log('FINANCIAL_NEWS_PROVIDER_SCHEMA_OK');
   for (const symbol of ['MSFT', 'NEE']) {
     const result = await rpc('tools/call', {
       name: 'get_financial_news', arguments: { symbol },

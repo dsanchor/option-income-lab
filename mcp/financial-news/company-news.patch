@@ -1,6 +1,6 @@
 --- a/src/tools/financial-news.ts
 +++ b/src/tools/financial-news.ts
-@@ -1,58 +1,78 @@
+@@ -1,58 +1,77 @@
  import axios from 'axios';
 -import * as cheerio from 'cheerio';
  import { getFinnhubConfig, validateConfig } from '../config.js';
@@ -30,7 +30,6 @@
        }
      },
 -    required: ["query"]
-+    anyOf: [{ required: ["symbol"] }, { required: ["query"] }],
 +    additionalProperties: false
    },
 
@@ -96,7 +95,7 @@
 
        return {
          content: [{
-@@ -63,48 +83,23 @@
+@@ -63,48 +82,23 @@
        };
 
      } catch (error) {
@@ -158,7 +157,7 @@
          }],
          isError: true
        };
-@@ -112,34 +107,6 @@
+@@ -112,34 +106,6 @@
    }
  };
 
@@ -193,7 +192,7 @@
  // Helper function to format news articles for display
  function formatNewsArticles(articles: NewsArticle[], query: string): string {
    const header = `# 📰 Financial News Results for "${query}"`;
-@@ -148,18 +115,16 @@
+@@ -148,18 +114,16 @@
      const timeAgo = getTimeAgo(article.publishedAt);
      return `## ${index + 1}. ${article.title}
 
@@ -214,7 +213,7 @@
 
    return `${header}\n\n${newsItems}${footer}`;
  }
-@@ -184,60 +149,56 @@
+@@ -184,60 +148,56 @@
  }
 
  // Finnhub API integration function
@@ -317,7 +316,7 @@
  // Interface for news articles
  interface NewsArticle {
    title: string;
-@@ -245,5 +206,4 @@
+@@ -245,5 +205,4 @@
    source: string;
    url: string;
    publishedAt: Date;

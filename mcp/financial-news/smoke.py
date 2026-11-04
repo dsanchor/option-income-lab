@@ -8,6 +8,15 @@ import urllib.error
 import urllib.request
 
 
+def validate_tool_schemas(tools):
+    forbidden = {"oneOf", "anyOf", "allOf", "enum", "const", "not"}
+    for tool in tools:
+        schema = tool["inputSchema"]
+        assert schema.get("type") == "object", f"{tool['name']}: root must be object"
+        assert not forbidden.intersection(schema), f"{tool['name']}: provider rejects root schema keywords"
+    assert any(tool["name"] == "get_financial_news" for tool in tools)
+
+
 def smoke(base):
     for attempt in range(30):
         try:
@@ -39,14 +48,14 @@ def smoke(base):
     initialized, session = rpc("initialize", 1)
     assert session and initialized["result"]["capabilities"]["tools"] == {}
     listed, _ = rpc("tools/list", 2, session)
-    assert any(tool["name"] == "get_financial_news" for tool in listed["result"]["tools"])
+    validate_tool_schemas(listed["result"]["tools"])
     try:
         rpc("tools/list", 3)
     except urllib.error.HTTPError as error:
         assert error.code == 400
     else:
         raise AssertionError("Sessionless tools/list was incorrectly accepted")
-    print("Health, initialization, session-bound tools/list, and session rejection passed.")
+    print("Health, initialization, provider-compatible tools/list, and session rejection passed.")
 
 
 if __name__ == "__main__":

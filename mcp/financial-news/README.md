@@ -27,6 +27,12 @@ the wrong, narrow general-market feed.
   matching any meaningful normalized keyword rather than the whole sentence.
   This is a limited feed filter, not semantic search or a web search.
 
+The tool schema is a flat `type: object` with optional `symbol` and `query`
+properties: API Chat's model provider rejects root schema combinators such as
+`anyOf`. The requirement to supply at least one is enforced at runtime; empty
+arguments return `isError: true`. Property bounds and `additionalProperties: false`
+remain unchanged.
+
 Both return at most 10 unique articles from the last seven rolling days,
 newest first. Invalid/future/stale timestamps and unusable URLs are excluded;
 provider-supplied related tickers, when present, must include the requested
@@ -169,17 +175,20 @@ docker run --rm \
 ```
 
 CI runs the smoke test against the built image. It checks `/health`, MCP initialize,
-session-bound `tools/list`, and rejection without a session. It deliberately does
-not invoke Finnhub or claim validation of live market data. The separate real
-MCP SDK fixture test discovers the symbol schema and calls the actual patched
-provider code with a test-only Axios adapter, including endpoint/date assertions,
+session-bound `tools/list` with provider-compatible root schemas, and rejection
+without a session. It deliberately does not invoke Finnhub or claim validation
+of live market data. The separate real
+MCP SDK fixture test checks both exported parameters and actual discovered schemas
+for provider compatibility, and calls the actual patched provider code with a
+test-only Axios adapter, including endpoint/date assertions,
 company-context queries, general matching, empty results and sanitized errors.
 No live key, base-URL override or model call is used for these tests.
 
 After platform probes report healthy, deployment runs `live-smoke.mjs` **inside**
 the app with ACA exec (terminal required), using its existing environment. Two
-public MSFT/NEE calls verify actual MCP discovery and provider retrieval. Only
-counts/latest UTC timestamps and sanitized failure categories are printed;
+public MSFT/NEE calls verify actual MCP discovery (including provider-compatible
+root schemas) and provider retrieval. Only counts/latest UTC timestamps and
+sanitized failure categories are printed;
 the key never leaves the app. A successful health check alone is not evidence
 of live news. Missing articles, provider errors or unavailable exec fail this
 verification step without claiming retrieval worked or rolling back deployment.

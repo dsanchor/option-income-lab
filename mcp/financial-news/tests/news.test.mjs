@@ -5,6 +5,21 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { getFinancialNews } from './build/tools/financial-news.js';
+
+function assertProviderSchema(schema) {
+  assert.equal(schema.type, 'object');
+  for (const key of ['oneOf', 'anyOf', 'allOf', 'enum', 'const', 'not']) {
+    assert.ok(!Object.hasOwn(schema, key), `Provider rejects root ${key}`);
+  }
+}
+
+test('exported news parameters are provider-compatible; empty input is rejected at runtime', async () => {
+  assertProviderSchema(getFinancialNews.parameters);
+  const result = await getFinancialNews.run({});
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /Provide a valid public US symbol or a non-empty query/);
+});
 
 test('patched server discovers and calls company/general news using the real MCP SDK', async () => {
   const port = 3197;
@@ -35,7 +50,7 @@ test('patched server discovers and calls company/general news using the real MCP
     const { tools } = await client.listTools();
     const tool = tools.find(item => item.name === 'get_financial_news');
     assert.ok(tool.inputSchema.properties.symbol);
-    assert.ok(tool.inputSchema.anyOf);
+    assertProviderSchema(tool.inputSchema);
     const call = args => client.callTool({ name: tool.name, arguments: args });
     const text = result => result.content.map(item => item.text || '').join('\n');
 
@@ -85,6 +100,7 @@ test('patched server discovers and calls company/general news using the real MCP
       env: { ...process.env, PORT: String(port) }, timeout: 10000,
     });
     assert.match(probe.stdout, /FINANCIAL_NEWS_LIVE_SMOKE_OK/);
+    assert.match(probe.stdout, /FINANCIAL_NEWS_PROVIDER_SCHEMA_OK/);
     assert.match(probe.stdout, /"symbol":"NEE","count":/);
     assert.doesNotMatch(probe.stdout, /Quarterly earnings|fixture-secret|Provider summary/);
     assert.match(logs, /financial_news_completed/);

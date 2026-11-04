@@ -28,7 +28,10 @@ class SmokeTests(unittest.TestCase):
             http.client.RemoteDisconnected("container starting"),
             response({"status": "healthy"}),
             response({"result": {"capabilities": {"tools": {}}}}, {"Mcp-Session-Id": "session"}),
-            response({"result": {"tools": [{"name": "get_financial_news"}]}}),
+            response({"result": {"tools": [{
+                "name": "get_financial_news",
+                "inputSchema": {"type": "object", "properties": {}},
+            }]}}),
             urllib.error.HTTPError("http://local/mcp", 400, "Session required", {}, None),
         ]
         with patch.object(smoke.urllib.request, "urlopen", side_effect=requests) as request, \
@@ -36,6 +39,18 @@ class SmokeTests(unittest.TestCase):
             smoke.smoke("http://local")
             self.assertEqual(sleep.call_count, 2)
             self.assertEqual(request.call_args_list[4].args[0].headers["Mcp-session-id"], "session")
+
+    def test_rejects_provider_incompatible_discovered_schemas(self):
+        for keyword in ["oneOf", "anyOf", "allOf", "enum", "const", "not"]:
+            with self.subTest(keyword=keyword), self.assertRaises(AssertionError):
+                smoke.validate_tool_schemas([{
+                    "name": "get_financial_news",
+                    "inputSchema": {"type": "object", keyword: []},
+                }])
+        with self.assertRaises(AssertionError):
+            smoke.validate_tool_schemas([{
+                "name": "get_financial_news", "inputSchema": {"type": "string"},
+            }])
 
     def test_startup_wait_is_bounded(self):
         with patch.object(smoke.urllib.request, "urlopen", side_effect=ConnectionResetError) as request, \
