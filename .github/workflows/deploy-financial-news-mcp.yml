@@ -1,0 +1,94 @@
+name: Deploy Finance News MCP
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mcp/financial-news/**'
+      - '.github/workflows/deploy-financial-news-mcp.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate deployment and transport tests
+        run: python3 -m unittest discover -s mcp/financial-news/tests -v
+      - name: Compute image name
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "name=ghcr.io/${REPOSITORY,,}-financial-news-mcp" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build smoke-test image
+        uses: docker/build-push-action@v6
+        with:
+          context: mcp/financial-news
+          load: true
+          tags: financial-news-mcp:smoke
+      - name: Smoke-test health and MCP session lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          container=$(docker run -d --rm -p 127.0.0.1:3000:3000 \
+            -e FINNHUB_API_KEY=smoke-test-not-a-live-key financial-news-mcp:smoke)
+          trap 'docker stop "$container" >/dev/null' EXIT
+          python3 mcp/financial-news/smoke.py http://127.0.0.1:3000
+      - name: Publish image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: mcp/financial-news
+          push: true
+          tags: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: deploy-production-financial-news-mcp
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require anonymous immutable image pull
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}
+        run: python3 mcp/financial-news/check_public_image.py "$IMAGE"
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Create or update internal Finance News MCP
+        env:
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          IMAGE: ${{ needs.build.outputs.image }}
+          REVISION_SUFFIX: r${{ github.run_id }}-${{ github.run_attempt }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'stock-options-manager-rg' }}
+          AZURE_CONTAINER_APPS_ENVIRONMENT: ${{ vars.AZURE_CONTAINER_APPS_ENVIRONMENT || 'cae-stock-options-manager' }}
+          AZURE_FINANCIAL_NEWS_APP: ${{ vars.AZURE_FINANCIAL_NEWS_APP || 'ca-stock-options-financial-news' }}
+        run: python3 mcp/financial-news/deploy.py
+      - name: Azure logout
+        if: always()
+        run: az logout || true
