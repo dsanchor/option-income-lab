@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 import json
 import logging
@@ -94,6 +95,48 @@ _console_handler.setLevel(logging.INFO)
 _console_handler.setFormatter(_fmt)
 
 logger.addHandler(_console_handler)
+
+
+class _FinancialNewsMCPTool(MCPStreamableHTTPTool):
+    async def _ensure_connected(self) -> None:
+        # Pinned FinanceNews-MCP rejects ping with HTTP 400, which aborts the
+        # SDK transport. Keep SDK discovery/calls, but skip its optional ping.
+        if not self.is_connected or self.session is None:
+            await self.connect()
+
+
+@asynccontextmanager
+async def _api_chat_news_tool(url: str | None):
+    if not url:
+        yield None
+        return
+    tool = _FinancialNewsMCPTool(
+        name="financial-news-mcp",
+        url=url,
+        request_timeout=10,
+        load_prompts=False,
+        allowed_tools=["get_financial_news"],
+        terminate_on_close=False,
+    )
+    available = False
+    try:
+        try:
+            async with asyncio.timeout(15):
+                await tool.connect()
+                if not any(f.name == "get_financial_news" for f in tool.functions):
+                    raise RuntimeError("News MCP did not expose get_financial_news")
+            available = True
+        except Exception:
+            logger.warning(
+                "Optional financial news MCP discovery failed; continuing API Chat without news",
+                exc_info=True,
+            )
+        yield tool if available else None
+    finally:
+        try:
+            await tool.close()
+        except Exception:
+            logger.warning("Optional financial news MCP cleanup failed", exc_info=True)
 
 
 class AgentRunner:
@@ -4224,13 +4267,15 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
         *,
         prompt,
         mcp_url: str,
+        financial_news_mcp_url: str | None = None,
     ) -> str:
         """Generate one API Chat response using live MCP tools for business data.
 
         ``mcp_url`` must point at the internal-only oil-mcp Container App
         (e.g. ``https://<mcp-fqdn>/mcp``). Raises ``RuntimeError`` wrapping
         any MCP connectivity failure so the route layer can surface a clear
-        503 instead of a generic 500.
+        503 instead of a generic 500. News is optional: failed discovery leaves
+        business tools available and explicitly tells the agent news is unavailable.
         """
         run_start = time.time()
         logger.info("Starting API chat function_id=%s", "api_chat")
@@ -4240,15 +4285,26 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
             request_timeout=30,
         )
         try:
-            async with mcp_tool:
+            async with mcp_tool, _api_chat_news_tool(financial_news_mcp_url) as news_tool:
+                tools = [mcp_tool]
+                instructions = prompt.instructions
+                if news_tool is not None:
+                    tools.append(news_tool)
+                else:
+                    instructions += (
+                        "\n\nFinancial news access is unavailable for this turn. "
+                        "Continue using business tools as needed. If current news is "
+                        "needed, explicitly say you cannot retrieve it; do not invent "
+                        "headlines or treat this as evidence that no news/events exist."
+                    )
                 agent = Agent(
                     client=self._get_client(model=None, function_id="api_chat"),
                     name="ApiChatAgent",
-                    instructions=prompt.instructions,
-                    tools=[mcp_tool],
+                    instructions=instructions,
+                    tools=tools,
                 )
                 deployment = self._resolve_model_deployment(model=None, function_id="api_chat")
-                options = {"max_tokens": prompt.max_completion_tokens}
+                options = {}
                 if "luna" not in deployment.lower():
                     options["temperature"] = prompt.temperature
                 result = await agent.run(prompt.message, options=options)

@@ -11,6 +11,7 @@ env:
   AZURE_API_APP: ${{ vars.AZURE_API_APP || 'ca-stock-options-manager-api' }}
   AZURE_FRONT_APP: ${{ vars.AZURE_FRONT_APP || 'ca-stock-options-manager-front' }}
   AZURE_MCP_APP: ${{ vars.AZURE_MCP_APP || 'ca-stock-options-manager-mcp' }}
+  AZURE_FINANCIAL_NEWS_APP: ${{ vars.AZURE_FINANCIAL_NEWS_APP || 'ca-stock-options-financial-news' }}
   AZURE_BACKUP_JOB: ${{ vars.AZURE_BACKUP_JOB || 'ca-stock-options-manager-backup' }}
 
 jobs:
@@ -89,10 +90,31 @@ jobs:
       - name: Deploy API to Container Apps
         id: deploy-api
         run: |
+          NEWS_MCP_URL=""
+          if NEWS_APP=$(az containerapp show \
+            --name "$AZURE_FINANCIAL_NEWS_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query '{fqdn:properties.configuration.ingress.fqdn,external:properties.configuration.ingress.external,environment:properties.managedEnvironmentId}' -o json); then
+            API_ENV=$(az containerapp show --name "$AZURE_API_APP" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --query properties.managedEnvironmentId -o tsv)
+            NEWS_FQDN=$(echo "$NEWS_APP" | jq -r '.fqdn // empty')
+            NEWS_ENV=$(echo "$NEWS_APP" | jq -r '.environment // empty')
+            NEWS_EXTERNAL=$(echo "$NEWS_APP" | jq -r '.external')
+            if [ -n "$NEWS_FQDN" ] && [ "$NEWS_EXTERNAL" = "false" ] && [ "$NEWS_ENV" = "$API_ENV" ]; then
+              NEWS_MCP_URL="https://${NEWS_FQDN}/mcp"
+            else
+              echo "::warning::Optional news app must have internal ingress in the API environment; news disabled"
+            fi
+          else
+            echo "::warning::Optional news app unavailable; deploying API with business tools only"
+          fi
+          echo "API financial news MCP: ${NEWS_MCP_URL:-disabled}"
           REVISION=$(az containerapp update \
             --name "$AZURE_API_APP" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --image ghcr.io/dsanchor/option-income-lab-api:${{ steps.tag.outputs.tag }} \
+            --set-env-vars "FINANCIAL_NEWS_MCP_URL=$NEWS_MCP_URL" \
             --query "properties.latestRevisionName" -o tsv)
           if [ -z "$REVISION" ]; then
             echo "❌ Could not determine revision name from az containerapp update output"

@@ -13,7 +13,7 @@ license are retained in the image. No financial-news logic is reimplemented.
 or its workflow on `main`, or manually via **Actions → Deploy Finance News MCP**.
 Other branches cannot publish/deploy with this workflow. It independently tests,
 builds, smoke-tests and publishes `ghcr.io/<owner>/option-income-lab-financial-news-mcp`,
-then deploys the exact digest. Existing application deployment files are unchanged.
+then deploys the exact digest. It does not deploy the API or frontend.
 
 The `production` GitHub environment must contain:
 
@@ -78,7 +78,47 @@ must be resolved before deployment can succeed.
   reported without claiming success. No automatic rollback is performed.
 
 The successful Actions summary prints the internal HTTPS `/mcp` URL.
-No application MCP configuration is automatically changed.
+This workflow does not change application MCP configuration.
+
+## API Chat integration
+
+API Chat alone can optionally use `get_financial_news` alongside the existing
+read-only `oil-mcp` business tools. The agent chooses whether news is relevant;
+there is no unconditional news fetch. Other chat modes and Option Timing are
+unchanged. Queries contain public company/ticker/topic information only, never
+conversation history or private portfolio/account data. News output is treated
+as untrusted evidence, checked for relevance, and cited with returned source URLs
+and publication dates when available; freshness and completeness are not guaranteed.
+API Chat no longer sets its former 1,500-token output cap: provider defaults and
+model hard limits apply. Request/history safety bounds and other agents' output
+limits remain unchanged.
+
+The API container needs only the server-configured `FINANCIAL_NEWS_MCP_URL`
+(internal HTTPS `/mcp` URL), **not** a Finnhub key or extra headers. If unset, or
+if optional discovery fails, API Chat keeps its business tools and explicitly
+discloses missing news access when needed. Discovery is bounded to 15 seconds;
+news MCP requests have a 10-second timeout. Invocation errors remain errors, not
+successful news results.
+
+The main `docker-publish.yml` production API deployment discovers
+`AZURE_FINANCIAL_NEWS_APP` (default above) in `AZURE_RESOURCE_GROUP`. It sets the
+URL only when the news app has internal ingress in the API's own environment;
+an absent/incompatible app clears the optional URL without blocking deployment.
+It never modifies the separate news app. Deploy news first, then deploy the API.
+
+Fresh Bicep provisioning derives the same internal URL from the environment's
+domain, without creating or depending on the separate news app. The optional
+`apps.api.financialNewsAppName` provisioner config property overrides the default
+`ca-stock-options-financial-news`; `""` disables news. Keep it aligned with the
+Actions variable for subsequent main API deployments.
+
+The existing Agent Framework 1.4.0 SDK handles transport, sessions, discovery,
+and invocation. Upstream negotiates MCP `2024-11-05`, supports no prompts, and
+rejects `ping` with HTTP 400 (which aborts the SDK transport). A news-only
+subclass skips that optional SDK connectivity probe; prompts and session DELETE
+are disabled. Real SDK smoke against the unmodified pinned server validated
+session-bound discovery and local validation-error propagation without calling
+Finnhub or an LLM. No raw JSON-RPC client or upstream fork is introduced.
 
 ## Validation
 

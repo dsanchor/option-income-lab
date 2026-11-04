@@ -220,11 +220,21 @@ def validate(config: dict[str, Any], check_backend: bool = True) -> None:
         )
 
     apps = exact_keys(config["apps"], {"api", "frontend", "mcp"}, "apps")
+    optional_api_keys = (
+        {"financialNewsAppName"}
+        if isinstance(apps["api"], dict) and "financialNewsAppName" in apps["api"]
+        else set()
+    )
     api = exact_keys(
         apps["api"],
-        {"ingress", "minReplicas", "maxReplicas", "cpu", "memory", "healthPath"},
+        {"ingress", "minReplicas", "maxReplicas", "cpu", "memory", "healthPath"} | optional_api_keys,
         "apps.api",
     )
+    news_name = apps["api"].get("financialNewsAppName", "ca-stock-options-financial-news")
+    if not isinstance(news_name, str) or (
+        news_name and not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", news_name)
+    ):
+        fail("apps.api.financialNewsAppName must be a Container App name or empty")
     ingress = exact_keys(api["ingress"], {"external", "targetPort"}, "apps.api.ingress")
     if ingress != {"external": False, "targetPort": 8000}:
         fail("API ingress must be internal on port 8000")

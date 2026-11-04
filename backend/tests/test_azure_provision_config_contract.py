@@ -45,6 +45,21 @@ def test_example_passes_draft_2020_schema_and_runtime_validator():
     VALIDATOR.validate(config)
 
 
+@pytest.mark.parametrize("name", ["custom-news-app", "", "https://external.invalid", 123])
+def test_optional_news_app_name_schema_and_runtime_validation_agree(name):
+    config = _config()
+    config["apps"]["api"]["financialNewsAppName"] = name
+    validator = jsonschema.Draft202012Validator(json.loads(SCHEMA_PATH.read_text()))
+    if isinstance(name, str) and name in {"custom-news-app", ""}:
+        validator.validate(config)
+        VALIDATOR.validate(config, check_backend=False)
+    else:
+        with pytest.raises(jsonschema.ValidationError):
+            validator.validate(config)
+        with pytest.raises(VALIDATOR.ConfigError, match="financialNewsAppName"):
+            VALIDATOR.validate(config, check_backend=False)
+
+
 @pytest.mark.parametrize(
     ("path", "key", "value"),
     [

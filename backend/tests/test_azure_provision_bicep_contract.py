@@ -132,6 +132,21 @@ def test_api_is_internal_frontend_requires_entra_and_real_internal_fqdn():
     assert "clientSecretSettingName: 'entra-client-secret'" in auth
 
 
+def test_news_url_is_api_only_without_deploying_the_separate_news_app():
+    template = _compile(MODULES / "apps.bicep")
+    apps = _text("apps.bicep")
+    assert "apiConfig.?financialNewsAppName ?? 'ca-stock-options-financial-news'" in apps
+    assert "'https://${financialNewsAppName}.internal.${environmentDefaultDomain}/mcp'" in apps
+    resources = template["resources"]
+    api_env = resources[0]["properties"]["template"]["containers"][0]["env"]
+    assert "FINANCIAL_NEWS_MCP_URL" in str(api_env)
+    assert all(
+        "FINANCIAL_NEWS_MCP_URL" not in str(resource)
+        for resource in resources[1:]
+    )
+    assert all("financialNewsAppName" not in str(resource["name"]) for resource in resources)
+
+
 def test_cosmos_and_foundry_keys_are_secure_and_only_consumed_by_secret_ref():
     stack = _text("stack.bicep")
     apps = _text("apps.bicep")

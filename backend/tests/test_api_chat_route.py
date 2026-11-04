@@ -7,7 +7,6 @@ gating, error mapping) is under test.
 
 import httpx
 import pytest
-
 import web.app as app_module
 from web.app import app
 
@@ -45,8 +44,12 @@ async def test_api_chat_mode_requires_user_as_last_message(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_api_chat_mode_happy_path_returns_agent_reply(client, monkeypatch):
+@pytest.mark.parametrize("news_url", [None, "https://news.internal/mcp"])
+async def test_api_chat_mode_happy_path_returns_agent_reply(client, monkeypatch, news_url):
     monkeypatch.setenv("OIL_MCP_URL", "https://mcp.internal/mcp")
+    monkeypatch.delenv("FINANCIAL_NEWS_MCP_URL", raising=False)
+    if news_url:
+        monkeypatch.setenv("FINANCIAL_NEWS_MCP_URL", news_url)
 
     from src.llm import LlmConfig
 
@@ -68,8 +71,9 @@ async def test_api_chat_mode_happy_path_returns_agent_reply(client, monkeypatch)
 
     captured = {}
 
-    async def fake_run_api_chat(self, *, prompt, mcp_url):
+    async def fake_run_api_chat(self, *, prompt, mcp_url, financial_news_mcp_url):
         captured["mcp_url"] = mcp_url
+        captured["news_url"] = financial_news_mcp_url
         captured["message"] = prompt.message
         return "Here are your holdings: ..."
 
@@ -85,9 +89,11 @@ async def test_api_chat_mode_happy_path_returns_agent_reply(client, monkeypatch)
             json={
                 "mode": "api",
                 "messages": [{"role": "user", "content": "What are my holdings?"}],
+                "financial_news_mcp_url": "https://client-controlled.invalid/mcp",
             },
         )
     assert resp.status_code == 200
     assert resp.json()["reply"] == "Here are your holdings: ..."
     assert captured["mcp_url"] == "https://mcp.internal/mcp"
+    assert captured["news_url"] == news_url
     assert "What are my holdings?" in captured["message"]

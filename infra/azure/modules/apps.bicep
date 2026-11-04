@@ -34,6 +34,9 @@ param frontendExternal bool = false
 
 param tags object
 
+// The separately deployed news app is optional; do not make it an ARM dependency.
+var financialNewsAppName = apiConfig.?financialNewsAppName ?? 'ca-stock-options-financial-news'
+
 var telegramSecrets = empty(telegramBotToken) ? [] : [
   {
     name: 'telegram-bot-token'
@@ -127,6 +130,10 @@ resource api 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'OIL_MCP_URL'
               value: 'https://${mcpName}.internal.${environmentDefaultDomain}/mcp'
+            }
+            {
+              name: 'FINANCIAL_NEWS_MCP_URL'
+              value: empty(financialNewsAppName) ? '' : 'https://${financialNewsAppName}.internal.${environmentDefaultDomain}/mcp'
             }
           ], telegramEnv)
           probes: [

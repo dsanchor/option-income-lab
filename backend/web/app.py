@@ -11053,7 +11053,11 @@ async def chat_api(request: Request):
                 function_llms=config_obj.function_llm_configs(),
                 function_models=config_obj.function_model_deployments(),
             )
-            reply = await runner.run_api_chat(prompt=prompt, mcp_url=mcp_url)
+            reply = await runner.run_api_chat(
+                prompt=prompt,
+                mcp_url=mcp_url,
+                financial_news_mcp_url=os.environ.get("FINANCIAL_NEWS_MCP_URL", "").strip() or None,
+            )
             if not reply:
                 raise RuntimeError("The configured model returned an empty response")
             return JSONResponse({"reply": reply})
