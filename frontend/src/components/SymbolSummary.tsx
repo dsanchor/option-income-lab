@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { usd } from "@/lib/format";
+import { scoreGaugeStyle } from "@/lib/scoreGauge";
 import { TimingScoreContent } from "@/components/SymbolCharts";
 import type { Enrichment, SymbolSummary as Summary } from "@/types/symbol-detail";
 
@@ -13,12 +14,6 @@ function scoreTone(score: number): string {
   if (score >= 70) return "text-accent-green";
   if (score >= 40) return "text-accent-orange";
   return "text-accent-red";
-}
-
-function scoreBar(score: number): string {
-  if (score >= 70) return "var(--grad-green)";
-  if (score >= 40) return "var(--grad-warm)";
-  return "linear-gradient(135deg,#ff4d5e,#a3123a)";
 }
 
 function Badge({ text, className }: { text: string; className: string }) {
@@ -105,7 +100,7 @@ export default function SymbolSummary({
                   {score > 0 ? (
                     <div className="flex items-center gap-2">
                       <span className="h-1.5 w-16 overflow-hidden rounded-full bg-bg-input">
-                        <span className="block h-full rounded-full" style={{ width: `${Math.min(score, 100)}%`, background: scoreBar(score) }} />
+                        <span className="block h-full rounded-full" style={scoreGaugeStyle(score)} />
                       </span>
                       <span className={`font-mono font-semibold ${scoreTone(score)}`}>{num(score)}</span>
                     </div>

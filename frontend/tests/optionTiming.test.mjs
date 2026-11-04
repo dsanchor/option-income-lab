@@ -102,13 +102,8 @@ test("synthetic unavailable timestamps are never appended as observations, real 
 test("card gauges expose actual side values, preserve zero, and mute missing or non-fresh scores", () => {
   const { default: Cards, OptionTimingGauge, OptionTimingValue } = load("components/OptionTiming.tsx");
   const render = (snapshot, side = "covered_call") => renderToStaticMarkup(React.createElement(OptionTimingGauge, { snapshot, side }));
-  const gradients = {
-    red: "linear-gradient(135deg,#ff4d5e,#a3123a)",
-    orange: "var(--grad-warm)",
-    yellow: "linear-gradient(135deg,#facc15,#ff9416)",
-    green: "var(--grad-green)",
-  };
-  for (const [score, band] of [[0, "red"], [24.9, "red"], [25, "orange"], [40, "orange"], [49.9, "orange"], [50, "yellow"], [70, "yellow"], [74.9, "yellow"], [75, "green"], [100, "green"]]) {
+  let fixedGradient;
+  for (const [score, band] of [[0, "red"], [24.9, "red"], [25, "orange"], [25.1, "orange"], [40, "orange"], [49.9, "orange"], [50, "yellow"], [50.1, "yellow"], [60, "yellow"], [74.9, "yellow"], [75, "green"], [75.1, "green"], [100, "green"]]) {
     const saved = snapshot(`score-${score}`, first.as_of, score);
     const html = render(saved);
     assert.match(html, /role="meter"/);
@@ -116,11 +111,28 @@ test("card gauges expose actual side values, preserve zero, and mute missing or 
     assert.match(html, /aria-valuemin="0"/);
     assert.match(html, /aria-valuemax="100"/);
     assert.match(html, new RegExp(`aria-valuenow="${score}"`));
-    assert.match(html, new RegExp(`width:${score}%`));
+    const fill = elements(OptionTimingGauge({ snapshot: saved, side: "covered_call" }))
+      .find((node) => node.props["aria-hidden"]);
+    assert.equal(fill.props.style.width, "100%", "gradient must not compress into the score width");
+    assert.equal(fill.props.style.clipPath, `inset(0 ${100 - score}% 0 0)`);
     assert.match(html, /bg-border/);
     assert.match(html, /aria-hidden="true" class="block h-full rounded-full/);
     assert.doesNotMatch(html, /left:|absolute|ring-|<span>0<\/span>|<span>100<\/span>/);
-    assert.ok(html.includes(`background:${gradients[band]}`));
+    fixedGradient ??= fill.props.style.background;
+    assert.equal(fill.props.style.background, fixedGradient, "all scores share the same absolute color scale");
+    const stops = [...fill.props.style.background.matchAll(/var\((--[\w-]+)\) (\d+)%/g)]
+      .map(([, token, position]) => [token, Number(position)]);
+    assert.deepEqual(stops, [
+      ["--accent-red", 0], ["--accent-red", 22],
+      ["--accent-orange", 28], ["--accent-orange", 47],
+      ["--color-yellow-400", 53], ["--color-yellow-400", 72],
+      ["--accent-green", 78], ["--accent-green", 100],
+    ]);
+    assert.match(fill.props.style.background, /^linear-gradient\(90deg,/);
+    if (score === 60) {
+      assert.deepEqual([...new Set(stops.filter(([, position]) => position < score).map(([token]) => token))],
+        ["--accent-red", "--accent-orange", "--color-yellow-400"]);
+    }
     assert.doesNotMatch(html, /color-mix/);
     const value = renderToStaticMarkup(React.createElement(OptionTimingValue, { snapshot: saved, side: "covered_call" }));
     assert.ok(value.includes(band === "yellow" ? "text-yellow-400" : `text-accent-${band}`));
@@ -132,7 +144,11 @@ test("card gauges expose actual side values, preserve zero, and mute missing or 
     assert.match(html, /aria-valuenow="60"/);
     assert.match(html, new RegExp(`aria-valuetext="60 / 100 · ${freshness}"`));
     assert.match(html, /bg-text-muted\/40/);
-    assert.match(html, /width:60%/);
+    const fill = elements(OptionTimingGauge({ snapshot: { ...last, freshness }, side: "covered_call" }))
+      .find((node) => node.props["aria-hidden"]);
+    assert.equal(fill.props.style.width, "100%");
+    assert.equal(fill.props.style.clipPath, "inset(0 40% 0 0)");
+    assert.equal(fill.props.style.background, undefined);
     assert.doesNotMatch(html, /background:|linear-gradient|accent-green/);
   }
   const noBand = snapshot("no-band", first.as_of, 60);

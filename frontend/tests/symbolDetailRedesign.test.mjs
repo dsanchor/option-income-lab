@@ -31,6 +31,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { createRequire } from "node:module";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
@@ -39,6 +40,50 @@ const cardSrc     = readFileSync(join(root, "src/components/SymbolConfigurationC
 const holdingsSrc = readFileSync(join(root, "src/components/PortfolioHoldingsCard.tsx"), "utf8");
 const pageSrc     = readFileSync(join(root, "src/app/symbols/[symbol]/page.tsx"), "utf8");
 const sectionSrc  = readFileSync(join(root, "src/components/DetailSection.tsx"), "utf8");
+
+it("DGI uses the fixed clipped timing scale while preserving numeric tones and missing scores", () => {
+  const require = createRequire(join(root, "package.json"));
+  const React = require("react");
+  const ts = require("typescript");
+  function load(relative) {
+    const source = readFileSync(join(root, "src", relative), "utf8");
+    const compiled = ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const loaded = { exports: {} };
+    const localRequire = (name) => {
+      if (name === "react") return { ...React, useState: () => [false, () => {}], useEffect() {} };
+      if (name === "@/lib/scoreGauge") return load("lib/scoreGauge.ts");
+      if (name === "@/lib/format") return { usd: String };
+      if (name === "@/components/SymbolCharts") return { TimingScoreContent: () => null };
+      return require(name);
+    };
+    new Function("require", "module", "exports", compiled)(localRequire, loaded, loaded.exports);
+    return loaded.exports;
+  }
+  const Summary = load("components/SymbolSummary.tsx").default;
+  const { scoreGaugeStyle } = load("lib/scoreGauge.ts");
+  const cells = (score) => {
+    const tree = Summary({ symbol: "MSFT", enrichment: { quality_score: score }, totalShares: 0 });
+    const walk = (node) => !node || typeof node !== "object" ? []
+      : Array.isArray(node) ? node.flatMap(walk) : [node, ...walk(node.props?.children)];
+    return walk(tree).filter((node) => node.type === "td");
+  };
+  for (const score of [24.9, 25, 25.1, 39.9, 40, 49.9, 50, 50.1, 60, 69.9, 70, 74.9, 75, 75.1, 100, 110]) {
+    const dgi = cells(score)[1].props.children;
+    const [track, value] = dgi.props.children;
+    assert.match(track.props.className, /overflow-hidden.*bg-bg-input/);
+    const style = track.props.children.props.style;
+    assert.deepEqual(style, scoreGaugeStyle(score), "DGI and timing must use the same scale");
+    assert.equal(style.width, "100%");
+    assert.equal(style.clipPath, `inset(0 ${100 - Math.min(score, 100)}% 0 0)`);
+    const tone = score >= 70 ? "green" : score >= 40 ? "orange" : "red";
+    assert.ok(value.props.className.includes(`text-accent-${tone}`));
+  }
+  for (const score of [undefined, null, 0]) {
+    assert.equal(cells(score)[1].props.children, "—", "preserve DGI's existing absent/zero display");
+  }
+});
 
 // ---------------------------------------------------------------------------
 // AP: Arrangement & Placement — Config card first, Holdings second

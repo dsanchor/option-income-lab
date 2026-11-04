@@ -8,6 +8,7 @@ import { fmtTime } from "@/lib/options-row-format";
 import { timeAgo } from "@/lib/format";
 import { decodeSymbolParam } from "@/lib/symbolEncoding";
 import { renderMarkdown } from "@/lib/markdown";
+import { scoreGaugeStyle } from "@/lib/scoreGauge";
 import { canExplainOptionTiming, fetchOptionTimingExplain, fetchOptionTimingHistory, OPTION_TIMING_SIDES, optionTimingPoints, optionTimingScore } from "@/lib/optionTiming";
 import type { OptionTimingBand, OptionTimingExplainResponse, OptionTimingPoint, OptionTimingSideKey, OptionTimingSnapshot } from "@/types/option-timing";
 
@@ -16,13 +17,6 @@ const BAND_CLASSES: Record<OptionTimingBand, string> = {
   orange: "text-accent-orange",
   yellow: "text-yellow-400",
   green: "text-accent-green",
-};
-
-const BAND_GRADIENTS: Record<OptionTimingBand, string> = {
-  red: "linear-gradient(135deg,#ff4d5e,#a3123a)",
-  orange: "var(--grad-warm)",
-  yellow: "linear-gradient(135deg,#facc15,#ff9416)",
-  green: "var(--grad-green)",
 };
 
 export function OptionTimingValue({ snapshot, side }: {
@@ -49,7 +43,6 @@ export function OptionTimingGauge({ snapshot, side }: {
   const label = OPTION_TIMING_SIDES.find((item) => item.key === side)!.label;
   const fresh = snapshot?.freshness === "fresh";
   const band = snapshot?.[side].band;
-  const gradient = fresh && band ? BAND_GRADIENTS[band] : null;
   return (
     <span className="mt-2 block">
       <span className="block h-1.5 overflow-hidden rounded-full bg-border"
@@ -59,10 +52,8 @@ export function OptionTimingGauge({ snapshot, side }: {
         aria-valuemax={score === null ? undefined : 100}
         aria-valuenow={score ?? undefined}
         aria-valuetext={score === null ? undefined : `${score} / 100${fresh ? "" : ` · ${snapshot?.freshness ?? "unknown"}`}`}>
-        {score !== null && <span aria-hidden="true" className="block h-full rounded-full bg-text-muted/40" style={{
-          width: `${score}%`,
-          ...(gradient ? { background: gradient } : {}),
-        }} />}
+        {score !== null && <span aria-hidden="true" className="block h-full rounded-full bg-text-muted/40"
+          style={scoreGaugeStyle(score, fresh && !!band)} />}
       </span>
     </span>
   );
