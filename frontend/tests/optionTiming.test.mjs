@@ -102,6 +102,12 @@ test("synthetic unavailable timestamps are never appended as observations, real 
 test("card gauges expose actual side values, preserve zero, and mute missing or non-fresh scores", () => {
   const { default: Cards, OptionTimingGauge, OptionTimingValue } = load("components/OptionTiming.tsx");
   const render = (snapshot, side = "covered_call") => renderToStaticMarkup(React.createElement(OptionTimingGauge, { snapshot, side }));
+  const gradients = {
+    red: "linear-gradient(135deg,#ff4d5e,#a3123a)",
+    orange: "var(--grad-warm)",
+    yellow: "linear-gradient(135deg,#facc15,#ff9416)",
+    green: "var(--grad-green)",
+  };
   for (const [score, band] of [[0, "red"], [24.9, "red"], [25, "orange"], [40, "orange"], [49.9, "orange"], [50, "yellow"], [70, "yellow"], [74.9, "yellow"], [75, "green"], [100, "green"]]) {
     const saved = snapshot(`score-${score}`, first.as_of, score);
     const html = render(saved);
@@ -114,11 +120,8 @@ test("card gauges expose actual side values, preserve zero, and mute missing or 
     assert.match(html, /bg-border/);
     assert.match(html, /aria-hidden="true" class="block h-full rounded-full/);
     assert.doesNotMatch(html, /left:|absolute|ring-|<span>0<\/span>|<span>100<\/span>/);
-    const gradient = html.match(/style="([^"]*linear-gradient[^"]*)"/)[1];
-    const token = band === "yellow" ? "--color-yellow-400" : `--accent-${band}`;
-    assert.deepEqual([...gradient.matchAll(/var\((--(?:accent-[\w-]+|color-yellow-400))\)/g)].map((match) => match[1]), [token, token]);
-    assert.match(gradient, /color-mix\(in srgb/);
-    assert.match(gradient, /var\(--bg-input\)/);
+    assert.ok(html.includes(`background:${gradients[band]}`));
+    assert.doesNotMatch(html, /color-mix/);
     const value = renderToStaticMarkup(React.createElement(OptionTimingValue, { snapshot: saved, side: "covered_call" }));
     assert.ok(value.includes(band === "yellow" ? "text-yellow-400" : `text-accent-${band}`));
     assert.doesNotMatch(html, /Covered CALL:|Unavailable/);

@@ -18,11 +18,11 @@ const BAND_CLASSES: Record<OptionTimingBand, string> = {
   green: "text-accent-green",
 };
 
-const BAND_COLORS: Record<OptionTimingBand, string> = {
-  red: "var(--accent-red)",
-  orange: "var(--accent-orange)",
-  yellow: "var(--color-yellow-400)",
-  green: "var(--accent-green)",
+const BAND_GRADIENTS: Record<OptionTimingBand, string> = {
+  red: "linear-gradient(135deg,#ff4d5e,#a3123a)",
+  orange: "var(--grad-warm)",
+  yellow: "linear-gradient(135deg,#facc15,#ff9416)",
+  green: "var(--grad-green)",
 };
 
 export function OptionTimingValue({ snapshot, side }: {
@@ -49,7 +49,7 @@ export function OptionTimingGauge({ snapshot, side }: {
   const label = OPTION_TIMING_SIDES.find((item) => item.key === side)!.label;
   const fresh = snapshot?.freshness === "fresh";
   const band = snapshot?.[side].band;
-  const color = fresh && band ? BAND_COLORS[band] : null;
+  const gradient = fresh && band ? BAND_GRADIENTS[band] : null;
   return (
     <span className="mt-2 block">
       <span className="block h-1.5 overflow-hidden rounded-full bg-border"
@@ -61,7 +61,7 @@ export function OptionTimingGauge({ snapshot, side }: {
         aria-valuetext={score === null ? undefined : `${score} / 100${fresh ? "" : ` · ${snapshot?.freshness ?? "unknown"}`}`}>
         {score !== null && <span aria-hidden="true" className="block h-full rounded-full bg-text-muted/40" style={{
           width: `${score}%`,
-          ...(color ? { background: `linear-gradient(135deg, color-mix(in srgb, ${color} 70%, var(--bg-input)), ${color})` } : {}),
+          ...(gradient ? { background: gradient } : {}),
         }} />}
       </span>
     </span>
