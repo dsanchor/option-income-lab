@@ -1,0 +1,13 @@
+Inter Latin, normal, variable weight font (Google Fonts v20).
+Unmodified files/inter-latin-wght-normal.woff2 from @fontsource-variable/inter@5.3.0:
+https://registry.npmjs.org/@fontsource-variable/inter/-/inter-5.3.0.tgz
+Font SHA-256: 3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62
+
+Licensed under SIL OFL 1.1. Copyright notice and full license are retained in
+public/fonts/Inter-LICENSE.txt, which is also shipped in the standalone image.
+
+The root layout uses next/font/local to preserve --font-inter and weights
+400–700 without contacting Google during development or production builds.
+This avoids Next 16.2.12's Google font URL parsing defect when the service
+returns extensionless /l/font?kit=...&skey=... URLs (vercel/next.js#99114).
+Keep this asset and its license together when updating the font.
