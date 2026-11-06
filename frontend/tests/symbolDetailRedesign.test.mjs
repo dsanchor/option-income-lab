@@ -41,6 +41,128 @@ const holdingsSrc = readFileSync(join(root, "src/components/PortfolioHoldingsCar
 const pageSrc     = readFileSync(join(root, "src/app/symbols/[symbol]/page.tsx"), "utf8");
 const sectionSrc  = readFileSync(join(root, "src/components/DetailSection.tsx"), "utf8");
 
+function renderDetailComponent(component, props, initialStates = []) {
+  const require = createRequire(join(root, "package.json"));
+  const React = require("react");
+  const ts = require("typescript");
+  const states = [...initialStates];
+  let index = 0;
+  const hooks = {
+    ...React,
+    useState(initial) {
+      const slot = index++;
+      if (!(slot in states)) states[slot] = typeof initial === "function" ? initial() : initial;
+      return [states[slot], (value) => { states[slot] = value; }];
+    },
+    useMemo: (fn) => fn(),
+    useCallback: (fn) => fn,
+    useEffect() {},
+    useRef: (value) => ({ current: value }),
+  };
+  function load(relative) {
+    const source = readFileSync(join(root, "src", relative), "utf8");
+    const compiled = ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const loaded = { exports: {} };
+    const localRequire = (name) => {
+      if (name === "react") return hooks;
+      if (name === "next/navigation") return { useRouter: () => ({ refresh() {} }) };
+      if (["@/lib/accountDisplay", "@/lib/holdingPnl", "@/lib/movementPagination", "@/lib/movementTypeLabel"].includes(name)) {
+        return load(`${name.slice(2)}.ts`);
+      }
+      if (name.startsWith("@/") || name.startsWith("./")) return { default: () => null };
+      return require(name);
+    };
+    new Function("require", "module", "exports", compiled)(localRequire, loaded, loaded.exports);
+    return loaded.exports;
+  }
+  const Component = load(`components/${component}.tsx`).default;
+  return () => {
+    index = 0;
+    return Component(props);
+  };
+}
+
+function detailNodes(node) {
+  if (!node || typeof node !== "object") return [];
+  if (Array.isArray(node)) return node.flatMap(detailNodes);
+  return [node, ...detailNodes(node.props?.children)];
+}
+
+function detailText(node) {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node !== "object") return String(node);
+  if (Array.isArray(node)) return node.map(detailText).join("");
+  return detailText(node.props?.children);
+}
+
+it("Stocks and Options render parallel semantic headings and flat table chrome with unchanged filters", () => {
+  const holdings = renderDetailComponent("PortfolioHoldingsCard", {
+    portfolio: { current_shares: "10", average_cost_eur: "12", current_invested_eur: "120" },
+    symbolState: "portfolio_active",
+  })();
+  const renderPositions = renderDetailComponent("PositionsTable", {
+    symbol: "MSFT",
+    positions: [
+      { position_id: "open", status: "active", type: "call", strike: 100 },
+      { position_id: "closed", status: "closed", type: "put", strike: 90 },
+    ],
+  });
+  const positions = renderPositions();
+  const transactions = renderDetailComponent("StockTransactionsTable", { securityId: "MSFT" }, [
+    [{ id: "buy", txn_type: "BUY", account_id: "a", trade_date: "2026-11-01", quantity: "10" }],
+    1, 0, "ALL", "3m", false,
+  ])();
+  const trees = [holdings, positions, transactions];
+  const headings = trees.map((tree) => detailNodes(tree).find((node) => node.type === "h2"));
+  assert.deepEqual(headings.map(detailText), ["Stock Holdings", "Option Positions", "Stock Transactions"]);
+  for (const tree of trees) {
+    assert.equal(tree.type, "section");
+    assert.equal(tree.props.className, holdings.props.className, "section rhythm must match");
+    const nodes = detailNodes(tree);
+    assert.equal(nodes.filter((node) => node.type === "table").length, 1);
+    assert.equal(nodes.find((node) => node.type === "h2").props.className, headings[0].props.className);
+    const shell = nodes.find((node) => node.props?.className?.includes("overflow-x-auto"));
+    assert.equal(shell.props.className, detailNodes(holdings).find((node) => node.props?.className?.includes("overflow-x-auto")).props.className);
+    for (const header of nodes.filter((node) => node.type === "th")) assert.equal(header.props.scope, "col");
+    const headerRow = nodes.find((node) => node.type === "thead").props.children;
+    const headerCell = detailNodes(headerRow).find((node) => node.type === "th");
+    const effectiveClasses = `${headerRow.props.className} ${headerCell.props.className}`;
+    const referenceRow = detailNodes(holdings).find((node) => node.type === "thead").props.children;
+    const referenceCell = detailNodes(referenceRow).find((node) => node.type === "th");
+    const presentation = (classes) => classes.split(" ").filter((cls) => /^(bg-|px-|py-|font-|uppercase|tracking-|text-xs)/.test(cls)).sort();
+    assert.deepEqual(presentation(effectiveClasses), presentation(`${referenceRow.props.className} ${referenceCell.props.className}`));
+  }
+  const active = detailNodes(positions).find((node) => node.type === "button" && detailText(node) === "Active");
+  active.props.onClick();
+  const filtered = renderPositions();
+  assert.match(detailText(filtered), /1 of 2/);
+  assert.equal(detailNodes(filtered).filter((node) => node.type === "tr" && node.props.onClick).length, 1);
+  assert.ok(detailNodes(filtered).some((node) => node.type === "button" && detailText(node) === "Roll"));
+});
+
+it("historical and zero-result states retain headings, badges and controls without extra card frames", () => {
+  const historical = renderDetailComponent("PortfolioHoldingsCard", {
+    portfolio: { current_shares: "0", holdings_by_account: [] },
+    symbolState: "portfolio_historical",
+  })();
+  const emptyOptions = renderDetailComponent("PositionsTable", { symbol: "MSFT", positions: [] })();
+  const historicalBadge = detailNodes(historical).find((node) => node.type === "span" && detailText(node).includes("Historical"));
+  const countBadge = detailNodes(emptyOptions).find((node) => node.type === "span" && detailText(node) === "0 of 0");
+  assert.equal(historicalBadge.props.className, countBadge.props.className);
+  assert.match(detailText(emptyOptions), /No positions match the current filters/);
+  assert.equal(detailNodes(historical).filter((node) => node.type === "table").length, 1);
+  for (const loading of [true, false]) {
+    const transactions = renderDetailComponent("StockTransactionsTable", { securityId: "MSFT" }, [
+      [], 0, 0, "ALL", "3m", loading,
+    ])();
+    assert.ok(detailNodes(transactions).some((node) => node.type === "h2"));
+    assert.ok(detailNodes(transactions).some((node) => node.type === "button" && detailText(node) === "Reassign accounts"));
+    assert.match(detailText(transactions), loading ? /Loading/ : /No stock transactions recorded/);
+  }
+});
+
 it("DGI uses the fixed clipped timing scale while preserving numeric tones and missing scores", () => {
   const require = createRequire(join(root, "package.json"));
   const React = require("react");

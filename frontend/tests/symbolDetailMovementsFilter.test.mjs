@@ -597,11 +597,9 @@ describe("AC: Accessible segmented controls", () => {
   });
 
   it("AC-3: active type filter button has visual distinction (existing — must not regress)", () => {
-    // The existing border-accent-blue conditional class must remain for type filter
-    assert.ok(
-      src.includes("border-accent-blue"),
-      "AC-3 DEFECT: Active filter button visual distinction (border-accent-blue) must be preserved."
-    );
+    const classes = src.match(/typeFilter === p\.value\s*\?\s*"([^"]+)"\s*:\s*"([^"]+)"/);
+    assert.ok(classes, "Type filter selection must determine the button appearance.");
+    assert.notEqual(classes[1], classes[2], "Selected and unselected type filters must remain distinguishable.");
   });
 
   it("AC-4: time filter active state has visual distinction (class change on active)", () => {
@@ -614,15 +612,9 @@ describe("AC: Accessible segmented controls", () => {
         "Rusty: add useState + conditional className for active time pill."
       );
     }
-    // When implemented, the active class must reference the time filter state
-    const hasConditionalClass =
-      (src.includes("timeFilter") || src.includes("timePeriod")) &&
-      src.includes("border-accent-blue");
-    assert.ok(
-      hasConditionalClass,
-      "AC-4 DEFECT: Active time filter pill must have a visually distinct class " +
-      "(e.g. border-accent-blue). Rusty: mirror the type pill conditional className."
-    );
+    const classes = src.match(/timeFilter === p\.value\s*\?\s*"([^"]+)"\s*:\s*"([^"]+)"/);
+    assert.ok(classes, "Time filter selection must determine the button appearance.");
+    assert.notEqual(classes[1], classes[2], "Selected and unselected time filters must remain distinguishable.");
   });
 });
 

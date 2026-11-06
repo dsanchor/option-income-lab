@@ -49,19 +49,19 @@ export default function PortfolioHoldingsCard({ portfolio, symbolState }: Props)
   });
 
   return (
-    <div className="space-y-2">
+    <section className="space-y-3">
       {/* ── Section heading ─────────────────────────────────────────── */}
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-text">Portfolio Holdings</h3>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-base font-semibold text-text">Stock Holdings</h2>
         {isHistorical && (
-          <span className="inline-block rounded-[var(--radius-pill)] border border-border px-2 py-0.5 text-xs text-text-muted">
+          <span className="inline-block rounded-[var(--radius-pill)] border border-border px-2 py-0.5 text-xs font-medium text-text-muted">
             Historical — 0 shares
           </span>
         )}
       </div>
 
       {/* ── Responsive semantic table — single flat container, no inner card ── */}
-      <div className="overflow-x-auto rounded-[var(--radius)] border border-border">
+      <div className="overflow-x-auto rounded-[var(--radius)] border border-border bg-bg-card">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-bg-card/80">
@@ -153,6 +153,6 @@ export default function PortfolioHoldingsCard({ portfolio, symbolState }: Props)
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
   );
 }

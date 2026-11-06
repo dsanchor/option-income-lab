@@ -82,9 +82,12 @@ export default function RecentActivities({
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">
-          Recent Activities <span className="text-sm text-text-muted">({filtered.length})</span>
-        </h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-base font-semibold text-text">Recent Activities</h2>
+          <span className="inline-block rounded-[var(--radius-pill)] border border-border px-2 py-0.5 text-xs font-medium text-text-muted">
+            {filtered.length}
+          </span>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1">
             {TIME_RANGES.map((t) => (

@@ -188,11 +188,14 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">
-          Positions <span className="text-sm text-text-muted">({filtered.length} of {positions.length})</span>
-        </h2>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1">
+          <h2 className="text-base font-semibold text-text">Option Positions</h2>
+          <span className="inline-block rounded-[var(--radius-pill)] border border-border px-2 py-0.5 text-xs font-medium text-text-muted">
+            {filtered.length} of {positions.length}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1" role="group" aria-label="Position status filter">
             {STATUS_FILTERS.map((s) => (
               <button
                 key={s.label}
@@ -206,7 +209,7 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1">
+          <div className="flex flex-wrap items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1" role="group" aria-label="Position time period">
             {DATE_FILTERS.map((dt) => (
               <button
                 key={dt.label}
@@ -232,18 +235,18 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
       <div className="overflow-x-auto rounded-[var(--radius)] border border-border bg-bg-card">
         <table className="w-full min-w-[960px] text-sm">
           <thead>
-            <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-muted">
-              <th className="px-4 py-3 font-medium">Type</th>
-              <th className="px-4 py-3 text-right font-medium">Strike</th>
-              <th className="px-4 py-3 font-medium">Expiration</th>
-              <th className="px-4 py-3 font-medium">Risk</th>
-              <th className="px-4 py-3 font-medium">Moneyness</th>
-              <th className="px-4 py-3 font-medium">Status</th>
-              <th className="px-4 py-3 font-medium">Contracts</th>
-              <th className="px-4 py-3 font-medium">Opened</th>
-              <th className="px-4 py-3 text-right font-medium">Premium</th>
-              <th className="px-4 py-3 font-medium">Notes</th>
-              <th className="px-4 py-3 text-right font-medium">Actions</th>
+            <tr className="border-b border-border bg-bg-card/80 text-left text-xs uppercase tracking-wide text-text-muted">
+              <th scope="col" className="px-4 py-2.5 font-semibold">Type</th>
+              <th scope="col" className="px-4 py-2.5 text-right font-semibold">Strike</th>
+              <th scope="col" className="px-4 py-2.5 font-semibold">Expiration</th>
+              <th scope="col" className="px-4 py-2.5 font-semibold">Risk</th>
+              <th scope="col" className="px-4 py-2.5 font-semibold">Moneyness</th>
+              <th scope="col" className="px-4 py-2.5 font-semibold">Status</th>
+              <th scope="col" className="px-4 py-2.5 font-semibold">Contracts</th>
+              <th scope="col" className="px-4 py-2.5 font-semibold">Opened</th>
+              <th scope="col" className="px-4 py-2.5 text-right font-semibold">Premium</th>
+              <th scope="col" className="px-4 py-2.5 font-semibold">Notes</th>
+              <th scope="col" className="px-4 py-2.5 text-right font-semibold">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -264,13 +267,13 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
                   <tr
                     onClick={() => posId && setDetailsFor((cur) => (cur === posId ? null : posId))}
                     aria-expanded={detailsFor === posId}
-                    className={`border-b border-border/60 transition-colors ${
+                    className={`border-b border-border/40 last:border-0 transition-colors ${
                       posId ? "cursor-pointer hover:bg-bg-hover" : ""
                     } ${
                       p.status !== "active" ? "text-text-muted opacity-55 saturate-50" : ""
                     } ${detailsFor === posId ? "bg-bg-input/50" : ""}`}
                   >
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-2.5">
                       <span className="inline-flex items-center gap-2">
                         <span
                           className="text-text-muted transition-transform duration-200"
@@ -285,15 +288,15 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
                         />
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right font-mono">{p.strike != null ? `$${num(p.strike)}` : "—"}</td>
-                    <td className="px-4 py-3 font-mono">{p.expiration ?? "—"}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-2.5 text-right font-mono">{p.strike != null ? `$${num(p.strike)}` : "—"}</td>
+                    <td className="px-4 py-2.5 font-mono">{p.expiration ?? "—"}</td>
+                    <td className="px-4 py-2.5">
                       {p.assignment_risk ? <Badge text={p.assignment_risk} className={riskClass(p.assignment_risk)} /> : "—"}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-2.5">
                       {p.moneyness ? <Badge text={p.moneyness} className={moneynessClass(p.moneyness)} /> : "—"}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-2.5">
                       <span className="flex flex-wrap items-center gap-1">
                         <Badge text={p.status ?? "—"} className={statusClass(p.status)} />
                         {p.status === "closed" && p.close_reason && (
@@ -306,12 +309,12 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
                         <WarningBadge warnings={warnings} />
                       </span>
                     </td>
-                    <td className="px-4 py-3"><PositionContractCounts position={p} /></td>
-                    <td className="px-4 py-3 font-mono">{p.opened_at ? String(p.opened_at).slice(0, 10) : "—"}</td>
-                    <td className="px-4 py-3 text-right font-mono">
+                    <td className="px-4 py-2.5"><PositionContractCounts position={p} /></td>
+                    <td className="px-4 py-2.5 font-mono">{p.opened_at ? String(p.opened_at).slice(0, 10) : "—"}</td>
+                    <td className="px-4 py-2.5 text-right font-mono">
                       {p.display_premium != null ? `$${num(p.display_premium)}` : "—"}
                     </td>
-                    <td className="px-4 py-3 max-w-[200px]" onClick={(e) => e.stopPropagation()}>
+                    <td className="px-4 py-2.5 max-w-[200px]" onClick={(e) => e.stopPropagation()}>
                       {editingNotes ? (
                         <div className="flex items-start gap-1">
                           <textarea
@@ -355,7 +358,7 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
                         </button>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                    <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex justify-end gap-1">
                         {isActive && posId ? (
                           <>

@@ -61,7 +61,7 @@ export default function AddPositionForm({ symbol }: { symbol: string }) {
 
   return (
     <section className="rounded-[var(--radius)] border border-border bg-bg-card p-4">
-      <h3 className="mb-3 text-sm font-semibold text-text">Add Position</h3>
+      <h2 className="mb-3 text-base font-semibold text-text">Add Position</h2>
       <div className="flex flex-wrap items-center gap-2">
         <select
           value={type}
