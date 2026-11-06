@@ -13,6 +13,7 @@
  *
  * Run: node --test frontend/tests/symbolDetailMovementsFilter.test.mjs
  *
+ * Option-pill tests exercise the component with a dependency-free hook harness.
  * Behavioral tests (TF / TB / AND / DF / PG) exercise inline logic mirrors that
  * are always runnable.  Source-contract tests (SR / AC / RG) read the live
  * StockTransactionsTable.tsx and fail with a clear DEFECT message until Rusty
@@ -24,6 +25,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
+import { createRequire } from "node:module";
+import * as dateHelpers from "../src/lib/dateHelpers.ts";
+import * as movementFilters from "../src/lib/filterMovementsByType.ts";
+import * as movementPagination from "../src/lib/movementPagination.ts";
+import * as movementTypeLabel from "../src/lib/movementTypeLabel.ts";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const SRC = join(__dir, "..", "src", "components", "StockTransactionsTable.tsx");
@@ -36,6 +42,196 @@ const portfolioTypesSrc = readFileSync(
   join(__dir, "..", "src", "types", "portfolio.ts"),
   "utf8",
 );
+
+const require = createRequire(import.meta.url);
+const ts = require("typescript");
+const componentCode = ts.transpileModule(src, {
+  compilerOptions: {
+    module: ts.ModuleKind.CommonJS,
+    jsx: ts.JsxEmit.ReactJSX,
+    target: ts.ScriptTarget.ES2022,
+  },
+}).outputText;
+
+function elements(node) {
+  if (Array.isArray(node)) return node.flatMap(elements);
+  if (!node || typeof node !== "object") return [];
+  return [node, ...elements(node.props?.children)];
+}
+
+// Commit effects after rendering, as in the other dependency-free hook tests.
+function transactionsHarness(dataset) {
+  const hooks = [], pending = [], requests = [];
+  let cursor = 0;
+  const same = (a, b) => a && a.length === b.length && a.every((v, i) => v === b[i]);
+  const react = {
+    useState(initial) {
+      const i = cursor++;
+      if (!(i in hooks)) hooks[i] = initial;
+      return [hooks[i], (value) => {
+        hooks[i] = typeof value === "function" ? value(hooks[i]) : value;
+      }];
+    },
+    useRef(initial) {
+      const i = cursor++;
+      if (!(i in hooks)) hooks[i] = { current: initial };
+      return hooks[i];
+    },
+    useCallback(fn, deps) {
+      const i = cursor++;
+      if (!same(hooks[i]?.deps, deps)) hooks[i] = { deps, fn };
+      return hooks[i].fn;
+    },
+    useMemo(fn, deps) {
+      return react.useCallback(fn, deps)();
+    },
+    useEffect(effect, deps) {
+      const i = cursor++;
+      if (!same(hooks[i]?.deps, deps)) pending.push(() => {
+        hooks[i]?.cleanup?.();
+        hooks[i] = { deps, cleanup: effect() };
+      });
+    },
+  };
+  const api = {
+    listAccounts: async () => ({ accounts: [] }),
+    async getMovements(params, options) {
+      requests.push({ params, signal: options.signal });
+      if (h.delayNext) {
+        const response = h.delayNext;
+        h.delayNext = null;
+        return response;
+      }
+      const filtered = dataset.filter((m) =>
+        m.security_id === params.security_id
+        && (!params.txn_type || m.txn_type === params.txn_type)
+        && (!params.date_from || m.trade_date >= params.date_from));
+      return {
+        movements: filtered.slice(params.offset, params.offset + params.limit),
+        total_count: filtered.length,
+      };
+    },
+  };
+  const overrides = {
+    react,
+    "lucide-react": {},
+    "@/lib/portfolio-api": api,
+    "@/lib/dateHelpers": dateHelpers,
+    "@/lib/filterMovementsByType": movementFilters,
+    "@/lib/movementPagination": movementPagination,
+    "@/lib/movementTypeLabel": movementTypeLabel,
+    "@/lib/accountDisplay": {},
+    "./MovementDetailDialog": {},
+    "./ReassignmentDialog": {},
+  };
+  const loaded = { exports: {} };
+  new Function("require", "module", "exports", componentCode)(
+    (name) => name in overrides ? overrides[name] : require(name),
+    loaded, loaded.exports,
+  );
+  const h = {
+    requests,
+    render() {
+      cursor = 0;
+      const tree = elements(loaded.exports.default({ securityId: "XNAS:AAPL" }));
+      for (const effect of pending.splice(0)) effect();
+      return tree;
+    },
+    async settle() {
+      await new Promise((resolve) => setImmediate(resolve));
+      return h.render();
+    },
+    async click(label, group) {
+      const tree = h.render();
+      const scope = group
+        ? elements(tree.find((n) => n.props?.["aria-label"] === group))
+        : tree;
+      const button = scope.find((n) => n.type === "button" && n.props.children === label);
+      assert.ok(button, `Missing ${label} button`);
+      assert.ok(!button.props.disabled, `${label} must be enabled`);
+      button.props.onClick();
+      h.render();
+      return h.settle();
+    },
+    close() {
+      for (const hook of hooks) hook?.cleanup?.();
+    },
+  };
+  return h;
+}
+
+const optionPills = [
+  ["CALL_SELL", "Call Sell"], ["CALL_BUY", "Call Buy"],
+  ["PUT_SELL", "Put Sell"], ["PUT_BUY", "Put Buy"],
+];
+const renderedMovementIds = (tree) => tree
+  .filter((n) => n.type === "tr" && n.key !== null).map((n) => n.key);
+function transactionDataset() {
+  const movement = (id, txn_type, extra = {}) => ({
+    id, txn_type, security_id: "XNAS:AAPL",
+    trade_date: dateHelpers.toLocalDateString(new Date()), ...extra,
+  });
+  return [
+    ...Array.from({ length: 21 }, (_, i) => movement(`buy-${i}`, "BUY")),
+    ...optionPills.map(([type]) => movement(type, type)),
+    movement("cash", "DIVIDEND"),
+    movement("scrip", "BUY", { ca_leg_type: "SHARE_ACQUISITION", ca_event_type: "SCRIP_DIVIDEND" }),
+    movement("other-security", "CALL_SELL", { security_id: "XNYS:AAPL" }),
+    movement("old-option", "PUT_BUY", { trade_date: "2000-01-01" }),
+  ];
+}
+
+describe("option movement pills in Symbol Detail", () => {
+  for (const [type, label] of optionPills) {
+    it(`${label} requests the exact stored type, preserves security/date, and resets pagination`, async () => {
+      const h = transactionsHarness(transactionDataset());
+      try {
+        h.render();
+        const initial = await h.settle();
+        assert.ok(renderedMovementIds(initial).includes("buy-0"));
+        assert.equal(h.requests.at(-1).params.txn_type, undefined);
+        await h.click("1m", "Time period");
+        await h.click("Next →");
+        assert.equal(h.requests.at(-1).params.offset, 20);
+        const tree = await h.click(label, "Transaction type filter");
+        assert.deepEqual(h.requests.at(-1).params, {
+          security_id: "XNAS:AAPL", txn_type: type,
+          date_from: dateHelpers.toLocalDateString(dateHelpers.subCalendarMonths(new Date(), 1)),
+          limit: 20, offset: 0,
+        });
+        assert.deepEqual(renderedMovementIds(tree), [type]);
+        await h.click("All", "Transaction type filter");
+        assert.equal(h.requests.at(-1).params.txn_type, undefined);
+        const secondPage = await h.click("Next →");
+        for (const [option] of optionPills) {
+          assert.ok(renderedMovementIds(secondPage).includes(option), `All must include ${option}`);
+        }
+      } finally { h.close(); }
+    });
+  }
+
+  it("preserves Dividend membership and ignores a delayed Dividend after an option selection", async () => {
+    const h = transactionsHarness(transactionDataset());
+    try {
+      h.render();
+      await h.settle();
+      const dividend = await h.click("Dividend", "Transaction type filter");
+      assert.deepEqual(renderedMovementIds(dividend), ["cash", "scrip"]);
+      assert.equal(h.requests.at(-1).params.limit, 500);
+      assert.equal(h.requests.at(-1).params.txn_type, undefined);
+      await h.click("All", "Transaction type filter");
+      let resolve;
+      h.delayNext = new Promise((done) => { resolve = done; });
+      await h.click("Dividend", "Transaction type filter");
+      const slow = h.requests.at(-1);
+      const option = await h.click("Put Buy", "Transaction type filter");
+      assert.equal(slow.signal.aborted, true);
+      assert.deepEqual(renderedMovementIds(option), ["PUT_BUY"]);
+      resolve({ movements: transactionDataset(), total_count: 29 });
+      assert.deepEqual(renderedMovementIds(await h.settle()), ["PUT_BUY"]);
+    } finally { h.close(); }
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Inline mirrors (keep in sync with src/lib/dateHelpers.ts and the component)
@@ -535,7 +731,7 @@ describe("SR: Source-contract — StockTransactionsTable implements time filter"
     );
   });
 
-  it("SR-6: type filter TYPE_PILLS still has all four entries (preserved)", () => {
+  it("SR-6: type filter TYPE_PILLS preserves the original four entries", () => {
     const required = ["ALL", "BUY", "SELL", "DIVIDEND"];
     for (const v of required) {
       assert.ok(

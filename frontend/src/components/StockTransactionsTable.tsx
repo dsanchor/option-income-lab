@@ -35,13 +35,18 @@ const TXN_BADGE: Record<TxnType, string> = {
   PUT_BUY: "bg-accent-cyan/15 text-accent-cyan",
 };
 
-type TypeFilter = "ALL" | "BUY" | "SELL" | "DIVIDEND";
+type TypeFilter = "ALL" | "BUY" | "SELL" | "DIVIDEND"
+  | "CALL_SELL" | "CALL_BUY" | "PUT_SELL" | "PUT_BUY";
 
 const TYPE_PILLS: Array<{ value: TypeFilter; label: string }> = [
   { value: "ALL", label: "All" },
   { value: "BUY", label: "Buy" },
   { value: "SELL", label: "Sell" },
   { value: "DIVIDEND", label: "Dividend" },
+  { value: "CALL_SELL", label: "Call Sell" },
+  { value: "CALL_BUY", label: "Call Buy" },
+  { value: "PUT_SELL", label: "Put Sell" },
+  { value: "PUT_BUY", label: "Put Buy" },
 ];
 
 type TimeFilter = "1m" | "3m" | "6m" | "1y" | "ALL";
@@ -79,7 +84,7 @@ interface Props {
 }
 
 /**
- * Full BUY/SELL/DIVIDEND transaction history for a security.
+ * Full ledger transaction history for a security.
  * Calls the existing movements API with security_id filter.
  * Amendment I — replaces SymbolMovementsTable inside the Stocks section.
  */
