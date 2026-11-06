@@ -10,6 +10,14 @@ function num(n: number | null | undefined, digits = 1): string {
   return typeof n === "number" && isFinite(n) ? n.toFixed(digits) : "—";
 }
 
+function fmtShares(value: string | number | null | undefined): string {
+  if (typeof value !== "string" && typeof value !== "number") return "—";
+  if (typeof value === "string" && value.trim() === "") return "—";
+  const shares = Number(value);
+  if (!Number.isFinite(shares)) return "—";
+  return shares % 1 === 0 ? shares.toFixed(0) : shares.toFixed(6).replace(/0+$/, "");
+}
+
 function scoreTone(score: number): string {
   if (score >= 70) return "text-accent-green";
   if (score >= 40) return "text-accent-orange";
@@ -43,12 +51,12 @@ export default function SymbolSummary({
   symbol,
   enrichment,
   summary,
-  totalShares,
+  currentShares,
 }: {
   symbol: string;
   enrichment: Enrichment;
   summary?: Summary;
-  totalShares: number;
+  currentShares?: string | number | null;
 }) {
   const enr = enrichment || {};
   const [open, setOpen] = useState(false);
@@ -116,7 +124,7 @@ export default function SymbolSummary({
                   ) : "—"}
                 </td>
                 <td className="px-3 py-3 text-right font-mono">{price != null ? `$${price.toFixed(2)}` : "—"}</td>
-                <td className="px-3 py-3 text-right font-mono">{totalShares > 0 ? totalShares : "—"}</td>
+                <td className="px-3 py-3 text-right font-mono">{fmtShares(currentShares)}</td>
                 <td className="px-3 py-3 text-right font-mono">{summary?.in_calls ? summary.in_calls : "—"}</td>
                 <td className="px-3 py-3 text-right font-mono">{summary?.put_exposure ? `$${usd(summary.put_exposure)}` : "—"}</td>
               </tr>

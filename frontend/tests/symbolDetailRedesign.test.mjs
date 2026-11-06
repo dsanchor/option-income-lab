@@ -68,7 +68,9 @@ function renderDetailComponent(component, props, initialStates = []) {
     const localRequire = (name) => {
       if (name === "react") return hooks;
       if (name === "next/navigation") return { useRouter: () => ({ refresh() {} }) };
-      if (["@/lib/accountDisplay", "@/lib/holdingPnl", "@/lib/movementPagination", "@/lib/movementTypeLabel"].includes(name)) {
+      if (name === "@/lib/api") return { API_BASE_URL: "http://mock-backend" };
+      if (name === "@/lib/symbolEncoding") return { decodeSymbolParam: (symbol) => symbol };
+      if (["@/lib/accountDisplay", "@/lib/holdingPnl", "@/lib/movementPagination", "@/lib/movementTypeLabel", "@/lib/format", "@/lib/scoreGauge"].includes(name)) {
         return load(`${name.slice(2)}.ts`);
       }
       if (name.startsWith("@/") || name.startsWith("./")) return { default: () => null };
@@ -77,7 +79,7 @@ function renderDetailComponent(component, props, initialStates = []) {
     new Function("require", "module", "exports", compiled)(localRequire, loaded, loaded.exports);
     return loaded.exports;
   }
-  const Component = load(`components/${component}.tsx`).default;
+  const Component = load(component.startsWith("app/") ? component : `components/${component}.tsx`).default;
   return () => {
     index = 0;
     return Component(props);
@@ -96,6 +98,52 @@ function detailText(node) {
   if (Array.isArray(node)) return node.map(detailText).join("");
   return detailText(node.props?.children);
 }
+
+it("Summary Shares renders actual portfolio holdings, including historical zero, without configured fallback", async () => {
+  const previous = globalThis.fetch;
+  try {
+    for (const [portfolio, symbolState, expected] of [
+      [{ current_shares: "12.5" }, "watchlist_and_portfolio", "12.5"],
+      [{ current_shares: "0" }, "portfolio_historical", "0"],
+      [null, "watchlist_only", "—"],
+      [undefined, "watchlist_only", "—"],
+      [{}, "portfolio_active", "—"],
+      [{ current_shares: "invalid" }, "portfolio_active", "—"],
+    ]) {
+      const data = { total_shares: 300, portfolio, symbol_state: symbolState, us_options_eligible: true, summary: { in_calls: 2, put_exposure: 500 } };
+      let requests = 0;
+      globalThis.fetch = async () => {
+        requests++;
+        return { ok: true, json: async () => data };
+      };
+      const page = await renderDetailComponent("app/symbols/[symbol]/page.tsx", { params: Promise.resolve({ symbol: "MSFT" }) })();
+      const summary = detailNodes(page).find((node) => node.props?.summary === data.summary);
+      assert.ok(summary, "page must pass the existing detail summary");
+      const tree = renderDetailComponent("SymbolSummary", summary.props)();
+      const cells = detailNodes(tree).filter((node) => node.type === "td");
+      assert.equal(detailText(cells[6]), expected);
+      assert.equal(detailText(cells[7]), "2");
+      assert.equal(detailText(cells[8]), "$500");
+      assert.equal(requests, 1, "use only the existing detail request");
+    }
+  } finally {
+    globalThis.fetch = previous;
+  }
+});
+
+it("Summary Shares preserves numeric zero and fractional precision while invalid values remain unavailable", () => {
+  for (const [currentShares, expected] of [
+    [0, "0"], ["0.000000", "0"], [12.5, "12.5"], ["12.123456", "12.123456"],
+    ["12.1234567", "12.123457"], ["100.000000", "100"],
+    [null, "—"], [undefined, "—"], ["", "—"], ["  ", "—"],
+    ["NaN", "—"], ["Infinity", "—"], [NaN, "—"], [Infinity, "—"], ["12.5oops", "—"],
+    [false, "—"], [[], "—"], [{}, "—"],
+  ]) {
+    const tree = renderDetailComponent("SymbolSummary", { symbol: "MSFT", enrichment: {}, currentShares })();
+    const cells = detailNodes(tree).filter((node) => node.type === "td");
+    assert.equal(detailText(cells[6]), expected, `currentShares=${currentShares}`);
+  }
+});
 
 it("Stocks and Options render parallel semantic headings and flat table chrome with unchanged filters", () => {
   const holdings = renderDetailComponent("PortfolioHoldingsCard", {
@@ -186,7 +234,7 @@ it("DGI uses the fixed clipped timing scale while preserving numeric tones and m
   const Summary = load("components/SymbolSummary.tsx").default;
   const { scoreGaugeStyle } = load("lib/scoreGauge.ts");
   const cells = (score) => {
-    const tree = Summary({ symbol: "MSFT", enrichment: { quality_score: score }, totalShares: 0 });
+    const tree = Summary({ symbol: "MSFT", enrichment: { quality_score: score }, currentShares: "0" });
     const walk = (node) => !node || typeof node !== "object" ? []
       : Array.isArray(node) ? node.flatMap(walk) : [node, ...walk(node.props?.children)];
     return walk(tree).filter((node) => node.type === "td");

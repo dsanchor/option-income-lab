@@ -149,7 +149,7 @@ export default async function SymbolDetailPage({
           symbol={symbol}
           enrichment={enr}
           summary={d.summary}
-          totalShares={d.total_shares}
+          currentShares={d.portfolio?.current_shares}
         />
         <OptionTiming symbol={d.security?.security_id ?? d.security_id ?? symbol} snapshot={d.option_timing} />
       </DetailSection>
