@@ -120,6 +120,8 @@ export interface ForecastChatResponse {
 
 export interface HitRateEntry {
   resolved: number;
+  resolved_inner?: number;
+  resolved_outer?: number;
   hit_pct_1sigma: number | null;
   hit_pct_2sigma: number | null;
   direction_pct: number | null;
@@ -159,4 +161,18 @@ export interface ForecastsResponse {
   hit_rate: Partial<Record<Horizon, HitRateEntry>>;
   averages: Partial<Record<Horizon, AverageEntry>>;
   error?: string;
+}
+
+export interface SymbolForecastSummary {
+  status: "ok" | "not_eligible" | "unavailable" | "error";
+  reason?: string;
+  stale?: boolean;
+  currency?: string | null;
+  latest?: ForecastRow;
+  hit_rate?: Partial<Record<Horizon, HitRateEntry>>;
+}
+
+export interface SymbolsForecastOverview {
+  range: { from: string; to: string };
+  symbols: Record<string, SymbolForecastSummary>;
 }

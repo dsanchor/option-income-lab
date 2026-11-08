@@ -35,7 +35,7 @@ const symbolsTableSrc = readFileSync(
   "utf8",
 );
 const symbolsPageSrc = readFileSync(
-  join(root, "src/app/symbols/page.tsx"),
+  join(root, "src/components/SymbolsView.tsx"),
   "utf8",
 );
 

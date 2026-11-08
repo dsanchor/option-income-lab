@@ -1436,7 +1436,7 @@ from src.calendar_visibility import (  # noqa: E402
 )
 
 
-def _compute_symbols_overview(cosmos, portfolio_container=None):
+def _compute_symbols_overview(cosmos, portfolio_container=None, *, view=None):
     """View-model for the Symbols list page — Unified Watchlist (rev 6).
 
     Returns a single flat ``rows`` array merging portfolio holdings and
@@ -1460,14 +1460,21 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
     Legacy fields (``portfolio_rows``, ``watchlist_rows``, ``portfolio_count``,
     ``watchlist_count``) are preserved for backward-compatible rollout.
     """
-    symbols = cosmos.list_symbols() if cosmos else []
+    projected_loader = getattr(cosmos, "list_symbols_overview", None)
+    symbols = (
+        projected_loader(view) if view and callable(projected_loader)
+        else cosmos.list_symbols() if cosmos else []
+    )
+    needs_options = view in (None, "options")
+    needs_portfolio = view in (None, "portfolio")
+    needs_holdings = view != "forecast"
     from src.option_timing_store import load_current_rows, read_current
-    timing_rows, timing_error = load_current_rows(cosmos)
+    timing_rows, timing_error = load_current_rows(cosmos) if needs_options else ({}, None)
 
     # ── Load portfolio holdings for classification and enrichment ──────────
     holdings_by_ticker: Dict[str, Any] = {}
     holdings_summary: Dict[str, Any] = {}
-    if portfolio_container is not None:
+    if needs_holdings and portfolio_container is not None:
         try:
             from src.portfolio.cosmos_portfolio import CosmosPortfolioService
             from src.portfolio.cosmos_securities import CosmosSecuritiesService
@@ -1497,10 +1504,10 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
             _screener_shares[_t] = _Dsc(str(_h.get("total_shares", 0)))
         except Exception:
             _screener_shares[_t] = _Dsc("0")
-    screener_universe: set = _compute_screener_universe(symbols, _screener_shares)
+    screener_universe: set = _compute_screener_universe(symbols, _screener_shares) if view is None else set()
     # Always supply the real holdings snapshot: config share overrides must
     # never qualify a symbol for a covered call on the Symbols page.
-    share_availability = _build_share_availability_map(symbols, _screener_shares)
+    share_availability = _build_share_availability_map(symbols, _screener_shares) if needs_options else {}
     from src.position_contracts import position_contract_counts
 
     total_call_exposure = 0.0
@@ -1512,7 +1519,7 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
         enr = s.get("enrichment") or {}
         metrics = enr.get("metrics") or {}
         technicals = enr.get("technicals") or {}
-        active = [p for p in s.get("positions", []) if p.get("status") == "active"]
+        active = [p for p in s.get("positions", []) if p.get("status") == "active"] if needs_options else []
         in_calls = sum(100 for p in active if p.get("type") == "call")
         put_exposure = sum(
             float(p.get("strike", 0)) * 100 for p in active if p.get("type") == "put"
@@ -1576,6 +1583,7 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
             "symbol": s.get("symbol"),
             "display_name": s.get("display_name", ""),
             "security_id": s.get("security_id"),  # from symbol_config (populated by ensure)
+            **({"exchange": s.get("exchange")} if view else {}),
             "list_section": list_section,          # legacy compat
             "row_source": row_source,
             "is_auto_enrolled": is_auto_enrolled,
@@ -1619,7 +1627,7 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
             "option_timing": read_current(
                 sym, s.get("security_id"), us_options_eligible,
                 timing_rows.get(sym), read_error=timing_error,
-            ),
+            ) if needs_options else None,
         }
 
         # ── Pricing cache fields (Phase 3, contract §8) ────────────────────
@@ -1657,7 +1665,7 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
         row["current_value_eur"] = _portfolio_valuation_fields(
             holding,
             pc,
-        )["current_value_eur"]
+        )["current_value_eur"] if needs_portfolio else None
         # ──────────────────────────────────────────────────────────────────
 
         all_rows.append(row)
@@ -1673,7 +1681,7 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
 
     # Portfolio-wide summary (§2.3) — computed over ALL holdings, unaffected by row filter
     portfolio_summary: Dict[str, Any] | None = None
-    if holdings_summary:
+    if needs_portfolio and holdings_summary:
         # Sum current_value_eur across all rows for the total portfolio value KPI
         from decimal import Decimal as _DSum
         _total_cv = _DSum("0")
@@ -1716,16 +1724,49 @@ def _compute_symbols_overview(cosmos, portfolio_container=None):
 @app.get("/api/symbols/overview")
 async def api_symbols_overview(
     request: Request,
+    view: Optional[str] = Query(default=None, pattern="^(portfolio|options|forecast)$"),
 ):
     try:
         cosmos = _get_cosmos(request)
         portfolio_container = getattr(cosmos, "portfolio_container", None)
-        return JSONResponse(
-            _compute_symbols_overview(cosmos, portfolio_container)
-        )
+        result = _compute_symbols_overview(cosmos, portfolio_container, view=view)
+        if view == "forecast":
+            date_from, date_to = _resolve_forecast_range("90d", None, None)
+            result["forecast_overview"] = _build_symbols_forecast_overview(
+                cosmos, result["rows"], date_from, date_to,
+            )
+        if view:
+            option_fields = {
+                "dgi_score", "tech_timing", "option_timing", "active_count",
+                "has_open_options", "can_open_covered_calls", "in_calls",
+                "put_exposure", "call_exposure", "screener_eligible",
+            }
+            portfolio_fields = {
+                "price_eur", "portfolio_avg_cost_eur", "portfolio_invested_eur",
+                "portfolio_dividends_eur", "portfolio_realized_eur", "current_value_eur",
+            }
+            excluded = (
+                option_fields if view == "portfolio"
+                else portfolio_fields if view == "options"
+                else option_fields | portfolio_fields
+            )
+            for row in result["rows"]:
+                for field in excluded:
+                    row.pop(field, None)
+            if view != "options":
+                result.pop("total_call_exposure", None)
+                result.pop("total_put_exposure", None)
+            if view != "portfolio":
+                result.pop("portfolio_summary", None)
+        return JSONResponse(result)
     except RuntimeError as e:
+        if view:
+            logger.exception("Symbols %s view unavailable", view)
         return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
+        if view:
+            logger.exception("Symbols %s view unavailable", view)
+            return JSONResponse({"error": f"{view.title()} view is unavailable"}, status_code=503)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -6029,7 +6070,7 @@ def _forecast_chat_row(row):
     })
 
 
-def _build_forecast_data(cosmos, symbol, date_from, date_to):
+def _build_forecast_data(cosmos, symbol, date_from, date_to, *, predictions=None):
     from src.price_forecast import (
         aggregate_forecast_averages,
         aggregate_hit_rate,
@@ -6037,10 +6078,13 @@ def _build_forecast_data(cosmos, symbol, date_from, date_to):
         summarize_prediction,
     )
 
-    loader = getattr(
-        cosmos, "get_price_forecasts_required", cosmos.get_price_forecasts
-    )
-    preds = loader(symbol, date_from, date_to)
+    if predictions is None:
+        loader = getattr(
+            cosmos, "get_price_forecasts_required", cosmos.get_price_forecasts
+        )
+        preds = loader(symbol, date_from, date_to)
+    else:
+        preds = predictions
     rows = []
     for prediction in preds:
         rows.append({
@@ -6199,6 +6243,177 @@ def _validate_forecast_chat_payload(payload):
     if total_chars > _FORECAST_CHAT_MAX_HISTORY_CHARS:
         raise OverflowError("History exceeds 20,000 characters")
     return mode, range_key, message.strip(), normalized
+
+
+def _validate_overview_forecast(prediction):
+    from src.price_forecast import HORIZONS
+
+    if not _forecast_chat_date(prediction.get("created_date")):
+        raise ValueError("Forecast created_date is invalid")
+    anchor = prediction.get("price_at_creation")
+    if not _finite_number(anchor):
+        raise ValueError("Forecast price_at_creation must be finite numeric data")
+    inner = prediction.get("confidence", 0.68)
+    outer = prediction.get("outer_confidence", 0.95)
+    if not (
+        _finite_number(inner) and _finite_number(outer)
+        and 0 < inner <= outer < 1
+    ):
+        raise ValueError("Forecast confidence levels are invalid or inverted")
+    horizons = prediction.get("horizons")
+    if not isinstance(horizons, dict) or not horizons:
+        raise ValueError("Forecast horizons are empty or invalid")
+    for name, band in horizons.items():
+        if name not in HORIZONS or not isinstance(band, dict):
+            raise ValueError(f"Forecast horizon {name} is invalid")
+        for field in ("center", "sigma", "low1", "high1", "low2", "high2"):
+            if not _finite_number(band.get(field)):
+                raise ValueError(f"Forecast {name}.{field} must be finite numeric data")
+        center = band["center"]
+        if not (
+            band["sigma"] >= 0
+            and band["low2"] <= band["low1"] <= center
+            <= band["high1"] <= band["high2"]
+        ):
+            raise ValueError(f"Forecast {name} bands are inverted or not nested")
+        # Stored prices are rounded to four decimals; centers are entry prices,
+        # not the optional trend overlay.
+        if not math.isclose(center, anchor, rel_tol=0, abs_tol=0.0001):
+            raise ValueError(f"Forecast {name} center differs from price_at_creation")
+        for low, high in (("low1", "high1"), ("low2", "high2")):
+            if not math.isclose(
+                center - band[low], band[high] - center,
+                rel_tol=0, abs_tol=0.0002,
+            ):
+                raise ValueError(f"Forecast {name} bands are inconsistent with center")
+        for field in ("trend_end", "trend_slope", "z1", "z2"):
+            if field in band and not _finite_number(band[field]):
+                raise ValueError(f"Forecast {name}.{field} must be finite numeric data")
+        for field in ("start_session", "end_session"):
+            if field in band and band[field] != HORIZONS[name][field]:
+                raise ValueError(f"Forecast {name}.{field} is inconsistent with horizon")
+
+
+def _build_symbols_forecast_overview(cosmos, universe, date_from, date_to):
+    from src.price_forecast import aggregate_hit_rate
+    from src.us_exchange_eligibility import enforce_us_options_eligible
+    result = {}
+    eligible = {}
+    for row in universe:
+        identity = row.get("security_id") or row["symbol"]
+        doc = row if "exchange" in row else cosmos.get_symbol(row["symbol"])
+        canonical = doc.get("security_id") if doc else None
+        if (
+            not doc
+            or (":" in identity and identity != canonical)
+            or (":" in identity and not _is_us_options_eligible(identity.split(":", 1)[0]))
+            or enforce_us_options_eligible(doc) is not None
+        ):
+            result[identity] = {"status": "not_eligible"}
+            continue
+        eligible[identity] = (row, doc)
+    owners = {}
+    for identity, (_, doc) in eligible.items():
+        owners.setdefault(doc["symbol"], set()).add(doc.get("security_id") or identity)
+    grouped = cosmos.get_price_forecasts_overview_required(
+        sorted({doc["symbol"] for _, doc in eligible.values()}),
+        date_from, date_to,
+    )
+    for identity, (row, doc) in eligible.items():
+        try:
+            history = grouped.get(doc["symbol"], [])
+            unique_owner = len(owners[doc["symbol"]]) == 1
+            predictions = [
+                p for p in history
+                if (
+                    p.get("security_id") == doc.get("security_id")
+                    if p.get("security_id")
+                    else unique_owner and bool(doc.get("security_id"))
+                )
+            ]
+            # Legacy forecasts are unlabelled Yahoo native closes. Only attach a
+            # currency when the matching US security's native quote is known USD.
+            latest = max(predictions, key=lambda p: p.get("created_date") or "", default=None)
+            if not latest:
+                reason = (
+                    "Legacy ticker-only forecast ownership is ambiguous"
+                    if not unique_owner and any(not p.get("security_id") for p in history)
+                    else "No forecast history for this canonical security"
+                )
+                result[identity] = {"status": "unavailable", "reason": reason}
+                continue
+            _validate_overview_forecast(latest)
+            window = [
+                p for p in predictions
+                if date_from <= (p.get("created_date") or "") <= date_to
+            ]
+            for prediction in window:
+                _validate_overview_forecast(prediction)
+            currency = latest.get("currency")
+            if not currency and row.get("price_currency") == "USD":
+                currency = "USD"
+            data = _build_forecast_data(
+                cosmos, doc["symbol"], date_from, date_to, predictions=window,
+            )
+            valid_rates = {}
+            for field in ("inside_1sigma", "inside_2sigma"):
+                sanitized = []
+                for prediction in window:
+                    endpoints = {
+                        h: e for h, e in (prediction.get("endpoints") or {}).items()
+                        if isinstance(e, dict)
+                        and h in prediction["horizons"]
+                        and isinstance(e.get(field), bool)
+                        and _forecast_chat_number(e.get("price")) is not None
+                    }
+                    sanitized.append({**prediction, "endpoints": endpoints})
+                valid_rates[field] = aggregate_hit_rate(sanitized)
+            for horizon, hit in data["hit_rate"].items():
+                inner = valid_rates["inside_1sigma"][horizon]
+                outer = valid_rates["inside_2sigma"][horizon]
+                hit.update({
+                    "resolved": inner["resolved"],
+                    "resolved_inner": inner["resolved"],
+                    "resolved_outer": outer["resolved"],
+                    "hit_pct_1sigma": inner["hit_pct_1sigma"],
+                    "hit_pct_2sigma": outer["hit_pct_2sigma"],
+                })
+            latest_row = _build_forecast_data(
+                cosmos, doc["symbol"], date_from, date_to, predictions=[latest],
+            )["rows"][0]
+            summary = {
+                "status": "ok",
+                "currency": currency,
+                "latest": latest_row,
+                "hit_rate": data["hit_rate"],
+                "stale": latest["created_date"] < date_from,
+            }
+            json.dumps(summary, allow_nan=False)
+            result[identity] = summary
+        except ValueError as exc:
+            logger.exception("Forecast overview corrupt data for %s", identity)
+            result[identity] = {"status": "error", "reason": str(exc)}
+        except Exception:
+            logger.exception("Forecast overview unavailable for %s", identity)
+            result[identity] = {"status": "error", "reason": "Forecast data could not be read"}
+    return {"range": {"from": date_from, "to": date_to}, "symbols": result}
+
+
+@app.get("/api/symbols/forecasts/overview")
+async def api_symbols_forecasts_overview(request: Request):
+    """Read-only latest bands and 90-day endpoint hits for the Symbols universe."""
+    try:
+        cosmos = _get_cosmos(request)
+        universe = _compute_symbols_overview(
+            cosmos, getattr(cosmos, "portfolio_container", None), view="forecast",
+        )
+        date_from, date_to = _resolve_forecast_range("90d", None, None)
+        return JSONResponse(_build_symbols_forecast_overview(
+            cosmos, universe["rows"], date_from, date_to,
+        ))
+    except Exception:
+        logger.exception("Symbols forecast overview read failed")
+        return JSONResponse({"error": "Forecast overview is unavailable"}, status_code=503)
 
 
 @app.get("/api/symbols/{symbol}/forecasts")

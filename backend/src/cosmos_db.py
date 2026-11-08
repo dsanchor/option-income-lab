@@ -1146,6 +1146,94 @@ class CosmosDBService:
         """Return forecasts without converting storage failures into no history."""
         return self._query_price_forecasts(symbol, date_from, date_to, limit)
 
+    def get_price_forecasts_overview_required(
+        self, symbols: list[str], date_from: str, date_to: str,
+    ) -> dict[str, list[dict]]:
+        """Bulk-read window history plus latest anchors, including stale ones.
+
+        MAX/GROUP BY avoids requiring the optional created_date ORDER BY index.
+        Only latest documents outside the window need a second full-document
+        read; older history is never materialized.
+        """
+        grouped: dict[str, list[dict]] = {symbol: [] for symbol in symbols}
+        if not symbols:
+            return grouped
+
+        items = self.container.query_items(
+            query=(
+                "SELECT * FROM c WHERE c.doc_type = 'price_forecast' "
+                "AND ARRAY_CONTAINS(@symbols, c.symbol) "
+                "AND c.created_date >= @from AND c.created_date <= @to"
+            ),
+            parameters=[
+                {"name": "@symbols", "value": symbols},
+                {"name": "@from", "value": date_from},
+                {"name": "@to", "value": date_to},
+            ],
+            enable_cross_partition_query=True,
+        )
+        for item in items:
+            if item.get("symbol") in grouped:
+                grouped[item["symbol"]].append(item)
+        anchors = self.container.query_items(
+            query=(
+                "SELECT c.symbol, c.security_id, MAX(c.created_date) AS created_date "
+                "FROM c WHERE c.doc_type = 'price_forecast' "
+                "AND ARRAY_CONTAINS(@symbols, c.symbol) AND c.created_date <= @to "
+                "GROUP BY c.symbol, c.security_id"
+            ),
+            parameters=[
+                {"name": "@symbols", "value": symbols},
+                {"name": "@to", "value": date_to},
+            ],
+            enable_cross_partition_query=True,
+        )
+        stale_anchors = [
+            {"symbol": anchor["symbol"], "created_date": anchor["created_date"]}
+            for anchor in anchors
+            if anchor.get("symbol") in grouped
+            and isinstance(anchor.get("created_date"), str)
+            and anchor["created_date"] < date_from
+        ]
+        # Bound parameter payloads, not one query per ticker.
+        for offset in range(0, len(stale_anchors), 100):
+            latest_items = self.container.query_items(
+                query=(
+                    "SELECT * FROM c WHERE c.doc_type = 'price_forecast' "
+                    "AND ARRAY_CONTAINS(@anchors, "
+                    '{"symbol": c.symbol, "created_date": c.created_date}, true)'
+                ),
+                parameters=[{
+                    "name": "@anchors", "value": stale_anchors[offset:offset + 100],
+                }],
+                enable_cross_partition_query=True,
+            )
+            for item in latest_items:
+                if item.get("symbol") in grouped:
+                    grouped[item["symbol"]].append(item)
+        for predictions in grouped.values():
+            unique = {
+                (p.get("id"), p.get("security_id"), p.get("created_date")): p
+                for p in predictions
+            }
+            predictions[:] = unique.values()
+            predictions.sort(key=lambda p: p.get("created_date", ""), reverse=True)
+        return grouped
+
+    def list_symbols_overview(self, view: str) -> list[dict]:
+        """Project only config fields required by an activated Symbols view."""
+        fields = [
+            "c.symbol", "c.security_id", "c.display_name", "c.exchange",
+            "c.watchlist", "c._auto_enrolled", "c.total_shares",
+            "c.enrichment", "c.pricing_cache",
+        ]
+        if view == "options":
+            fields.append("c.positions")
+        return list(self.container.query_items(
+            query=f"SELECT {', '.join(fields)} FROM c WHERE c.doc_type = 'symbol_config'",
+            enable_cross_partition_query=True,
+        ))
+
     def get_price_forecast(self, symbol: str, forecast_id: str) -> Optional[dict]:
         """Read a single forecast document by id, or None if missing."""
         try:

@@ -21,7 +21,7 @@ import type { SecurityMaster } from "@/types/portfolio";
 
 type Phase = "search" | "create";
 
-export default function AddSymbolForm() {
+export default function AddSymbolForm({ onAdded }: { onAdded?: () => void } = {}) {
   const router = useRouter();
   const formRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -103,6 +103,7 @@ export default function AddSymbolForm() {
     setSuccess(null);
     try {
       const res = await addSymbol({ security_id: candidate.security_id });
+      onAdded?.();
       const label = candidate.has_config ? "Already in watchlist" : `${candidate.ticker} added`;
       setSuccess(label);
       setTimeout(() => {
@@ -115,13 +116,14 @@ export default function AddSymbolForm() {
     } finally {
       setSaving(false);
     }
-  }, [router]);
+  }, [router, onAdded]);
 
   const handleCreated = useCallback(async (security: SecurityMaster) => {
     setSaving(true);
     setError(null);
     try {
       const res = await addSymbol({ security_id: security.security_id });
+      onAdded?.();
       setSuccess(`${security.ticker} added!`);
       setTimeout(() => {
         setOpen(false);
@@ -133,7 +135,7 @@ export default function AddSymbolForm() {
     } finally {
       setSaving(false);
     }
-  }, [router]);
+  }, [router, onAdded]);
 
   return (
     <div ref={formRef} className="relative inline-block">

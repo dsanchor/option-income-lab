@@ -374,3 +374,397 @@ def test_context_deterministically_truncates_rows(client):
     assert meta["forecast_count"] == 130
     assert meta["rows_in_context"] <= 100
     assert meta["truncated"] is True
+
+
+@pytest.fixture
+def overview_client(client, monkeypatch):
+    cosmos = client.app.state.cosmos
+    docs = {
+        "MSFT": cosmos.symbol,
+        "EMPTY": {"symbol": "EMPTY", "security_id": "XNYS:EMPTY", "exchange": "XNYS"},
+        "IBE": {"symbol": "IBE", "security_id": "XMAD:IBE", "exchange": "XMAD"},
+    }
+    universe = [
+        {"symbol": ticker, "security_id": doc["security_id"], "price_currency": "USD"}
+        for ticker, doc in docs.items()
+    ] + [{"symbol": "MSFT", "security_id": "XLON:MSFT", "price_currency": "GBP"}]
+    monkeypatch.setattr(
+        "web.app._compute_symbols_overview", lambda *args, **kwargs: {"rows": universe},
+    )
+    cosmos.get_symbol = docs.get
+    calls = []
+
+    def batch(symbols, date_from, date_to):
+        calls.append((symbols, date_from, date_to))
+        return {"MSFT": cosmos.forecasts, "EMPTY": []}
+
+    cosmos.get_price_forecasts_overview_required = batch
+    return client, calls
+
+
+def test_forecast_overview_one_allowlisted_read_latest_bands_and_90d_hits(overview_client):
+    client, calls = overview_client
+    cosmos = client.app.state.cosmos
+    cosmos.forecasts.reverse()  # Latest must not depend on storage ordering.
+    cosmos.forecasts[0]["endpoints"]["1d"]["inside_1sigma"] = False
+    response = client.get("/api/symbols/forecasts/overview")
+    assert response.status_code == 200
+    body = response.json()
+    assert len(calls) == 1
+    assert calls[0][0] == ["EMPTY", "MSFT"]
+    from datetime import date
+    assert (date.fromisoformat(calls[0][2]) - date.fromisoformat(calls[0][1])).days == 90
+    symbols = body["symbols"]
+    summary = symbols["XNAS:MSFT"]
+    assert summary["latest"]["created_date"] == "2026-09-29"
+    assert summary["latest"]["horizons"]["1d"]["low1"] == 103
+    assert summary["latest"]["horizons"]["1d"]["high2"] == 109
+    assert summary["currency"] == "USD"
+    assert summary["hit_rate"]["1d"]["hit_pct_1sigma"] == 50
+    assert summary["hit_rate"]["1d"]["hit_pct_2sigma"] == 100
+    assert summary["hit_rate"]["1w"]["hit_pct_1sigma"] is None
+    assert symbols["XNYS:EMPTY"]["status"] == "unavailable"
+    assert symbols["XMAD:IBE"]["status"] == "not_eligible"
+    assert symbols["XLON:MSFT"]["status"] == "not_eligible"
+
+
+def test_forecast_overview_invalid_samples_are_not_fabricated_misses(overview_client):
+    client, _ = overview_client
+    forecasts = client.app.state.cosmos.forecasts
+    forecasts[0]["endpoints"]["1d"]["inside_1sigma"] = None
+    forecasts[1]["endpoints"]["1d"]["inside_1sigma"] = False
+    summary = client.get("/api/symbols/forecasts/overview").json()["symbols"]["XNAS:MSFT"]
+    assert summary["hit_rate"]["1d"]["resolved"] == 1
+    assert summary["hit_rate"]["1d"]["resolved_outer"] == 2
+    assert summary["hit_rate"]["1d"]["hit_pct_1sigma"] == 0
+    forecasts[1]["endpoints"]["1d"]["price"] = None
+    summary = client.get("/api/symbols/forecasts/overview").json()["symbols"]["XNAS:MSFT"]
+    assert summary["hit_rate"]["1d"]["resolved"] == 0
+    assert summary["hit_rate"]["1d"]["hit_pct_1sigma"] is None
+
+
+def test_forecast_overview_partial_and_storage_failures(overview_client):
+    client, _ = overview_client
+    client.app.state.cosmos.forecasts[0]["horizons"] = None
+    response = client.get("/api/symbols/forecasts/overview")
+    assert response.status_code == 200
+    assert response.json()["symbols"]["XNAS:MSFT"]["status"] == "error"
+    assert response.json()["symbols"]["XNYS:EMPTY"]["status"] == "unavailable"
+
+    def fail(*args):
+        raise RuntimeError("storage unavailable")
+
+    client.app.state.cosmos.get_price_forecasts_overview_required = fail
+    response = client.get("/api/symbols/forecasts/overview")
+    assert response.status_code == 503
+    assert "unavailable" in response.json()["error"]
+
+
+def test_forecast_overview_canonical_prediction_mismatch(overview_client):
+    client, _ = overview_client
+    for forecast in client.app.state.cosmos.forecasts:
+        forecast["security_id"] = "XLON:MSFT"
+    response = client.get("/api/symbols/forecasts/overview")
+    assert response.json()["symbols"]["XNAS:MSFT"]["status"] == "unavailable"
+
+
+def test_forecast_overview_ambiguous_legacy_does_not_borrow_canonical_history(
+    overview_client, monkeypatch,
+):
+    client, _ = overview_client
+    cosmos = client.app.state.cosmos
+    universe = [
+        {"symbol": "MSFT", "security_id": f"{mic}:MSFT", "exchange": mic,
+         "price_currency": "USD"}
+        for mic in ("XNAS", "XNYS")
+    ]
+    monkeypatch.setattr(
+        "web.app._compute_symbols_overview", lambda *args, **kwargs: {"rows": universe},
+    )
+    summaries = client.get("/api/symbols/forecasts/overview").json()["symbols"]
+    for summary in summaries.values():
+        assert summary["status"] == "unavailable"
+        assert "ambiguous" in summary["reason"]
+        assert "latest" not in summary and "hit_rate" not in summary
+
+    cosmos.forecasts[0]["security_id"] = "XNAS:MSFT"
+    cosmos.forecasts[1]["security_id"] = "XNYS:MSFT"
+    cosmos.forecasts[1]["endpoints"]["1d"]["inside_1sigma"] = False
+    summaries = client.get("/api/symbols/forecasts/overview").json()["symbols"]
+    assert summaries["XNAS:MSFT"]["latest"]["price_at_creation"] == 105
+    assert summaries["XNYS:MSFT"]["latest"]["price_at_creation"] == 100
+    assert summaries["XNAS:MSFT"]["hit_rate"]["1d"]["hit_pct_1sigma"] == 100
+    assert summaries["XNYS:MSFT"]["hit_rate"]["1d"]["hit_pct_1sigma"] == 0
+    assert all(s["hit_rate"]["1d"]["resolved"] == 1 for s in summaries.values())
+    cosmos.forecasts.append(_forecast("2026-09-30", 999))
+    summaries = client.get("/api/symbols/forecasts/overview").json()["symbols"]
+    assert summaries["XNAS:MSFT"]["latest"]["price_at_creation"] == 105
+    assert summaries["XNYS:MSFT"]["latest"]["price_at_creation"] == 100
+    assert all(s["hit_rate"]["1d"]["resolved"] == 1 for s in summaries.values())
+
+
+@pytest.mark.parametrize("corruption", [
+    "empty", "string", "inverted", "nan", "outer_not_nested",
+    "center", "unknown_horizon", "session", "price", "null_band",
+])
+def test_forecast_overview_corrupt_latest_is_error_without_older_fallback(
+    overview_client, corruption, caplog,
+):
+    client, _ = overview_client
+    latest = client.app.state.cosmos.forecasts[0]
+    band = latest["horizons"]["1d"]
+    if corruption == "empty":
+        latest["horizons"] = {}
+    elif corruption == "string":
+        band["low1"] = "103"
+    elif corruption == "inverted":
+        band["low1"], band["high1"] = band["high1"], band["low1"]
+    elif corruption == "nan":
+        band["high1"] = float("nan")
+    elif corruption == "outer_not_nested":
+        band["low2"] = band["center"]
+    elif corruption == "center":
+        band["center"] += 1
+    elif corruption == "unknown_horizon":
+        latest["horizons"]["1m"] = dict(band)
+    elif corruption == "session":
+        band["end_session"] = 5
+    elif corruption == "price":
+        latest["price_at_creation"] = "105"
+    elif corruption == "null_band":
+        latest["horizons"]["1d"] = None
+    summary = client.get("/api/symbols/forecasts/overview").json()["symbols"]["XNAS:MSFT"]
+    assert summary["status"] == "error"
+    assert summary["reason"].startswith("Forecast")
+    assert "latest" not in summary and "hit_rate" not in summary
+    assert "Forecast overview corrupt data for XNAS:MSFT" in caplog.text
+
+
+def test_forecast_overview_missing_horizons_are_not_corrupt(overview_client):
+    client, _ = overview_client
+    summary = client.get("/api/symbols/forecasts/overview").json()["symbols"]["XNAS:MSFT"]
+    assert summary["status"] == "ok"
+    assert "1w" not in summary["latest"]["horizons"]
+    assert summary["hit_rate"]["1w"]["resolved"] == 0
+    assert summary["hit_rate"]["1w"]["hit_pct_1sigma"] is None
+
+
+def test_forecast_overview_old_latest_retains_bands_without_old_hit_rates(overview_client):
+    client, _ = overview_client
+    cosmos = client.app.state.cosmos
+    cosmos.forecasts = [_forecast("2025-09-29", 105), _forecast("2025-09-20", 100)]
+    summary = client.get("/api/symbols/forecasts/overview").json()["symbols"]["XNAS:MSFT"]
+    assert summary["status"] == "ok"
+    assert summary["latest"]["created_date"] == "2025-09-29"
+    assert summary["latest"]["horizons"]["1d"]["low1"] == 103
+    assert summary["stale"] is True
+    assert summary["hit_rate"]["1d"]["resolved"] == 0
+    assert summary["hit_rate"]["1d"]["hit_pct_1sigma"] is None
+    assert summary["hit_rate"]["1d"]["hit_pct_2sigma"] is None
+
+
+def test_forecast_overview_cosmos_query_is_allowlisted_and_propagates_failure():
+    from src.cosmos_db import CosmosDBService
+
+    class Container:
+        calls = []
+
+        def query_items(self, **kwargs):
+            self.calls.append(kwargs)
+            return [
+                {"symbol": "MSFT", "created_date": "2026-09-20"},
+                {"symbol": "MSFT", "created_date": "2026-09-29"},
+                {"symbol": "UNTRACKED", "created_date": "2026-09-29"},
+            ]
+
+    cosmos = object.__new__(CosmosDBService)
+    cosmos.container = Container()
+    grouped = cosmos.get_price_forecasts_overview_required(["MSFT"], "2026-07-01", "2026-09-29")
+    assert list(grouped) == ["MSFT"]
+    assert grouped["MSFT"][0]["created_date"] == "2026-09-29"
+    assert len(cosmos.container.calls) == 2
+    assert "ARRAY_CONTAINS(@symbols, c.symbol)" in cosmos.container.calls[0]["query"]
+    assert cosmos.get_price_forecasts_overview_required([], "2026-07-01", "2026-09-29") == {}
+    assert len(cosmos.container.calls) == 2
+
+    def fail(**kwargs):
+        raise RuntimeError("storage failure")
+
+    cosmos.container.query_items = fail
+    with pytest.raises(RuntimeError, match="storage failure"):
+        cosmos.get_price_forecasts_overview_required(["MSFT"], "2026-07-01", "2026-09-29")
+
+
+def test_forecast_overview_cosmos_bulk_latest_is_independent_of_window_and_identity():
+    from src.cosmos_db import CosmosDBService
+
+    documents = [
+        {**_forecast("2025-09-20", 90), "symbol": "MSFT", "security_id": "XNAS:MSFT"},
+        {**_forecast("2025-09-29", 105), "symbol": "MSFT", "security_id": "XNAS:MSFT"},
+        {**_forecast("2025-10-01", 70), "symbol": "MSFT", "security_id": "XNYS:MSFT"},
+        {**_forecast("2026-09-29", 200), "symbol": "OTHER"},
+        {**_forecast("2026-10-01", 999), "symbol": "UNTRACKED"},
+    ]
+
+    class Container:
+        def __init__(self):
+            self.calls = []
+
+        def query_items(self, **kwargs):
+            self.calls.append(kwargs)
+            query = kwargs["query"]
+            params = {p["name"]: p["value"] for p in kwargs["parameters"]}
+            if "MAX(c.created_date)" in query:
+                assert "@from" not in params
+                assert "GROUP BY c.symbol, c.security_id" in query
+                owners = {}
+                for doc in documents:
+                    if doc["symbol"] in params["@symbols"] and doc["created_date"] <= params["@to"]:
+                        owner = (doc["symbol"], doc.get("security_id"))
+                        if owner not in owners or doc["created_date"] > owners[owner]["created_date"]:
+                            owners[owner] = doc
+                return list(owners.values())
+            if "@anchors" in params:
+                assert "ARRAY_CONTAINS(@anchors" in query
+                assert len(params["@anchors"]) <= 100
+                return [
+                    doc for doc in documents
+                    if {"symbol": doc["symbol"], "created_date": doc["created_date"]}
+                    in params["@anchors"]
+                ]
+            return [
+                doc for doc in documents
+                if doc["symbol"] in params["@symbols"]
+                and params["@from"] <= doc["created_date"] <= params["@to"]
+            ]
+
+    cosmos = object.__new__(CosmosDBService)
+    cosmos.container = Container()
+    grouped = cosmos.get_price_forecasts_overview_required(
+        ["MSFT", "OTHER"], "2026-07-01", "2026-09-29",
+    )
+    assert [p["created_date"] for p in grouped["MSFT"]] == ["2025-10-01", "2025-09-29"]
+    assert [p["created_date"] for p in grouped["OTHER"]] == ["2026-09-29"]
+    assert len(cosmos.container.calls) == 3
+    assert all(c["enable_cross_partition_query"] for c in cosmos.container.calls)
+    from web.app import _build_symbols_forecast_overview
+
+    universe = [
+        {"symbol": "MSFT", "security_id": f"{mic}:MSFT", "exchange": mic,
+         "price_currency": "USD"}
+        for mic in ("XNAS", "XNYS")
+    ]
+    summaries = _build_symbols_forecast_overview(
+        cosmos, universe, "2026-07-01", "2026-09-29",
+    )["symbols"]
+    for identity, expected_date, expected_price in [
+        ("XNAS:MSFT", "2025-09-29", 105),
+        ("XNYS:MSFT", "2025-10-01", 70),
+    ]:
+        summary = summaries[identity]
+        assert summary["status"] == "ok" and summary["stale"] is True
+        assert summary["latest"]["created_date"] == expected_date
+        assert summary["latest"]["price_at_creation"] == expected_price
+        assert summary["hit_rate"]["1d"]["resolved"] == 0
+        assert summary["hit_rate"]["1d"]["hit_pct_1sigma"] is None
+
+
+def test_symbols_scoped_views_defer_inactive_backend_work_and_preserve_legacy(client, monkeypatch):
+    cosmos = client.app.state.cosmos
+    doc = {
+        **cosmos.symbol,
+        "enrichment": {"metrics": {"current_price": 105}, "momentum": "Bullish"},
+        "pricing_cache": {"status": "ok", "price_major": 105, "price_currency": "USD", "quote_currency": "USD"},
+    }
+    cosmos.container = object()
+    cosmos.portfolio_container = object()
+    calls = {"holdings": 0, "timing": 0, "screener": 0, "availability": 0, "valuation": 0, "forecasts": 0}
+
+    class Holdings:
+        def __init__(self, *args):
+            pass
+
+        def compute_holdings(self):
+            calls["holdings"] += 1
+            return {"holdings": [], "summary": {"remaining_cost_basis_eur": "100.00"}}
+
+    monkeypatch.setattr("src.portfolio.cosmos_portfolio.CosmosPortfolioService", lambda *args: object())
+    monkeypatch.setattr("src.portfolio.cosmos_securities.CosmosSecuritiesService", lambda *args: object())
+    monkeypatch.setattr("src.portfolio.holdings_service.HoldingsService", Holdings)
+
+    def timing(*args):
+        calls["timing"] += 1
+        return {}, None
+
+    def screener(*args):
+        calls["screener"] += 1
+        return set()
+
+    def availability(*args):
+        calls["availability"] += 1
+        return {}
+
+    def valuation(*args):
+        calls["valuation"] += 1
+        return {"current_value_eur": None}
+
+    def forecasts(*args):
+        calls["forecasts"] += 1
+        return {"MSFT": cosmos.forecasts}
+
+    monkeypatch.setattr("src.option_timing_store.load_current_rows", timing)
+    monkeypatch.setattr("web.app._compute_screener_universe", screener)
+    monkeypatch.setattr("web.app._build_share_availability_map", availability)
+    monkeypatch.setattr("web.app._portfolio_valuation_fields", valuation)
+    cosmos.list_symbols = lambda: [doc]
+    cosmos.list_symbols_overview = lambda view: [doc]
+    cosmos.get_price_forecasts_overview_required = forecasts
+
+    portfolio = client.get("/api/symbols/overview?view=portfolio")
+    assert portfolio.status_code == 200
+    assert calls == {"holdings": 1, "timing": 0, "screener": 0, "availability": 0, "valuation": 1, "forecasts": 0}
+    assert "portfolio_summary" in portfolio.json()
+    assert "total_call_exposure" not in portfolio.json()
+    assert "option_timing" not in portfolio.json()["rows"][0]
+
+    options = client.get("/api/symbols/overview?view=options")
+    assert options.status_code == 200
+    assert calls == {"holdings": 2, "timing": 1, "screener": 0, "availability": 1, "valuation": 1, "forecasts": 0}
+    assert "portfolio_summary" not in options.json()
+    assert "total_call_exposure" in options.json()
+    assert "portfolio_invested_eur" not in options.json()["rows"][0]
+
+    forecast = client.get("/api/symbols/overview?view=forecast")
+    assert forecast.status_code == 200
+    assert calls == {"holdings": 2, "timing": 1, "screener": 0, "availability": 1, "valuation": 1, "forecasts": 1}
+    assert forecast.json()["forecast_overview"]["symbols"]["XNAS:MSFT"]["status"] == "ok"
+    assert "portfolio_summary" not in forecast.json()
+    assert "option_timing" not in forecast.json()["rows"][0]
+
+    legacy = client.get("/api/symbols/overview")
+    assert legacy.status_code == 200
+    assert calls == {"holdings": 3, "timing": 2, "screener": 1, "availability": 2, "valuation": 2, "forecasts": 1}
+    assert "portfolio_summary" in legacy.json()
+    assert "total_call_exposure" in legacy.json()
+    assert "forecast_overview" not in legacy.json()
+    assert client.get("/api/symbols/overview?view=anything").status_code == 422
+
+
+def test_symbols_view_projection_excludes_inactive_options_documents():
+    from src.cosmos_db import CosmosDBService
+
+    class Container:
+        queries = []
+
+        def query_items(self, **kwargs):
+            self.queries.append(kwargs["query"])
+            return []
+
+    cosmos = object.__new__(CosmosDBService)
+    cosmos.container = Container()
+    for view in ("portfolio", "forecast", "options"):
+        cosmos.list_symbols_overview(view)
+    assert "c.positions" not in cosmos.container.queries[0]
+    assert "c.positions" not in cosmos.container.queries[1]
+    assert "c.positions" in cosmos.container.queries[2]
+    assert all("SELECT *" not in query for query in cosmos.container.queries)

@@ -1,0 +1,192 @@
+"use client";
+
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { symbolsViewQueryOptions } from "@/lib/symbols-overview-query";
+import { usd, timeAgo } from "@/lib/format";
+import SymbolsTable from "@/components/SymbolsTable";
+import AddSymbolForm from "@/components/AddSymbolForm";
+import type { SymbolRow, PortfolioSummary, SymbolsViewMode } from "@/types/symbols";
+
+/** Format a EUR number (or string) for KPI display. */
+function kpiEur(v: number | string | null | undefined): string {
+  const n = typeof v === "string" ? parseFloat(v) : (v ?? NaN);
+  if (!isFinite(n)) return "—";
+  return new Intl.NumberFormat("de-DE", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: 2,
+  }).format(n);
+}
+
+/** Format a percentage for KPI display, with an explicit "+" sign when positive. */
+function kpiPct(v: number | null | undefined): string {
+  if (v == null || !isFinite(v)) return "—";
+  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+}
+
+function KpiCard({
+  label,
+  value,
+  tone,
+  tooltip,
+}: {
+  label: string;
+  value: string;
+  tone?: "green" | "red" | "neutral";
+  tooltip?: string;
+}) {
+  const valueClass =
+    tone === "green"
+      ? "text-accent-green"
+      : tone === "red"
+        ? "text-accent-red"
+        : "text-text";
+  const barStyle =
+    tone === "green"
+      ? "var(--grad-green)"
+      : tone === "red"
+        ? "var(--grad-warm)"
+        : "var(--grad-blue)";
+  return (
+    <div
+      className="relative overflow-hidden rounded-[var(--radius)] border border-border bg-bg-card p-4 flex-1 min-w-[160px]"
+      title={tooltip}
+    >
+      <span className="absolute inset-y-0 left-0 w-1" style={{ background: barStyle }} aria-hidden />
+      <div className="pl-1">
+        <div className="text-xs text-text-muted mb-1">{label}</div>
+        <div className={`text-xl font-semibold font-mono ${valueClass}`}>{value}</div>
+      </div>
+    </div>
+  );
+}
+
+export default function SymbolsView() {
+  const [activeView, setActiveView] = useState<SymbolsViewMode>("portfolio");
+  const queryClient = useQueryClient();
+  const query = useQuery(symbolsViewQueryOptions(activeView));
+  const d = query.data ?? {};
+  const invalidateViews = () => {
+    void queryClient.invalidateQueries({ queryKey: ["symbols-overview"] });
+  };
+
+  // Unified list: prefer Livingston's `symbols[]`, then legacy sectioned arrays, then flat rows
+  const allSymbols: SymbolRow[] =
+    d.symbols ??
+    (d.portfolio_rows || d.watchlist_rows
+      ? [...(d.portfolio_rows ?? []), ...(d.watchlist_rows ?? [])]
+      : null) ??
+    d.rows ??
+    [];
+
+  const ps: PortfolioSummary | null | undefined = d.portfolio_summary;
+  // Resolve field names across both backend contracts
+  const totalInvestment = ps?.total_investment_eur ?? (ps?.remaining_cost_basis_eur != null ? parseFloat(ps.remaining_cost_basis_eur) : null);
+  const netGains = ps?.net_gains_eur ?? (ps?.realized_result_eur != null ? parseFloat(ps.realized_result_eur) : null);
+  const totalDividends = ps?.total_dividends_eur;
+  const totalCurrentValue = ps?.total_current_value_eur ?? null;
+  const hasPortfolioSummary = ps != null && (totalInvestment != null || netGains != null);
+
+  const netGainsTone =
+    netGains == null ? "neutral" : netGains >= 0 ? "green" : "red";
+
+  // Unrealized benefit/loss %: current market value vs. remaining cost basis still held.
+  const totalCurrentValueNum =
+    totalCurrentValue != null
+      ? (typeof totalCurrentValue === "string" ? parseFloat(totalCurrentValue) : totalCurrentValue)
+      : null;
+  const unrealizedPct =
+    totalCurrentValueNum != null && isFinite(totalCurrentValueNum) && totalInvestment != null && totalInvestment !== 0
+      ? ((totalCurrentValueNum - totalInvestment) / totalInvestment) * 100
+      : null;
+  const unrealizedPctTone =
+    unrealizedPct == null ? "neutral" : unrealizedPct >= 0 ? "green" : "red";
+
+  return (
+    <div className="space-y-6">
+      {/* ── Header ───────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Symbols</h1>
+          {d.last_update_ts && (
+            <p className="text-sm text-text-muted">Last enrichment {timeAgo(d.last_update_ts)}</p>
+          )}
+        </div>
+        {/* Row 1 — Options exposure */}
+        {activeView === "options" && query.data && <div className="flex flex-wrap gap-4 text-sm text-text-muted">
+          <span>
+            Calls exposure <span className="text-text">${usd(d.total_call_exposure)}</span>
+          </span>
+          <span>
+            Puts committed <span className="text-text">${usd(d.total_put_exposure)}</span>
+          </span>
+        </div>}
+      </div>
+
+      {/* Row 2 — Portfolio KPIs (visible only when holdings data exists) */}
+      {activeView === "portfolio" && hasPortfolioSummary && (
+        <div className="flex flex-wrap gap-3">
+          <KpiCard
+            label="Current Investment"
+            value={kpiEur(totalInvestment)}
+            tone="neutral"
+            tooltip="Base de coste CMP de las acciones que aún posees (remaining_cost_basis_eur)."
+          />
+          {totalCurrentValue != null && (
+            <KpiCard
+              label="Current Value"
+              value={kpiEur(totalCurrentValue)}
+              tone="neutral"
+              tooltip="Valor actual de mercado del portfolio en EUR (acciones × precio actual en EUR)."
+            />
+          )}
+          {unrealizedPct != null && (
+            <KpiCard
+              label="Unrealized P/L %"
+              value={kpiPct(unrealizedPct)}
+              tone={unrealizedPctTone}
+              tooltip="Ganancia o pérdida no realizada: (Current Value − Current Investment) / Current Investment."
+            />
+          )}
+          <KpiCard
+            label="Realized Result"
+            value={kpiEur(netGains)}
+            tone={netGainsTone}
+            tooltip="Ganancia o pérdida cerrada por ventas de acciones. No incluye ganancias no realizadas ni P&L de opciones."
+          />
+          <KpiCard
+            label="Net Dividends"
+            value={kpiEur(totalDividends)}
+            tone="neutral"
+            tooltip="Total de dividendos netos recibidos (tras retenciones) en todos los activos."
+          />
+        </div>
+      )}
+
+      <div className="flex items-center gap-3">
+        <AddSymbolForm onAdded={invalidateViews} />
+        <button type="button" className="text-xs text-accent-blue hover:underline disabled:opacity-50" disabled={query.isFetching} onClick={() => { void query.refetch(); }}>Refresh</button>
+        <span className="text-xs text-text-muted" role="status">
+          {query.isFetching ? `Loading ${activeView}…` : query.dataUpdatedAt ? `Updated ${timeAgo(new Date(query.dataUpdatedAt).toISOString())}` : ""}
+        </span>
+      </div>
+      {query.error && (
+        <div role="alert" className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-4 py-3 text-sm">
+          Could not load {activeView}. <button type="button" className="underline" onClick={() => { void query.refetch(); }}>Retry</button>
+        </div>
+      )}
+
+      <SymbolsTable
+        rows={allSymbols}
+        onViewModeChange={setActiveView}
+        forecastOverview={d.forecast_overview}
+        optionFiltersAvailable={activeView === "options"}
+        loading={query.isFetching}
+        loadError={query.error ? "Could not load forecasts." : undefined}
+        onRefresh={() => { void query.refetch(); }}
+        onDataChanged={invalidateViews}
+      />
+    </div>
+  );
+}

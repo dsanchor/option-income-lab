@@ -122,7 +122,7 @@ describe("Symbols page no longer requests the removed include_zero_portfolio fla
   // page.tsx renders JSX, which Node's native TS type-stripping cannot parse,
   // so it can't be import()-ed directly in this plain-Node test harness.
   const pageSrc = readFileSync(
-    fileURLToPath(new URL("../src/app/symbols/page.tsx", import.meta.url)),
+    fileURLToPath(new URL("../src/components/SymbolsView.tsx", import.meta.url)),
     "utf8",
   );
 

@@ -1,4 +1,7 @@
 import type { OptionTimingSnapshot } from "@/types/option-timing";
+import type { SymbolsForecastOverview } from "@/types/forecasts";
+
+export type SymbolsViewMode = "portfolio" | "options" | "forecast";
 
 export interface SymbolWatchlistFlags {
   covered_call: boolean;
@@ -70,6 +73,7 @@ export interface PortfolioSummary {
 }
 
 export interface SymbolsOverview {
+  forecast_overview?: SymbolsForecastOverview;
   // Livingston unified flat list (primary surface)
   symbols?: SymbolRow[];
   // Legacy sectioned arrays — kept for backward compat until migration confirmed

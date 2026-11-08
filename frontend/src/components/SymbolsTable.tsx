@@ -28,6 +28,8 @@ import { OptionTimingModal, OptionTimingValue } from "@/components/OptionTiming"
 import { compareOptionTiming, optionTimingScore, OPTION_TIMING_SIDES } from "@/lib/optionTiming";
 import type { OptionTimingSideKey } from "@/types/option-timing";
 import type { SymbolRow } from "@/types/symbols";
+import { HORIZONS, type SymbolsForecastOverview } from "@/types/forecasts";
+import { ForecastBandCell } from "@/components/SymbolsForecastTable";
 
 function num(n: number | null | undefined, digits = 1): string {
   return typeof n === "number" && isFinite(n) ? n.toFixed(digits) : "—";
@@ -131,7 +133,7 @@ const SUITABILITY_FILTERS: { key: SymbolSuitabilityFilter; label: string; title:
   { key: "no_calls", label: "Unfavorable Calls", title: "Fresh covered CALL Option Timing <25; technical context only, not trade permission" },
 ];
 
-type ViewMode = "portfolio" | "options";
+type ViewMode = "portfolio" | "options" | "forecast";
 
 const COLUMNS: {
   key: SortKey;
@@ -161,7 +163,19 @@ const COLUMNS: {
   { key: "put_exposure",             label: "Puts $",   align: "right", modes: ["options"],  width: "80px",  nowrap: true },
 ];
 
-export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
+export default function SymbolsTable({
+  rows, onViewModeChange, forecastOverview, loading = false, loadError,
+  onRefresh, onDataChanged, optionFiltersAvailable = true,
+}: {
+  rows: SymbolRow[];
+  onViewModeChange?: (mode: ViewMode) => void;
+  forecastOverview?: SymbolsForecastOverview;
+  loading?: boolean;
+  loadError?: string;
+  onRefresh?: () => void;
+  onDataChanged?: () => void;
+  optionFiltersAvailable?: boolean;
+}) {
   const router = useRouter();
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<SortKey>("symbol");
@@ -173,6 +187,8 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
   const [modalSymbol, setModalSymbol] = useState<string | null>(null);
   const [timingModal, setTimingModal] = useState<{ row: SymbolRow; side: OptionTimingSideKey } | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("portfolio");
+  const forecasts = { data: forecastOverview, error: loadError, retry: onRefresh };
+  const forecastColumnCount = viewMode === "forecast" ? HORIZONS.length : 0;
 
   // Inline shares editing (watchlist-only rows)
   const [editingShares, setEditingShares] = useState<string | null>(null);
@@ -224,13 +240,14 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       const data = await res.json().catch(() => ({})) as { error?: string };
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       router.refresh();
+      onDataChanged?.();
     } catch (error) {
       setLocalShares((prev) => { const n = { ...prev }; delete n[symbol]; return n; });
       setSharesError(error instanceof Error ? `Could not update ${symbol}: ${error.message}` : `Could not update ${symbol}`);
     } finally {
       setSharesSaving(null);
     }
-  }, [sharesInput, localShares, router]);
+  }, [sharesInput, localShares, router, onDataChanged]);
 
   const deleteSymbol = useCallback(async (symbol: string) => {
     if (deletingSymbols.has(symbol)) return;
@@ -248,23 +265,24 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setRemovedSymbols((prev) => new Set(prev).add(symbol));
       router.refresh();
+      onDataChanged?.();
     } catch (error) {
       toast.error(error instanceof Error ? `Could not delete ${symbol}: ${error.message}` : `Could not delete ${symbol}`);
     } finally {
       setDeletingSymbols((prev) => { const n = new Set(prev); n.delete(symbol); return n; });
     }
-  }, [deletingSymbols, router]);
+  }, [deletingSymbols, router, onDataChanged]);
 
   const filtered = useMemo(() => {
     const query = q.trim().toUpperCase();
     let out = rows.filter((r) => {
       if (removedSymbols.has(r.symbol)) return false;
-      return matchesSymbolPositions(r, positionFilters);
+      return viewMode === "forecast" || !optionFiltersAvailable || matchesSymbolPositions(r, positionFilters);
     });
     if (query) {
       out = out.filter((r) => matchesSearchQuery(r, query));
     }
-    if (suitabilityFilter !== "all") {
+    if (viewMode !== "forecast" && optionFiltersAvailable && suitabilityFilter !== "all") {
       out = out.filter((r) => matchesSymbolSuitability(r.option_timing, suitabilityFilter));
     }
     if (momentumFilters.size > 0) {
@@ -294,7 +312,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       return dir === "asc" ? cmp : -cmp;
     });
     return sorted;
-  }, [rows, q, sort, dir, suitabilityFilter, momentumFilters, positionFilters, removedSymbols]);
+  }, [rows, q, sort, dir, suitabilityFilter, momentumFilters, positionFilters, removedSymbols, viewMode, optionFiltersAvailable]);
 
   /** Columns visible in the current view mode (no-modes = always visible). */
   const visibleColumns = useMemo(
@@ -305,11 +323,12 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
   const cols = visibleColumns;
   // Computed min-width — sums each visible col's declared width + 52px Actions.
   // Updates atomically with viewMode so Options' compact set doesn't inherit Portfolio spacing.
-  const tableMinWidth = cols.reduce((sum, c) => sum + (c.width ? parseInt(c.width, 10) : 120), 52);
+  const tableMinWidth = cols.reduce((sum, c) => sum + (c.width ? parseInt(c.width, 10) : 120), 52) + forecastColumnCount * 300;
 
   /** Switch view mode; reset sort key if it becomes hidden. */
   function changeViewMode(mode: ViewMode) {
     setViewMode(mode);
+    onViewModeChange?.(mode);
     const newVisibleKeys = new Set(
       COLUMNS.filter((c) => !c.modes || c.modes.includes(mode)).map((c) => c.key),
     );
@@ -346,7 +365,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
   // rows are hidden from the Portfolio section by default; the toggle
   // reveals them. Never affects Watchlist rows or the API response.
   const portfolioHistoricalCount = portfolioFiltered.filter((r) => r.is_historical).length;
-  const portfolioVisible = hideHistorical
+  const portfolioVisible = hideHistorical && viewMode !== "forecast"
     ? portfolioFiltered.filter((r) => !r.is_historical)
     : portfolioFiltered;
 
@@ -366,13 +385,14 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
       : plPct >= 0 ? "text-accent-green" : "text-accent-red";
     return (
       <tr
-        key={r.symbol}
+        key={r.security_id ?? r.symbol}
         onClick={() => setModalSymbol(r.security_id ?? r.symbol)}
         className="cursor-pointer border-b border-border/60 transition-colors last:border-0 hover:bg-bg-hover/50"
       >
         <td className="px-3 py-3">
           <Link
-            href={href}
+            href={viewMode === "forecast" && forecasts.data?.symbols[r.security_id ?? r.symbol]?.status === "ok"
+              ? `${href}/forecasts?range=90d` : href}
             onClick={(e) => e.stopPropagation()}
             className="font-semibold text-text hover:text-accent-blue"
           >
@@ -417,6 +437,16 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
             {formatPrice(r.price, r.price_display_currency)}
           </span>
         </td>
+        {viewMode === "forecast" && HORIZONS.map((horizon) => (
+          <ForecastBandCell
+            key={horizon}
+            horizon={horizon}
+            summary={forecasts.data?.symbols[r.security_id ?? r.symbol] ?? (forecasts.data ? { status: "unavailable" } : undefined)}
+            range={forecasts.data?.range}
+            error={forecasts.error}
+            formatPrice={formatPrice}
+          />
+        ))}
         {viewMode === "portfolio" && (
           <td className="px-3 py-3 text-right font-mono text-xs whitespace-nowrap">{eur(r.price_eur)}</td>
         )}
@@ -539,7 +569,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
           aria-label="Table view mode"
           className="flex items-center rounded-[var(--radius-pill)] border border-border bg-bg-card p-0.5"
         >
-          {(["portfolio", "options"] as const).map((mode) => (
+          {(["portfolio", "options", "forecast"] as const).map((mode) => (
             <button
               key={mode}
               type="button"
@@ -552,11 +582,11 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
                   : "text-text-muted hover:text-text"
               }`}
             >
-              {mode === "portfolio" ? "Portfolio" : "Options"}
+              {mode === "portfolio" ? "Portfolio" : mode === "options" ? "Options" : "Forecast"}
             </button>
           ))}
         </div>
-        <div className="flex flex-wrap gap-1.5">
+        <div className={viewMode === "forecast" || !optionFiltersAvailable ? "hidden" : "flex flex-wrap gap-1.5"}>
           {SUITABILITY_FILTERS.map(({ key, label, title }) => (
             <button
               key={key}
@@ -574,7 +604,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
             </button>
           ))}
         </div>
-        <div role="group" aria-label="Filter Symbols by positions" className="flex flex-wrap gap-1.5">
+        <div role="group" aria-label="Filter Symbols by positions" className={viewMode === "forecast" || !optionFiltersAvailable ? "hidden" : "flex flex-wrap gap-1.5"}>
           {([
             { key: null, label: "All positions", title: "Clear position filters" },
             { key: "openOptions", label: "Open options", title: "Active calls or puts with remaining contracts, including paper positions" },
@@ -644,13 +674,14 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
           <input
             type="checkbox"
             checked={hideHistorical}
+            disabled={viewMode === "forecast"}
             onChange={(e) => setHideHistorical(e.target.checked)}
             aria-label="Hide historical zero-share symbols"
           />
           Hide historical{portfolioHistoricalCount > 0 ? ` (${portfolioHistoricalCount})` : ""}
         </label>
         <span className="ml-auto shrink-0 text-xs text-text-muted">
-          {portfolioVisible.length} portfolio · {watchlistFiltered.length} watchlist
+          {viewMode === "forecast" ? `${filtered.length} symbols` : `${portfolioVisible.length} portfolio · ${watchlistFiltered.length} watchlist`}
         </span>
         </div>
       </div>
@@ -661,6 +692,16 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
           <button type="button" className="underline" onClick={() => setSharesError(null)}>Dismiss</button>
         </div>
       )}
+      {viewMode === "forecast" && (
+        <div className="text-xs text-text-muted" role="status">
+          {forecasts.error ? <>{forecasts.error} <button type="button" className="text-accent-blue underline" onClick={forecasts.retry}>Retry</button></>
+            : !forecasts.data ? "Loading forecasts…"
+              : "Inner / Outer: nominal targets · Hit 90d: historical endpoint coverage (inner / outer)"}
+          {forecasts.data && Object.values(forecasts.data.symbols).some((s) => s.status === "error") && (
+            <> · Some forecasts failed. <button type="button" className="text-accent-blue underline" onClick={forecasts.retry}>Retry</button></>
+          )}
+        </div>
+      )}
 
       <div className="surface table-modern overflow-x-auto">
         <table className="w-full text-sm" style={{ minWidth: `${tableMinWidth}px` }}>
@@ -668,6 +709,7 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
             {cols.map((c) => (
               <col key={c.key} style={c.width ? { width: c.width } : undefined} />
             ))}
+            {viewMode === "forecast" && HORIZONS.map((h) => <col key={h} style={{ width: "300px" }} />)}
             <col style={{ width: "52px" }} />
           </colgroup>
           <thead>
@@ -682,39 +724,41 @@ export default function SymbolsTable({ rows }: { rows: SymbolRow[] }) {
                   <span className="ml-1 text-[0.65rem]">{sort === c.key ? (dir === "asc" ? "▲" : "▼") : ""}</span>
                 </th>
               ))}
+              {viewMode === "forecast" && HORIZONS.map((h) => <th key={h} className="px-3 py-3 font-medium">{h}</th>)}
               <th className="px-3 py-3 text-right font-medium whitespace-nowrap">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {portfolioVisible.length === 0 && watchlistFiltered.length === 0 && (
+            {!loading && !loadError && portfolioVisible.length === 0 && watchlistFiltered.length === 0 && (
               <tr>
-                <td colSpan={cols.length + 1} className="px-4 py-8 text-center text-text-muted">
+                <td colSpan={cols.length + 1 + forecastColumnCount} className="px-4 py-8 text-center text-text-muted">
                   No symbols match.
                 </td>
               </tr>
             )}
-            {portfolioVisible.length > 0 && (
+            {viewMode === "forecast" && filtered.map(renderRow)}
+            {viewMode !== "forecast" && portfolioVisible.length > 0 && (
               <tr>
                 <td
-                  colSpan={cols.length + 1}
+                  colSpan={cols.length + 1 + forecastColumnCount}
                   className="border-b border-border/60 bg-bg-hover/40 px-4 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-text-muted select-none"
                 >
                   Portfolio
                 </td>
               </tr>
             )}
-            {portfolioVisible.map(renderRow)}
-            {watchlistFiltered.length > 0 && (
+            {viewMode !== "forecast" && portfolioVisible.map(renderRow)}
+            {viewMode !== "forecast" && watchlistFiltered.length > 0 && (
               <tr>
                 <td
-                  colSpan={cols.length + 1}
+                  colSpan={cols.length + 1 + forecastColumnCount}
                   className="border-b border-border/60 bg-bg-hover/40 px-4 py-1 text-[0.65rem] font-semibold uppercase tracking-widest text-text-muted select-none"
                 >
                   Watchlist
                 </td>
               </tr>
             )}
-            {watchlistFiltered.map(renderRow)}
+            {viewMode !== "forecast" && watchlistFiltered.map(renderRow)}
           </tbody>
         </table>
       </div>

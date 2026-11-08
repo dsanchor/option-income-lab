@@ -596,9 +596,7 @@ describe("NF: No extra fetch on mode switch", () => {
     assert.ok(true, "NF-1: No fetch-on-viewMode-change defect detected");
   });
 
-  it("NF-2: Mode switch operates on already-filtered rows (no row-set change)", () => {
-    // The 'filtered' memo should NOT depend on viewMode — only column visibility changes.
-    // Proxy: check that the useMemo for 'filtered' does not reference viewMode.
+  it("NF-2: Portfolio/Options share filters; Forecast only bypasses option-specific filters", () => {
     const filteredMemoIdx = src.indexOf("const filtered = useMemo");
     if (filteredMemoIdx === -1) {
       // filtered renamed — skip
@@ -608,12 +606,11 @@ describe("NF: No extra fetch on mode switch", () => {
     // Extract the deps array of the filtered memo (heuristic: look for the ], after the memo body)
     const memoSection = src.slice(filteredMemoIdx, filteredMemoIdx + 800);
     const hasViewModeInDeps = memoSection.includes("viewMode") || memoSection.includes("tableMode");
-    assert.ok(
-      !hasViewModeInDeps,
-      "NF-2 DEFECT: 'filtered' useMemo must NOT depend on viewMode. " +
-      "Filtering (rows shown) must be independent of column mode. " +
-      "Mode only controls which columns are rendered, not which rows are visible."
-    );
+    if (hasViewModeInDeps) {
+      assert.match(memoSection, /viewMode === "forecast" \|\| !optionFiltersAvailable \|\| matchesSymbolPositions/);
+      assert.match(memoSection, /viewMode !== "forecast" && optionFiltersAvailable && suitabilityFilter/);
+      assert.doesNotMatch(memoSection, /viewMode [!=]== "(portfolio|options)"/);
+    }
   });
 });
 

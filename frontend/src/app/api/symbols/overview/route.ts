@@ -15,7 +15,10 @@ import type { SymbolsOverview } from "@/types/symbols";
 export async function GET(request: Request) {
   try {
     const { search } = new URL(request.url);
-    const data = await apiFetch<SymbolsOverview>(`/api/symbols/overview${search}`);
+    const data = await apiFetch<SymbolsOverview>(`/api/symbols/overview${search}`, {
+      signal: request.signal,
+      cache: "no-store",
+    });
     return NextResponse.json(data);
   } catch (err) {
     return NextResponse.json(
