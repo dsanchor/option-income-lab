@@ -5,6 +5,7 @@ import SymbolActions from "@/components/SymbolActions";
 import RecentActivities from "@/components/RecentActivities";
 import PositionsTable from "@/components/PositionsTable";
 import SymbolSummary from "@/components/SymbolSummary";
+import SymbolForecastSummary from "@/components/SymbolForecastSummary";
 import AddPositionForm from "@/components/AddPositionForm";
 import SymbolPlansTable from "@/components/SymbolPlansTable";
 import { RtChartProvider, RtChartButton, RtChartPanel } from "@/components/RtChart";
@@ -152,6 +153,7 @@ export default async function SymbolDetailPage({
           currentShares={d.portfolio?.current_shares}
         />
         <OptionTiming symbol={d.security?.security_id ?? d.security_id ?? symbol} snapshot={d.option_timing} />
+        <SymbolForecastSummary symbol={d.security?.security_id ?? d.security_id ?? symbol} />
       </DetailSection>
 
       {/* Symbol configuration — always visible, below Summary */}

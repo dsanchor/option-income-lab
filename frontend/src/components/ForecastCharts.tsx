@@ -15,6 +15,7 @@ import {
   YAxis,
 } from "recharts";
 import { HORIZONS } from "@/types/forecasts";
+import { latestRow } from "@/lib/latestForecastRow";
 import type { ForecastRow, Horizon, HitRateEntry } from "@/types/forecasts";
 
 const CENTER_COLOR = "#5b61ff";
@@ -32,22 +33,30 @@ const money = (v: number | null | undefined) =>
 const pct = (v: number | null | undefined) =>
   typeof v === "number" && isFinite(v) ? `${v.toFixed(1)}%` : "—";
 
-/** Pick the most recent forecast row (max created_date). */
-export function latestRow(rows: ForecastRow[]): ForecastRow | null {
-  if (!rows?.length) return null;
-  return rows.reduce((best, r) =>
-    (r.created_date ?? "") > (best.created_date ?? "") ? r : best,
-  rows[0]);
-}
-
 type FanPoint = {
   label: string;
+  horizon?: Horizon;
   center: number | null;
   band1: [number, number] | null;
   band2: [number, number] | null;
 };
 
-function ProjectionFanChart({ row }: { row: ForecastRow | null }) {
+export function ProjectionFanChart({
+  row,
+  calibration,
+}: {
+  row: ForecastRow | null;
+  calibration?: {
+    hitRate: Partial<Record<Horizon, HitRateEntry>>;
+    windowLabel: string;
+  };
+}) {
+  const band1Label = calibration
+    ? confidenceLabel(row?.confidence, "Inner band")
+    : "±1σ";
+  const band2Label = calibration
+    ? confidenceLabel(row?.outer_confidence, "Outer band")
+    : "±2σ";
   const anchor = row?.price_at_creation ?? null;
   if (!row || anchor == null) {
     return <p className="text-sm text-text-muted">No projection data for this range.</p>;
@@ -63,7 +72,7 @@ function ProjectionFanChart({ row }: { row: ForecastRow | null }) {
       hz.low1 != null && hz.high1 != null ? [hz.low1, hz.high1] : null;
     const band2: [number, number] | null =
       hz.low2 != null && hz.high2 != null ? [hz.low2, hz.high2] : null;
-    data.push({ label: h.toUpperCase(), center: hz.center, band1, band2 });
+    data.push({ label: h.toUpperCase(), horizon: h, center: hz.center, band1, band2 });
   }
 
   if (data.length < 2) {
@@ -95,6 +104,15 @@ function ProjectionFanChart({ row }: { row: ForecastRow | null }) {
             content={({ active, payload, label }) => {
               if (!active || !payload?.length) return null;
               const p = payload[0].payload as FanPoint;
+              const hr = p.horizon ? calibration?.hitRate[p.horizon] : undefined;
+              const sampleCount = hr?.resolved;
+              const validSample = typeof sampleCount === "number" &&
+                Number.isInteger(sampleCount) && sampleCount > 0;
+              const coverage = (value: number | null | undefined) =>
+                validSample && typeof value === "number" &&
+                Number.isFinite(value) && value >= 0 && value <= 100
+                  ? pct(value)
+                  : "Unavailable";
               return (
                 <div className="rounded-[10px] border border-border bg-bg-card px-3 py-2 text-xs shadow-lg">
                   <div className="mb-1 font-medium text-text">{label}</div>
@@ -104,18 +122,34 @@ function ProjectionFanChart({ row }: { row: ForecastRow | null }) {
                   </div>
                   {p.band1 && (
                     <div className="flex items-center gap-2">
-                      <span className="text-text-muted">±1σ</span>
+                      <span className="text-text-muted">{band1Label}</span>
                       <span className="ml-auto font-mono text-text-muted">
                         {money(p.band1[0])} – {money(p.band1[1])}
+                        {calibration && p.horizon && (
+                          <span className="block">Realized hit-rate: {coverage(hr?.hit_pct_1sigma)}</span>
+                        )}
                       </span>
                     </div>
                   )}
                   {p.band2 && (
                     <div className="flex items-center gap-2">
-                      <span className="text-text-muted">±2σ</span>
+                      <span className="text-text-muted">{band2Label}</span>
                       <span className="ml-auto font-mono text-text-muted">
                         {money(p.band2[0])} – {money(p.band2[1])}
+                        {calibration && p.horizon && (
+                          <span className="block">Realized hit-rate: {coverage(hr?.hit_pct_2sigma)}</span>
+                        )}
                       </span>
+                    </div>
+                  )}
+                  {calibration && p.horizon && (
+                    <div className="mt-2 text-text-muted">
+                      Historical window: {calibration.windowLabel} · Resolved samples: {
+                        typeof sampleCount === "number" && Number.isInteger(sampleCount) && sampleCount >= 0
+                          ? sampleCount
+                          : "Unavailable"
+                      }
+                      <div>Realized coverage, not nominal confidence.</div>
                     </div>
                   )}
                 </div>
@@ -124,7 +158,7 @@ function ProjectionFanChart({ row }: { row: ForecastRow | null }) {
           />
           <Area
             dataKey="band2"
-            name="±2σ"
+            name={band2Label}
             stroke="none"
             fill={BAND2_COLOR}
             fillOpacity={0.08}
@@ -133,7 +167,7 @@ function ProjectionFanChart({ row }: { row: ForecastRow | null }) {
           />
           <Area
             dataKey="band1"
-            name="±1σ"
+            name={band1Label}
             stroke="none"
             fill={BAND1_COLOR}
             fillOpacity={0.18}
@@ -154,6 +188,12 @@ function ProjectionFanChart({ row }: { row: ForecastRow | null }) {
       </ResponsiveContainer>
     </div>
   );
+}
+
+function confidenceLabel(value: number | null | undefined, fallback: string): string {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value < 1
+    ? `${pct(value * 100)} nominal confidence`
+    : `${fallback} (confidence unavailable)`;
 }
 
 type HitPoint = { label: string; hit1: number | null; hit2: number | null; dir: number | null };
