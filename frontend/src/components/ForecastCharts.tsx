@@ -123,10 +123,10 @@ export function ProjectionFanChart({
                   {p.band1 && (
                     <div className="flex items-center gap-2">
                       <span className="text-text-muted">{band1Label}</span>
-                      <span className="ml-auto font-mono text-text-muted">
+                      <span className={`ml-auto font-mono ${calibration ? "text-text" : "text-text-muted"}`}>
                         {money(p.band1[0])} – {money(p.band1[1])}
                         {calibration && p.horizon && (
-                          <span className="block">Realized hit-rate: {coverage(hr?.hit_pct_1sigma)}</span>
+                          <span className="block"><span className="text-text-muted">Hit-rate: </span>{coverage(hr?.hit_pct_1sigma)}</span>
                         )}
                       </span>
                     </div>
@@ -134,10 +134,10 @@ export function ProjectionFanChart({
                   {p.band2 && (
                     <div className="flex items-center gap-2">
                       <span className="text-text-muted">{band2Label}</span>
-                      <span className="ml-auto font-mono text-text-muted">
+                      <span className={`ml-auto font-mono ${calibration ? "text-text" : "text-text-muted"}`}>
                         {money(p.band2[0])} – {money(p.band2[1])}
                         {calibration && p.horizon && (
-                          <span className="block">Realized hit-rate: {coverage(hr?.hit_pct_2sigma)}</span>
+                          <span className="block"><span className="text-text-muted">Hit-rate: </span>{coverage(hr?.hit_pct_2sigma)}</span>
                         )}
                       </span>
                     </div>
@@ -149,7 +149,6 @@ export function ProjectionFanChart({
                           ? sampleCount
                           : "Unavailable"
                       }
-                      <div>Realized coverage, not nominal confidence.</div>
                     </div>
                   )}
                 </div>
@@ -192,7 +191,7 @@ export function ProjectionFanChart({
 
 function confidenceLabel(value: number | null | undefined, fallback: string): string {
   return typeof value === "number" && Number.isFinite(value) && value > 0 && value < 1
-    ? `${pct(value * 100)} nominal confidence`
+    ? pct(value * 100)
     : `${fallback} (confidence unavailable)`;
 }
 

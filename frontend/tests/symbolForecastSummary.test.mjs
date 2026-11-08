@@ -77,17 +77,20 @@ test("summary tooltip pairs actual band prices with per-horizon empirical covera
     },
   });
   const html = tooltip(tree, 1);
-  assert.match(html, /50\.0% nominal confidence/);
-  assert.match(html, /90\.0% nominal confidence/);
-  assert.match(html, /\$95\.00.*\$105\.00/);
-  assert.match(html, /\$90\.00.*\$110\.00/);
-  assert.match(html, /Realized hit-rate: 41\.7%/);
-  assert.match(html, /Realized hit-rate: 83\.3%/);
-  assert.match(html, /Historical window: 90d.*Resolved samples: 12/);
-  assert.doesNotMatch(html, /σ|100\.0%/);
-  assert.match(tooltip(tree, 2), /Realized hit-rate: 0\.0%/);
+  assert.match(html, /<span class="text-text-muted">50\.0%<\/span>/);
+  assert.match(html, /<span class="text-text-muted">90\.0%<\/span>/);
+  assert.match(html, /<span class="ml-auto font-mono text-text">\$101\.00<\/span>/);
+  for (const [low, high, hit] of [["95", "105", "41.7"], ["90", "110", "83.3"]]) {
+    assert.ok(html.includes(
+      `<span class="ml-auto font-mono text-text">$${low}.00 – $${high}.00<span class="block"><span class="text-text-muted">Hit-rate: </span>${hit}%</span></span>`,
+    ));
+  }
+  assert.match(html, /<div class="mt-2 text-text-muted">Historical window: 90d.*Resolved samples: 12<\/div>/);
+  assert.doesNotMatch(html, /σ|100\.0%|nominal confidence|Realized/);
+  assert.match(tooltip(tree, 2), /Hit-rate: <\/span>0\.0%/);
+  assert.match(tooltip(tree, 2), /Hit-rate: <\/span>100\.0%/);
   assert.match(tooltip(tree, 2), /Resolved samples: 4/);
-  assert.doesNotMatch(tooltip(tree, 0), /Realized hit-rate|Resolved samples/);
+  assert.doesNotMatch(tooltip(tree, 0), /Hit-rate|Resolved samples/);
 });
 
 test("unresolved, absent and invalid calibration stays unavailable, never fabricated zero", () => {
@@ -102,17 +105,25 @@ test("unresolved, absent and invalid calibration stays unavailable, never fabric
       calibration: { windowLabel: "90d", hitRate: { "1d": entry } },
     });
     const html = tooltip(tree, 1);
-    assert.equal((html.match(/Realized hit-rate: Unavailable/g) ?? []).length, 2);
-    assert.match(html, /confidence unavailable/);
-    assert.doesNotMatch(html, /0\.0%|σ/);
+    assert.equal((html.match(/Hit-rate: <\/span>Unavailable/g) ?? []).length, 2);
+    assert.match(html, /Inner band \(confidence unavailable\)/);
+    assert.match(html, /Outer band \(confidence unavailable\)/);
+    assert.doesNotMatch(html, /0\.0%|σ|nominal confidence|Realized/);
   }
 });
 
 test("existing projection chart retains its labels and tooltip without summary props", () => {
   const tree = charts.ProjectionFanChart({ row });
   assert.equal(find(tree, "Area").props.name, "±2σ");
-  assert.match(tooltip(tree, 1), /±1σ|±2σ/);
-  assert.doesNotMatch(tooltip(tree, 1), /Realized|Historical|nominal confidence/);
+  const html = tooltip(tree, 1);
+  assert.match(html, /<span class="text-text-muted">±1σ<\/span>/);
+  assert.match(html, /<span class="text-text-muted">±2σ<\/span>/);
+  for (const [low, high] of [["95", "105"], ["90", "110"]]) {
+    assert.ok(html.includes(
+      `<span class="ml-auto font-mono text-text-muted">$${low}.00 – $${high}.00</span>`,
+    ));
+  }
+  assert.doesNotMatch(html, /Hit-rate|Realized|Historical|nominal confidence/);
   assert.match(renderToStaticMarkup(charts.ProjectionFanChart({ row: null })), /No projection data/);
 });
 
