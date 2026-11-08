@@ -115,9 +115,6 @@ export default function SymbolsView() {
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Symbols</h1>
-          {d.last_update_ts && (
-            <p className="text-sm text-text-muted">Last enrichment {timeAgo(d.last_update_ts)}</p>
-          )}
         </div>
         {/* Row 1 — Options exposure */}
         {activeView === "options" && query.data && <div className="flex flex-wrap gap-4 text-sm text-text-muted">
