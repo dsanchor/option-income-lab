@@ -184,6 +184,8 @@ export default function SymbolsTable({
   const [momentumFilters, setMomentumFilters] = useState<Set<SymbolMomentumFilter>>(new Set());
   const [positionFilters, setPositionFilters] = useState<SymbolPositionFilters>(ALL_SYMBOL_POSITIONS);
   const [hideHistorical, setHideHistorical] = useState(true);
+  const [hideNotEligible, setHideNotEligible] = useState(true);
+  const [hideUnknownFreshness, setHideUnknownFreshness] = useState(true);
   const [modalSymbol, setModalSymbol] = useState<string | null>(null);
   const [timingModal, setTimingModal] = useState<{ row: SymbolRow; side: OptionTimingSideKey } | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("portfolio");
@@ -277,6 +279,10 @@ export default function SymbolsTable({
     const query = q.trim().toUpperCase();
     let out = rows.filter((r) => {
       if (removedSymbols.has(r.symbol)) return false;
+      if (viewMode === "forecast" && hideNotEligible
+        && forecastOverview?.symbols[r.security_id ?? r.symbol]?.status === "not_eligible") return false;
+      if (viewMode === "options" && hideUnknownFreshness
+        && r.option_timing?.freshness !== "fresh" && r.option_timing?.freshness !== "stale") return false;
       return viewMode === "forecast" || !optionFiltersAvailable || matchesSymbolPositions(r, positionFilters);
     });
     if (query) {
@@ -312,7 +318,7 @@ export default function SymbolsTable({
       return dir === "asc" ? cmp : -cmp;
     });
     return sorted;
-  }, [rows, q, sort, dir, suitabilityFilter, momentumFilters, positionFilters, removedSymbols, viewMode, optionFiltersAvailable]);
+  }, [rows, q, sort, dir, suitabilityFilter, momentumFilters, positionFilters, removedSymbols, viewMode, optionFiltersAvailable, hideNotEligible, hideUnknownFreshness, forecastOverview]);
 
   /** Columns visible in the current view mode (no-modes = always visible). */
   const visibleColumns = useMemo(
@@ -569,7 +575,7 @@ export default function SymbolsTable({
           placeholder="🔍 Filter symbols…"
           className="w-full max-w-xs rounded-[var(--radius-pill)] border border-border bg-bg-input px-3.5 py-1.5 text-sm text-text placeholder:text-text-muted focus:border-accent-blue focus:outline-none"
         />
-        {/* View mode selector — controls column visibility only, not rows */}
+        {/* View mode selector */}
         <div
           role="radiogroup"
           aria-label="Table view mode"
@@ -685,6 +691,28 @@ export default function SymbolsTable({
           />
           Hide historical{portfolioHistoricalCount > 0 ? ` (${portfolioHistoricalCount})` : ""}
         </label>
+        {viewMode === "forecast" && (
+          <label className="flex shrink-0 items-center gap-1.5 text-xs text-text-muted" title="Hide symbols marked not eligible by the forecast">
+            <input
+              type="checkbox"
+              checked={hideNotEligible}
+              onChange={(e) => setHideNotEligible(e.target.checked)}
+              aria-label="Hide not eligible"
+            />
+            Hide not eligible
+          </label>
+        )}
+        {viewMode === "options" && (
+          <label className="flex shrink-0 items-center gap-1.5 text-xs text-text-muted" title="Hide missing Option Timing snapshots or unknown freshness; keep fresh and stale">
+            <input
+              type="checkbox"
+              checked={hideUnknownFreshness}
+              onChange={(e) => setHideUnknownFreshness(e.target.checked)}
+              aria-label="Hide unknown freshness"
+            />
+            Hide unknown freshness
+          </label>
+        )}
         <span className="ml-auto shrink-0 text-xs text-text-muted">
           {viewMode === "forecast" ? `${visibleRows.length} symbols` : `${portfolioVisible.length} portfolio · ${watchlistFiltered.length} watchlist`}
         </span>

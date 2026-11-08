@@ -54,6 +54,7 @@ test("three views preserve native Price and forecast the shared historical-filte
 
 function symbolsTableHarness(rows) {
   const state = [];
+  const memos = [];
   let hook = 0, tree, props = { rows, optionFiltersAvailable: false };
   const react = {
     ...React,
@@ -64,7 +65,14 @@ function symbolsTableHarness(rows) {
         state[index] = typeof next === "function" ? next(state[index]) : next;
       }];
     },
-    useMemo: (fn) => fn(),
+    useMemo(fn, deps) {
+      const index = hook++;
+      const previous = memos[index];
+      if (!previous || deps.some((dep, i) => !Object.is(dep, previous.deps[i]))) {
+        memos[index] = { deps, value: fn() };
+      }
+      return memos[index].value;
+    },
     useCallback: (fn) => fn,
   };
   function loadModule(source) {
@@ -114,8 +122,10 @@ function symbolsTableHarness(rows) {
       find((node) => node.props?.role === "radio" && node.props.children === mode, tree).props.onClick();
       return this.render();
     },
-    checkbox() { return find((node) => node.props?.["aria-label"] === "Hide historical zero-share symbols", tree).props; },
-    check(checked) { this.checkbox().onChange({ target: { checked } }); return this.render(); },
+    checkbox(label = "Hide historical zero-share symbols") {
+      return find((node) => node.props?.["aria-label"] === label, tree)?.props;
+    },
+    check(checked, label) { this.checkbox(label).onChange({ target: { checked } }); return this.render(); },
     search(value) {
       find((node) => node.props?.placeholder === "🔍 Filter symbols…", tree).props.onChange({ target: { value } });
       return this.render();
@@ -129,8 +139,124 @@ const historicalRows = [
   { symbol: "LIVE", security_id: "live", row_source: "portfolio", portfolio_shares: "10", is_historical: false },
   { symbol: "WATCH", security_id: "watch", row_source: "watchlist", total_shares: 0, is_historical: false },
   { symbol: "UNKNOWN", security_id: "unknown", total_shares: 0 },
-].map((row) => ({ category: "", momentum: "", entry_tag: "", in_calls: 0, put_exposure: 0, ...row }));
+].map((row) => ({
+  category: "", momentum: "", entry_tag: "", in_calls: 0, put_exposure: 0,
+  option_timing: {
+    freshness: "fresh",
+    covered_call: { status: "unavailable", score: null, reason_codes: [] },
+    cash_secured_put: { status: "unavailable", score: null, reason_codes: [] },
+  },
+  ...row,
+}));
 const renderedSymbols = (html) => Array.from(html.matchAll(/aria-label="Delete (\w+) and all its data"/g), ([, symbol]) => symbol);
+
+test("Forecast defaults to hiding only authoritative not eligible, updates metadata/counts, and preserves uncheck across views", () => {
+  const rows = ["BLOCKED", "OK", "UNAVAILABLE", "ERROR", "LOADING", "FALLBACK"].map((symbol) => ({
+    ...historicalRows[2], symbol, security_id: symbol === "FALLBACK" ? undefined : symbol.toLowerCase(),
+    category: "Not eligible", mic: "XNAS",
+  }));
+  const table = symbolsTableHarness(rows);
+  const overview = {
+    symbols: {
+      blocked: { status: "not_eligible" }, BLOCKED: { status: "ok" },
+      ok: { status: "ok", currency: "USD", latest },
+      unavailable: { status: "unavailable" }, error: { status: "error" },
+      FALLBACK: { status: "not_eligible" },
+    },
+    range: {},
+  };
+  assert.equal(renderedSymbols(table.render({ forecastOverview: overview })).length, 6);
+  assert.equal(table.checkbox("Hide not eligible"), undefined);
+  const filtered = table.switchView("Forecast");
+  assert.equal(table.checkbox("Hide not eligible").checked, true);
+  assert.equal(table.checkbox("Hide unknown freshness"), undefined);
+  assert.deepEqual(renderedSymbols(filtered), ["ERROR", "LOADING", "OK", "UNAVAILABLE"]);
+  assert.match(filtered, /4 symbols/);
+
+  const updated = { ...overview, symbols: { ...overview.symbols, blocked: { status: "unavailable" }, ok: { status: "not_eligible" } } };
+  const reactive = table.render({ forecastOverview: updated });
+  assert.deepEqual(renderedSymbols(reactive), ["BLOCKED", "ERROR", "LOADING", "UNAVAILABLE"]);
+  assert.match(reactive, /4 symbols/);
+  const fewer = table.render({
+    forecastOverview: { ...updated, symbols: { ...updated.symbols, error: { status: "not_eligible" } } },
+  });
+  assert.deepEqual(renderedSymbols(fewer), ["BLOCKED", "LOADING", "UNAVAILABLE"]);
+  assert.match(fewer, /3 symbols/);
+  table.render({ forecastOverview: updated });
+  assert.match(table.search("OK"), /0 symbols[\s\S]*No symbols match/);
+  const restored = table.check(false, "Hide not eligible");
+  assert.deepEqual(renderedSymbols(restored), ["OK"]);
+  assert.match(restored, /Not elegible/);
+  table.search("");
+  for (const mode of ["Options", "Portfolio", "Forecast"]) {
+    assert.equal(renderedSymbols(table.switchView(mode)).length, 6);
+  }
+  assert.equal(table.checkbox("Hide not eligible").checked, false);
+  const changed = table.render({ forecastOverview: overview });
+  assert.equal(renderedSymbols(changed).length, 6);
+  assert.match(table.check(true, "Hide not eligible"), /4 symbols/);
+});
+
+test("Options hides unknown/missing freshness only, retains fresh/stale including unavailable scores, and preserves independent toggles", () => {
+  const base = historicalRows[2];
+  const rows = [
+    ["FRESH", base.option_timing],
+    ["STALE", { ...base.option_timing, freshness: "stale" }],
+    ["UNKNOWN", { ...base.option_timing, freshness: "unknown" }],
+    ["NULL", null],
+    ["MISSING", undefined],
+    ["NOFRESHNESS", { ...base.option_timing, freshness: undefined }],
+    ["NULLFRESHNESS", { ...base.option_timing, freshness: null }],
+  ].map(([symbol, option_timing], i) => ({
+    ...base, symbol, security_id: symbol.toLowerCase(), option_timing,
+    row_source: i % 2 ? "watchlist" : "portfolio", total_shares: 0, in_calls: 0,
+  }));
+  const table = symbolsTableHarness(rows);
+  const portfolio = table.render();
+  assert.equal(renderedSymbols(portfolio).length, 7);
+  assert.equal(table.checkbox("Hide unknown freshness"), undefined);
+  const options = table.switchView("Options");
+  assert.equal(table.checkbox("Hide unknown freshness").checked, true);
+  assert.equal(table.checkbox("Hide not eligible"), undefined);
+  assert.deepEqual(renderedSymbols(options), ["FRESH", "STALE"]);
+  assert.match(options, /1 portfolio · 1 watchlist/);
+  assert.match(table.search("UNKNOWN"), /0 portfolio · 0 watchlist[\s\S]*No symbols match/);
+  assert.deepEqual(renderedSymbols(table.check(false, "Hide unknown freshness")), ["UNKNOWN"]);
+  table.search("");
+  assert.equal(renderedSymbols(table.switchView("Forecast")).length, 7);
+  assert.equal(table.checkbox("Hide not eligible").checked, true);
+  table.check(false, "Hide not eligible");
+  assert.equal(renderedSymbols(table.switchView("Portfolio")).length, 7);
+  assert.equal(renderedSymbols(table.switchView("Options")).length, 7);
+  assert.equal(table.checkbox("Hide unknown freshness").checked, false);
+  assert.deepEqual(renderedSymbols(table.check(true, "Hide unknown freshness")), ["FRESH", "STALE"]);
+  table.switchView("Forecast");
+  assert.equal(table.checkbox("Hide not eligible").checked, false);
+});
+
+test("mode-specific defaults feed the shared historical count before hiding historical holdings", () => {
+  const sold = historicalRows[0];
+  const table = symbolsTableHarness([
+    sold,
+    { ...sold, symbol: "BLOCKED", security_id: "blocked", option_timing: null },
+    { ...historicalRows[3], option_timing: null },
+  ]);
+  const portfolio = table.render({ forecastOverview: {
+    symbols: { blocked: { status: "not_eligible" } }, range: {},
+  } });
+  assert.match(portfolio, /Hide historical \(2\)/);
+  assert.match(portfolio, /0 portfolio · 1 watchlist/);
+  const forecast = table.switchView("Forecast");
+  assert.match(forecast, /Hide historical \(1\)/);
+  assert.match(forecast, /1 symbols/);
+  assert.match(table.check(false, "Hide not eligible"), /Hide historical \(2\)/);
+  const options = table.switchView("Options");
+  assert.match(options, /Hide historical \(1\)/);
+  assert.match(options, /0 portfolio · 0 watchlist[\s\S]*No symbols match/);
+  const restored = table.check(false, "Hide unknown freshness");
+  assert.match(restored, /Hide historical \(2\)/);
+  assert.deepEqual(renderedSymbols(restored), ["WATCH"]);
+});
 
 test("shared checkbox defaults checked and enabled in all tabs, hides real historical holdings only, and retains explicit uncheck", () => {
   const table = symbolsTableHarness(historicalRows);

@@ -10,7 +10,7 @@
  *   SR  — Sort-reset: active sort on hidden column -> default on switch
  *   CS  — ColSpan/alignment: header <-> body column count must match
  *   AC  — Accessibility: aria-pressed / role attributes on selector buttons
- *   NF  — No extra fetch / no row-filter change on mode switch
+ *   NF  — No extra fetch / scoped mode-specific filters
  *   SF  — Shared-filter regression: search + suitability apply in both modes
  *   RG  — Regression: existing column labels not removed by selector refactor
  *   CW  — Column width contract: proportional/content-driven, overflow, no clipping
@@ -562,7 +562,7 @@ describe("AC: Accessibility — selector active state and keyboard semantics", (
 });
 
 // ---------------------------------------------------------------------------
-// NF: No extra fetch / row-filter change on mode switch
+// NF: No extra fetch / scoped mode-specific filters
 // ---------------------------------------------------------------------------
 
 describe("NF: No extra fetch on mode switch", () => {
@@ -596,20 +596,21 @@ describe("NF: No extra fetch on mode switch", () => {
     assert.ok(true, "NF-1: No fetch-on-viewMode-change defect detected");
   });
 
-  it("NF-2: Portfolio/Options share filters; Forecast only bypasses option-specific filters", () => {
+  it("NF-2: Shared filters retain Forecast bypass, with mode-scoped eligibility/freshness defaults", () => {
     const filteredMemoIdx = src.indexOf("const filtered = useMemo");
     if (filteredMemoIdx === -1) {
       // filtered renamed — skip
       assert.ok(true, "NF-2: 'filtered' useMemo not found by name; check manually if needed");
       return;
     }
-    // Extract the deps array of the filtered memo (heuristic: look for the ], after the memo body)
-    const memoSection = src.slice(filteredMemoIdx, filteredMemoIdx + 800);
+    const memoSection = src.slice(filteredMemoIdx, src.indexOf("const visibleColumns", filteredMemoIdx));
     const hasViewModeInDeps = memoSection.includes("viewMode") || memoSection.includes("tableMode");
     if (hasViewModeInDeps) {
       assert.match(memoSection, /viewMode === "forecast" \|\| !optionFiltersAvailable \|\| matchesSymbolPositions/);
       assert.match(memoSection, /viewMode !== "forecast" && optionFiltersAvailable && suitabilityFilter/);
-      assert.doesNotMatch(memoSection, /viewMode [!=]== "(portfolio|options)"/);
+      assert.match(memoSection, /viewMode === "forecast" && hideNotEligible/);
+      assert.match(memoSection, /viewMode === "options" && hideUnknownFreshness/);
+      assert.doesNotMatch(memoSection, /viewMode [!=]== "portfolio"/);
     }
   });
 });
