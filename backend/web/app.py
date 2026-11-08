@@ -6299,9 +6299,15 @@ def _build_symbols_forecast_overview(cosmos, universe, date_from, date_to):
     from src.us_exchange_eligibility import enforce_us_options_eligible
     result = {}
     eligible = {}
+    owners = {}
+    resolved = []
     for row in universe:
         identity = row.get("security_id") or row["symbol"]
         doc = row if "exchange" in row else cosmos.get_symbol(row["symbol"])
+        owner = row.get("security_id") or (doc or {}).get("security_id") or identity
+        owners.setdefault(row["symbol"], set()).add(owner)
+        resolved.append((identity, row, doc))
+    for identity, row, doc in resolved:
         canonical = doc.get("security_id") if doc else None
         if (
             not doc
@@ -6309,15 +6315,22 @@ def _build_symbols_forecast_overview(cosmos, universe, date_from, date_to):
             or (":" in identity and not _is_us_options_eligible(identity.split(":", 1)[0]))
             or enforce_us_options_eligible(doc) is not None
         ):
-            result[identity] = {"status": "not_eligible"}
+            result[identity] = {
+                "status": "not_eligible",
+                "reason": "Security is not eligible for US-options forecasts",
+            }
             continue
         eligible[identity] = (row, doc)
-    owners = {}
-    for identity, (_, doc) in eligible.items():
-        owners.setdefault(doc["symbol"], set()).add(doc.get("security_id") or identity)
     grouped = cosmos.get_price_forecasts_overview_required(
         sorted({doc["symbol"] for _, doc in eligible.values()}),
         date_from, date_to,
+        {
+            symbol: sorted({
+                doc["security_id"] for _, doc in eligible.values()
+                if doc["symbol"] == symbol and doc.get("security_id")
+            })
+            for symbol in {doc["symbol"] for _, doc in eligible.values()}
+        },
     )
     for identity, (row, doc) in eligible.items():
         try:

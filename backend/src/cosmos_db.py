@@ -15,6 +15,7 @@ from azure.cosmos.exceptions import (
 )
 from typing import Callable, Optional
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 import copy
 import logging
@@ -1148,16 +1149,28 @@ class CosmosDBService:
 
     def get_price_forecasts_overview_required(
         self, symbols: list[str], date_from: str, date_to: str,
+        security_ids_by_symbol: dict[str, list[str]],
     ) -> dict[str, list[dict]]:
         """Bulk-read window history plus latest anchors, including stale ones.
 
-        MAX/GROUP BY avoids requiring the optional created_date ORDER BY index.
-        Only latest documents outside the window need a second full-document
-        read; older history is never materialized.
+        One allowlisted query loads calibration history. Four workers at most
+        independently read each canonical owner's latest and ticker-only legacy
+        latest. Single-partition VALUE MAX followed by an exact-date TOP 1 avoids
+        both SDK-unsupported cross-partition GROUP BY and an ORDER BY index on
+        created_date (excluded by the symbols container's indexing policy).
+        No historical documents outside the window are materialized. Storage
+        failures propagate to the overview's logged 503, never empty success.
         """
         grouped: dict[str, list[dict]] = {symbol: [] for symbol in symbols}
         if not symbols:
             return grouped
+        scopes = []
+        for symbol in grouped:
+            scopes.append((symbol, None))
+            for security_id in sorted(set(security_ids_by_symbol.get(symbol, []))):
+                if ":" not in security_id or security_id.split(":", 1)[1] != symbol:
+                    raise ValueError("Forecast lookup identity does not match symbol")
+                scopes.append((symbol, security_id))
 
         items = self.container.query_items(
             query=(
@@ -1175,42 +1188,47 @@ class CosmosDBService:
         for item in items:
             if item.get("symbol") in grouped:
                 grouped[item["symbol"]].append(item)
-        anchors = self.container.query_items(
-            query=(
-                "SELECT c.symbol, c.security_id, MAX(c.created_date) AS created_date "
-                "FROM c WHERE c.doc_type = 'price_forecast' "
-                "AND ARRAY_CONTAINS(@symbols, c.symbol) AND c.created_date <= @to "
-                "GROUP BY c.symbol, c.security_id"
-            ),
-            parameters=[
-                {"name": "@symbols", "value": symbols},
-                {"name": "@to", "value": date_to},
-            ],
-            enable_cross_partition_query=True,
-        )
-        stale_anchors = [
-            {"symbol": anchor["symbol"], "created_date": anchor["created_date"]}
-            for anchor in anchors
-            if anchor.get("symbol") in grouped
-            and isinstance(anchor.get("created_date"), str)
-            and anchor["created_date"] < date_from
-        ]
-        # Bound parameter payloads, not one query per ticker.
-        for offset in range(0, len(stale_anchors), 100):
-            latest_items = self.container.query_items(
-                query=(
-                    "SELECT * FROM c WHERE c.doc_type = 'price_forecast' "
-                    "AND ARRAY_CONTAINS(@anchors, "
-                    '{"symbol": c.symbol, "created_date": c.created_date}, true)'
-                ),
-                parameters=[{
-                    "name": "@anchors", "value": stale_anchors[offset:offset + 100],
-                }],
-                enable_cross_partition_query=True,
+        def read_latest(scope):
+            symbol, security_id = scope
+            conditions = (
+                "c.doc_type = 'price_forecast' AND c.symbol = @symbol "
+                "AND c.created_date <= @to"
             )
-            for item in latest_items:
-                if item.get("symbol") in grouped:
-                    grouped[item["symbol"]].append(item)
+            params = [
+                {"name": "@symbol", "value": symbol},
+                {"name": "@to", "value": date_to},
+            ]
+            if security_id is None:
+                conditions += (
+                    " AND (NOT IS_DEFINED(c.security_id) "
+                    "OR IS_NULL(c.security_id) OR c.security_id = '')"
+                )
+            else:
+                conditions += " AND c.security_id = @security_id"
+                params.append({"name": "@security_id", "value": security_id})
+            anchors = list(self.container.query_items(
+                query=f"SELECT VALUE MAX(c.created_date) FROM c WHERE {conditions}",
+                parameters=params,
+                partition_key=symbol,
+                enable_scan_in_query=True,
+            ))
+            latest_date = anchors[0] if anchors else None
+            if not isinstance(latest_date, str):
+                return symbol, []
+            latest = list(self.container.query_items(
+                query=(
+                    f"SELECT TOP 1 * FROM c WHERE {conditions} "
+                    "AND c.created_date = @latest_date"
+                ),
+                parameters=params + [{"name": "@latest_date", "value": latest_date}],
+                partition_key=symbol,
+                enable_scan_in_query=True,
+            ))
+            return symbol, latest
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            for symbol, latest_items in executor.map(read_latest, scopes):
+                grouped[symbol].extend(latest_items)
         for predictions in grouped.values():
             unique = {
                 (p.get("id"), p.get("security_id"), p.get("created_date")): p

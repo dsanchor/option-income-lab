@@ -14,16 +14,16 @@ const source = readFileSync(new URL("../src/components/SymbolsForecastTable.tsx"
 const table = readFileSync(new URL("../src/components/SymbolsTable.tsx", import.meta.url), "utf8");
 
 function load(react = React) {
-  const module = { exports: {} };
+  const loadedModule = { exports: {} };
   const code = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
   vm.runInNewContext(code, {
-    exports: module.exports, module,
+    exports: loadedModule.exports, module: loadedModule,
     require: (name) => name === "react" ? react : require(name),
     Date, Promise,
   });
-  return module.exports;
+  return loadedModule.exports;
 }
 
 const { ForecastBandCell } = load();
@@ -195,7 +195,194 @@ test("Symbols page has no eager server data; persistent wrapper scopes KPIs and 
   assert.doesNotMatch(page, /apiFetch|fetch\(|getData/);
   assert.match(view, /useQuery\(symbolsViewQueryOptions\(activeView\)\)/);
   assert.match(view, /activeView === "options" &&/);
-  assert.match(view, /activeView === "portfolio" && hasPortfolioSummary/);
+  assert.match(view, /\{hasPortfolioSummary && \(/);
   assert.match(view, /onDataChanged=\{invalidateViews\}/);
   assert.match(view, /onAdded=\{invalidateViews\}/);
+});
+
+function symbolsViewHarness() {
+  const client = new QueryClient();
+  const observers = [];
+  const unsubscribes = [];
+  let mode = "portfolio", hook = 0, tableProps, addProps, refresh;
+  const loadedModule = { exports: {} };
+  const code = ts.transpileModule(
+    readFileSync(new URL("../src/components/SymbolsView.tsx", import.meta.url), "utf8"),
+    { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } },
+  ).outputText;
+  vm.runInNewContext(code, {
+    exports: loadedModule.exports, module: loadedModule,
+    require: (name) => {
+      if (name === "react") return { ...React, useState: () => [mode, (next) => { mode = next; }] };
+      if (name === "@tanstack/react-query") return {
+        useQueryClient: () => client,
+        useQuery: (options) => {
+          const index = hook++;
+          if (!observers[index]) {
+            observers[index] = new QueryObserver(client, options);
+            unsubscribes.push(observers[index].subscribe(() => {}));
+          } else observers[index].setOptions(options);
+          return observers[index].getCurrentResult();
+        },
+      };
+      if (name === "@/lib/symbols-overview-query") return { symbolsViewQueryOptions };
+      if (name === "@/lib/format") return { usd: String, timeAgo: () => "now" };
+      if (name === "@/components/SymbolsTable") return { default: (props) => { tableProps = props; return null; } };
+      if (name === "@/components/AddSymbolForm") return { default: (props) => { addProps = props; return null; } };
+      return require(name);
+    },
+  });
+  const findRefresh = (node) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(findRefresh); return; }
+    if (node.type === "button" && node.props.children === "Refresh") refresh = node.props.onClick;
+    findRefresh(node.props?.children);
+  };
+  return {
+    client, observers,
+    render() {
+      hook = 0;
+      const tree = loadedModule.exports.default();
+      findRefresh(tree);
+      return renderToStaticMarkup(tree);
+    },
+    switchView(next) { tableProps.onViewModeChange(next); return this.render(); },
+    refresh() { refresh(); },
+    mutate() { tableProps.onDataChanged(); },
+    add() { addProps.onAdded(); },
+    close() {
+      unsubscribes.forEach((unsubscribe) => unsubscribe());
+      assert.equal(client.getQueryCache().find({ queryKey: ["symbols-overview", "portfolio"] }).getObserversCount(), 0);
+      client.clear();
+    },
+  };
+}
+
+const portfolioSummary = {
+  total_investment_eur: 1000, total_current_value_eur: 1200,
+  net_gains_eur: 50, total_dividends_eur: 25,
+};
+const expectedCards = [
+  ["Current Investment", "1.000,00\u00a0€"], ["Current Value", "1.200,00\u00a0€"],
+  ["Unrealized P/L %", "+20.00%"], ["Realized Result", "50,00\u00a0€"],
+  ["Net Dividends", "25,00\u00a0€"],
+];
+const kpiCards = (html) => Array.from(
+  html.matchAll(/text-xs text-text-muted mb-1">([^<]+)<\/div><div class="[^"]+">([^<]+)<\/div>/g),
+  ([, label, value]) => [label, value],
+);
+
+test("shared KPI cards retain Portfolio values through lazy Options/Forecast loading and errors; Portfolio refresh updates them", async (t) => {
+  const calls = [];
+  const options = deferred(), forecast = deferred(), refreshed = deferred();
+  t.mock.method(globalThis, "fetch", (url) => {
+    calls.push(url);
+    if (url.endsWith("options")) return options.promise;
+    if (url.endsWith("forecast")) return forecast.promise;
+    return calls.length === 1
+      ? Promise.resolve({ ok: true, json: async () => ({ portfolio_summary: portfolioSummary }) })
+      : refreshed.promise;
+  });
+  const view = symbolsViewHarness();
+  t.after(() => view.close());
+  assert.deepEqual(kpiCards(view.render()), []);
+  await flush();
+  assert.deepEqual(kpiCards(view.render()), expectedCards);
+  assert.deepEqual(calls, ["/api/symbols/overview?view=portfolio"]);
+
+  assert.deepEqual(kpiCards(view.switchView("options")), expectedCards);
+  assert.match(view.render(), /Loading options/);
+  options.resolve({ ok: true, json: async () => ({ portfolio_summary: { total_investment_eur: 0 } }) });
+  await flush();
+  assert.deepEqual(kpiCards(view.render()), expectedCards);
+
+  assert.deepEqual(kpiCards(view.switchView("forecast")), expectedCards);
+  assert.match(view.render(), /Loading forecast/);
+  forecast.reject(new Error("Forecast unavailable"));
+  await flush();
+  const failed = view.render();
+  assert.match(failed, /Could not load forecast/);
+  assert.deepEqual(kpiCards(failed), expectedCards);
+  assert.deepEqual(calls, [
+    "/api/symbols/overview?view=portfolio", "/api/symbols/overview?view=options",
+    "/api/symbols/overview?view=forecast",
+  ]);
+
+  assert.deepEqual(kpiCards(view.switchView("portfolio")), expectedCards);
+  await flush();
+  assert.equal(calls.length, 3);
+  view.refresh();
+  assert.deepEqual(kpiCards(view.render()), expectedCards);
+  refreshed.resolve({ ok: true, json: async () => ({
+    portfolio_summary: { ...portfolioSummary, total_current_value_eur: 1500 },
+  }) });
+  await flush();
+  assert.deepEqual(kpiCards(view.render()), [
+    expectedCards[0], ["Current Value", "1.500,00\u00a0€"],
+    ["Unrealized P/L %", "+50.00%"], ...expectedCards.slice(3),
+  ]);
+  assert.equal(calls.length, 4);
+});
+
+test("cache subscription keeps KPIs current while mutations refetch only the active view and stale Portfolio refreshes on return", async (t) => {
+  const calls = [];
+  const refreshed = deferred();
+  t.mock.method(globalThis, "fetch", (url) => {
+    calls.push(url);
+    if (url.endsWith("portfolio") && calls.length > 1) return refreshed.promise;
+    return Promise.resolve({ ok: true, json: async () => url.endsWith("portfolio")
+      ? { portfolio_summary: portfolioSummary } : { rows: [] } });
+  });
+  const view = symbolsViewHarness();
+  t.after(() => view.close());
+  view.render();
+  await flush();
+  view.switchView("options");
+  await flush();
+  assert.equal(view.client.getQueryCache().find({ queryKey: ["symbols-overview", "portfolio"] }).isActive(), false);
+  const updated = { ...portfolioSummary, total_dividends_eur: 75 };
+  view.client.setQueryData(["symbols-overview", "portfolio"], { portfolio_summary: updated });
+  assert.equal(view.observers[1].getCurrentResult().data.total_dividends_eur, 75);
+  const updatedCards = [...expectedCards.slice(0, 4), ["Net Dividends", "75,00\u00a0€"]];
+  assert.deepEqual(kpiCards(view.render()), updatedCards);
+  for (const mutate of [() => view.mutate(), () => view.add()]) {
+    mutate();
+    await flush();
+    assert.deepEqual(kpiCards(view.render()), updatedCards);
+  }
+  assert.deepEqual(calls, [
+    "/api/symbols/overview?view=portfolio", "/api/symbols/overview?view=options",
+    "/api/symbols/overview?view=options", "/api/symbols/overview?view=options",
+  ]);
+  assert.deepEqual(kpiCards(view.switchView("portfolio")), updatedCards);
+  assert.match(view.render(), /Loading portfolio/);
+  refreshed.resolve({ ok: true, json: async () => ({ portfolio_summary: portfolioSummary }) });
+  await flush();
+  assert.deepEqual(kpiCards(view.render()), expectedCards);
+  assert.equal(calls.length, 5);
+});
+
+test("missing or unavailable Portfolio summary never invents cards on any view", async (t) => {
+  for (const portfolio of [{ rows: [] }, { portfolio_summary: null }, { portfolio_summary: {} }, { error: "Portfolio unavailable" }]) {
+    const calls = [];
+    t.mock.method(globalThis, "fetch", async (url) => {
+      calls.push(url);
+      return { ok: true, json: async () => url.endsWith("portfolio") ? portfolio : {
+        portfolio_summary: portfolioSummary,
+      } };
+    });
+    const view = symbolsViewHarness();
+    try {
+      for (const mode of ["portfolio", "options", "forecast"]) {
+        if (mode === "portfolio") view.render();
+        else view.switchView(mode);
+        await flush();
+        assert.deepEqual(kpiCards(view.render()), []);
+      }
+      assert.equal(calls.length, 3);
+    } finally {
+      view.close();
+      t.mock.restoreAll();
+    }
+  }
 });

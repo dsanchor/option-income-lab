@@ -66,6 +66,12 @@ export default function SymbolsView() {
   const [activeView, setActiveView] = useState<SymbolsViewMode>("portfolio");
   const queryClient = useQueryClient();
   const query = useQuery(symbolsViewQueryOptions(activeView));
+  // Keep shared KPIs subscribed to Portfolio's cache without fetching an inactive view.
+  const portfolioSummary = useQuery({
+    ...symbolsViewQueryOptions("portfolio"),
+    enabled: false,
+    select: (overview) => overview.portfolio_summary,
+  });
   const d = query.data ?? {};
   const invalidateViews = () => {
     void queryClient.invalidateQueries({ queryKey: ["symbols-overview"] });
@@ -80,7 +86,7 @@ export default function SymbolsView() {
     d.rows ??
     [];
 
-  const ps: PortfolioSummary | null | undefined = d.portfolio_summary;
+  const ps: PortfolioSummary | null | undefined = portfolioSummary.data;
   // Resolve field names across both backend contracts
   const totalInvestment = ps?.total_investment_eur ?? (ps?.remaining_cost_basis_eur != null ? parseFloat(ps.remaining_cost_basis_eur) : null);
   const netGains = ps?.net_gains_eur ?? (ps?.realized_result_eur != null ? parseFloat(ps.realized_result_eur) : null);
@@ -125,7 +131,7 @@ export default function SymbolsView() {
       </div>
 
       {/* Row 2 — Portfolio KPIs (visible only when holdings data exists) */}
-      {activeView === "portfolio" && hasPortfolioSummary && (
+      {hasPortfolioSummary && (
         <div className="flex flex-wrap gap-3">
           <KpiCard
             label="Current Investment"

@@ -379,6 +379,8 @@ def test_context_deterministically_truncates_rows(client):
 @pytest.fixture
 def overview_client(client, monkeypatch):
     cosmos = client.app.state.cosmos
+    for forecast in cosmos.forecasts:
+        forecast["security_id"] = "XNAS:MSFT"
     docs = {
         "MSFT": cosmos.symbol,
         "EMPTY": {"symbol": "EMPTY", "security_id": "XNYS:EMPTY", "exchange": "XNYS"},
@@ -394,8 +396,8 @@ def overview_client(client, monkeypatch):
     cosmos.get_symbol = docs.get
     calls = []
 
-    def batch(symbols, date_from, date_to):
-        calls.append((symbols, date_from, date_to))
+    def batch(symbols, date_from, date_to, security_ids_by_symbol):
+        calls.append((symbols, date_from, date_to, security_ids_by_symbol))
         return {"MSFT": cosmos.forecasts, "EMPTY": []}
 
     cosmos.get_price_forecasts_overview_required = batch
@@ -412,6 +414,7 @@ def test_forecast_overview_one_allowlisted_read_latest_bands_and_90d_hits(overvi
     body = response.json()
     assert len(calls) == 1
     assert calls[0][0] == ["EMPTY", "MSFT"]
+    assert calls[0][3] == {"EMPTY": ["XNYS:EMPTY"], "MSFT": ["XNAS:MSFT"]}
     from datetime import date
     assert (date.fromisoformat(calls[0][2]) - date.fromisoformat(calls[0][1])).days == 90
     symbols = body["symbols"]
@@ -473,6 +476,8 @@ def test_forecast_overview_ambiguous_legacy_does_not_borrow_canonical_history(
 ):
     client, _ = overview_client
     cosmos = client.app.state.cosmos
+    for forecast in cosmos.forecasts:
+        forecast.pop("security_id", None)
     universe = [
         {"symbol": "MSFT", "security_id": f"{mic}:MSFT", "exchange": mic,
          "price_currency": "USD"}
@@ -501,6 +506,46 @@ def test_forecast_overview_ambiguous_legacy_does_not_borrow_canonical_history(
     assert summaries["XNAS:MSFT"]["latest"]["price_at_creation"] == 105
     assert summaries["XNYS:MSFT"]["latest"]["price_at_creation"] == 100
     assert all(s["hit_rate"]["1d"]["resolved"] == 1 for s in summaries.values())
+
+
+def test_forecast_overview_noneligible_owner_still_makes_legacy_ambiguous(
+    overview_client, monkeypatch,
+):
+    client, _ = overview_client
+    cosmos = client.app.state.cosmos
+    universe = [
+        {"symbol": "MSFT", "security_id": f"{mic}:MSFT", "exchange": mic,
+         "price_currency": currency}
+        for mic, currency in (("XNAS", "USD"), ("XLON", "GBP"))
+    ]
+    monkeypatch.setattr(
+        "web.app._compute_symbols_overview", lambda *args, **kwargs: {"rows": universe},
+    )
+    cosmos.get_price_forecasts_overview_required = lambda *args: {"MSFT": cosmos.forecasts}
+    for forecast in cosmos.forecasts:
+        forecast.pop("security_id", None)
+    summaries = client.get("/api/symbols/forecasts/overview").json()["symbols"]
+    assert summaries["XNAS:MSFT"]["status"] == "unavailable"
+    assert "ambiguous" in summaries["XNAS:MSFT"]["reason"]
+    assert summaries["XLON:MSFT"]["status"] == "not_eligible"
+    assert summaries["XLON:MSFT"]["reason"]
+    assert all("latest" not in s and "hit_rate" not in s for s in summaries.values())
+
+    cosmos.forecasts[1]["security_id"] = "XNAS:MSFT"
+    cosmos.forecasts[0]["security_id"] = "XLON:MSFT"
+    cosmos.forecasts.append(_forecast("2026-09-30", 999))
+    summaries = client.get("/api/symbols/forecasts/overview").json()["symbols"]
+    assert summaries["XNAS:MSFT"]["status"] == "ok"
+    assert summaries["XNAS:MSFT"]["latest"]["price_at_creation"] == 100
+    assert summaries["XNAS:MSFT"]["hit_rate"]["1d"]["resolved"] == 1
+    assert summaries["XLON:MSFT"]["status"] == "not_eligible"
+    assert "latest" not in summaries["XLON:MSFT"]
+
+    universe.pop()
+    cosmos.forecasts = [_forecast("2026-09-29", 105)]
+    summary = client.get("/api/symbols/forecasts/overview").json()["symbols"]["XNAS:MSFT"]
+    assert summary["status"] == "ok"
+    assert summary["latest"]["price_at_creation"] == 105
 
 
 @pytest.mark.parametrize("corruption", [
@@ -552,7 +597,10 @@ def test_forecast_overview_missing_horizons_are_not_corrupt(overview_client):
 def test_forecast_overview_old_latest_retains_bands_without_old_hit_rates(overview_client):
     client, _ = overview_client
     cosmos = client.app.state.cosmos
-    cosmos.forecasts = [_forecast("2025-09-29", 105), _forecast("2025-09-20", 100)]
+    cosmos.forecasts = [
+        {**_forecast(day, price), "security_id": "XNAS:MSFT"}
+        for day, price in (("2025-09-29", 105), ("2025-09-20", 100))
+    ]
     summary = client.get("/api/symbols/forecasts/overview").json()["symbols"]["XNAS:MSFT"]
     assert summary["status"] == "ok"
     assert summary["latest"]["created_date"] == "2025-09-29"
@@ -563,90 +611,177 @@ def test_forecast_overview_old_latest_retains_bands_without_old_hit_rates(overvi
     assert summary["hit_rate"]["1d"]["hit_pct_2sigma"] is None
 
 
-def test_forecast_overview_cosmos_query_is_allowlisted_and_propagates_failure():
+class _SdkForecastContainer:
+    """Exercise installed ContainerProxy SQLQuerySpec and partition routing."""
+
+    def __init__(self, documents, fail_on=None):
+        from unittest.mock import Mock
+
+        from azure.cosmos.container import ContainerProxy
+
+        self.documents = documents
+        self.calls = []
+        self.returned = []
+        self.fail_on = fail_on
+        self.container = object.__new__(ContainerProxy)
+        self.container.container_link = "dbs/test/colls/symbols"
+        properties = {
+            "_rid": "symbols-rid", "partitionKey": {"paths": ["/symbol"], "kind": "Hash"},
+        }
+        self.container._get_properties_with_options = Mock(return_value=properties)
+        self.container._ContainerProxy__get_client_container_caches = Mock(
+            return_value={self.container.container_link: properties},
+        )
+        self.container.client_connection = Mock()
+        self.container.client_connection.QueryItems.side_effect = self.execute
+
+    def execute(self, *, query, options, partition_key, **kwargs):
+        assert isinstance(query, dict) and set(query) == {"query", "parameters"}
+        params = {p["name"]: p["value"] for p in query["parameters"]}
+        sql = query["query"]
+        self.calls.append((query, options, partition_key))
+        if partition_key is None:
+            kind = "window"
+            assert options["enableCrossPartitionQuery"] is True
+            assert sql == (
+                "SELECT * FROM c WHERE c.doc_type = 'price_forecast' "
+                "AND ARRAY_CONTAINS(@symbols, c.symbol) "
+                "AND c.created_date >= @from AND c.created_date <= @to"
+            )
+            matches = [
+                d for d in self.documents
+                if d["symbol"] in params["@symbols"]
+                and params["@from"] <= d["created_date"] <= params["@to"]
+            ]
+        else:
+            assert options["partitionKey"] == partition_key == params["@symbol"]
+            assert not options.get("enableCrossPartitionQuery")
+            assert options["enableScanInQuery"] is True
+            conditions = (
+                "c.doc_type = 'price_forecast' AND c.symbol = @symbol "
+                "AND c.created_date <= @to"
+            )
+            if "@security_id" in params:
+                conditions += " AND c.security_id = @security_id"
+            else:
+                conditions += (
+                    " AND (NOT IS_DEFINED(c.security_id) "
+                    "OR IS_NULL(c.security_id) OR c.security_id = '')"
+                )
+            matches = [
+                d for d in self.documents
+                if d["symbol"] == partition_key and d["created_date"] <= params["@to"]
+                and (
+                    d.get("security_id") == params["@security_id"]
+                    if "@security_id" in params else not d.get("security_id")
+                )
+            ]
+            if "@latest_date" not in params:
+                kind = "anchor"
+                assert sql == f"SELECT VALUE MAX(c.created_date) FROM c WHERE {conditions}"
+                matches = [max((d["created_date"] for d in matches), default=None)]
+            else:
+                kind = "latest"
+                assert sql == (
+                    f"SELECT TOP 1 * FROM c WHERE {conditions} "
+                    "AND c.created_date = @latest_date"
+                )
+                matches = [
+                    d for d in matches if d["created_date"] == params["@latest_date"]
+                ][:1]
+        if self.fail_on == kind:
+            def failed_page():
+                raise RuntimeError("storage failure")
+                yield
+            return failed_page()
+        self.returned.extend(matches)
+        return iter(matches)
+
+
+def test_forecast_overview_installed_sdk_rejects_previous_nonvalue_aggregate():
+    from unittest.mock import Mock
+
+    from azure.cosmos._execution_context.execution_dispatcher import (
+        _ProxyQueryExecutionContext,
+    )
+    from azure.cosmos.exceptions import CosmosHttpResponseError
+
+    context = object.__new__(_ProxyQueryExecutionContext)
+    context._resource_link = "dbs/test/colls/symbols"
+    context._options = {"enableCrossPartitionQuery": True}
+    plan = Mock()
+    plan.has_aggregates.return_value = True
+    plan.has_select_value.return_value = False
+    with pytest.raises(CosmosHttpResponseError, match="only supports 'VALUE"):
+        context._create_pipelined_execution_context(plan)
+
+
+@pytest.mark.parametrize("fail_on", ["window", "anchor", "latest"])
+def test_forecast_overview_sdk_query_failures_propagate_as_503(client, monkeypatch, fail_on):
     from src.cosmos_db import CosmosDBService
 
-    class Container:
-        calls = []
-
-        def query_items(self, **kwargs):
-            self.calls.append(kwargs)
-            return [
-                {"symbol": "MSFT", "created_date": "2026-09-20"},
-                {"symbol": "MSFT", "created_date": "2026-09-29"},
-                {"symbol": "UNTRACKED", "created_date": "2026-09-29"},
-            ]
-
     cosmos = object.__new__(CosmosDBService)
-    cosmos.container = Container()
-    grouped = cosmos.get_price_forecasts_overview_required(["MSFT"], "2026-07-01", "2026-09-29")
-    assert list(grouped) == ["MSFT"]
-    assert grouped["MSFT"][0]["created_date"] == "2026-09-29"
-    assert len(cosmos.container.calls) == 2
-    assert "ARRAY_CONTAINS(@symbols, c.symbol)" in cosmos.container.calls[0]["query"]
-    assert cosmos.get_price_forecasts_overview_required([], "2026-07-01", "2026-09-29") == {}
-    assert len(cosmos.container.calls) == 2
-
-    def fail(**kwargs):
-        raise RuntimeError("storage failure")
-
-    cosmos.container.query_items = fail
+    transport = _SdkForecastContainer([
+        {**_forecast("2025-09-29", 105), "symbol": "MSFT", "security_id": "XNAS:MSFT"},
+    ], fail_on=fail_on)
+    cosmos.container = transport.container
+    client.app.state.cosmos = cosmos
+    monkeypatch.setattr("web.app._compute_symbols_overview", lambda *args, **kwargs: {
+        "rows": [{"symbol": "MSFT", "security_id": "XNAS:MSFT", "exchange": "XNAS"}],
+    })
     with pytest.raises(RuntimeError, match="storage failure"):
-        cosmos.get_price_forecasts_overview_required(["MSFT"], "2026-07-01", "2026-09-29")
+        cosmos.get_price_forecasts_overview_required(
+            ["MSFT"], "2026-07-01", "2026-09-29", {"MSFT": ["XNAS:MSFT"]},
+        )
+    assert client.get("/api/symbols/forecasts/overview").status_code == 503
 
 
-def test_forecast_overview_cosmos_bulk_latest_is_independent_of_window_and_identity():
+def test_forecast_overview_sdk_latest_is_independent_of_window_and_identity():
     from src.cosmos_db import CosmosDBService
 
     documents = [
         {**_forecast("2025-09-20", 90), "symbol": "MSFT", "security_id": "XNAS:MSFT"},
         {**_forecast("2025-09-29", 105), "symbol": "MSFT", "security_id": "XNAS:MSFT"},
         {**_forecast("2025-10-01", 70), "symbol": "MSFT", "security_id": "XNYS:MSFT"},
+        {**_forecast("2025-11-01", 999), "symbol": "MSFT", "security_id": "XLON:MSFT"},
+        {**_forecast("2025-11-02", 888), "symbol": "MSFT"},
+        {**_forecast("2026-10-01", 777), "symbol": "MSFT", "security_id": "XNAS:MSFT"},
         {**_forecast("2026-09-29", 200), "symbol": "OTHER"},
         {**_forecast("2026-10-01", 999), "symbol": "UNTRACKED"},
     ]
-
-    class Container:
-        def __init__(self):
-            self.calls = []
-
-        def query_items(self, **kwargs):
-            self.calls.append(kwargs)
-            query = kwargs["query"]
-            params = {p["name"]: p["value"] for p in kwargs["parameters"]}
-            if "MAX(c.created_date)" in query:
-                assert "@from" not in params
-                assert "GROUP BY c.symbol, c.security_id" in query
-                owners = {}
-                for doc in documents:
-                    if doc["symbol"] in params["@symbols"] and doc["created_date"] <= params["@to"]:
-                        owner = (doc["symbol"], doc.get("security_id"))
-                        if owner not in owners or doc["created_date"] > owners[owner]["created_date"]:
-                            owners[owner] = doc
-                return list(owners.values())
-            if "@anchors" in params:
-                assert "ARRAY_CONTAINS(@anchors" in query
-                assert len(params["@anchors"]) <= 100
-                return [
-                    doc for doc in documents
-                    if {"symbol": doc["symbol"], "created_date": doc["created_date"]}
-                    in params["@anchors"]
-                ]
-            return [
-                doc for doc in documents
-                if doc["symbol"] in params["@symbols"]
-                and params["@from"] <= doc["created_date"] <= params["@to"]
-            ]
-
+    documents.extend(
+        {**_forecast("2024-01-01", 50), "id": f"old-{i}", "symbol": "MSFT",
+         "security_id": "XNAS:MSFT"}
+        for i in range(600)
+    )
     cosmos = object.__new__(CosmosDBService)
-    cosmos.container = Container()
+    transport = _SdkForecastContainer(documents)
+    cosmos.container = transport.container
     grouped = cosmos.get_price_forecasts_overview_required(
         ["MSFT", "OTHER"], "2026-07-01", "2026-09-29",
+        {"MSFT": ["XNAS:MSFT", "XNYS:MSFT"]},
     )
-    assert [p["created_date"] for p in grouped["MSFT"]] == ["2025-10-01", "2025-09-29"]
+    assert [p["created_date"] for p in grouped["MSFT"]] == [
+        "2025-11-02", "2025-10-01", "2025-09-29",
+    ]
     assert [p["created_date"] for p in grouped["OTHER"]] == ["2026-09-29"]
-    assert len(cosmos.container.calls) == 3
-    assert all(c["enable_cross_partition_query"] for c in cosmos.container.calls)
+    assert len(transport.calls) == 9  # One window + four scalar anchors/exact TOP 1 reads.
+    assert sum(pk is None for _, _, pk in transport.calls) == 1
+    assert all("GROUP BY" not in spec["query"] for spec, _, _ in transport.calls)
+    assert all(
+        not isinstance(d, dict) or d["created_date"] != "2025-09-20"
+        for d in transport.returned
+    )
+    count = len(transport.calls)
+    assert cosmos.get_price_forecasts_overview_required(
+        [], "2026-07-01", "2026-09-29", {},
+    ) == {}
+    assert len(transport.calls) == count
+    with pytest.raises(ValueError, match="identity does not match"):
+        cosmos.get_price_forecasts_overview_required(
+            ["MSFT"], "2026-07-01", "2026-09-29", {"MSFT": ["XNAS:OTHER"]},
+        )
+    assert len(transport.calls) == count
     from web.app import _build_symbols_forecast_overview
 
     universe = [
@@ -667,6 +802,45 @@ def test_forecast_overview_cosmos_bulk_latest_is_independent_of_window_and_ident
         assert summary["latest"]["price_at_creation"] == expected_price
         assert summary["hit_rate"]["1d"]["resolved"] == 0
         assert summary["hit_rate"]["1d"]["hit_pct_1sigma"] is None
+
+
+def test_forecast_overview_latest_scopes_have_finite_concurrency_and_no_global_cap():
+    from threading import Lock
+    from time import sleep
+
+    from src.cosmos_db import CosmosDBService
+
+    symbols = [f"STOCK{i}" for i in range(12)]
+    transport = _SdkForecastContainer([
+        {**_forecast("2024-01-01", 100), "symbol": symbol, "security_id": f"XNAS:{symbol}"}
+        for symbol in symbols
+    ])
+    active = peak = 0
+    lock = Lock()
+
+    def execute(**kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            sleep(0.005)
+            return transport.execute(**kwargs)
+        finally:
+            with lock:
+                active -= 1
+
+    transport.container.client_connection.QueryItems.side_effect = execute
+    cosmos = object.__new__(CosmosDBService)
+    cosmos.container = transport.container
+    grouped = cosmos.get_price_forecasts_overview_required(
+        symbols, "2026-07-01", "2026-09-29",
+        {symbol: [f"XNAS:{symbol}"] for symbol in symbols},
+    )
+    assert 1 < peak <= 4
+    assert all([p["created_date"] for p in grouped[symbol]] == ["2024-01-01"] for symbol in symbols)
+    assert len(transport.calls) == 37  # Window, 24 scope anchors, 12 canonical TOP 1 reads.
+    assert len([d for d in transport.returned if isinstance(d, dict)]) == 12
 
 
 def test_symbols_scoped_views_defer_inactive_backend_work_and_preserve_legacy(client, monkeypatch):
