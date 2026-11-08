@@ -21,6 +21,10 @@ export default async function SymbolForecastSummary({ symbol }: { symbol: string
   }
 
   const row = latestRow(data.rows ?? []);
+  const slope = typeof row?.trend?.slope === "number" && Number.isFinite(row.trend.slope)
+    ? row.trend.slope : null;
+  const r2 = typeof row?.trend?.r2 === "number" && Number.isFinite(row.trend.r2)
+    ? row.trend.r2 : null;
   return (
     <Link
       href={`${symbolHref(symbol)}/forecasts?range=90d`}
@@ -33,11 +37,45 @@ export default async function SymbolForecastSummary({ symbol }: { symbol: string
           <span className="font-mono text-xs text-text-muted">{row.created_date}</span>
         )}
       </div>
-      <p className="mb-2 text-xs text-text-muted">
-        Latest price bands · Historical window: 90d.
-        Hover a horizon for realized hit-rates and resolved sample counts.
-        Dashed line = anchor. Open price forecasts →
-      </p>
+      {row && (
+        <div className="mb-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-text-muted">
+          <span>
+            Price at creation:{" "}
+            <strong className="text-text">
+              {typeof row.price_at_creation === "number" && Number.isFinite(row.price_at_creation)
+                ? `$${row.price_at_creation.toFixed(2)}` : "—"}
+            </strong>
+          </span>
+          <span>
+            HV:{" "}
+            <strong className="text-text">
+              {typeof row.hv === "number" && Number.isFinite(row.hv)
+                ? `${(row.hv * 100).toFixed(1)}%` : "—"}
+            </strong>
+          </span>
+          <span>
+            Vol source: <strong className="text-text">{row.vol_source || "—"}</strong>
+          </span>
+          <span>
+            Bias:{" "}
+            <strong className="text-text">
+              {typeof row.bias === "number" && Number.isFinite(row.bias)
+                ? row.bias.toFixed(2) : "—"}
+            </strong>
+          </span>
+          {slope != null && (
+            <span title="Robust (Theil-Sen) per-session drift, shrunk by fit quality R².">
+              Trend:{" "}
+              <strong className="text-text">
+                {slope >= 0 ? "+" : ""}{slope.toFixed(2)} $/session
+              </strong>
+              {r2 != null ? ` · R² ${r2.toFixed(2)}` : ""}
+            </span>
+          )}
+          {row.flags?.earnings_in_window === true && <span>📅 earnings in window</span>}
+          {row.flags?.exdiv_in_window === true && <span>💰 ex-div in window</span>}
+        </div>
+      )}
       <ProjectionFanChart
         row={row}
         calibration={{ hitRate: data.hit_rate ?? {}, windowLabel: "90d" }}

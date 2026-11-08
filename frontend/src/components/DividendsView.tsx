@@ -216,6 +216,8 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
     ? summary.effective_withholding_pct
     : undefined;
   const avgLast12 = averageLastNExcludingZero(monthly.map((row) => getTotalNet(row)), 12);
+  const avgLast6 = averageLastNExcludingZero(monthly.map((row) => getTotalNet(row)), 6);
+  const avgLast3 = averageLastNExcludingZero(monthly.map((row) => getTotalNet(row)), 3);
   const cards = [
     {
       label: "Avg Monthly Total (last 12mo)",
@@ -224,7 +226,7 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
       suffix: "",
       decimals: 2,
       tone: ((avgLast12 ?? 0) >= 0 ? "green" : "red") as "green" | "red",
-      hint: "Months with no activity are excluded from the average",
+      hint: `6m: ${avgLast6 === null ? "—" : eur(avgLast6)} · 3m: ${avgLast3 === null ? "—" : eur(avgLast3)}`,
     },
     {
       label: "Cash Yield on Cost",

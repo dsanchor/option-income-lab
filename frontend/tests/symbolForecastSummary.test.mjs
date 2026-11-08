@@ -158,6 +158,74 @@ test("summary exposes HTTP/transport and response errors rather than hiding fail
   }
 });
 
+async function summaryMarkup(rows) {
+  const card = load("../src/components/SymbolForecastSummary.tsx", {
+    "next/link": { default: "a" },
+    "@/lib/api": { apiFetch: async () => ({ rows, hit_rate: {} }) },
+    "@/components/ForecastCharts": { ProjectionFanChart: () => null },
+  }).default;
+  return renderToStaticMarkup(await card({ symbol: "AAD" }));
+}
+
+test("summary metadata uses the actual latest forecast, with signed trend and detail tooltip", async () => {
+  const older = {
+    ...row, created_date: "2026-10-01", price_at_creation: 321.98,
+    hv: 0.41, vol_source: "hv", bias: -0.75, trend: { slope: 1.23, r2: 0.92 },
+    flags: { earnings_in_window: true, exdiv_in_window: false },
+  };
+  const latest = {
+    ...row, price_at_creation: 617.43, hv: 0.287, vol_source: "iv", bias: 0.236,
+    trend: { slope: -0.074, r2: 0.126 },
+    flags: { earnings_in_window: false, exdiv_in_window: true },
+  };
+  for (const slope of [-0.074, 0.074, 0]) {
+    const html = await summaryMarkup([older, { ...latest, trend: { ...latest.trend, slope } }]);
+    const text = html.replace(/<[^>]*>/g, "");
+    assert.match(text, /Price at creation: \$617\.43/);
+    assert.match(text, /HV: 28\.7%/);
+    assert.match(text, /Vol source: iv/);
+    assert.match(text, /Bias: 0\.24/);
+    assert.ok(text.includes(`Trend: ${slope >= 0 ? "+" : ""}${slope.toFixed(2)} $/session · R² 0.13`));
+    assert.match(html, /title="Robust \(Theil-Sen\) per-session drift, shrunk by fit quality R²\."/);
+    assert.match(html, /flex flex-wrap.*text-xs/);
+    assert.match(text, /💰 ex-div in window/);
+    assert.doesNotMatch(text, /earnings in window|321\.98|Latest price bands|Historical window|Hover a horizon|Dashed line = anchor|Open price forecasts/);
+  }
+});
+
+test("summary shows event flags only for true booleans and omits unavailable R²", async () => {
+  for (const flag of [true, false, undefined, null, "true", "false", 1]) {
+    for (const r2 of [undefined, null, NaN, Infinity, "0.5"]) {
+      const html = await summaryMarkup([{
+        ...row, trend: { slope: -0.1, r2 },
+        flags: { earnings_in_window: flag, exdiv_in_window: flag },
+      }]);
+      const text = html.replace(/<[^>]*>/g, "");
+      assert.match(text, /Trend: -0\.10 \$\/session/);
+      assert.doesNotMatch(text, /R²|NaN|Infinity/);
+      assert.equal(text.includes("📅 earnings in window"), flag === true);
+      assert.equal(text.includes("💰 ex-div in window"), flag === true);
+    }
+  }
+});
+
+test("summary missing numeric metadata stays honest and empty responses omit metadata", async () => {
+  for (const value of [undefined, null, NaN, Infinity, -Infinity]) {
+    const html = await summaryMarkup([{
+      ...row, price_at_creation: value, hv: value, bias: value,
+      vol_source: null, trend: { slope: value, r2: 0.5 }, flags: null,
+    }]);
+    const text = html.replace(/<[^>]*>/g, "");
+    assert.match(text, /Price at creation: —HV: —Vol source: —Bias: —/);
+    assert.doesNotMatch(text, /Trend:|R²|NaN|Infinity|null|undefined|0\.00|in window/);
+  }
+  const zero = (await summaryMarkup([{
+    ...row, price_at_creation: 0, hv: 0, bias: 0, vol_source: "hv",
+  }])).replace(/<[^>]*>/g, "");
+  assert.match(zero, /Price at creation: \$0\.00HV: 0\.0%Vol source: hvBias: 0\.00/);
+  assert.doesNotMatch(await summaryMarkup([]), /Price at creation|HV:|Vol source|Bias:|Trend:|R²|in window|Latest price bands/);
+});
+
 test("summary executes successful and empty responses across the React server/client boundary", () => {
   const result = spawnSync(process.execPath, [
     "--conditions=react-server",

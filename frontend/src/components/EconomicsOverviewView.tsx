@@ -448,6 +448,8 @@ function SummaryRow({ summary, monthly }: { summary: EconomicsAggregatedSummary;
   };
   const coverageDisplay = `${coverage.linked_positions ?? 0}/${coverage.total_positions ?? 0}`;
   const avgLast12 = averageLastNExcludingZero(monthly.map((row) => row.combined_net_eur), 12);
+  const avgLast6 = averageLastNExcludingZero(monthly.map((row) => row.combined_net_eur), 6);
+  const avgLast3 = averageLastNExcludingZero(monthly.map((row) => row.combined_net_eur), 3);
   const yoc = summary.portfolio_yoc_pct;
 
   const cards = [
@@ -499,7 +501,7 @@ function SummaryRow({ summary, monthly }: { summary: EconomicsAggregatedSummary;
       prefix: "€",
       decimals: 2,
       tone: ((avgLast12 ?? 0) >= 0 ? "green" : "red") as "green" | "red",
-      hint: "Months with no activity are excluded from the average",
+      hint: `6m: ${avgLast6 === null ? "—" : eur(avgLast6)} · 3m: ${avgLast3 === null ? "—" : eur(avgLast3)}`,
     },
     {
       label: "Cash Yield on Cost",

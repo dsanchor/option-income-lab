@@ -24,10 +24,10 @@ describe("Monthly net average reference line", () => {
       economicsView,
       /const avgLast12 = useMemo\(\s*\(\) => averageLastNExcludingZero\(data\?\.monthly\.map\(\(row\) => row\.net_income_eur\) \?\? \[\], 12\)/,
     );
-    assert.match(economicsView, /<SummaryRow summary=\{data\.summary\} avgLast12=\{avgLast12\} \/>/);
+    assert.match(economicsView, /<SummaryRow summary=\{data\.summary\} avgLast12=\{avgLast12\} avgLast6=\{avgLast6\} avgLast3=\{avgLast3\} \/>/);
     assert.match(economicsView, /<MonthlyNetChart rows=\{data\.monthly\} avgLast12=\{avgLast12\} \/>/);
     assert.equal(
-      (economicsView.match(/averageLastNExcludingZero\(/g) ?? []).length,
+      (economicsView.match(/averageLastNExcludingZero\([^\n]*, 12\)/g) ?? []).length,
       1,
       "The card and chart must not calculate separate averages.",
     );

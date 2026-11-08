@@ -163,7 +163,12 @@ function readInitialOptionFilters() {
   };
 }
 
-function SummaryRow({ summary, avgLast12 }: { summary: EconomicsSummary; avgLast12: number | null }) {
+function SummaryRow({ summary, avgLast12, avgLast6, avgLast3 }: {
+  summary: EconomicsSummary;
+  avgLast12: number | null;
+  avgLast6: number | null;
+  avgLast3: number | null;
+}) {
   const cards = [
     {
       label: "Premium Sold (USD)",
@@ -208,7 +213,7 @@ function SummaryRow({ summary, avgLast12 }: { summary: EconomicsSummary; avgLast
       prefix: "€",
       decimals: 2,
       tone: ((avgLast12 ?? 0) >= 0 ? "green" : "red") as "green" | "red",
-      hint: "Months with no activity are excluded from the average",
+      hint: `6m: ${avgLast6 === null ? "—" : eur(avgLast6)} · 3m: ${avgLast3 === null ? "—" : eur(avgLast3)}`,
     },
   ];
 
@@ -976,6 +981,14 @@ export default function EconomicsView({
     () => averageLastNExcludingZero(data?.monthly.map((row) => row.net_income_eur) ?? [], 12),
     [data?.monthly],
   );
+  const avgLast6 = useMemo(
+    () => averageLastNExcludingZero(data?.monthly.map((row) => row.net_income_eur) ?? [], 6),
+    [data?.monthly],
+  );
+  const avgLast3 = useMemo(
+    () => averageLastNExcludingZero(data?.monthly.map((row) => row.net_income_eur) ?? [], 3),
+    [data?.monthly],
+  );
 
   return (
     <div className="space-y-8">
@@ -992,7 +1005,7 @@ export default function EconomicsView({
         </div>
       )}
 
-      {data && <SummaryRow summary={data.summary} avgLast12={avgLast12} />}
+      {data && <SummaryRow summary={data.summary} avgLast12={avgLast12} avgLast6={avgLast6} avgLast3={avgLast3} />}
 
       {coverage && <CoverageBanner coverage={coverage} hasAccountFilter={accountIds.length > 0} />}
 
