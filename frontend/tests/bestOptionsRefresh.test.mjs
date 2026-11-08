@@ -113,7 +113,11 @@ function harness() {
     },
   };
 }
-const tables = (tree) => tree.filter((node) => typeof node.type === "function" && node.props.side);
+// Refresh owns one snapshot; the nested presentation chooses the visible side.
+const tables = (tree) => {
+  const snapshot = tree.find((node) => typeof node.type === "function" && node.props.response)?.props.response;
+  return snapshot ? [snapshot.calls, snapshot.puts].map((data) => ({ props: { data } })) : [];
+};
 const busy = (tree) => tree.find((node) => "aria-busy" in (node.props || {}));
 const refreshButton = (tree) => tree.find((node) => node.type === "button");
 const alertText = (tree) => tree.find((node) => node.props?.role === "alert")?.props.children.flat(Infinity).join("");

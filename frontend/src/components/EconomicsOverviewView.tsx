@@ -19,7 +19,7 @@ import MultiSelect from "@/components/MultiSelect";
 import Reveal from "@/components/Reveal";
 import StatCard from "@/components/StatCard";
 import { getAccountName } from "@/lib/accountDisplay";
-import { averageLastNExcludingZero } from "@/lib/format";
+import { averageCompletedMonthsExcludingZero, averageLastNExcludingZero } from "@/lib/format";
 import { listAccounts } from "@/lib/portfolio-api";
 import type { BrokerAccount } from "@/types/portfolio";
 import type {
@@ -448,8 +448,8 @@ function SummaryRow({ summary, monthly }: { summary: EconomicsAggregatedSummary;
   };
   const coverageDisplay = `${coverage.linked_positions ?? 0}/${coverage.total_positions ?? 0}`;
   const avgLast12 = averageLastNExcludingZero(monthly.map((row) => row.combined_net_eur), 12);
-  const avgLast6 = averageLastNExcludingZero(monthly.map((row) => row.combined_net_eur), 6);
-  const avgLast3 = averageLastNExcludingZero(monthly.map((row) => row.combined_net_eur), 3);
+  const avgLast6 = averageCompletedMonthsExcludingZero(monthly, (row) => row.combined_net_eur, 6);
+  const avgLast3 = averageCompletedMonthsExcludingZero(monthly, (row) => row.combined_net_eur, 3);
   const yoc = summary.portfolio_yoc_pct;
 
   const cards = [

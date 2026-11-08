@@ -118,8 +118,8 @@ export interface BestOptionGates {
   earnings_span: "pass" | "fail" | "unknown" | string;
 }
 
-/** One row per contract in the DTE window — every row supplied by the evaluator,
- * never filtered further by the UI (design §4.1: "row inclusion, not a gate"). */
+/** An evaluator-supplied contract in the configured DTE window and delta band.
+ * Presentation filters narrow the available snapshot, never re-score or re-gate rows. */
 export interface BestOptionRow {
   expiration: string;
   dte: number;

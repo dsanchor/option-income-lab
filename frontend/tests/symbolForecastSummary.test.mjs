@@ -186,10 +186,34 @@ test("summary metadata uses the actual latest forecast, with signed trend and de
     assert.match(text, /Vol source: iv/);
     assert.match(text, /Bias: 0\.24/);
     assert.ok(text.includes(`Trend: ${slope >= 0 ? "+" : ""}${slope.toFixed(2)} $/session · R² 0.13`));
-    assert.match(html, /title="Robust \(Theil-Sen\) per-session drift, shrunk by fit quality R²\."/);
+    assert.match(html, /title="Headline robust \(Theil-Sen\) trend in dollars per trading session:/);
     assert.match(html, /flex flex-wrap.*text-xs/);
     assert.match(text, /💰 ex-div in window/);
     assert.doesNotMatch(text, /earnings in window|321\.98|Latest price bands|Historical window|Hover a horizon|Dashed line = anchor|Open price forecasts/);
+  }
+});
+
+test("summary metadata renders explanatory native tooltips without adding visible copy", async () => {
+  for (const source of ["iv", "hv", "ewma"]) {
+    const html = await summaryMarkup([{
+      ...row, hv: 0.287, vol_source: source, bias: -0.24,
+      trend: { slope: -0.074, r2: 0.126 },
+      flags: { earnings_in_window: true, exdiv_in_window: true },
+    }]);
+    const tooltips = [...html.matchAll(/<span class="cursor-help" title="([^"]+)">/g)]
+      .map((match) => match[1]);
+    assert.equal(tooltips.length, 8);
+    assert.match(tooltips[0], /Price anchor.*created, not the live price/);
+    assert.match(tooltips[1], /Annualized volatility actually used.*calibration scaling.*may come from IV, historical volatility or EWMA/);
+    assert.match(tooltips[2], /iv = options-implied.*hv = historical.*ewma = exponentially weighted.*recent moves more weight/);
+    assert.match(tooltips[3], /-1 to \+1.*positive is bullish, negative bearish.*absolute values.*stronger signal.*Not a probability or target return.*does not shift the band center/);
+    assert.match(tooltips[4], /dollars per trading session.*positive slopes up, negative down.*shrunk toward zero.*overlay, not the band center.*longer horizons/);
+    assert.match(tooltips[5], /fit quality from 0 to 1.*past price variation.*not a measure of future forecast accuracy/);
+    assert.match(tooltips[6], /known earnings date.*after creation.*30 calendar days.*not the 90-day history range/);
+    assert.match(tooltips[7], /known ex-dividend date.*after creation.*30 calendar days.*not the 90-day history range/);
+    const text = html.replace(/<[^>]*>/g, "");
+    assert.match(text, new RegExp(`Vol source: ${source}`));
+    assert.doesNotMatch(text, /Annualized|estimator|probability|fit quality|calendar days|live price/);
   }
 });
 

@@ -39,24 +39,24 @@ export default async function SymbolForecastSummary({ symbol }: { symbol: string
       </div>
       {row && (
         <div className="mb-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-text-muted">
-          <span>
+          <span className="cursor-help" title="Price anchor when this forecast was created, not the live price. The fan bands stay centered here.">
             Price at creation:{" "}
             <strong className="text-text">
               {typeof row.price_at_creation === "number" && Number.isFinite(row.price_at_creation)
                 ? `$${row.price_at_creation.toFixed(2)}` : "—"}
             </strong>
           </span>
-          <span>
+          <span className="cursor-help" title="Annualized volatility actually used for the fan bands, including any applied calibration scaling. Despite the HV label, it may come from IV, historical volatility or EWMA; see Vol source.">
             HV:{" "}
             <strong className="text-text">
               {typeof row.hv === "number" && Number.isFinite(row.hv)
                 ? `${(row.hv * 100).toFixed(1)}%` : "—"}
             </strong>
           </span>
-          <span>
+          <span className="cursor-help" title="Volatility estimator used: iv = options-implied volatility; hv = historical volatility; ewma = exponentially weighted historical volatility, giving recent moves more weight.">
             Vol source: <strong className="text-text">{row.vol_source || "—"}</strong>
           </span>
-          <span>
+          <span className="cursor-help" title="Signed directional signal from -1 to +1: positive is bullish, negative bearish; larger absolute values mean a stronger signal. Not a probability or target return; it does not shift the band center.">
             Bias:{" "}
             <strong className="text-text">
               {typeof row.bias === "number" && Number.isFinite(row.bias)
@@ -64,16 +64,31 @@ export default async function SymbolForecastSummary({ symbol }: { symbol: string
             </strong>
           </span>
           {slope != null && (
-            <span title="Robust (Theil-Sen) per-session drift, shrunk by fit quality R².">
+            <span className="cursor-help" title="Headline robust (Theil-Sen) trend in dollars per trading session: positive slopes up, negative down, shrunk toward zero by fit quality R². Used for the trend overlay, not the band center; longer horizons may use their own fit.">
               Trend:{" "}
               <strong className="text-text">
                 {slope >= 0 ? "+" : ""}{slope.toFixed(2)} $/session
               </strong>
-              {r2 != null ? ` · R² ${r2.toFixed(2)}` : ""}
+              {r2 != null && (
+                <>
+                  {" · "}
+                  <span className="cursor-help" title="Historical trend fit quality from 0 to 1: higher means the fitted line explains more of the past price variation. Used to shrink the trend slope, not a measure of future forecast accuracy.">
+                    R² {r2.toFixed(2)}
+                  </span>
+                </>
+              )}
             </span>
           )}
-          {row.flags?.earnings_in_window === true && <span>📅 earnings in window</span>}
-          {row.flags?.exdiv_in_window === true && <span>💰 ex-div in window</span>}
+          {row.flags?.earnings_in_window === true && (
+            <span className="cursor-help" title="At forecast creation, a known earnings date fell after creation and within the next 30 calendar days (not the 90-day history range). Earnings can cause price gaps.">
+              📅 earnings in window
+            </span>
+          )}
+          {row.flags?.exdiv_in_window === true && (
+            <span className="cursor-help" title="At forecast creation, a known ex-dividend date fell after creation and within the next 30 calendar days (not the 90-day history range). The price may adjust as the stock trades without dividend entitlement.">
+              💰 ex-div in window
+            </span>
+          )}
         </div>
       )}
       <ProjectionFanChart

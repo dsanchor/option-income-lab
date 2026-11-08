@@ -8,7 +8,7 @@ import StatCard from "@/components/StatCard";
 import AccountBadge from "@/components/AccountBadge";
 import { getAccountName } from "@/lib/accountDisplay";
 import { listAccounts } from "@/lib/portfolio-api";
-import { averageLastNExcludingZero } from "@/lib/format";
+import { averageCompletedMonthsExcludingZero, averageLastNExcludingZero } from "@/lib/format";
 import type { BrokerAccount } from "@/types/portfolio";
 import {
   Area,
@@ -216,8 +216,8 @@ function SummaryRow({ summary, monthly }: { summary: DividendsSummary; monthly: 
     ? summary.effective_withholding_pct
     : undefined;
   const avgLast12 = averageLastNExcludingZero(monthly.map((row) => getTotalNet(row)), 12);
-  const avgLast6 = averageLastNExcludingZero(monthly.map((row) => getTotalNet(row)), 6);
-  const avgLast3 = averageLastNExcludingZero(monthly.map((row) => getTotalNet(row)), 3);
+  const avgLast6 = averageCompletedMonthsExcludingZero(monthly, getTotalNet, 6);
+  const avgLast3 = averageCompletedMonthsExcludingZero(monthly, getTotalNet, 3);
   const cards = [
     {
       label: "Avg Monthly Total (last 12mo)",

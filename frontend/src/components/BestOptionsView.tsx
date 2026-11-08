@@ -4,6 +4,10 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw, Trophy } from "lucide-react";
 import BestOptionsParams from "@/components/BestOptionsParams";
 import ContractValidationAction from "@/components/ContractValidationAction";
+import MultiSelect from "@/components/MultiSelect";
+import { DEFAULT_PREFERENCES, LIMIT_OPTIONS, PREFERENCE_OPTIONS, OptionsNumericFilters, OptionsPagination, OptionsSideTabs, OptionsSortHeader, type NumericDraft } from "@/components/OptionsPresentation";
+import { bestOptionIdentity, clampOptionsOffset, filterBestOptionsRows, initialBestOptionsDraft, parseBestOptionsFilters, sortBestOptionsRows, type BestOptionsSort } from "@/lib/best-options-presentation";
+import type { ScreenerPreference, ScreenerSide, ScreenerSortDir } from "@/types/screener";
 import { preferenceRowTint } from "@/lib/badges";
 import { ColorBadge, GateBadge, flagLabel, fmtNum, fmtPct, fmtExpiration, fmtTime, calcGap, fmtGap, fmtGapPct } from "@/lib/options-row-format";
 import type {
@@ -12,8 +16,9 @@ import type {
   BestOptionsSide,
 } from "@/types/best-options";
 
-function RowDetails({ row }: { row: BestOptionRow }) {
+function RowDetails({ row, underlyingPrice }: { row: BestOptionRow; underlyingPrice: number | null }) {
   const compEntries = Object.entries(row.components ?? {});
+  const { gap } = calcGap(row.strike, underlyingPrice);
   return (
     <div className="space-y-2 border-t border-border/60 px-3 py-2 text-xs">
       <div className="flex flex-wrap gap-1.5">
@@ -43,6 +48,8 @@ function RowDetails({ row }: { row: BestOptionRow }) {
         </div>
       )}
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-text-muted">
+        <span>Gap $: {fmtGap(gap)}</span>
+        <span>Signed Δ: {fmtNum(row.delta, 3)}</span>
         <span>
           Quote as of: {fmtTime(row.quote_asof)}
           {row.stale ? " (stale)" : ""}
@@ -61,7 +68,7 @@ function NearestMissPanel({ nearestMiss }: { nearestMiss: BestOptionsSide["neare
   const otherEntries = Object.entries(rest).filter(([, v]) => v !== null && v !== undefined);
   return (
     <div className="rounded-[var(--radius)] border border-accent-blue/40 bg-accent-blue/10 px-3 py-2 text-xs">
-      <strong>Nearest miss — why nothing (more) qualifies:</strong>{" "}
+      <strong>Nearest miss — snapshot qualification detail:</strong>{" "}
       {typeof description === "string" && description.length > 0 ? (
         <span>{description}</span>
       ) : otherEntries.length > 0 ? (
@@ -81,19 +88,31 @@ function OptionsTable({
   symbol,
   side,
   data,
+  rows,
+  category,
+  chainStale,
   underlyingPrice,
+  sort,
+  dir,
+  onSort,
 }: {
   symbol: string;
   side: "call" | "put";
   data: BestOptionsSide;
+  rows: BestOptionRow[];
+  category: string;
+  chainStale: boolean;
   underlyingPrice: number | null;
+  sort: BestOptionsSort;
+  dir: ScreenerSortDir;
+  onSort: (field: BestOptionsSort) => void;
 }) {
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
-  const toggle = (i: number) =>
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggle = (identity: string) =>
     setExpanded((s) => {
       const next = new Set(s);
-      if (next.has(i)) next.delete(i);
-      else next.add(i);
+      if (next.has(identity)) next.delete(identity);
+      else next.add(identity);
       return next;
     });
 
@@ -108,7 +127,7 @@ function OptionsTable({
         <h3 className="text-base font-semibold">{side === "call" ? "Covered Calls" : "Cash-Secured Puts"}</h3>
         <span>
           <span className="text-text-muted">Shown:</span>{" "}
-          <span className="font-mono">{data.rows.length} of {data.total}</span>
+          <span className="font-mono">{rows.length} · available snapshot: {data.rows.length} of {data.total}</span>
           {data.truncated ? <span className="text-text-muted"> (capped at 400)</span> : null}
         </span>
         <span>
@@ -119,15 +138,17 @@ function OptionsTable({
 
       {noSharesHeld && (
         <div role="note" className="rounded-[var(--radius)] border border-accent-orange/40 bg-accent-orange/10 px-3 py-2 text-xs text-accent-orange">
-          0 shares held — no covered call is currently coverable. Every candidate contract is still shown below for
-          reference.
+          0 shares held — no covered call is currently coverable. Candidate contracts remain available for
+          reference, subject to the current filters.
         </div>
       )}
 
       <NearestMissPanel nearestMiss={data.nearest_miss} />
 
-      {data.rows.length === 0 ? (
-        <p className="text-sm text-text-muted">No contracts in the configured DTE window.</p>
+      {rows.length === 0 ? (
+        <p className="text-sm text-text-muted">
+          {data.rows.length === 0 ? "No contracts in the configured DTE window and delta bands." : "No contracts match the current filters."}
+        </p>
       ) : (
         // Table structure/typography/spacing/row-tint intentionally mirrors
         // the Roll Scenarios table (`PositionDetail.tsx`'s `RollTableView`)
@@ -143,27 +164,29 @@ function OptionsTable({
               <tr>
                 <th className="border-b border-border px-2 py-1 text-left" aria-label="Expand" />
                 <th className="border-b border-border px-2 py-1 text-left">Status</th>
-                <th className="border-b border-border px-2 py-1 text-left">Exp</th>
-                <th className="border-b border-border px-2 py-1 text-right">DTE</th>
-                <th className="border-b border-border px-2 py-1 text-right">Strike</th>
-                <th className="border-b border-border px-2 py-1 text-right" title="Gap from analyzed price">Gap $</th>
-                <th className="border-b border-border px-2 py-1 text-right" title="Gap from analyzed price (%)">Gap %</th>
+                <th className="border-b border-border px-2 py-1 text-left">Symbol</th>
+                {([
+                  ["dte", "DTE"], ["abs_delta", "Δ"], ["premium_pct", "Prem %"],
+                  ["annualized_return_pct", "Ann. %"], ["open_interest", "OI"],
+                ] as const).map(([field, label]) => (
+                  <OptionsSortHeader key={field} field={field} label={label} align="right" sort={sort} dir={dir} onSort={onSort} />
+                ))}
+                <OptionsSortHeader field="expiration" label="Exp" align="left" sort={sort} dir={dir} onSort={onSort} />
+                <OptionsSortHeader field="strike" label="Strike" align="right" sort={sort} dir={dir} onSort={onSort} />
+                <OptionsSortHeader field="gap_pct" label="Gap" align="right" sort={sort} dir={dir} onSort={onSort} />
                 <th className="border-b border-border px-2 py-1 text-right">Bid/Ask</th>
-                <th className="border-b border-border px-2 py-1 text-right">Δ</th>
-                <th className="border-b border-border px-2 py-1 text-right">Prem %</th>
-                <th className="border-b border-border px-2 py-1 text-right">Ann. %</th>
-                <th className="border-b border-border px-2 py-1 text-right">OI</th>
-                <th className="border-b border-border px-2 py-1 text-right">Score</th>
+                <OptionsSortHeader field="score" label="Score" align="right" sort={sort} dir={dir} onSort={onSort} />
                 <th className="border-b border-border px-2 py-1 text-left">Flags</th>
                 <th className="border-b border-border px-2 py-1 text-left" title="Validate contract — advisory only, no auto-order">Validate</th>
               </tr>
             </thead>
             <tbody>
-              {data.rows.map((row, i) => {
-                const open = expanded.has(i);
+              {rows.map((row) => {
+                const identity = bestOptionIdentity(symbol, side, row);
+                const open = expanded.has(identity);
                 const { gap, gapPct } = calcGap(row.strike, underlyingPrice);
                 return (
-                  <Fragment key={`${row.expiration}-${row.strike}-${i}`}>
+                  <Fragment key={identity}>
                     <tr
                       className="border-b border-border/40"
                       style={{ background: preferenceRowTint(row.color) }}
@@ -171,7 +194,7 @@ function OptionsTable({
                       <td className="px-2 py-1 text-left">
                         <button
                           type="button"
-                          onClick={() => toggle(i)}
+                          onClick={() => toggle(identity)}
                           aria-expanded={open}
                           aria-label={open ? "Collapse row detail" : "Expand row detail"}
                           className="text-text-muted"
@@ -182,26 +205,34 @@ function OptionsTable({
                       <td className="px-2 py-1 text-left">
                         <ColorBadge color={row.color} label={row.label} />
                       </td>
-                      <td className="px-2 py-1 text-left font-mono">{fmtExpiration(row.expiration)}</td>
+                      <td className="px-2 py-1 text-left">
+                        <span className="font-mono font-semibold text-accent-blue">{symbol}</span>
+                        {category && <span className="ml-1 text-text-muted">({category})</span>}
+                        {chainStale && (
+                          <span title="This symbol's cached option chain is due for a refresh"
+                            className="ml-1 rounded border border-accent-orange/40 bg-accent-orange/10 px-1 py-0.5 text-[10px] text-accent-orange">
+                            stale
+                          </span>
+                        )}
+                      </td>
                       <td className="px-2 py-1 text-right font-mono">{row.dte}</td>
-                      <td className="px-2 py-1 text-right font-mono font-semibold">{fmtNum(row.strike)}</td>
-                      <td className="px-2 py-1 text-right font-mono text-text-muted" title={gap !== null && underlyingPrice !== null ? `Strike ${fmtNum(row.strike)} vs analyzed ${fmtNum(underlyingPrice)}` : undefined}>
-                        {fmtGap(gap)}
-                      </td>
-                      <td className="px-2 py-1 text-right font-mono text-text-muted">
-                        {fmtGapPct(gapPct)}
-                      </td>
-                      <td className="px-2 py-1 text-right font-mono text-text-muted">
-                        {fmtNum(row.bid)} / {fmtNum(row.ask)}
-                      </td>
-                      <td className="px-2 py-1 text-right font-mono text-text-muted" title={`|Δ| ${fmtNum(row.abs_delta, 3)}`}>
-                        {fmtNum(row.delta, 3)}
+                      <td className="px-2 py-1 text-right font-mono text-text-muted" title={`Δ ${fmtNum(row.delta, 3)}`}>
+                        {fmtNum(row.abs_delta, 3)}
                       </td>
                       <td className="px-2 py-1 text-right font-mono font-semibold" title={`Floor ${fmtPct(row.effective_min_pct)}`}>
                         {fmtPct(row.premium_pct)}
                       </td>
                       <td className="px-2 py-1 text-right font-mono">{fmtPct(row.annualized_return_pct)}</td>
                       <td className="px-2 py-1 text-right font-mono text-text-muted">{row.open_interest ?? "—"}</td>
+                      <td className="px-2 py-1 text-left font-mono">{fmtExpiration(row.expiration)}</td>
+                      <td className="px-2 py-1 text-right font-mono font-semibold">{fmtNum(row.strike)}</td>
+                      <td className="px-2 py-1 text-right font-mono text-text-muted"
+                        title={gap !== null && underlyingPrice !== null ? `Gap: ${fmtNum(gap, 2)} (${fmtGapPct(gapPct)}) | Strike ${fmtNum(row.strike)} vs analyzed ${fmtNum(underlyingPrice)}` : undefined}>
+                        {fmtGapPct(gapPct)}
+                      </td>
+                      <td className="px-2 py-1 text-right font-mono text-text-muted">
+                        {fmtNum(row.bid)} / {fmtNum(row.ask)}
+                      </td>
                       <td className="px-2 py-1 text-right font-mono">
                         {row.score != null ? Math.round(row.score) : "—"}
                       </td>
@@ -238,7 +269,7 @@ function OptionsTable({
                     {open && (
                       <tr className="border-b border-border/40">
                         <td colSpan={TABLE_COLS} className="p-0">
-                          <RowDetails row={row} />
+                          <RowDetails row={row} underlyingPrice={underlyingPrice} />
                         </td>
                       </tr>
                     )}
@@ -250,6 +281,102 @@ function OptionsTable({
         </div>
       )}
     </section>
+  );
+}
+
+function SnapshotResults({ symbol, response }: { symbol: string; response: BestOptionsResponse }) {
+  const [side, setSide] = useState<ScreenerSide>("call");
+  const [preferences, setPreferences] = useState<ScreenerPreference[]>(DEFAULT_PREFERENCES);
+  const [draft, setDraft] = useState(() => initialBestOptionsDraft(response.parameters.dte));
+  const [appliedDraft, setAppliedDraft] = useState(draft);
+  const [limit, setLimit] = useState(100);
+  const [offset, setOffset] = useState(0);
+  const [sort, setSort] = useState<BestOptionsSort>("default");
+  const [dir, setDir] = useState<ScreenerSortDir>("desc");
+  const { error } = parseBestOptionsFilters(draft, response.parameters.dte);
+  const applied = parseBestOptionsFilters(appliedDraft, response.parameters.dte);
+
+  useEffect(() => {
+    if (draft === appliedDraft || error) return;
+    const timer = setTimeout(() => {
+      setAppliedDraft(draft);
+      setOffset(0);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [draft, appliedDraft, error]);
+
+  const data = side === "call" ? response.calls : response.puts;
+  const price = response.parameters.underlying.price;
+  const filtered = applied.error ? [] : filterBestOptionsRows(data.rows, preferences, applied.filters, price);
+  const ordered = sortBestOptionsRows(filtered, sort, dir, price);
+  const pageOffset = clampOptionsOffset(offset, limit, ordered.length);
+  if (offset !== pageOffset) setOffset(pageOffset);
+  const rows = ordered.slice(pageOffset, pageOffset + limit);
+  const onSort = (field: BestOptionsSort) => {
+    setDir(sort === field && dir === "desc" ? "asc" : "desc");
+    setSort(field);
+    setOffset(0);
+  };
+
+  return (
+    <div className="space-y-6">
+      <OptionsSideTabs side={side} onChange={(next) => { setSide(next); setOffset(0); }} />
+      <div className="surface p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-base font-semibold">Filters</h2>
+          <span className="rounded-[var(--radius-pill)] bg-bg-input px-2 py-0.5 text-xs text-text-muted">
+            {filtered.length} matching · {data.rows.length} available in snapshot
+          </span>
+        </div>
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-text-muted">Category / Profile</span>
+            <MultiSelect options={PREFERENCE_OPTIONS} selected={preferences} allLabel="All Profiles"
+              onChange={(next) => { setPreferences(next as ScreenerPreference[]); setOffset(0); }} />
+          </div>
+          <OptionsNumericFilters draft={draft} onChange={(field: keyof NumericDraft, value) => {
+            setDraft((prev) => ({ ...prev, [field]: value }));
+          }} />
+          <div className="flex flex-col gap-1">
+            <span className="text-xs text-text-muted">Rows per page</span>
+            <select aria-label="Rows per page" value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setOffset(0); }}
+              className="rounded-[var(--radius)] border border-border bg-bg-input px-3 py-1.5 text-sm text-text">
+              {LIMIT_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+          <button type="button" onClick={() => { setSort("default"); setDir("desc"); setOffset(0); }}
+            className="rounded-[var(--radius-pill)] border border-border bg-bg-input px-3 py-1.5 text-xs text-text-muted">
+            Default order
+          </button>
+        </div>
+        <p className="mt-3 text-xs text-text-muted">
+          Filters narrow only {symbol}&apos;s available snapshot ({response.parameters.dte.min}–{response.parameters.dte.max} DTE and configured delta bands).
+          They do not fetch more contracts or rerun generation. Refresh updates the snapshot.
+        </p>
+      </div>
+      {(error || applied.error) && (
+        <p role="alert" className="rounded-[var(--radius)] border border-accent-red/40 bg-accent-red/10 px-3 py-2 text-xs text-accent-red">
+          {error || applied.error}
+        </p>
+      )}
+      {draft !== appliedDraft && !error && (
+        <p role="status" className="text-xs text-text-muted">Applying filters…</p>
+      )}
+      {(response.status === "stale" || response.cache?.chain_stale || response.cache?.refreshing ||
+        response.cache?.inputs_drift?.length || response.cache?.refresh_error || response.cache?.chain_refresh_error) && (
+        <p role="status" className="rounded-[var(--radius)] border border-accent-orange/40 bg-accent-orange/10 px-3 py-2 text-xs text-accent-orange">
+          {response.status === "stale" || response.cache?.chain_stale ? "Snapshot / chain is stale. " : ""}
+          {response.cache?.refreshing ? "Server refresh is in progress; this is the previous snapshot. " : ""}
+          {response.cache?.inputs_drift?.length ? `Inputs changed since generation: ${response.cache.inputs_drift.join(", ")}. ` : ""}
+          {[response.cache?.refresh_error, response.cache?.chain_refresh_error].filter(Boolean).join("; ")}
+        </p>
+      )}
+      <OptionsTable symbol={symbol} side={side} data={data} rows={rows}
+        category={response.parameters.category.label} chainStale={response.cache?.chain_stale === true}
+        underlyingPrice={price} sort={sort} dir={dir} onSort={onSort} />
+      <OptionsPagination offset={pageOffset} limit={limit} total={filtered.length} returned={rows.length}
+        hasMore={pageOffset + rows.length < filtered.length} onPage={setOffset} />
+    </div>
   );
 }
 
@@ -557,8 +684,7 @@ function BestOptionsContent({ symbol }: { symbol: string }) {
               </span>
             )}
           </div>
-          <OptionsTable symbol={symbol} side="call" data={state.data.calls} underlyingPrice={state.data.parameters.underlying.price} />
-          <OptionsTable symbol={symbol} side="put" data={state.data.puts} underlyingPrice={state.data.parameters.underlying.price} />
+          <SnapshotResults symbol={symbol} response={state.data} />
         </div>
       )}
     </div>

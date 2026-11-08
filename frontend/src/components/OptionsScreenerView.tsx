@@ -2,11 +2,13 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RefreshCw, ListFilter, ChevronLeft, ChevronRight, ArrowUp, ArrowDown } from "lucide-react";
+import { RefreshCw, ListFilter } from "lucide-react";
 import MultiSelect, { type MultiSelectOption } from "@/components/MultiSelect";
+import { DEFAULT_PREFERENCES, LIMIT_OPTIONS, PREFERENCE_OPTIONS, OptionsNumericFilters, OptionsPagination, OptionsSideTabs, OptionsSortHeader, type NumericDraft } from "@/components/OptionsPresentation";
 import ContractValidationAction from "@/components/ContractValidationAction";
 import { preferenceRowTint } from "@/lib/badges";
 import { ColorBadge, flagLabel, fmtNum, fmtPct, fmtExpiration, calcGap, fmtGapPct } from "@/lib/options-row-format";
+import { parseOptionsNumericFilters } from "@/lib/best-options-presentation";
 import type {
   ScreenerOptionRow,
   ScreenerOptionsApiResponse,
@@ -32,38 +34,20 @@ function isScreenerEligible(r: SymbolRow): boolean {
   return r.screener_eligible === true;
 }
 
-const PREFERENCE_OPTIONS: MultiSelectOption[] = [
-  { value: "Preferred", label: "Preferred" },
-  { value: "Acceptable", label: "Acceptable" },
-  { value: "Avoid", label: "Avoid" },
-];
 const SHARE_AVAILABILITY_OPTIONS: MultiSelectOption[] = [
   { value: "available", label: "✅ 100+ shares free" },
   { value: "shares_committed", label: "🔒 Shares committed" },
   { value: "no_shares", label: "⚠️ <100 total shares" },
   { value: "unknown", label: "⚠️ Availability unknown" },
 ];
-const DEFAULT_PREFERENCES: ScreenerPreference[] = ["Preferred", "Acceptable"];
 const DEFAULT_DTE_MIN = 0;
 const DEFAULT_DTE_MAX = 45;
 const DEFAULT_LIMIT = 100;
-const LIMIT_OPTIONS = [25, 50, 100, 250, 500];
 const DEBOUNCE_MS = 400;
 
 /** Numeric filter draft — free-text so a user can clear/retype a field
  * without fighting a coerced value; parsed to a number (or `undefined` for
  * "unset") only once debounced into `applied` below. */
-interface NumericDraft {
-  minAnnualizedReturn: string;
-  minAbsDelta: string;
-  maxAbsDelta: string;
-  minDte: string;
-  maxDte: string;
-  minOi: string;
-  minGapPct: string;
-  maxGapPct: string;
-}
-
 const EMPTY_DRAFT: NumericDraft = {
   minAnnualizedReturn: "",
   minAbsDelta: "",
@@ -107,13 +91,6 @@ const DEFAULT_APPLIED: AppliedFilters = {
   offset: 0,
   limit: DEFAULT_LIMIT,
 };
-
-function parseNum(v: string): number | undefined {
-  const t = v.trim();
-  if (!t) return undefined;
-  const n = Number(t);
-  return isFinite(n) ? n : undefined;
-}
 
 function buildQuery(applied: AppliedFilters): string {
   const p = new URLSearchParams();
@@ -174,18 +151,8 @@ function SortableHeader({
   applied: AppliedFilters;
   onSort: (field: ScreenerSortField) => void;
 }) {
-  const active = applied.sort === field;
   return (
-    <th className={`border-b border-border px-2 py-1 text-${align}`}>
-      <button
-        type="button"
-        onClick={() => onSort(field)}
-        className={`inline-flex items-center gap-0.5 ${active ? "font-semibold text-text" : "text-text-muted hover:text-text"}`}
-      >
-        {label}
-        {active && (applied.dir === "asc" ? <ArrowUp size={11} /> : <ArrowDown size={11} />)}
-      </button>
-    </th>
+    <OptionsSortHeader field={field} label={label} align={align} sort={applied.sort} dir={applied.dir} onSort={onSort} />
   );
 }
 
@@ -262,36 +229,22 @@ export default function OptionsScreenerView() {
   useEffect(() => {
     if (draftTimer.current) clearTimeout(draftTimer.current);
     draftTimer.current = setTimeout(() => {
-      // Validate gap filters
-      const minGap = parseNum(draft.minGapPct);
-      const maxGap = parseNum(draft.maxGapPct);
-
-      // Bounds check [-100, 200]
-      if (minGap != null && (minGap < -100 || minGap > 200)) {
-        setFilterError("Min gap % must be between -100 and 200");
-        return;
-      }
-      if (maxGap != null && (maxGap < -100 || maxGap > 200)) {
-        setFilterError("Max gap % must be between -100 and 200");
-        return;
-      }
-
-      // Min <= Max check
-      if (minGap != null && maxGap != null && minGap > maxGap) {
-        setFilterError("Min gap % cannot exceed max gap %");
+      const { filters, error } = parseOptionsNumericFilters(draft, { min: DEFAULT_DTE_MIN, max: DEFAULT_DTE_MAX });
+      if (error) {
+        setFilterError(error);
         return;
       }
 
       setFilterError(null);
       setFilter({
-        minAnnualizedReturn: parseNum(draft.minAnnualizedReturn),
-        minAbsDelta: parseNum(draft.minAbsDelta),
-        maxAbsDelta: parseNum(draft.maxAbsDelta),
-        minDte: parseNum(draft.minDte) ?? DEFAULT_DTE_MIN,
-        maxDte: parseNum(draft.maxDte) ?? DEFAULT_DTE_MAX,
-        minOi: parseNum(draft.minOi),
-        minGapPct: minGap,
-        maxGapPct: maxGap,
+        minAnnualizedReturn: filters.minAnnualizedReturn,
+        minAbsDelta: filters.minAbsDelta,
+        maxAbsDelta: filters.maxAbsDelta,
+        minDte: filters.minDte ?? DEFAULT_DTE_MIN,
+        maxDte: filters.maxDte ?? DEFAULT_DTE_MAX,
+        minOi: filters.minOi,
+        minGapPct: filters.minGapPct,
+        maxGapPct: filters.maxGapPct,
       });
     }, DEBOUNCE_MS);
     return () => {
@@ -388,20 +341,7 @@ export default function OptionsScreenerView() {
           renders as a per-row badge for symbols that can't currently cover,
           and a Share Availability filter widget (Calls tab only) lets the
           user narrow by availability state. */}
-      <div className="flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1">
-        {(["call", "put"] as ScreenerSide[]).map((s) => (
-          <button
-            key={s}
-            type="button"
-            onClick={() => setFilter({ side: s })}
-            className={`rounded-[var(--radius-pill)] px-4 py-1.5 text-sm transition ${
-              applied.side === s ? "bg-accent-blue text-white" : "text-text-muted hover:text-text"
-            }`}
-          >
-            {s === "call" ? "Covered Calls" : "Cash-Secured Puts"}
-          </button>
-        ))}
-      </div>
+      <OptionsSideTabs side={applied.side} onChange={(side) => setFilter({ side })} />
 
       <div className="surface p-4">
         <div className="mb-3 flex items-center justify-between">
@@ -442,96 +382,7 @@ export default function OptionsScreenerView() {
               />
             </div>
           )}
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-text-muted">Min ann. return %</span>
-            <input
-              type="number"
-              inputMode="decimal"
-              value={draft.minAnnualizedReturn}
-              onChange={(e) => setDraft((d) => ({ ...d, minAnnualizedReturn: e.target.value }))}
-              placeholder="e.g. 15"
-              className="w-28 rounded-[var(--radius)] border border-border bg-bg-input px-3 py-1.5 text-sm text-text"
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-text-muted">|Δ| range</span>
-            <div className="flex items-center gap-1">
-              <input
-                type="number"
-                inputMode="decimal"
-                step="0.01"
-                value={draft.minAbsDelta}
-                onChange={(e) => setDraft((d) => ({ ...d, minAbsDelta: e.target.value }))}
-                placeholder="min"
-                className="w-20 rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1.5 text-sm text-text"
-              />
-              <span className="text-text-muted">–</span>
-              <input
-                type="number"
-                inputMode="decimal"
-                step="0.01"
-                value={draft.maxAbsDelta}
-                onChange={(e) => setDraft((d) => ({ ...d, maxAbsDelta: e.target.value }))}
-                placeholder="max"
-                className="w-20 rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1.5 text-sm text-text"
-              />
-            </div>
-          </div>
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-text-muted">DTE range</span>
-            <div className="flex items-center gap-1">
-              <input
-                type="number"
-                inputMode="numeric"
-                value={draft.minDte}
-                onChange={(e) => setDraft((d) => ({ ...d, minDte: e.target.value }))}
-                className="w-16 rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1.5 text-sm text-text"
-              />
-              <span className="text-text-muted">–</span>
-              <input
-                type="number"
-                inputMode="numeric"
-                value={draft.maxDte}
-                onChange={(e) => setDraft((d) => ({ ...d, maxDte: e.target.value }))}
-                className="w-16 rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1.5 text-sm text-text"
-              />
-            </div>
-          </div>
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-text-muted">Min open interest</span>
-            <input
-              type="number"
-              inputMode="numeric"
-              value={draft.minOi}
-              onChange={(e) => setDraft((d) => ({ ...d, minOi: e.target.value }))}
-              placeholder="e.g. 100"
-              className="w-24 rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1.5 text-sm text-text"
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-text-muted">Min gap %</span>
-            <input
-              type="number"
-              inputMode="decimal"
-              value={draft.minGapPct}
-              onChange={(e) => setDraft((d) => ({ ...d, minGapPct: e.target.value }))}
-              placeholder="e.g. -10"
-              className="w-24 rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1.5 text-sm text-text"
-              aria-label="Minimum gap percentage (-100 to 200)"
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <span className="text-xs text-text-muted">Max gap %</span>
-            <input
-              type="number"
-              inputMode="decimal"
-              value={draft.maxGapPct}
-              onChange={(e) => setDraft((d) => ({ ...d, maxGapPct: e.target.value }))}
-              placeholder="e.g. 10"
-              className="w-24 rounded-[var(--radius)] border border-border bg-bg-input px-2 py-1.5 text-sm text-text"
-              aria-label="Maximum gap percentage (-100 to 200)"
-            />
-          </div>
+          <OptionsNumericFilters draft={draft} onChange={(field, value) => setDraft((d) => ({ ...d, [field]: value }))} />
           <div className="flex flex-col gap-1">
             <span className="text-xs text-text-muted">Rows per page</span>
             <select
@@ -775,31 +626,8 @@ function ResultsTable({
         </details>
       )}
 
-      <div className="flex items-center justify-between text-xs text-text-muted">
-        <span>
-          {pagination.total_matching === 0
-            ? "0 results"
-            : `${pagination.offset + 1}–${pagination.offset + pagination.returned} of ${pagination.total_matching}`}
-        </span>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => onPage(Math.max(0, pagination.offset - pagination.limit))}
-            disabled={pagination.offset === 0}
-            className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-input px-2.5 py-1 disabled:opacity-40"
-          >
-            <ChevronLeft size={13} /> Prev
-          </button>
-          <button
-            type="button"
-            onClick={() => onPage(pagination.offset + pagination.limit)}
-            disabled={!pagination.has_more}
-            className="inline-flex items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-input px-2.5 py-1 disabled:opacity-40"
-          >
-            Next <ChevronRight size={13} />
-          </button>
-        </div>
-      </div>
+      <OptionsPagination offset={pagination.offset} limit={pagination.limit} total={pagination.total_matching}
+        returned={pagination.returned} hasMore={pagination.has_more} onPage={onPage} />
     </section>
   );
 }

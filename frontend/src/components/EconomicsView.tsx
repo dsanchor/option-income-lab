@@ -26,7 +26,7 @@ import {
 import Reveal from "@/components/Reveal";
 import StatCard from "@/components/StatCard";
 import { getAccountName } from "@/lib/accountDisplay";
-import { averageLastNExcludingZero } from "@/lib/format";
+import { averageCompletedMonthsExcludingZero, averageLastNExcludingZero } from "@/lib/format";
 import { getMovements, listAccounts } from "@/lib/portfolio-api";
 import MovementDetailDialog from "@/components/MovementDetailDialog";
 import type { BrokerAccount, LedgerMovement } from "@/types/portfolio";
@@ -982,11 +982,11 @@ export default function EconomicsView({
     [data?.monthly],
   );
   const avgLast6 = useMemo(
-    () => averageLastNExcludingZero(data?.monthly.map((row) => row.net_income_eur) ?? [], 6),
+    () => averageCompletedMonthsExcludingZero(data?.monthly ?? [], (row) => row.net_income_eur, 6),
     [data?.monthly],
   );
   const avgLast3 = useMemo(
-    () => averageLastNExcludingZero(data?.monthly.map((row) => row.net_income_eur) ?? [], 3),
+    () => averageCompletedMonthsExcludingZero(data?.monthly ?? [], (row) => row.net_income_eur, 3),
     [data?.monthly],
   );
 
