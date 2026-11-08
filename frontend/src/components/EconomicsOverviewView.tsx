@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -874,6 +874,7 @@ export default function EconomicsOverviewView() {
   const coverage = data?.summary.options_coverage;
 
   const [selectedPassiveIncomeYears, setSelectedPassiveIncomeYears] = useState<Set<number>>(new Set());
+  const passiveIncomeNoneSelected = useRef(false);
   const passiveIncomeRows = useMemo(() => comparisonData?.monthly ?? [], [comparisonData]);
   const availablePassiveIncomeYears = useMemo(
     () => Array.from(new Set(passiveIncomeRows.map((row) => parseYearMonth(row.month).year))).sort((a, b) => a - b),
@@ -883,6 +884,7 @@ export default function EconomicsOverviewView() {
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setSelectedPassiveIncomeYears((prev) => {
+        if (passiveIncomeNoneSelected.current && prev.size === 0) return prev;
         const stillValid = prev.size > 0 && Array.from(prev).every((y) => availablePassiveIncomeYears.includes(y));
         return stillValid ? prev : new Set(availablePassiveIncomeYears);
       });
@@ -891,6 +893,7 @@ export default function EconomicsOverviewView() {
   }, [availablePassiveIncomeYears]);
 
   function togglePassiveIncomeYear(yearValue: number) {
+    passiveIncomeNoneSelected.current = false;
     setSelectedPassiveIncomeYears((prev) => {
       const next = new Set(prev);
       if (next.has(yearValue)) next.delete(yearValue);
@@ -1002,10 +1005,27 @@ export default function EconomicsOverviewView() {
               <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-base font-semibold">Passive Income — Year Comparison</h2>
                 <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    aria-label="None — deselect all comparison years"
+                    aria-pressed={selectedPassiveIncomeYears.size === 0}
+                    onClick={() => {
+                      passiveIncomeNoneSelected.current = true;
+                      setSelectedPassiveIncomeYears(new Set());
+                    }}
+                    className={`rounded-[var(--radius-pill)] border px-2.5 py-0.5 text-xs transition-colors ${
+                      selectedPassiveIncomeYears.size === 0
+                        ? "border-accent-blue/40 bg-accent-blue/15 text-accent-blue"
+                        : "border-border bg-bg-input text-text-muted hover:text-text"
+                    }`}
+                  >
+                    None
+                  </button>
                   {availablePassiveIncomeYears.map((yearValue) => (
                     <button
                       key={yearValue}
                       type="button"
+                      aria-pressed={selectedPassiveIncomeYears.has(yearValue)}
                       onClick={() => togglePassiveIncomeYear(yearValue)}
                       className={`rounded-[var(--radius-pill)] border px-2.5 py-0.5 text-xs transition-colors ${
                         selectedPassiveIncomeYears.has(yearValue)

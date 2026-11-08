@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import EconomicsTabs from "@/components/EconomicsTabs";
 import MultiSelect from "@/components/MultiSelect";
 import Reveal from "@/components/Reveal";
@@ -1040,6 +1040,7 @@ export default function DividendsView() {
   const [comparisonData, setComparisonData] = useState<DividendsReport | null>(null);
   const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
   const [selectedYoyYears, setSelectedYoyYears] = useState<Set<number>>(new Set());
+  const yoyNoneSelected = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -1112,6 +1113,7 @@ export default function DividendsView() {
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setSelectedYoyYears((prev) => {
+        if (yoyNoneSelected.current && prev.size === 0) return prev;
         const stillValid = prev.size > 0 && Array.from(prev).every((y) => availableYoyYears.includes(y));
         return stillValid ? prev : new Set(availableYoyYears);
       });
@@ -1120,6 +1122,7 @@ export default function DividendsView() {
   }, [availableYoyYears]);
 
   function toggleYoyYear(yearValue: number) {
+    yoyNoneSelected.current = false;
     setSelectedYoyYears((prev) => {
       const next = new Set(prev);
       if (next.has(yearValue)) next.delete(yearValue);
@@ -1209,10 +1212,27 @@ export default function DividendsView() {
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-medium text-text-muted">Year-over-Year Monthly Comparison</h3>
                   <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      aria-label="None — deselect all comparison years"
+                      aria-pressed={selectedYoyYears.size === 0}
+                      onClick={() => {
+                        yoyNoneSelected.current = true;
+                        setSelectedYoyYears(new Set());
+                      }}
+                      className={`rounded-[var(--radius-pill)] border px-2.5 py-0.5 text-xs transition-colors ${
+                        selectedYoyYears.size === 0
+                          ? "border-accent-blue/40 bg-accent-blue/15 text-accent-blue"
+                          : "border-border bg-bg-input text-text-muted hover:text-text"
+                      }`}
+                    >
+                      None
+                    </button>
                     {availableYoyYears.map((yearValue) => (
                       <button
                         key={yearValue}
                         type="button"
+                        aria-pressed={selectedYoyYears.has(yearValue)}
                         onClick={() => toggleYoyYear(yearValue)}
                         className={`rounded-[var(--radius-pill)] border px-2.5 py-0.5 text-xs transition-colors ${
                           selectedYoyYears.has(yearValue)
