@@ -6,7 +6,15 @@ import { symbolsViewQueryOptions } from "@/lib/symbols-overview-query";
 import { usd, timeAgo } from "@/lib/format";
 import SymbolsTable from "@/components/SymbolsTable";
 import AddSymbolForm from "@/components/AddSymbolForm";
-import type { SymbolRow, PortfolioSummary, SymbolsViewMode } from "@/types/symbols";
+import type { SymbolRow, PortfolioSummary, SymbolsOverview, SymbolsViewMode } from "@/types/symbols";
+
+function overviewRows(overview: SymbolsOverview | undefined): SymbolRow[] {
+  return overview?.symbols ??
+    (overview?.portfolio_rows || overview?.watchlist_rows
+      ? [...(overview.portfolio_rows ?? []), ...(overview.watchlist_rows ?? [])]
+      : null) ??
+    overview?.rows ?? [];
+}
 
 /** Format a EUR number (or string) for KPI display. */
 function kpiEur(v: number | string | null | undefined): string {
@@ -66,27 +74,19 @@ export default function SymbolsView() {
   const [activeView, setActiveView] = useState<SymbolsViewMode>("portfolio");
   const queryClient = useQueryClient();
   const query = useQuery(symbolsViewQueryOptions(activeView));
-  // Keep shared KPIs subscribed to Portfolio's cache without fetching an inactive view.
-  const portfolioSummary = useQuery({
+  // Subscribe to shared KPIs without fetching the inactive Portfolio view.
+  const portfolioCache = useQuery({
     ...symbolsViewQueryOptions("portfolio"),
     enabled: false,
-    select: (overview) => overview.portfolio_summary,
   });
   const d = query.data ?? {};
   const invalidateViews = () => {
     void queryClient.invalidateQueries({ queryKey: ["symbols-overview"] });
   };
 
-  // Unified list: prefer Livingston's `symbols[]`, then legacy sectioned arrays, then flat rows
-  const allSymbols: SymbolRow[] =
-    d.symbols ??
-    (d.portfolio_rows || d.watchlist_rows
-      ? [...(d.portfolio_rows ?? []), ...(d.watchlist_rows ?? [])]
-      : null) ??
-    d.rows ??
-    [];
+  const allSymbols = overviewRows(query.data);
 
-  const ps: PortfolioSummary | null | undefined = portfolioSummary.data;
+  const ps: PortfolioSummary | null | undefined = portfolioCache.data?.portfolio_summary;
   // Resolve field names across both backend contracts
   const totalInvestment = ps?.total_investment_eur ?? (ps?.remaining_cost_basis_eur != null ? parseFloat(ps.remaining_cost_basis_eur) : null);
   const netGains = ps?.net_gains_eur ?? (ps?.realized_result_eur != null ? parseFloat(ps.realized_result_eur) : null);

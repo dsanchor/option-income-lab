@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import vm from "node:vm";
 import test from "node:test";
@@ -41,15 +41,160 @@ function cell(summary, horizon = "1d", error) {
   }));
 }
 
-test("three views preserve native Price and forecast all filtered Symbols without historical hiding", () => {
+test("three views preserve native Price and forecast the shared historical-filtered Symbols", () => {
   assert.match(table, /\["portfolio", "options", "forecast"\]/);
-  assert.match(table, /hideHistorical && viewMode !== "forecast"/);
-  assert.match(table, /viewMode === "forecast" && filtered\.map\(renderRow\)/);
+  assert.doesNotMatch(table, /hideHistorical && viewMode !== "forecast"/);
+  assert.match(table, /viewMode === "forecast" && visibleRows\.map\(renderRow\)/);
   assert.match(table, /viewMode === "forecast" \|\| !optionFiltersAvailable \|\| matchesSymbolPositions/);
   assert.match(table, /viewMode !== "forecast" && optionFiltersAvailable && suitabilityFilter/);
   assert.match(table, /formatPrice\(r\.price, r\.price_display_currency\)/);
   assert.match(table, /\/forecasts\?range=90d/);
   assert.match(table, /forecasts\.data\?\.symbols\[r\.security_id \?\? r\.symbol\]/);
+});
+
+function symbolsTableHarness(rows) {
+  const state = [];
+  let hook = 0, tree, props = { rows, optionFiltersAvailable: false };
+  const react = {
+    ...React,
+    useState(initial) {
+      const index = hook++;
+      if (!(index in state)) state[index] = initial;
+      return [state[index], (next) => {
+        state[index] = typeof next === "function" ? next(state[index]) : next;
+      }];
+    },
+    useMemo: (fn) => fn(),
+    useCallback: (fn) => fn,
+  };
+  function loadModule(source) {
+    const loadedModule = { exports: {} };
+    const code = ts.transpileModule(source, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+    }).outputText;
+    vm.runInNewContext(code, {
+      exports: loadedModule.exports, module: loadedModule,
+      require(name) {
+        if (name === "react") return react;
+        if (name === "next/navigation") return { useRouter: () => ({ refresh() {} }) };
+        if (name === "next/link") return { default: ({ children, href }) => React.createElement("a", { href }, children) };
+        if (name === "sonner") return { toast: { error() {} } };
+        if (name === "lucide-react") return { Trash2: () => null };
+        if (name === "@/components/SymbolsForecastTable") return { ForecastBandCell };
+        if (name.startsWith("@/components/")) return {
+          default: () => null, OptionTimingValue: () => null, OptionTimingModal: () => null,
+        };
+        if (name.startsWith("@/")) {
+          const base = `../src/${name.slice(2)}`;
+          const url = [".ts", ".tsx"].map((ext) => new URL(base + ext, import.meta.url)).find((url) => existsSync(url));
+          return loadModule(readFileSync(url, "utf8"));
+        }
+        return require(name);
+      },
+    });
+    return loadedModule.exports;
+  }
+  const Component = loadModule(table).default;
+  function find(predicate, node) {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const child of node) { const found = find(predicate, child); if (found) return found; }
+      return;
+    }
+    return predicate(node) ? node : find(predicate, node.props?.children);
+  }
+  return {
+    render(next = {}) {
+      props = { ...props, ...next };
+      hook = 0;
+      tree = Component(props);
+      return renderToStaticMarkup(tree);
+    },
+    switchView(mode) {
+      find((node) => node.props?.role === "radio" && node.props.children === mode, tree).props.onClick();
+      return this.render();
+    },
+    checkbox() { return find((node) => node.props?.["aria-label"] === "Hide historical zero-share symbols", tree).props; },
+    check(checked) { this.checkbox().onChange({ target: { checked } }); return this.render(); },
+    search(value) {
+      find((node) => node.props?.placeholder === "🔍 Filter symbols…", tree).props.onChange({ target: { value } });
+      return this.render();
+    },
+  };
+}
+
+const historicalRows = [
+  { symbol: "SOLD", security_id: "sold", row_source: "portfolio", portfolio_shares: "0", is_historical: true },
+  { symbol: "SHORT", security_id: "short", row_source: "both", portfolio_shares: "-2", is_historical: true },
+  { symbol: "LIVE", security_id: "live", row_source: "portfolio", portfolio_shares: "10", is_historical: false },
+  { symbol: "WATCH", security_id: "watch", row_source: "watchlist", total_shares: 0, is_historical: false },
+  { symbol: "UNKNOWN", security_id: "unknown", total_shares: 0 },
+].map((row) => ({ category: "", momentum: "", entry_tag: "", in_calls: 0, put_exposure: 0, ...row }));
+const renderedSymbols = (html) => Array.from(html.matchAll(/aria-label="Delete (\w+) and all its data"/g), ([, symbol]) => symbol);
+
+test("shared checkbox defaults checked and enabled in all tabs, hides real historical holdings only, and retains explicit uncheck", () => {
+  const table = symbolsTableHarness(historicalRows);
+  table.render();
+  for (const mode of ["Portfolio", "Options", "Forecast"]) {
+    const html = table.switchView(mode);
+    assert.equal(table.checkbox().checked, true);
+    assert.ok(!table.checkbox().disabled);
+    assert.deepEqual(renderedSymbols(html).sort(), ["LIVE", "UNKNOWN", "WATCH"]);
+    assert.match(html, /Hide historical \(2\)/);
+    if (mode === "Forecast") {
+      assert.match(html, /3 symbols/);
+      assert.doesNotMatch(html, />Portfolio<\/td>|>Watchlist<\/td>/);
+    }
+  }
+  assert.equal(renderedSymbols(table.check(false)).length, 5);
+  for (const mode of ["Options", "Portfolio", "Forecast"]) {
+    assert.equal(renderedSymbols(table.switchView(mode)).length, 5);
+    assert.equal(table.checkbox().checked, false);
+  }
+  assert.equal(renderedSymbols(table.check(true)).length, 3);
+});
+
+test("Forecast historical-only search reports zero visible rows and no match, except while loading or failed", () => {
+  const table = symbolsTableHarness(historicalRows);
+  table.render();
+  table.switchView("Forecast");
+  const empty = table.search("SOLD");
+  assert.match(empty, /0 symbols/);
+  assert.match(empty, /No symbols match/);
+  assert.deepEqual(renderedSymbols(empty), []);
+  assert.doesNotMatch(table.render({ loading: true }), /No symbols match/);
+  assert.doesNotMatch(table.render({ loading: false, loadError: "failed" }), /No symbols match/);
+  table.render({ loadError: undefined });
+  const revealed = table.check(false);
+  assert.match(revealed, /1 symbols/);
+  assert.doesNotMatch(revealed, /No symbols match/);
+  assert.deepEqual(renderedSymbols(revealed), ["SOLD"]);
+});
+
+test("Forecast has only Symbol, native Price, four bands and Actions; other tabs retain Category/Momentum and cell alignment", () => {
+  const table = symbolsTableHarness([{ ...historicalRows[2], category: "SEARCH_CATEGORY", momentum: "Bullish" }]);
+  table.render({ forecastOverview: { symbols: {}, range: {} } });
+  for (const mode of ["Portfolio", "Options", "Forecast"]) {
+    const html = table.switchView(mode);
+    const headers = Array.from(html.matchAll(/<th\b[^>]*>([\s\S]*?)<\/th>/g), ([, content]) => content.replace(/<[^>]*>/g, "").replace(/[▲▼]/g, "").trim());
+    const row = html.match(/<tr\b[^>]*class="cursor-pointer[\s\S]*?<\/tr>/)[0];
+    assert.equal((row.match(/<td\b/g) ?? []).length, headers.length);
+    if (mode === "Forecast") {
+      assert.deepEqual(headers, ["Symbol", "Price", "1d", "1w", "2w", "4w", "Actions"]);
+      assert.doesNotMatch(row, /SEARCH_CATEGORY|Bullish/);
+      assert.doesNotMatch(html, /width:300px/);
+      const searched = table.search("SEARCH_CATEGORY");
+      assert.deepEqual(renderedSymbols(searched), ["LIVE"]);
+      const empty = table.search("absent");
+      assert.match(empty, /colSpan="7"/);
+      table.search("");
+    } else {
+      assert.ok(headers.includes("Category"));
+      assert.ok(headers.includes("Momentum"));
+      assert.match(row, /SEARCH_CATEGORY/);
+      assert.match(row, /Bullish/);
+    }
+  }
 });
 
 test("all four horizons show nominal inner/outer bands, 90d hits and sample/date/anchor hover", () => {
@@ -93,10 +238,16 @@ test("forecast prices retain raw USD/EUR/GBP/GBp units independently of overview
 
 test("all unavailable/noneligible/loading/error states are explicit", () => {
   for (const [summary, label] of [
-    [undefined, "Loading…"], [{ status: "not_eligible" }, "Not eligible"],
+    [undefined, "Loading…"], [{ status: "not_eligible" }, "Not elegible"],
     [{ status: "unavailable" }, "Forecast unavailable"], [{ status: "error" }, "Forecast error"],
   ]) assert.ok(cell(summary).includes(label));
   assert.match(cell(undefined, "1d", "failed"), /Forecast error/);
+});
+
+test("not-eligible forecasts show only Not elegible, with no inline reason or hover text", () => {
+  const html = cell({ status: "not_eligible", reason: "Verbose eligibility reason" });
+  assert.equal(html.replace(/<[^>]*>/g, ""), "Not elegible");
+  assert.doesNotMatch(html, /title=|Verbose eligibility reason/);
 });
 
 test("canonical ambiguity and corrupt bands surface per-Symbol reasons without rates", () => {
@@ -240,6 +391,7 @@ function symbolsViewHarness() {
   };
   return {
     client, observers,
+    get rows() { return tableProps.rows; },
     render() {
       hook = 0;
       const tree = loadedModule.exports.default();
@@ -271,6 +423,125 @@ const kpiCards = (html) => Array.from(
   html.matchAll(/text-xs text-text-muted mb-1">([^<]+)<\/div><div class="[^"]+">([^<]+)<\/div>/g),
   ([, label, value]) => [label, value],
 );
+
+test("active Forecast mutations refresh native classification despite invalidated Portfolio/Options caches", async (t) => {
+  const calls = [];
+  let inventoryChanged = false;
+  const forecastRows = () => historicalRows.map((row) => ({
+    ...row,
+    ...(inventoryChanged && row.security_id === "sold"
+      ? { is_historical: false, portfolio_shares: "10" } : {}),
+    ...(inventoryChanged && row.security_id === "live"
+      ? { is_historical: true, portfolio_shares: "0" } : {}),
+    category: "FORECAST",
+  }));
+  t.mock.method(globalThis, "fetch", async (url) => {
+    calls.push(url);
+    return { ok: true, json: async () => url.endsWith("forecast")
+      ? { rows: forecastRows() } : { symbols: historicalRows } };
+  });
+  const view = symbolsViewHarness();
+  t.after(() => view.close());
+  view.render();
+  await flush();
+  view.switchView("options");
+  await flush();
+  view.render();
+  assert.equal(view.rows[0].is_historical, true);
+  view.switchView("forecast");
+  await flush();
+  view.render();
+  assert.equal(view.rows.find((row) => row.security_id === "sold").is_historical, true);
+  assert.equal(view.rows.find((row) => row.security_id === "short").row_source, "both");
+  assert.equal(view.rows.find((row) => row.security_id === "watch").row_source, "watchlist");
+  assert.equal(view.rows[0].category, "FORECAST");
+  const table = symbolsTableHarness(view.rows);
+  table.render();
+  assert.deepEqual(renderedSymbols(table.switchView("Forecast")).sort(), ["LIVE", "UNKNOWN", "WATCH"]);
+
+  inventoryChanged = true;
+  view.mutate();
+  await flush();
+  view.render();
+  for (const mode of ["portfolio", "options"]) {
+    const cached = view.client.getQueryCache().find({ queryKey: ["symbols-overview", mode] });
+    assert.equal(cached.state.isInvalidated, true);
+    assert.equal(cached.isActive(), false);
+    assert.equal(cached.state.data.symbols[0].is_historical, true);
+    assert.equal(cached.state.data.symbols[2].is_historical, false);
+  }
+  assert.equal(view.rows.find((row) => row.security_id === "sold").is_historical, false);
+  assert.equal(view.rows.find((row) => row.security_id === "live").is_historical, true);
+  assert.equal(view.rows.find((row) => row.security_id === "short").row_source, "both");
+  assert.equal(view.rows.find((row) => row.security_id === "watch").is_historical, false);
+  const changed = table.render({ rows: view.rows });
+  assert.deepEqual(renderedSymbols(changed).sort(), ["SOLD", "UNKNOWN", "WATCH"]);
+  assert.match(changed, /3 symbols/);
+  assert.match(changed, /Hide historical \(2\)/);
+  assert.match(table.search("LIVE"), /0 symbols/);
+  assert.match(table.render(), /No symbols match/);
+  assert.deepEqual(renderedSymbols(table.search("SOLD")), ["SOLD"]);
+
+  inventoryChanged = false;
+  view.add();
+  await flush();
+  view.render();
+  table.render({ rows: view.rows });
+  assert.match(table.render(), /No symbols match/);
+  assert.deepEqual(renderedSymbols(table.search("")), ["LIVE", "UNKNOWN", "WATCH"]);
+
+  inventoryChanged = true;
+  view.refresh();
+  await flush();
+  view.render();
+  assert.equal(view.rows.find((row) => row.security_id === "sold").is_historical, false);
+  assert.equal(view.rows.find((row) => row.security_id === "live").is_historical, true);
+  assert.deepEqual(calls, [
+    "/api/symbols/overview?view=portfolio", "/api/symbols/overview?view=options",
+    "/api/symbols/overview?view=forecast", "/api/symbols/overview?view=forecast",
+    "/api/symbols/overview?view=forecast", "/api/symbols/overview?view=forecast",
+  ]);
+});
+
+test("a late initial Portfolio response cannot overwrite authoritative Forecast classification", async (t) => {
+  const calls = [], portfolio = deferred();
+  t.mock.method(globalThis, "fetch", (url) => {
+    calls.push(url);
+    return url.endsWith("portfolio") ? portfolio.promise : Promise.resolve({
+      ok: true, json: async () => ({ rows: [
+        { ...historicalRows[0], is_historical: false, portfolio_shares: "10" },
+        { ...historicalRows[0], security_id: "another-exchange", row_source: "watchlist", is_historical: false },
+        { ...historicalRows[0], security_id: null, row_source: undefined, is_historical: undefined, portfolio_shares: null },
+      ] }),
+    });
+  });
+  const view = symbolsViewHarness();
+  t.after(() => view.close());
+  view.render();
+  view.switchView("forecast");
+  await flush();
+  portfolio.resolve({ ok: true, json: async () => ({ rows: historicalRows }) });
+  await flush();
+  view.render();
+  assert.deepEqual(view.rows.map((row) => row.is_historical), [false, false, undefined]);
+  assert.equal(view.rows[1].row_source, "watchlist");
+  assert.deepEqual(calls, [
+    "/api/symbols/overview?view=portfolio", "/api/symbols/overview?view=forecast",
+  ]);
+});
+
+test("Forecast with no holdings-aware cache leaves unknown and zero-share watchlist rows visible", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => ({ ok: true, json: async () => ({ rows: [] }) }));
+  const view = symbolsViewHarness();
+  t.after(() => view.close());
+  view.render();
+  await flush();
+  view.client.setQueryData(["symbols-overview", "forecast"], {
+    rows: [historicalRows[3], historicalRows[4], { ...historicalRows[0], security_id: null, is_historical: false, row_source: "watchlist" }],
+  });
+  view.switchView("forecast");
+  assert.deepEqual(view.rows.map((row) => row.is_historical), [false, undefined, false]);
+});
 
 test("shared KPI cards retain Portfolio values through lazy Options/Forecast loading and errors; Portfolio refresh updates them", async (t) => {
   const calls = [];
@@ -342,7 +613,7 @@ test("cache subscription keeps KPIs current while mutations refetch only the act
   assert.equal(view.client.getQueryCache().find({ queryKey: ["symbols-overview", "portfolio"] }).isActive(), false);
   const updated = { ...portfolioSummary, total_dividends_eur: 75 };
   view.client.setQueryData(["symbols-overview", "portfolio"], { portfolio_summary: updated });
-  assert.equal(view.observers[1].getCurrentResult().data.total_dividends_eur, 75);
+  assert.equal(view.observers[1].getCurrentResult().data.portfolio_summary.total_dividends_eur, 75);
   const updatedCards = [...expectedCards.slice(0, 4), ["Net Dividends", "75,00\u00a0€"]];
   assert.deepEqual(kpiCards(view.render()), updatedCards);
   for (const mutate of [() => view.mutate(), () => view.add()]) {

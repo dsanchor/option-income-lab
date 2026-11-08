@@ -9,7 +9,7 @@
  * entry for the ticker at all (real equity trade history), regardless of
  * current share count. Zero/negative-share portfolio rows are marked
  * `is_historical` and hidden by default in the UI via a "Hide historical"
- * toggle scoped to the Portfolio section (see SymbolsTable.tsx), but the
+ * shared toggle in all three tabs (see SymbolsTable.tsx), but the
  * API itself never hides them and never sends/needs `include_zero_portfolio`.
  * "watchlist" = no holdings entry at all (option-only symbols, or symbols
  * whose only equity movements were soft-deleted/SUPERSEDED/VOIDED).

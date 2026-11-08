@@ -144,13 +144,13 @@ const COLUMNS: {
   nowrap?: true;
 }[] = [
   { key: "symbol",                   label: "Symbol",    width: "160px" },
-  { key: "category",                 label: "Category",  width: "110px" },
+  { key: "category",                 label: "Category",  modes: ["portfolio", "options"], width: "110px" },
   { key: "dgi_score",               label: "DGI",      modes: ["options"], align: "right", width: "64px",  nowrap: true },
   { key: "tech_timing",             label: "Tech",     modes: ["options"], align: "right", width: "64px",  nowrap: true },
   { key: "call_timing",             label: "CALL Timing", modes: ["options"], align: "right", width: "140px", nowrap: true },
   { key: "put_timing",              label: "PUT Timing", modes: ["options"], align: "right", width: "140px", nowrap: true },
   { key: "entry_tag",               label: "Entry",    modes: ["options"],                 width: "88px",  nowrap: true },
-  { key: "momentum",                 label: "Momentum",                                     width: "104px", nowrap: true },
+  { key: "momentum",                 label: "Momentum", modes: ["portfolio", "options"],      width: "104px", nowrap: true },
   { key: "price",                    label: "Price",     align: "right",                    width: "96px",  nowrap: true },
   { key: "price_eur",               label: "Price €",  align: "right", modes: ["portfolio"], width: "84px",  nowrap: true },
   { key: "portfolio_shares",         label: "Shares",   align: "right", modes: ["portfolio"], width: "72px",  nowrap: true },
@@ -323,7 +323,8 @@ export default function SymbolsTable({
   const cols = visibleColumns;
   // Computed min-width — sums each visible col's declared width + 52px Actions.
   // Updates atomically with viewMode so Options' compact set doesn't inherit Portfolio spacing.
-  const tableMinWidth = cols.reduce((sum, c) => sum + (c.width ? parseInt(c.width, 10) : 120), 52) + forecastColumnCount * 300;
+  // Forecast bands use their natural content width, not a forced 300px per horizon.
+  const tableMinWidth = cols.reduce((sum, c) => sum + (c.width ? parseInt(c.width, 10) : 120), 52);
 
   /** Switch view mode; reset sort key if it becomes hidden. */
   function changeViewMode(mode: ViewMode) {
@@ -362,12 +363,13 @@ export default function SymbolsTable({
   const portfolioFiltered = filtered.filter(isPortfolioRow);
   const watchlistFiltered = filtered.filter((r) => !isPortfolioRow(r));
   // "Hide historical" (default ON): fully-sold/negative-inventory portfolio
-  // rows are hidden from the Portfolio section by default; the toggle
+  // rows are hidden in every view by default; the shared toggle
   // reveals them. Never affects Watchlist rows or the API response.
   const portfolioHistoricalCount = portfolioFiltered.filter((r) => r.is_historical).length;
-  const portfolioVisible = hideHistorical && viewMode !== "forecast"
+  const portfolioVisible = hideHistorical
     ? portfolioFiltered.filter((r) => !r.is_historical)
     : portfolioFiltered;
+  const visibleRows = filtered.filter((r) => !hideHistorical || !isPortfolioRow(r) || !r.is_historical);
 
   // Row renderer closes over all component state — no prop threading needed
   function renderRow(r: SymbolRow) {
@@ -399,7 +401,9 @@ export default function SymbolsTable({
             {r.symbol}
           </Link>
         </td>
-        <td className="px-3 py-3"><Pill text={r.category} className={categoryClass(r.category)} /></td>
+        {viewMode !== "forecast" && (
+          <td className="px-3 py-3"><Pill text={r.category} className={categoryClass(r.category)} /></td>
+        )}
         {viewMode === "options" && (
           <td className="px-3 py-3 text-right font-mono whitespace-nowrap">{num(r.dgi_score)}</td>
         )}
@@ -422,7 +426,9 @@ export default function SymbolsTable({
         {viewMode === "options" && (
           <td className="px-3 py-3 whitespace-nowrap"><Pill text={r.entry_tag} className={entryClass(r.entry_tag)} /></td>
         )}
-        <td className="px-3 py-3 whitespace-nowrap"><Pill text={r.momentum} className={momentumClass(r.momentum)} /></td>
+        {viewMode !== "forecast" && (
+          <td className="px-3 py-3 whitespace-nowrap"><Pill text={r.momentum} className={momentumClass(r.momentum)} /></td>
+        )}
         <td className="px-3 py-3 text-right font-mono whitespace-nowrap">
           <span
             className={r.pricing_status === "stale" ? "opacity-60" : undefined}
@@ -674,14 +680,13 @@ export default function SymbolsTable({
           <input
             type="checkbox"
             checked={hideHistorical}
-            disabled={viewMode === "forecast"}
             onChange={(e) => setHideHistorical(e.target.checked)}
             aria-label="Hide historical zero-share symbols"
           />
           Hide historical{portfolioHistoricalCount > 0 ? ` (${portfolioHistoricalCount})` : ""}
         </label>
         <span className="ml-auto shrink-0 text-xs text-text-muted">
-          {viewMode === "forecast" ? `${filtered.length} symbols` : `${portfolioVisible.length} portfolio · ${watchlistFiltered.length} watchlist`}
+          {viewMode === "forecast" ? `${visibleRows.length} symbols` : `${portfolioVisible.length} portfolio · ${watchlistFiltered.length} watchlist`}
         </span>
         </div>
       </div>
@@ -709,7 +714,7 @@ export default function SymbolsTable({
             {cols.map((c) => (
               <col key={c.key} style={c.width ? { width: c.width } : undefined} />
             ))}
-            {viewMode === "forecast" && HORIZONS.map((h) => <col key={h} style={{ width: "300px" }} />)}
+            {viewMode === "forecast" && HORIZONS.map((h) => <col key={h} />)}
             <col style={{ width: "52px" }} />
           </colgroup>
           <thead>
@@ -736,7 +741,7 @@ export default function SymbolsTable({
                 </td>
               </tr>
             )}
-            {viewMode === "forecast" && filtered.map(renderRow)}
+            {viewMode === "forecast" && visibleRows.map(renderRow)}
             {viewMode !== "forecast" && portfolioVisible.length > 0 && (
               <tr>
                 <td

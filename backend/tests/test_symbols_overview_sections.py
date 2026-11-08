@@ -239,6 +239,112 @@ def _add_option(fake_cosmos, security_id: str, txn_type: str, account_id: str = 
     fake_cosmos.portfolio_container._store[did] = doc
 
 
+def test_forecast_native_classification_matches_active_holdings_and_refreshes(client, monkeypatch):
+    from web.app import _compute_symbols_overview
+
+    http, cosmos = client
+    tickers = ["LIVE", "SOLD", "SHORT", "WATCH", "OPTION", "DELETED", "SUPERSEDED", "VOIDED", "DIV", "TRANSFER"]
+    for ticker in tickers:
+        cosmos.container.seed_security(f"XNAS:{ticker}")
+        cosmos.container.seed_config(ticker, {
+            "security_id": f"XNAS:{ticker}",
+            "total_shares": 999 if ticker == "WATCH" else 0,
+            "_auto_enrolled": True,
+        })
+    cosmos.container.seed_config("LEGACY")
+    _add_buy(cosmos, "XNAS:LIVE")
+    _add_buy(cosmos, "XNAS:SOLD")
+    _add_sell(cosmos, "XNAS:SOLD")
+    _add_sell(cosmos, "XNAS:SHORT", quantity="2")
+    _add_option(cosmos, "XNAS:OPTION", "CALL_SELL")
+    _add_buy(cosmos, "XNAS:DELETED", deleted=True)
+    _add_buy(cosmos, "XNAS:SUPERSEDED", correction_status="SUPERSEDED")
+    _add_buy(cosmos, "XNAS:VOIDED", correction_status="VOIDED")
+    _add_buy(cosmos, "XNAS:DIV")
+    cosmos.portfolio_container._store["txn_DIV__unassigned"]["txn_type"] = "DIVIDEND"
+    _add_buy(cosmos, "XNAS:TRANSFER", account_id="source", quantity="12")
+    _add_sell(cosmos, "XNAS:TRANSFER", account_id="source", quantity="12")
+    cosmos.portfolio_container._store["txn_TRANSFER_source_sell"]["txn_type"] = "TRANSFER_OUT"
+    _add_buy(cosmos, "XNAS:TRANSFER", account_id="destination", quantity="12")
+    cosmos.portfolio_container._store["txn_TRANSFER_destination"]["txn_type"] = "TRANSFER_IN"
+    cosmos.container._store[("SOLD", "config_SOLD")]["watchlist"]["buy_tracker"] = True
+
+    def classification(rows):
+        return {
+            row["security_id"]: (row["row_source"], row["is_historical"], row["portfolio_shares"])
+            for row in rows if row.get("security_id")
+        }
+
+    portfolio = _compute_symbols_overview(cosmos, cosmos.portfolio_container, view="portfolio")
+    options = _compute_symbols_overview(cosmos, cosmos.portfolio_container, view="options")
+    assert classification(options["rows"]) == classification(portfolio["rows"])
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Forecast must not compute full holdings, options or valuation")
+
+    monkeypatch.setattr("src.portfolio.holdings_service.HoldingsService.compute_holdings", forbidden)
+    monkeypatch.setattr("src.option_timing_store.load_current_rows", forbidden)
+    monkeypatch.setattr("web.app._portfolio_valuation_fields", forbidden)
+    monkeypatch.setattr("web.app._build_share_availability_map", forbidden)
+    monkeypatch.setattr("web.app._build_symbols_forecast_overview", lambda *args: {"symbols": {}})
+    queries = []
+    original_query = cosmos.portfolio_container.query_items
+
+    def projected_query(**kwargs):
+        queries.append(kwargs["query"])
+        return (
+            {key: row[key] for key in ("security_id", "txn_type", "quantity") if key in row}
+            for row in original_query(**kwargs)
+        )
+
+    monkeypatch.setattr(cosmos.portfolio_container, "query_items", projected_query)
+    response = http.get("/api/symbols/overview?view=forecast")
+    assert response.status_code == 200
+    initial = response.json()
+    assert classification(initial["rows"]) == classification(portfolio["rows"])
+    assert classification(initial["rows"])["XNAS:SOLD"] == ("both", True, "0.000000")
+    assert classification(initial["rows"])["XNAS:WATCH"] == ("watchlist", False, None)
+    assert classification(initial["rows"])["XNAS:SHORT"] == ("portfolio", True, "-2.000000")
+    legacy = next(row for row in initial["rows"] if row["symbol"] == "LEGACY")
+    assert "row_source" not in legacy and "is_historical" not in legacy
+    assert "portfolio_summary" not in initial
+    assert all("option_timing" not in row for row in initial["rows"])
+
+    # Identical ticker, different canonical security: never borrow the holding.
+    current_symbols = cosmos.list_symbols()
+    cosmos.list_symbols = lambda: [
+        *current_symbols,
+        {"symbol": "SOLD", "security_id": "XNYS:SOLD"},
+    ]
+    _add_buy(cosmos, "XNAS:SOLD", quantity="10", doc_id="reopened")
+    _add_sell(cosmos, "XNAS:LIVE")
+    refreshed = http.get("/api/symbols/overview?view=forecast")
+    assert refreshed.status_code == 200
+    rows = classification(refreshed.json()["rows"])
+    assert rows["XNAS:SOLD"] == ("both", False, "10.000000")
+    assert rows["XNAS:LIVE"] == ("portfolio", True, "0.000000")
+    assert rows["XNYS:SOLD"] == ("watchlist", False, None)
+    assert len(queries) == 2
+    assert all("SELECT c.security_id, c.txn_type, c.quantity" in query for query in queries)
+    assert all("SELECT *" not in query for query in queries)
+
+
+@pytest.mark.parametrize("unavailable", ["missing", "query-error", "invalid-quantity"])
+def test_forecast_classification_failure_is_not_a_valid_empty_watchlist(client, monkeypatch, unavailable):
+    http, cosmos = client
+    if unavailable == "missing":
+        cosmos.portfolio_container = None
+    elif unavailable == "query-error":
+        def fail(**kwargs):
+            raise RuntimeError("storage failed")
+        monkeypatch.setattr(cosmos.portfolio_container, "query_items", fail)
+    else:
+        _add_buy(cosmos, "XNAS:LIVE", quantity="NaN")
+    response = http.get("/api/symbols/overview?view=forecast")
+    assert response.status_code == 503
+    assert response.json() == {"error": "Holdings classification is unavailable"}
+
+
 @pytest.mark.parametrize(
     ("shares", "positions", "open_options", "call_capacity"),
     [

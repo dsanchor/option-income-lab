@@ -1436,6 +1436,45 @@ from src.calendar_visibility import (  # noqa: E402
 )
 
 
+def _load_symbols_holdings_classification(portfolio_container):
+    """Read current equity membership/shares without FIFO, valuation or read-repair.
+
+    Uses the same active-ledger predicate as get_all_movements_for_holdings.
+    One cross-partition projected read per Forecast request; O(active movements)
+    arithmetic and O(securities) state, not a constant-cost holdings cache.
+    """
+    if portfolio_container is None:
+        raise RuntimeError("Holdings classification is unavailable")
+    from src.portfolio.models import OPTION_TXN_TYPES
+
+    query = (
+        "SELECT c.security_id, c.txn_type, c.quantity FROM c "
+        "WHERE c.doc_type = 'ledger_txn' "
+        "AND NOT IS_DEFINED(c.deleted_at) "
+        "AND (NOT IS_DEFINED(c.correction_status) OR c.correction_status = 'ACTIVE')"
+    )
+    shares_by_security = {}
+    try:
+        movements = portfolio_container.query_items(
+            query=query, enable_cross_partition_query=True,
+        )
+        for movement in movements:
+            security_id = movement.get("security_id")
+            txn_type = movement.get("txn_type")
+            if not security_id or txn_type in OPTION_TXN_TYPES:
+                continue
+            shares_by_security.setdefault(security_id, Decimal(0))
+            if txn_type in {"BUY", "SELL", "TRANSFER_IN", "TRANSFER_OUT"}:
+                quantity = _decimal_or_none(movement.get("quantity", "0"))
+                if quantity is None or not quantity.is_finite():
+                    raise ValueError("Invalid ledger quantity")
+                direction = 1 if txn_type in {"BUY", "TRANSFER_IN"} else -1
+                shares_by_security[security_id] += direction * quantity
+    except Exception as exc:
+        raise RuntimeError("Holdings classification is unavailable") from exc
+    return shares_by_security
+
+
 def _compute_symbols_overview(cosmos, portfolio_container=None, *, view=None):
     """View-model for the Symbols list page — Unified Watchlist (rev 6).
 
@@ -1468,6 +1507,10 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, *, view=None):
     needs_options = view in (None, "options")
     needs_portfolio = view in (None, "portfolio")
     needs_holdings = view != "forecast"
+    forecast_shares = (
+        _load_symbols_holdings_classification(portfolio_container)
+        if view == "forecast" else None
+    )
     from src.option_timing_store import load_current_rows, read_current
     timing_rows, timing_error = load_current_rows(cosmos) if needs_options else ({}, None)
 
@@ -1548,6 +1591,11 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, *, view=None):
 
         # Resolve portfolio_shares for classification
         portfolio_shares_str: str | None = holding.get("total_shares") if holding else None
+        security_id = s.get("security_id")
+        if forecast_shares is not None and security_id in forecast_shares:
+            portfolio_shares_str = str(forecast_shares[security_id].quantize(
+                Decimal("0.000001"), rounding=ROUND_HALF_UP,
+            ))
 
         if portfolio_shares_str is not None:
             try:
@@ -1565,7 +1613,10 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, *, view=None):
         # movements were soft-deleted/SUPERSEDED/VOIDED). Nothing is ever
         # hidden by the API — the frontend applies its own default-on
         # "Hide historical" filter using is_historical.
-        is_portfolio = holding is not None
+        is_portfolio = (
+            security_id in forecast_shares
+            if forecast_shares is not None else holding is not None
+        )
         is_historical = shares_val is not None and shares_val <= 0
 
         # Determine row_source
@@ -1629,6 +1680,11 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, *, view=None):
                 timing_rows.get(sym), read_error=timing_error,
             ) if needs_options else None,
         }
+        if forecast_shares is not None and not security_id:
+            # Legacy ticker-only rows cannot be joined safely across exchanges.
+            # Omitted classification is unknown, not an authoritative watchlist.
+            for field in ("list_section", "row_source", "is_historical"):
+                row.pop(field, None)
 
         # ── Pricing cache fields (Phase 3, contract §8) ────────────────────
         pc = s.get("pricing_cache") or {}
@@ -1676,8 +1732,8 @@ def _compute_symbols_overview(cosmos, portfolio_container=None, *, view=None):
     )
 
     # Legacy section splits (preserved for atomic frontend rollout)
-    portfolio_rows = [r for r in all_rows if r["list_section"] == "portfolio"]
-    watchlist_rows = [r for r in all_rows if r["list_section"] == "watchlist"]
+    portfolio_rows = [r for r in all_rows if r.get("list_section") == "portfolio"]
+    watchlist_rows = [r for r in all_rows if r.get("list_section") == "watchlist"]
 
     # Portfolio-wide summary (§2.3) — computed over ALL holdings, unaffected by row filter
     portfolio_summary: Dict[str, Any] | None = None

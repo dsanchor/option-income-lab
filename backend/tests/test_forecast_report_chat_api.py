@@ -851,7 +851,15 @@ def test_symbols_scoped_views_defer_inactive_backend_work_and_preserve_legacy(cl
         "pricing_cache": {"status": "ok", "price_major": 105, "price_currency": "USD", "quote_currency": "USD"},
     }
     cosmos.container = object()
-    cosmos.portfolio_container = object()
+    class ClassificationContainer:
+        def __init__(self):
+            self.queries = []
+
+        def query_items(self, **kwargs):
+            self.queries.append(kwargs["query"])
+            return []
+
+    cosmos.portfolio_container = ClassificationContainer()
     calls = {"holdings": 0, "timing": 0, "screener": 0, "availability": 0, "valuation": 0, "forecasts": 0}
 
     class Holdings:
@@ -914,6 +922,9 @@ def test_symbols_scoped_views_defer_inactive_backend_work_and_preserve_legacy(cl
     assert forecast.json()["forecast_overview"]["symbols"]["XNAS:MSFT"]["status"] == "ok"
     assert "portfolio_summary" not in forecast.json()
     assert "option_timing" not in forecast.json()["rows"][0]
+    assert len(cosmos.portfolio_container.queries) == 1
+    assert "SELECT c.security_id, c.txn_type, c.quantity" in cosmos.portfolio_container.queries[0]
+    assert forecast.json()["rows"][0]["is_historical"] is False
 
     legacy = client.get("/api/symbols/overview")
     assert legacy.status_code == 200

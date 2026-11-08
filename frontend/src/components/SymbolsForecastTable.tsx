@@ -16,10 +16,12 @@ export function ForecastBandCell({
   error?: string;
   formatPrice: (price: number | null | undefined, currency: string | null | undefined) => string;
 }) {
+  if (summary?.status === "not_eligible") {
+    return <td className="px-3 py-3 text-xs text-text-muted">Not elegible</td>;
+  }
   if (!summary || summary.status !== "ok" || !summary.latest) {
     const label = error ? "Forecast error" : !summary ? "Loading…" :
-      summary.status === "not_eligible" ? "Not eligible" :
-        summary.status === "error" ? "Forecast error" : "Forecast unavailable";
+      summary.status === "error" ? "Forecast error" : "Forecast unavailable";
     return <td className="px-3 py-3 text-xs text-text-muted" title={error ?? summary?.reason}>
       {label}
       {summary?.reason && <div>{summary.reason}</div>}
