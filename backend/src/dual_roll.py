@@ -17,6 +17,16 @@ from .position_contracts import PositionContractCountError, resolve_open_contrac
 AlternativeId = Literal["DEFENSIVE", "CREDIT_EXTENDED"]
 
 
+class RollExpiryCheck(TypedDict):
+    expiration: str
+    status: Literal["available", "no_candidate", "incomplete_data"]
+    reasons: list[str]
+    bid: float | None
+    ask: float | None
+    buyback_ask: float
+    quote_asof: str | None
+
+
 class RollAlternative(TypedDict, total=False):
     alternative_id: AlternativeId
     status: str
@@ -27,6 +37,7 @@ class RollAlternative(TypedDict, total=False):
     roll_economics: dict
     quote: dict
     advisory_only: bool
+    expiry_checks: list[RollExpiryCheck]
 
 
 def _date(value) -> date | None:
@@ -102,11 +113,14 @@ def build_roll_alternatives(
     assessment: dict,
     now: datetime,
     market_data: dict | None = None,
+    source_chain: dict | None = None,
 ) -> dict | None:
     """Keep the selected defensive destination; search its strike by expiry, not credit.
 
     ``chain`` must be the agent-view, type/position/delta-filtered chain used by
     the existing roll search. Unknown quote freshness/calendar data fails closed.
+    ``source_chain`` is the normalized pre-filter chain, for diagnostics ONLY:
+    an excluded contract can explain a rejection but cannot become eligible.
     All credit values are estimates before commissions, not fill guarantees.
     """
     option_type = position.get("type")
@@ -253,43 +267,88 @@ def build_roll_alternatives(
         extended.update(status="no_candidate", reason="Existing event/fundamental safety gate blocks extension.")
         return result
 
-    bucket = chain.get("calls" if option_type == "call" else "puts") or {}
-    expirations = sorted({parsed for key in bucket if (parsed := _date(key)) is not None})
+    side = "calls" if option_type == "call" else "puts"
+    expiry_keys = set(chain.get(side) or {}) | set((source_chain or {}).get(side) or {})
+    expirations = sorted({parsed for key in expiry_keys if (parsed := _date(key)) is not None})
     later = [exp for exp in expirations if exp > max(held_expiry, expiry) and 0 < (exp - today).days <= 90]
     if not later:
         extended.update(status="incomplete_data", reason="No later expiry data within 90 DTE; eligibility cannot be established.")
         return result
 
     missing_data = False
+    checks: list[RollExpiryCheck] = []
+    extended["expiry_checks"] = checks
     for candidate_expiry in later:
+        contract = get_contract(chain, strike, candidate_expiry.isoformat(), option_type)
+        observed = contract if contract is not None else get_contract(
+            source_chain, strike, candidate_expiry.isoformat(), option_type,
+        )
+        meta = observed.get("_meta") if isinstance(observed, dict) else None
+        quote_asof = meta.get("quote_asof") if isinstance(meta, dict) else None
+        check: RollExpiryCheck = {
+            "expiration": candidate_expiry.isoformat(),
+            "status": "no_candidate",
+            "reasons": [],
+            "bid": usable_quote(observed, "bid"),
+            "ask": usable_quote(observed, "ask"),
+            "buyback_ask": ask,
+            "quote_asof": quote_asof if isinstance(quote_asof, str) else None,
+        }
+        checks.append(check)
         gap = (candidate_expiry - earnings_date).days
         # Existing pre-earnings buffer and post-earnings stabilization rules.
         # The conditional 8–13-day exception needs evidence we cannot infer.
         if -2 <= gap <= 7:
+            check["reasons"].append("Expiry falls inside the existing earnings safety buffer.")
             continue
         if 8 <= gap <= 13:
             missing_data = True
+            check["status"] = "incomplete_data"
+            check["reasons"].append("Post-earnings 8–13-day exception requires evidence not established by this search.")
             continue
         if option_type == "call" and ex_dividend and today <= ex_dividend <= candidate_expiry:
+            check["reasons"].append("Expiry crosses the existing ex-dividend safety gate.")
             continue
-        contract = get_contract(chain, strike, candidate_expiry.isoformat(), option_type)
+        if observed is None:
+            check["status"] = "incomplete_data"
+            check["reasons"].append("Exact defensive strike is absent from the source chain for this expiry.")
+        else:
+            if not _fresh(observed):
+                check["reasons"].append("Quote is stale or freshness is unknown.")
+            if usable_quote(observed, "bid") is None:
+                check["reasons"].append("Executable new bid is missing or invalid.")
+            if usable_quote(observed, "ask") is None:
+                check["reasons"].append("New ask is missing or invalid.")
+            if (
+                check["bid"] is not None and check["ask"] is not None
+                and check["bid"] > check["ask"]
+            ):
+                check["reasons"].append("Bid exceeds ask (crossed market).")
+            if not is_candidate_eligible(observed):
+                check["reasons"].append("Existing bid/open-interest/Greek-validity eligibility gate fails.")
+            if usable_greek(observed, "delta") is None:
+                check["reasons"].append("Valid delta is unavailable.")
+            if check["reasons"]:
+                check["status"] = "incomplete_data"
+            if contract is None:
+                check["reasons"].append("Excluded by the existing position/delta candidate filters; source quote is diagnostic only.")
+        if check["reasons"]:
+            missing_data |= check["status"] == "incomplete_data"
+            continue
         bid = usable_quote(contract, "bid")
-        new_ask = usable_quote(contract, "ask")
-        if (
-            not _fresh(contract) or bid is None or new_ask is None or bid > new_ask
-            or not is_candidate_eligible(contract)
-            or usable_greek(contract, "delta") is None
-        ):
-            missing_data = True
-            continue
         credit = bid - ask
         if not math.isfinite(credit) or credit <= 0:
+            check["reasons"].append("New bid minus held ask is not a strictly positive finite credit.")
             continue
         per_contract = credit * multiplier
         total_credit = per_contract * quantity
         if not math.isfinite(per_contract) or not math.isfinite(total_credit):
             missing_data = True
+            check["status"] = "incomplete_data"
+            check["reasons"].append("Contract quantity cannot support finite credit economics.")
             continue
+        check["status"] = "available"
+        check["reasons"].append("Nearest eligible same-strike expiry with positive executable estimated credit.")
         extended.update({
             "status": "available",
             "reason": "Nearest later eligible expiry at the defensive strike; estimated credit before commissions, not a guaranteed fill.",
@@ -313,18 +372,19 @@ def build_roll_alternatives(
             },
         })
         return result
+    rejection_summary = " ".join(dict.fromkeys(
+        reason for check in checks for reason in check["reasons"]
+    ))
     extended.update(
         status="incomplete_data" if missing_data else "no_candidate",
-        reason=(
-            "Missing, invalid or stale same-strike quotes; no eligible executable credit found."
-            if missing_data else "No positive-credit same-strike contract passes the existing safety gates within 90 DTE."
-        ),
+        reason=f"No eligible executable same-strike credit found within 90 DTE. {rejection_summary}",
     )
     return result
 
 
 def build_roll_pair_context(
     chain: dict, *, position: dict, assessment: dict, now: datetime, market_data: dict,
+    source_chain: dict | None = None,
 ) -> str:
     """Give the existing principal call deterministic pair metadata before selection.
 
@@ -359,12 +419,13 @@ def build_roll_pair_context(
             }
             pair = build_roll_alternatives(
                 primary, chain, position=position, assessment=assessment, now=now, market_data=market_data,
+                source_chain=source_chain,
             )
             alternative = pair["alternatives"]["CREDIT_EXTENDED"]
             rows.append({
                 "defensive_baseline": {"new_strike": strike, "new_expiration": expiration.isoformat()},
                 "CREDIT_EXTENDED": {
-                    key: value for key, value in alternative.items() if key != "quote"
+                    key: value for key, value in alternative.items() if key not in ("quote", "expiry_checks")
                 },
             })
     return (

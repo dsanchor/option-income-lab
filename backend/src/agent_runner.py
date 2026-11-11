@@ -2896,6 +2896,9 @@ Output your activity in the required JSON format. Use the timestamp above in you
             # already-nulled representation an agent's prompt does.
             from src.options_chain_cache import apply_agent_view
             structured_chain = apply_agent_view(structured_chain)
+            # Retain normalized source evidence to distinguish absent quotes from
+            # contracts intentionally excluded by the unchanged candidate filters.
+            dual_roll_source_chain = structured_chain
             current_contract = get_contract(
                 structured_chain,
                 float(strike),
@@ -3104,6 +3107,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         assessment=handoff_json,
                         now=datetime.fromisoformat(analysis_ts.replace("Z", "+00:00")),
                         market_data=data,
+                        source_chain=dual_roll_source_chain,
                     )
 
                 try:
@@ -3360,6 +3364,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 assessment=_rule_eval_assessment_data or {},
                 now=datetime.fromisoformat(analysis_ts.replace("Z", "+00:00")),
                 market_data=data,
+                source_chain=dual_roll_source_chain,
             )
             if roll_alternatives is not None:
                 activity_payload["roll_alternatives"] = roll_alternatives

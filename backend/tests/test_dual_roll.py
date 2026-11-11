@@ -9,6 +9,10 @@ from src.dual_roll import (
     scope_supervisor_review,
 )
 from src.options_chain_cache import apply_agent_view
+from src.options_chain_filters import (
+    filter_options_chain_by_delta,
+    filter_options_chain_for_position,
+)
 from src.rule_evaluator import build_rule_evaluation
 from src.telegram_notifier import TelegramNotifier
 
@@ -162,6 +166,88 @@ def test_no_later_expiry_data_is_distinct_from_complete_nonpositive_search():
     assert build(scenario(later=[]))["alternatives"]["CREDIT_EXTENDED"]["status"] == "incomplete_data"
     assert build(scenario(later=[(50, quote(2))]))["alternatives"]["CREDIT_EXTENDED"]["status"] == "no_candidate"
     assert build(scenario(later=[(91, quote(9))]))["alternatives"]["CREDIT_EXTENDED"]["status"] != "available"
+
+
+@pytest.mark.parametrize("option_type,delta", [("call", 0.95), ("put", -0.7)])
+def test_source_evidence_explains_filtered_expiry_without_reintroducing_its_contract(option_type, delta):
+    activity, source, position, assessment = scenario(option_type, [(50, quote(delta=delta))])
+    source = apply_agent_view(source, now=NOW)
+    before = deepcopy(source)
+    filtered = filter_options_chain_by_delta(
+        filter_options_chain_for_position(source, position["strike"], option_type),
+    )
+    result = build_roll_alternatives(
+        activity, filtered, position=position, assessment=assessment, now=NOW,
+        source_chain=source,
+    )
+    extended = result["alternatives"]["CREDIT_EXTENDED"]
+    assert extended["status"] == "no_candidate"
+    assert "new_expiration" not in extended
+    check, = extended["expiry_checks"]
+    assert check["expiration"] == expiry(50)
+    assert check["bid"] == 2.5 and check["buyback_ask"] == 2
+    assert check["reasons"] == [
+        "Excluded by the existing position/delta candidate filters; source quote is diagnostic only.",
+    ]
+    assert source == before
+
+
+def test_diagnostic_source_cannot_replace_the_nearest_eligible_filtered_destination():
+    activity, source, position, assessment = scenario(later=[
+        (40, quote(9, delta=0.95)), (50, quote()), (70, quote(9)),
+    ])
+    filtered = filter_options_chain_by_delta(source)
+    extended = build_roll_alternatives(
+        activity, filtered, position=position, assessment=assessment, now=NOW,
+        source_chain=source,
+    )["alternatives"]["CREDIT_EXTENDED"]
+    assert extended["status"] == "available"
+    assert extended["new_expiration"] == expiry(50)
+    assert [check["expiration"] for check in extended["expiry_checks"]] == [expiry(40), expiry(50)]
+    assert [check["status"] for check in extended["expiry_checks"]] == ["no_candidate", "available"]
+
+
+@pytest.mark.parametrize("changes,reason", [
+    ({"ask": None}, "New ask is missing or invalid."),
+    ({"bid": 13}, "Bid exceeds ask (crossed market)."),
+    ({"_meta": {"stale": True}}, "Quote is stale or freshness is unknown."),
+    ({"openInterest": 0}, "Existing bid/open-interest/Greek-validity eligibility gate fails."),
+])
+def test_expiry_checks_identify_the_execution_evidence_that_failed(changes, reason):
+    extended = build(scenario(later=[(50, quote(**changes))]))["alternatives"]["CREDIT_EXTENDED"]
+    assert extended["status"] == "incomplete_data"
+    check, = extended["expiry_checks"]
+    assert check["status"] == "incomplete_data"
+    assert reason in check["reasons"]
+    assert check["expiration"] == expiry(50)
+
+
+def test_earnings_exception_missing_evidence_is_not_reported_as_missing_quotes():
+    s = scenario(later=[(50, quote())])
+    s[3]["earnings_analysis"]["next_earnings_date"] = expiry(40)
+    extended = build(s)["alternatives"]["CREDIT_EXTENDED"]
+    assert extended["status"] == "incomplete_data"
+    check, = extended["expiry_checks"]
+    assert check["bid"] == 2.5 and check["ask"] == 12
+    assert check["reasons"] == [
+        "Post-earnings 8–13-day exception requires evidence not established by this search.",
+    ]
+    assert "quotes" not in extended["reason"]
+
+
+def test_expiry_checks_distinguish_absent_strike_nonpositive_credit_and_event_blocks():
+    s = scenario(later=[(40, quote(2)), (50, quote()), (70, quote(9))])
+    s[1]["calls"][expiry(50)] = {"110.0": quote(9)}
+    s[3]["earnings_analysis"]["next_earnings_date"] = expiry(69)
+    extended = build(s)["alternatives"]["CREDIT_EXTENDED"]
+    assert extended["status"] == "incomplete_data"
+    assert [check["status"] for check in extended["expiry_checks"]] == [
+        "no_candidate", "incomplete_data", "no_candidate",
+    ]
+    reasons = [check["reasons"][0] for check in extended["expiry_checks"]]
+    assert "strictly positive" in reasons[0]
+    assert "Exact defensive strike is absent" in reasons[1]
+    assert "earnings safety buffer" in reasons[2]
 
 
 def test_same_strike_identity_is_exact_decimal_not_a_float_or_nearest_match():

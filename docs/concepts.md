@@ -38,6 +38,12 @@ Before Phase 2 receives the options chain, a 4-stage filter pipeline narrows it 
 
 After filtering, a pre-computed **candidates table** with roll economics (buyback cost, new premium, net credit) is generated and included in the Phase 2 prompt.
 
+**Defensive dual-roll comparison:** For call `ROLL_UP_AND_OUT` and put `ROLL_DOWN_AND_OUT`, `DEFENSIVE` remains the primary destination under the existing 45-DTE policy. Advisory `CREDIT_EXTENDED` searches the exact same defensive strike at the nearest eligible later expiry, up to 90 calendar days from today, requiring strictly positive new bid minus held ask. Freshness, liquidity, valid Greeks and event gates are not relaxed. An unavailable extension is a valid outcome, not a missing strategy button.
+
+New activities retain expiry-by-expiry eligibility checks (quotes, quote timestamp and rejection reasons). These distinguish missing/stale/crossed quotes, existing candidate-filter exclusions, nonpositive credit, and earnings/ex-dividend restrictions. The normalized pre-filter chain is diagnostic evidence only; it cannot reintroduce an excluded contract. Historical activities retain their original recorded reasons.
+
+The **Supervisor is an auditor, not a third roll strategy**. In the activity detail's Roll alternatives panel, its findings appear separately under each available destination, including WEAK/“Original decision holds” findings. An unavailable destination explicitly explains why there is no contract audit; missing/incomplete scoped reviews never imply approval. The separate “Apply Recommendation” action is intentionally absent for dual-roll reviews; “Apply roll” still targets `DEFENSIVE` only.
+
 **Profit optimization (premium-first roll policy):** When market indicators show the position is deeply OTM with no risk catalysts, the monitor may recommend tightening the strike to collect additional premium (ROLL_DOWN for calls, ROLL_UP for puts). This requires 3 mandatory conditions (≥10 DTE, deeply OTM, net credit) plus at least 4 of 7 flexible conditions (super-majority gate) — conservative by design. The ultra-defensive roll threshold caps maximum debit at $1 ($100 per contract). Profit-optimization rolls are tagged with a `"profit_optimization"` risk flag to distinguish them from defensive rolls. Monitor agents prioritize premium collection when rolling, considering whether to tighten strikes more aggressively when conditions allow.
 
 **Roll types:**

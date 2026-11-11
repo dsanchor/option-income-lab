@@ -67,3 +67,28 @@ def test_unavailable_defensive_and_advisory_review_clone_are_not_actionable(api)
     assert response.status_code == 400
     assert "advisory" in response.json()["error"]
     cosmos.write_activity.assert_not_called()
+
+
+def test_detail_preserves_expiry_diagnostics_and_independent_defensive_supervisor_audit(api):
+    client, activity, cosmos = api
+    activity["roll_alternatives"]["alternatives"]["CREDIT_EXTENDED"] = {
+        "alternative_id": "CREDIT_EXTENDED", "status": "incomplete_data",
+        "reason": "See expiry checks.",
+        "expiry_checks": [{
+            "expiration": "2026-12-31", "status": "incomplete_data",
+            "bid": 2.5, "ask": None, "buyback_ask": 2,
+            "quote_asof": None, "reasons": ["New ask is missing or invalid."],
+        }],
+    }
+    activity["supervisor_view"] = {"alternative_reviews": {"DEFENSIVE": {
+        "review_status": "complete", "challenge_strength": "WEAK",
+        "net_assessment": "ORIGINAL_HOLDS", "one_liner": "Shorter exposure holds.",
+        "counter_arguments": [],
+    }}}
+    response = client.get("/api/activities/activity-1")
+    assert response.status_code == 200
+    persisted = response.json()["activity"]
+    assert persisted["roll_alternatives"] == activity["roll_alternatives"]
+    assert persisted["supervisor_view"] == activity["supervisor_view"]
+    cosmos.roll_position.assert_not_called()
+    cosmos.write_activity.assert_not_called()

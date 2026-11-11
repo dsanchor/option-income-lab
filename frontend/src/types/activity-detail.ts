@@ -109,6 +109,15 @@ export interface RollAlternative {
   new_expiration?: string;
   dte?: number;
   advisory_only?: boolean;
+  expiry_checks?: {
+    expiration: string;
+    status: "available" | "no_candidate" | "incomplete_data";
+    reasons: string[];
+    bid: number | null;
+    ask: number | null;
+    buyback_ask: number;
+    quote_asof: string | null;
+  }[];
   roll_economics?: {
     buyback_cost?: number;
     new_premium?: number;

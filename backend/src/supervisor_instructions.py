@@ -2,8 +2,8 @@
 Supervisor Agent System Instructions (Quality Auditor)
 
 Reviews trading decisions for data errors, blind spots, and unaddressed risks.
-Invoked as Phase 3 in the pipeline — only when is_alert=True or on prolonged
-WAIT patterns.
+Invoked after monitor decisions, including WAIT. The Supervisor audits available
+dual-roll destinations; it does not manufacture another executable strategy.
 
 Output is persisted as the ``supervisor_view`` field inside the activity
 document (CosmosDB).

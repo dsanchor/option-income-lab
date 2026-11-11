@@ -84,7 +84,7 @@ test("unscoped legacy verdict never approves both alternatives or creates an inf
   assert.ok(html.includes("Scoped comparison unavailable"));
   assert.ok(!html.includes("Everything is safe"));
   assert.ok(!html.includes("Global Alpha claim"));
-  assert.ok(!html.includes("Apply Recommendation"));
+  assert.ok(!html.includes("Apply Recommendation</button>"));
 });
 
 test("missing eligible data and complete no-candidate outcomes are explicit, not success-shaped contracts", () => {
@@ -110,6 +110,45 @@ test("legacy single-contract activities keep existing Supervisor and Alpha rende
   assert.ok(html.includes("Legacy holds") && html.includes("Legacy Alpha"));
   assert.ok(html.includes("Apply Recommendation"));
   assert.ok(!html.includes("Roll alternatives"));
+});
+
+test("unavailable extension retains a visible Supervisor explanation and the defensive WEAK audit", () => {
+  const a = activity();
+  a.roll_alternatives.alternatives.CREDIT_EXTENDED = {
+    alternative_id: "CREDIT_EXTENDED", status: "incomplete_data", reason: "See expiry checks.",
+    expiry_checks: [{
+      expiration: "2026-12-31", status: "incomplete_data", bid: 2.5, ask: null,
+      buyback_ask: 2, quote_asof: null, reasons: ["New ask is missing or invalid."],
+    }],
+  };
+  a.supervisor_view = { alternative_reviews: {
+    DEFENSIVE: { review_status: "complete", net_assessment: "ORIGINAL_HOLDS", challenge_strength: "WEAK", one_liner: "Shorter exposure holds." },
+  } };
+  const html = detail(a);
+  for (const text of ["Supervisor audit", "not a third roll strategy", "Supervisor · DEFENSIVE",
+    "Supervisor · CREDIT_EXTENDED", "Shorter exposure holds.", "Original decision holds",
+    "Not audited as a destination", "Expiry eligibility checks", "2026-12-31",
+    "New ask is missing or invalid.", "Quote as of: unknown", "$2.50 / —", "held ask: $2.00"]) {
+    assert.ok(html.includes(text), text);
+  }
+  assert.ok(!html.includes("Apply Recommendation</button>"));
+  assert.ok(!html.includes("$0.00"));
+});
+
+test("both unavailable destinations still explain Supervisor scope without displaying false approvals", () => {
+  const a = activity();
+  for (const id of ["DEFENSIVE", "CREDIT_EXTENDED"]) {
+    a.roll_alternatives.alternatives[id] = { alternative_id: id, status: "no_defensive", reason: "No destination selected." };
+  }
+  a.supervisor_view = { alternative_reviews: {
+    DEFENSIVE: { review_status: "complete", net_assessment: "ORIGINAL_HOLDS", challenge_strength: "WEAK", one_liner: "Do not infer approval." },
+  } };
+  let html = panel(a);
+  assert.equal((html.match(/Not audited as a destination/g) ?? []).length, 2);
+  assert.ok(!html.includes("Do not infer approval.") && !html.includes("Original decision holds"));
+  delete a.supervisor_view;
+  html = panel(a);
+  assert.ok(html.includes("No Supervisor result saved"));
 });
 
 test("optional additional Alpha suggestion identifies baseline and stays advisory with no action button", () => {

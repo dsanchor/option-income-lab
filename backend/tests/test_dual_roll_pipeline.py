@@ -20,7 +20,8 @@ from tests.test_force_alpha_execution import (
 
 
 @pytest.mark.parametrize("option_type", ["call", "put"])
-def test_monitor_persists_both_targets_scoped_reviews_and_notifies_in_one_pipeline(monkeypatch, option_type):
+@pytest.mark.parametrize("extension_case", ["available", "filtered", "stale"])
+def test_monitor_persists_both_targets_scoped_reviews_and_notifies_in_one_pipeline(monkeypatch, option_type, extension_case):
     now = datetime.now(timezone.utc)
     exp = lambda days: (now.date() + timedelta(days=days)).isoformat()
     target = 425.0 if option_type == "call" else 415.0
@@ -80,10 +81,12 @@ def test_monitor_persists_both_targets_scoped_reviews_and_notifies_in_one_pipeli
     monkeypatch.setattr(runner, "_record_trace", lambda cosmos, **kwargs: traces.append(kwargs))
     bucket = {}
     for days, strike, bid, ask in [(7, 420, 1, 2), (28, target, 1.5, 1.6), (50, target, 2.5, 2.6)]:
+        delta = (0.95 if option_type == "call" else -0.7) if days == 50 and extension_case == "filtered" else 0.3 * sign
+        quote_asof = now - timedelta(days=1) if days == 50 and extension_case == "stale" else now
         bucket[exp(days).replace("-", "")] = {str(float(strike)): {
-            "bid": bid, "ask": ask, "delta": 0.3 * sign, "theta": -0.02,
+            "bid": bid, "ask": ask, "delta": delta, "theta": -0.02,
             "openInterest": 100,
-            "_meta": {"greeks_valid": True, "quote_asof": now.isoformat()},
+            "_meta": {"greeks_valid": True, "quote_asof": quote_asof.isoformat()},
         }}
     chain = {"symbol": "MSFT", "calls": bucket if option_type == "call" else {}, "puts": bucket if option_type == "put" else {}}
     market = {
@@ -99,17 +102,27 @@ def test_monitor_persists_both_targets_scoped_reviews_and_notifies_in_one_pipeli
     ))
     assert state["phase2_calls"] == 1
     assert len(roll_prompts) == 1 and "DUAL-ROLL PAIRS" in roll_prompts[0]
-    assert exp(50) in roll_prompts[0] and "Principal preference: DEFENSIVE" in roll_prompts[0]
+    assert "Principal preference: DEFENSIVE" in roll_prompts[0]
     assert len(calls) == 2
     assert len(cosmos.activities) == 1
     activity = cosmos.activities[0]
     alternatives = activity["roll_alternatives"]["alternatives"]
     assert alternatives["DEFENSIVE"]["new_expiration"] == exp(28)
-    assert alternatives["CREDIT_EXTENDED"]["new_expiration"] == exp(50)
-    assert alternatives["CREDIT_EXTENDED"]["roll_economics"]["net_credit_total"] == 150
+    extended = alternatives["CREDIT_EXTENDED"]
+    check, = extended["expiry_checks"]
+    assert check["expiration"] == exp(50) and check["quote_asof"] == quote_asof.isoformat()
+    if extension_case == "available":
+        assert extended["new_expiration"] == exp(50)
+        assert extended["roll_economics"]["net_credit_total"] == 150
+        assert activity["supervisor_view"]["alternative_reviews"]["CREDIT_EXTENDED"]["net_assessment"] == "RECONSIDER"
+        assert activity["alpha_view"]["preferred_alternative_id"] == "CREDIT_EXTENDED"
+    else:
+        assert extended["status"] == ("no_candidate" if extension_case == "filtered" else "incomplete_data")
+        assert "new_expiration" not in extended
+        assert ("candidate filters" if extension_case == "filtered" else "stale") in " ".join(check["reasons"])
+        assert "CREDIT_EXTENDED" not in activity["supervisor_view"]["alternative_reviews"]
+        assert activity["alpha_view"]["preferred_alternative_id"] is None
     assert activity["supervisor_view"]["alternative_reviews"]["DEFENSIVE"]["net_assessment"] == "ORIGINAL_HOLDS"
-    assert activity["supervisor_view"]["alternative_reviews"]["CREDIT_EXTENDED"]["net_assessment"] == "RECONSIDER"
-    assert activity["alpha_view"]["preferred_alternative_id"] == "CREDIT_EXTENDED"
     assert activity["alpha_view"]["alternative"] == {}
     assert primary_roll_target(activity) == (target, exp(28))
     assert len(notifier.alerts) == 1
