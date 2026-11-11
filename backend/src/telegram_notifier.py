@@ -6,6 +6,7 @@ Changes made via the Settings UI take effect immediately — no scheduler restar
 import logging
 import os
 import re
+from html import escape
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -251,6 +252,52 @@ class TelegramNotifier:
 
         if assignment_risk is not None:
             lines.append(f"Assignment Risk: {str(assignment_risk).capitalize()}")
+
+        dual = data.get("roll_alternatives")
+        if dual:
+            lines.append("")
+            lines.append("Preferred: DEFENSIVE (apply-roll target). CREDIT_EXTENDED is advisory only.")
+            for key, candidate in dual.get("alternatives", {}).items():
+                lines.append(f"<b>{escape(key)}</b>: {escape(str(candidate.get('status', 'unavailable')))}")
+                if candidate.get("status") == "available":
+                    economics = candidate.get("roll_economics") or {}
+                    lines.append(
+                        f"${candidate.get('new_strike')} exp {candidate.get('new_expiration')} "
+                        f"({candidate.get('dte')} DTE)"
+                    )
+                    lines.append(
+                        f"Estimated net credit/debit before commissions: "
+                        f"${economics.get('net_credit')} per share (not guaranteed fill)"
+                    )
+                    if economics.get("net_credit_total") is not None:
+                        lines.append(f"Estimated total: ${economics['net_credit_total']}")
+                    scoped = (data.get("supervisor_view") or {}).get("alternative_reviews", {}).get(key) or {}
+                    if scoped.get("review_status") == "complete":
+                        lines.append(
+                            f"Supervisor [{key}]: {escape(str(scoped.get('net_assessment')))}"
+                            f" — {escape(str(scoped.get('one_liner', '')))}"
+                        )
+                    else:
+                        lines.append(f"Supervisor [{key}]: scoped audit unavailable")
+                else:
+                    lines.append(escape(str(candidate.get("reason", "No alternative available."))))
+            alpha = data.get("alpha_view") or {}
+            if alpha.get("comparison_status") == "complete":
+                lines.append(
+                    f"Alpha prefers {escape(str(alpha.get('preferred_alternative_id')))}: "
+                    f"{escape(str(alpha.get('comparison_rationale', '')))}"
+                )
+            else:
+                lines.append("Alpha: scoped comparison unavailable")
+            additional = alpha.get("additional_alternative")
+            if alpha.get("additional_proposal_status") == "available" and additional:
+                lines.append(
+                    f"Additional Alpha suggestion (advisory only; baseline "
+                    f"{escape(str(additional.get('baseline_alternative_id')))}): "
+                    f"${additional.get('strike')} exp {additional.get('expiration')}. "
+                    f"Relaxed: {escape(str(alpha.get('relaxed_parameter')))}."
+                )
+            return "\n".join(lines)
 
         # Inline supervisor (MODERATE/STRONG only)
         sv = data.get("supervisor_view")

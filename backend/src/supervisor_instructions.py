@@ -73,6 +73,38 @@ SUPERVISOR_OUTPUT_SCHEMA = {
     ],
 }
 
+SUPERVISOR_OUTPUT_SCHEMA["properties"]["alternative_reviews"] = {
+    "type": "object",
+    "description": (
+        "Required when roll_alternatives exists: independently audit EACH available "
+        "alternative keyed by its stable ID (DEFENSIVE, CREDIT_EXTENDED). Never copy "
+        "a legacy verdict across both. Omit unavailable alternatives."
+    ),
+    "additionalProperties": {
+        "type": "object",
+        "properties": dict(SUPERVISOR_OUTPUT_SCHEMA["properties"]),
+        "required": list(SUPERVISOR_OUTPUT_SCHEMA["required"]),
+    },
+}
+
+DUAL_ROLL_AUDIT = """
+## Authorized dual-roll audit — narrow exception, overrides conflicting DTE text
+When the decision contains roll_alternatives, audit EACH available destination
+independently in alternative_reviews, keyed DEFENSIVE / CREDIT_EXTENDED, in this
+ONE response. One may hold while the other requires reconsideration. Top-level
+legacy fields describe DEFENSIVE ONLY, never a combined approval.
+DEFENSIVE retains the existing tier policy and 45-DTE cap.
+ONLY the supplied CREDIT_EXTENDED for a call ROLL_UP_AND_OUT or put
+ROLL_DOWN_AND_OUT may exceed 45 DTE, up to 90 calendar days FROM TODAY.
+Verify SAME defensive strike, strict improvement over the holding, expiry
+strictly later than BOTH holding and defensive, nearest eligible expiry,
+positive finite new bid minus held ask, liquidity, quote freshness, earnings,
+events, and other existing safety gates. Credit is estimated BEFORE commissions,
+not guaranteed. The $1 defensive tier is net premium PER SHARE, not strike distance;
+it does not replace the authorized strictly-positive extended-credit threshold.
+No exception for SELL, general Alpha proposals, or other roll directions.
+The extended alternative is advisory; it NEVER replaces the apply-roll target.
+"""
 
 # ---------------------------------------------------------------------------
 # Decision-specific playbooks

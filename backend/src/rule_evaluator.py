@@ -958,6 +958,16 @@ def _roll_tier_rule(rule_id: str, label: str, activity_data: Dict) -> Dict[str, 
     expected = "Tier 1 (net credit) or Tier 2 (ultra-defensive \u2264$1 debit)"
     roll_economics = activity_data.get("roll_economics") or {}
     roll_tier = roll_economics.get("roll_tier")
+    from .dual_roll import is_designated_extended_roll
+    if is_designated_extended_roll(activity_data):
+        credit = _finite_float(roll_economics.get("net_credit"))
+        passed = credit is not None and credit > 0
+        return _rule(
+            rule_id, label, "execution", STATUS_PASS if passed else STATUS_FAIL,
+            "Extended credit > 0 per share before commissions",
+            f"Estimated net credit = {credit}", "deterministic", blocking=not passed,
+            data_refs={"net_credit": credit, "alternative_id": "CREDIT_EXTENDED"},
+        )
     if _buyback_quote_available(activity_data) is False:
         return _rule(
             rule_id, label, "execution", STATUS_UNKNOWN, expected,
@@ -1061,6 +1071,10 @@ def _premium_cross_check_rule(rule_id: str, label: str, activity_data: Dict) -> 
 
 def _new_dte_target_rule(rule_id: str, label: str, activity_data: Dict) -> Dict[str, Any]:
     expected = "New DTE 21\u201345"
+    from .dual_roll import is_designated_extended_roll
+    extended = is_designated_extended_roll(activity_data)
+    if extended:
+        expected = "Designated extended-credit roll: new DTE 1\u201390 from today"
     new_expiration = activity_data.get("new_expiration")
     generated_at = activity_data.get("timestamp")
     if not new_expiration:
@@ -1075,8 +1089,19 @@ def _new_dte_target_rule(rule_id: str, label: str, activity_data: Dict) -> Dict[
             rule_id, label, "timing", STATUS_UNKNOWN, expected,
             "Unable to parse new_expiration", "deterministic", blocking=False, data_refs={},
         )
-    new_dte = (exp_dt - ref_dt).days
-    status = STATUS_PASS if 21 <= new_dte <= 45 else STATUS_WARNING
+    if extended:
+        from zoneinfo import ZoneInfo
+        try:
+            ref_dt = datetime.fromisoformat(str(generated_at).replace("Z", "+00:00"))
+            if ref_dt.tzinfo is None:
+                ref_dt = ref_dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            ref_dt = datetime.now(timezone.utc)
+        ref_dt = ref_dt.astimezone(ZoneInfo("America/New_York"))
+        new_dte = (exp_dt.date() - ref_dt.date()).days
+    else:
+        new_dte = (exp_dt - ref_dt).days
+    status = STATUS_PASS if (1 <= new_dte <= 90 if extended else 21 <= new_dte <= 45) else STATUS_WARNING
     return _rule(
         rule_id, label, "timing", status, expected, f"DTE = {new_dte}",
         "deterministic", blocking=False, data_refs={"new_dte": new_dte},

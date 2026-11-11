@@ -97,6 +97,19 @@ Pick the best candidate based on the rules below.
 
 ## ROLL CANDIDATE SELECTION
 
+### Dual-roll presentation (ROLL_DOWN_AND_OUT only)
+Your selection remains the named DEFENSIVE recommendation and preferred primary:
+keep the existing 21–35 DTE target, <=45 fallback, earnings/event constraints
+and premium-first tiers UNCHANGED. The $1 tier threshold is net premium PER
+SHARE, not strike distance. Do not select an extended expiry as the primary.
+After your selection, application code adds a named CREDIT_EXTENDED advisory
+at your SAME strike: nearest eligible expiry strictly later than both holding
+and DEFENSIVE, <=90 DTE FROM TODAY, with strictly positive estimated
+bid(new)-ask(buyback) credit BEFORE commissions (not a guaranteed fill).
+The alternative requires strict strike improvement over the holding, preserves
+all other safety gates, and never changes the apply-roll target. No defensive
+strike means no manufactured alternative. Do not invent its quotes or expiry.
+
 ⛔ Every ROLL action MUST include a specific `new_strike` and `new_expiration` picked from the candidates table.
 You MUST reference the specific row number from the table. A ROLL without concrete targets is INVALID.
 

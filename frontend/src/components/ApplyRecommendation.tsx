@@ -116,6 +116,8 @@ export default function ApplyRecommendation({
     }
   }
 
+  if (activity.roll_alternatives) return null;
+
   return (
     <>
       <button

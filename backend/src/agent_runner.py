@@ -35,8 +35,8 @@ from .options_chain_filters import (
 from .options_math import executable_buyback_ask, robust_mid_optional
 from .volatility import format_volatility_block
 from .yfinance_data_provider import YFinanceDataProvider, create_provider, get_shared_provider, OPTIONS_CHAIN_SCHEMA_DESCRIPTION
-from .supervisor_instructions import get_supervisor_instructions, SUPERVISOR_OUTPUT_SCHEMA
-from .alpha_instructions import get_alpha_instructions, ALPHA_OUTPUT_SCHEMA, RELAXABLE_PARAMETERS
+from .supervisor_instructions import get_supervisor_instructions, SUPERVISOR_OUTPUT_SCHEMA, DUAL_ROLL_AUDIT
+from .alpha_instructions import get_alpha_instructions, ALPHA_OUTPUT_SCHEMA, RELAXABLE_PARAMETERS, DUAL_ROLL_COMPARISON
 from .rule_evaluator import (
     build_buy_tracker_evidence,
     build_rule_evaluation,
@@ -44,6 +44,7 @@ from .rule_evaluator import (
     normalize_buy_tracker_activity,
 )
 from .category_params import normalize_category
+from .dual_roll import build_roll_alternatives, build_roll_pair_context, roll_source_available, scope_alpha_review, scope_supervisor_review
 
 # Canonical timestamp format — used for ALL activity and alert log entries.
 # ISO 8601 with UTC indicator to avoid timezone ambiguity.
@@ -1478,6 +1479,8 @@ class AgentRunner:
             supervisor_agent_type = _AGENT_TYPE_MAP.get(agent_type, agent_type)
 
             instructions = get_supervisor_instructions(supervisor_agent_type, decision_type)
+            if activity_payload.get("roll_alternatives"):
+                instructions += "\n\n" + DUAL_ROLL_AUDIT
 
             message = f"""Audit the following trading decision:
 
@@ -1520,7 +1523,9 @@ Provide your supervisor audit in the JSON format specified above."""
                 except json.JSONDecodeError:
                     continue
 
-            if supervisor_data is None and '"challenge_strength"' in response_text:
+            if supervisor_data is None and (
+                '"challenge_strength"' in response_text or '"alternative_reviews"' in response_text
+            ):
                 for i in range(len(response_text)):
                     if response_text[i] == '{':
                         depth = 0
@@ -1532,7 +1537,7 @@ Provide your supervisor audit in the JSON format specified above."""
                                 if depth == 0:
                                     try:
                                         parsed = json.loads(response_text[i:j + 1])
-                                        if "challenge_strength" in parsed:
+                                        if "challenge_strength" in parsed or "alternative_reviews" in parsed:
                                             supervisor_data = parsed
                                     except json.JSONDecodeError:
                                         pass
@@ -1545,6 +1550,8 @@ Provide your supervisor audit in the JSON format specified above."""
                 error = "no_parseable_json"
                 return None
 
+            if activity_payload.get("roll_alternatives"):
+                supervisor_data = scope_supervisor_review(supervisor_data, activity_payload)
             required = {"challenge_strength", "counter_arguments", "net_assessment"}
             missing = required - set(supervisor_data.keys())
             if missing:
@@ -1615,6 +1622,7 @@ Provide your supervisor audit in the JSON format specified above."""
         run_id: str = None,
         parent_trace_id: str = None,
         is_validation_context: bool = False,
+        review_chain: dict | None = None,
     ) -> dict | None:
         """Run an alpha advisor agent for aggressive perspective.
 
@@ -1647,11 +1655,19 @@ Provide your supervisor audit in the JSON format specified above."""
                 else decision_type
             )
             instructions = get_alpha_instructions(alpha_agent_type, playbook_decision)
+            if activity_payload.get("roll_alternatives"):
+                instructions += "\n\n" + DUAL_ROLL_COMPARISON
 
             # Append validation context addendum if in validation mode
             if is_validation_context:
                 from .alpha_instructions import VALIDATION_CONTEXT_ADDENDUM
                 instructions = instructions + "\n\n" + VALIDATION_CONTEXT_ADDENDUM
+
+            output_schema = ALPHA_OUTPUT_SCHEMA
+            if activity_payload.get("roll_alternatives"):
+                from copy import deepcopy
+                output_schema = deepcopy(ALPHA_OUTPUT_SCHEMA)
+                output_schema["properties"]["alternative"]["required"] = []
 
             message = f"""Provide an aggressive alternative perspective on this decision:
 
@@ -1665,7 +1681,7 @@ Provide your supervisor audit in the JSON format specified above."""
 {previous_context}
 
 === OUTPUT FORMAT ===
-{json.dumps(ALPHA_OUTPUT_SCHEMA, indent=2)}
+{json.dumps(output_schema, indent=2)}
 
 Provide your alpha advisor analysis in the JSON format specified above."""
 
@@ -1694,7 +1710,9 @@ Provide your alpha advisor analysis in the JSON format specified above."""
                 except json.JSONDecodeError:
                     continue
 
-            if alpha_data is None and ('opportunity_strength' in response_text):
+            if alpha_data is None and (
+                'opportunity_strength' in response_text or 'preferred_alternative_id' in response_text
+            ):
                 for i in range(len(response_text)):
                     if response_text[i] == '{':
                         depth = 0
@@ -1707,7 +1725,7 @@ Provide your alpha advisor analysis in the JSON format specified above."""
                                     candidate = response_text[i:j + 1]
                                     try:
                                         parsed = json.loads(candidate)
-                                        if "opportunity_strength" in parsed:
+                                        if "opportunity_strength" in parsed or "preferred_alternative_id" in parsed:
                                             alpha_data = parsed
                                     except json.JSONDecodeError:
                                         # Try fixing single quotes → double quotes
@@ -1731,6 +1749,8 @@ Provide your alpha advisor analysis in the JSON format specified above."""
                 error = "no_parseable_json"
                 return None
 
+            if activity_payload.get("roll_alternatives"):
+                alpha_data = scope_alpha_review(alpha_data, activity_payload, chain=review_chain)
             required = {"opportunity_strength", "alternative", "relaxed_parameter"}
             missing = required - set(alpha_data.keys())
             if missing:
@@ -2868,6 +2888,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 structured_chain = json.loads(data.get('options_chain', '{}'))
             except (json.JSONDecodeError, TypeError):
                 structured_chain = {"calls": {}, "puts": {}}
+            dual_roll_source_available = roll_source_available(structured_chain)
             # Agent-prompt seam (Danny's zero-free decision §2.2/§4):
             # normalize before extracting the current contract or building
             # the Phase 2 filtered chain / roll candidate table below — all
@@ -2884,6 +2905,8 @@ Output your activity in the required JSON format. Use the timestamp above in you
             current_buyback_ask = executable_buyback_ask(
                 current_contract.get("ask") if current_contract else None
             )
+            # Keep the pre-filter held quote for deterministic roll economics.
+            buyback_reference = current_contract
             open_call_quote_incomplete = (
                 position_type == "call" and current_buyback_ask is None
             )
@@ -3071,6 +3094,16 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         roll_type=roll_type,
                         buyback_cost=_bb_cost,
                         current_contract=current_contract,
+                    )
+                    filtered_chain_text += build_roll_pair_context(
+                        {
+                            **direction_filtered, "buyback_reference": buyback_reference,
+                            "source_available": dual_roll_source_available,
+                        },
+                        position=position,
+                        assessment=handoff_json,
+                        now=datetime.fromisoformat(analysis_ts.replace("Z", "+00:00")),
+                        market_data=data,
                     )
 
                 try:
@@ -3313,6 +3346,36 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 alert_enrichment = self._extract_alert_enrichment(json_data)
                 activity_payload.update(alert_enrichment)
 
+            # Candidate identity/status is application-authored, never model-authored.
+            activity_payload.pop("roll_alternatives", None)
+            activity_payload.pop("roll_alternative_id", None)
+            dual_chain = {
+                **structured_chain, "buyback_reference": buyback_reference,
+                "source_available": dual_roll_source_available,
+            }
+            roll_alternatives = build_roll_alternatives(
+                activity_payload,
+                dual_chain,
+                position=position,
+                assessment=_rule_eval_assessment_data or {},
+                now=datetime.fromisoformat(analysis_ts.replace("Z", "+00:00")),
+                market_data=data,
+            )
+            if roll_alternatives is not None:
+                activity_payload["roll_alternatives"] = roll_alternatives
+                activity_payload["symbol_category"] = normalize_category(symbol_category)
+                for alternative_id, alternative in roll_alternatives["alternatives"].items():
+                    if alternative["status"] == "available":
+                        scoped_activity = {
+                            **activity_payload,
+                            **alternative,
+                            "roll_alternative_id": alternative_id,
+                            "earnings_analysis": (_rule_eval_assessment_data or {}).get("earnings_analysis"),
+                        }
+                        alternative["rule_evaluation"] = build_rule_evaluation(
+                            agent_type, scoped_activity, phase="roll", category=symbol_category,
+                        )
+
             # ── Structured rule evaluation (deterministic, post-corrections) ──
             # Monitor activities always persist BOTH the assessment phase and,
             # when a roll was pursued, the roll phase — via a `phases` array
@@ -3355,13 +3418,13 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 print(f"⚠️ ROLL ALERT logged for {symbol} ${strike} exp {expiration}")
 
                 # ── Supervisor always runs; Alpha only on alerts / prolonged waits ──
-                market_data = self._build_market_data_block(data, symbol, exchange)
                 alpha_chain_text = self._build_alpha_options_chain(
                     data, agent_type,
                     current_strike=float(strike),
                     current_expiration=expiration
                 )
                 alpha_market_data = self._build_market_data_block(data, symbol, exchange, options_chain_text=alpha_chain_text)
+                market_data = alpha_market_data
                 # Both supervisor + alpha run in parallel
                 supervisor_view, alpha_view = await asyncio.gather(
                     self._run_supervisor_review(
@@ -3380,6 +3443,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         previous_context=previous_context,
                         agent_type=agent_type,
                         model=alpha_model,
+                        review_chain=dual_chain if roll_alternatives is not None else None,
                         cosmos=cosmos,
                         run_id=run_id,
                         parent_trace_id=final_phase_trace_id,
@@ -3451,6 +3515,8 @@ Output your activity in the required JSON format. Use the timestamp above in you
                     }
                     # Normalize for templates
                     alert_data["activity"] = alert_data["action"]
+                    if roll_alternatives is not None:
+                        alert_data["roll_alternatives"] = roll_alternatives
                     alert_data["strike"] = alert_data.get("new_strike") or alert_data.get("current_strike")
                     alert_data["expiration"] = alert_data.get("new_expiration") or alert_data.get("current_expiration")
                     if supervisor_view is not None:

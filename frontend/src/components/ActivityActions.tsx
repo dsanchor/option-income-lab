@@ -13,6 +13,7 @@ export default function ActivityActions({
   isAlert,
   validationStatus,
   validationSource,
+  rollAvailable,
 }: {
   symbol: string;
   activityId: string;
@@ -20,6 +21,7 @@ export default function ActivityActions({
   isAlert: boolean;
   validationStatus?: "approved" | "review_incomplete" | "error" | null;
   validationSource?: "best_options" | "options_screener" | null;
+  rollAvailable?: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
@@ -28,7 +30,7 @@ export default function ActivityActions({
   const isValidation = validationSource != null;
   const isApprovedValidation = isValidation && validationStatus === "approved" && isAlert;
   const canOpen = isAlert && (WATCH_AGENTS.includes(agentType) || isApprovedValidation);
-  const canRoll = isAlert && MONITOR_AGENTS.includes(agentType);
+  const canRoll = isAlert && MONITOR_AGENTS.includes(agentType) && rollAvailable !== false;
 
   async function run(
     kind: string,

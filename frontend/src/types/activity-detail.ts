@@ -54,6 +54,7 @@ export interface SupervisorView {
   counter_arguments?: CounterArgument[];
   net_assessment?: string;
   one_liner?: string;
+  alternative_reviews?: Partial<Record<RollAlternativeId, ScopedSupervisorReview>>;
   [k: string]: unknown;
 }
 
@@ -77,7 +78,55 @@ export interface AlphaView {
   parameter_detail?: string;
   alternative?: AlphaAlternative | null;
   one_liner?: string;
+  preferred_alternative_id?: RollAlternativeId | null;
+  comparison_rationale?: string;
+  comparison_status?: "complete" | "incomplete";
+  additional_proposal_status?: "available" | "rejected";
+  additional_proposal_reason?: string;
+  additional_alternative?: AlphaAlternative & {
+    baseline_alternative_id: RollAlternativeId;
+    advisory_only: true;
+    roll_economics: { net_credit: number; net_credit_total: number };
+  };
   [k: string]: unknown;
+}
+
+export type RollAlternativeId = "DEFENSIVE" | "CREDIT_EXTENDED";
+
+export interface ScopedSupervisorReview {
+  review_status: "complete" | "incomplete";
+  challenge_strength?: string;
+  net_assessment?: string;
+  one_liner?: string;
+  counter_arguments?: CounterArgument[];
+}
+
+export interface RollAlternative {
+  alternative_id: RollAlternativeId;
+  status: "available" | "no_candidate" | "incomplete_data" | "no_defensive";
+  reason?: string;
+  new_strike?: number | string;
+  new_expiration?: string;
+  dte?: number;
+  advisory_only?: boolean;
+  roll_economics?: {
+    buyback_cost?: number;
+    new_premium?: number;
+    net_credit?: number;
+    net_credit_per_contract?: number;
+    net_credit_total?: number;
+    quantity?: number;
+    multiplier?: number;
+  };
+  rule_evaluation?: RuleEvaluation;
+}
+
+export interface RollAlternatives {
+  schema_version: number;
+  preferred_alternative_id: RollAlternativeId;
+  preference_reason: string;
+  action_target_id: "DEFENSIVE";
+  alternatives: Record<RollAlternativeId, RollAlternative>;
 }
 
 export interface CreatedFrom {
@@ -114,6 +163,7 @@ export interface ActivityDoc {
   supervisor_view?: SupervisorView | null;
   alpha_view?: AlphaView | null;
   rule_evaluation?: RuleEvaluation | null;
+  roll_alternatives?: RollAlternatives | null;
   // Contract validation fields (backend/src/contract_validation_integration.py)
   run_id?: string | null;
   validation_status?: "approved" | "review_incomplete" | "error" | null;

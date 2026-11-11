@@ -2,6 +2,7 @@ import Link from "next/link";
 import ActivityActions from "@/components/ActivityActions";
 import ApplyRecommendation from "@/components/ApplyRecommendation";
 import RuleEvaluationPanel from "@/components/RuleEvaluationPanel";
+import DualRollPanel from "@/components/DualRollPanel";
 import type { ActivityDetail, ActivityDoc } from "@/types/activity-detail";
 
 function activityClass(a: string | undefined): string {
@@ -405,8 +406,9 @@ export default function ActivityDetailView({ data }: { data: ActivityDetail }) {
           Historic activities without it fall through untouched. */}
       {a.rule_evaluation && <RuleEvaluationPanel evaluation={a.rule_evaluation} />}
 
-      {a.supervisor_view && <SupervisorPanel sv={a.supervisor_view} activity={a} />}
-      {a.alpha_view && <AlphaPanel av={a.alpha_view} activity={a} />}
+      {a.roll_alternatives && <DualRollPanel activity={a} />}
+      {!a.roll_alternatives && a.supervisor_view && <SupervisorPanel sv={a.supervisor_view} activity={a} />}
+      {!a.roll_alternatives && a.alpha_view && <AlphaPanel av={a.alpha_view} activity={a} />}
 
       {a.id && (
         <div className="flex flex-wrap items-center gap-3">
@@ -417,6 +419,7 @@ export default function ActivityDetailView({ data }: { data: ActivityDetail }) {
             isAlert={data.is_alert}
             validationStatus={a.validation_status}
             validationSource={a.validation_source}
+            rollAvailable={a.roll_alternatives ? a.roll_alternatives.alternatives.DEFENSIVE.status === "available" : undefined}
           />
           <Link
             href={`/activities/${encodeURIComponent(a.id)}/chat`}

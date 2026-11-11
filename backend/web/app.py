@@ -3718,12 +3718,8 @@ async def api_roll_position_from_activity(request: Request, symbol: str,
             return JSONResponse({"error": f"Activity {activity_id} not found"},
                                 status_code=404)
 
-        strike = (activity.get("strike")
-                  or activity.get("new_strike")
-                  or activity.get("current_strike"))
-        expiration = (activity.get("expiration")
-                      or activity.get("new_expiration")
-                      or activity.get("current_expiration"))
+        from src.dual_roll import primary_roll_target
+        strike, expiration = primary_roll_target(activity)
         agent_type = activity.get("agent_type")
         position_id = activity.get("position_id")
 
@@ -8077,6 +8073,11 @@ async def api_create_activity_from_recommendation(request: Request):
             return JSONResponse(
                 {"error": f"Source activity {source_activity_id} not found"},
                 status_code=404,
+            )
+        if source_activity.get("roll_alternatives"):
+            return JSONResponse(
+                {"error": "Dual-roll reviews are advisory. Apply roll uses the original DEFENSIVE destination."},
+                status_code=400,
             )
 
         symbol = source_activity["symbol"]

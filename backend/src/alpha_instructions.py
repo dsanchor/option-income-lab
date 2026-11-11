@@ -26,6 +26,34 @@ RELAXABLE_PARAMETERS = (
     "theta_below_minimum",
 )
 
+DUAL_ROLL_COMPARISON = """
+## Authorized dual-roll comparison — narrow exception to the 45-DTE text
+When roll_alternatives is present, compare EACH available named alternative
+in this ONE response. Return preferred_alternative_id (DEFENSIVE or
+CREDIT_EXTENDED) and comparison_rationale explaining credit versus extra time,
+assignment/event exposure and opportunity cost. Do not invent a mandatory
+third trade or reinterpret an unavailable alternative as available.
+Normally return alternative {} and relaxed_parameter "none": prefer an EXISTING
+supplied alternative without inventing a third trade. If an additional trade
+really improves matters, identify baseline_alternative_id, name exactly ONE
+existing RELAXABLE_PARAMETER, and explain parameter_detail, rationale and
+trade_off. It must pass the existing one-coordinate/proximity, quote, liquidity,
+earnings/event and defensive tier gates and the general <=45-DTE cap.
+Additional proposals are separately validated, advisory only, and cannot become
+the preferred named alternative or the principal's DEFENSIVE apply-roll target.
+ONLY the supplied CREDIT_EXTENDED for call ROLL_UP_AND_OUT / put
+ROLL_DOWN_AND_OUT has the authorized <=90 DTE FROM TODAY exception. It must
+use the SAME defensive strike with strict directional improvement, strictly
+later than holding AND defensive, nearest eligible expiry, positive finite
+bid(new)-ask(buyback), and all existing liquidity, earnings/event and safety gates.
+Credit is estimated BEFORE commissions, never guaranteed. The $1 defensive
+tier is net premium PER SHARE, not strike distance; extended credit only
+requires strictly positive credit. Never extend the general Alpha DTE cap,
+new SELL rules, or RELAXABLE_PARAMETERS. A further trade suggestion is not
+automatically approved by this comparison and cannot be an actionable recommendation.
+Top-level historical fields must not imply one verdict approves both contracts.
+"""
+
 ALPHA_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -151,6 +179,26 @@ ALPHA_OUTPUT_SCHEMA = {
     ],
 }
 
+ALPHA_OUTPUT_SCHEMA["properties"].update({
+    "preferred_alternative_id": {
+        "type": ["string", "null"],
+        "enum": ["DEFENSIVE", "CREDIT_EXTENDED", None],
+        "description": "For roll_alternatives only: prefer an existing available alternative.",
+    },
+    "comparison_rationale": {
+        "type": "string",
+        "description": "For dual rolls: compare the supplied alternatives and explain the preference.",
+    },
+    "baseline_alternative_id": {
+        "type": "string",
+        "enum": ["DEFENSIVE", "CREDIT_EXTENDED"],
+        "description": "Required only for an optional additional trade: identify the supplied baseline.",
+    },
+})
+ALPHA_OUTPUT_SCHEMA["properties"]["alternative"]["description"] = (
+    "Legacy single-trade proposal. For roll_alternatives normally return {}; "
+    "an optional additional proposal requires a baseline ID and one soft parameter."
+)
 
 # ---------------------------------------------------------------------------
 # Decision-specific playbooks
