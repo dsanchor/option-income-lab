@@ -9,6 +9,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Playwright's bundled Node needs libatomic before it can install browser dependencies.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install Chromium + OS-level deps via Playwright (needed for TradingView fallback)
 RUN playwright install chromium --with-deps
 
