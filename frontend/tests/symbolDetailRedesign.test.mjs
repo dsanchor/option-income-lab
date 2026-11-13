@@ -38,7 +38,8 @@ const root = join(__dirname, "..");
 
 const cardSrc     = readFileSync(join(root, "src/components/SymbolConfigurationCard.tsx"), "utf8");
 const holdingsSrc = readFileSync(join(root, "src/components/PortfolioHoldingsCard.tsx"), "utf8");
-const pageSrc     = readFileSync(join(root, "src/app/symbols/[symbol]/page.tsx"), "utf8");
+const pageSrc     = readFileSync(join(root, "src/app/symbols/[symbol]/page.tsx"), "utf8")
+  + readFileSync(join(root, "src/components/SymbolDetailPanels.tsx"), "utf8");
 const sectionSrc  = readFileSync(join(root, "src/components/DetailSection.tsx"), "utf8");
 
 function renderDetailComponent(component, props, initialStates = []) {

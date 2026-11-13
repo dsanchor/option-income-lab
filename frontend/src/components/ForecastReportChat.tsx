@@ -306,7 +306,6 @@ export default function ForecastReportChat({
                   ref={inputRef}
                   id="forecast-report-chat-input"
                   rows={2}
-                  maxLength={2000}
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
                   onKeyDown={onKeyDown}

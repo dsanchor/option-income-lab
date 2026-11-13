@@ -392,14 +392,6 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
                     </td>
                   </tr>
 
-                  {detailsFor === posId && posId && (
-                    <tr className="border-b border-border/60 bg-bg-input/30">
-                      <td colSpan={COLS} className="px-4 py-4">
-                        <PositionDetail key={`${p.position_id}:${p.expiration}:${p.strike}`} symbol={symbol} position={p} />
-                      </td>
-                    </tr>
-                  )}
-
                   {rollFor === posId && (
                     <tr className="border-b border-border/60 bg-bg-input/40">
                       <td colSpan={COLS} className="px-4 py-4">
@@ -457,6 +449,14 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
                     <tr className="border-b border-border/60 bg-bg-input/40">
                       <td colSpan={COLS} className="px-4 py-4">
                         <CloseForm busy={busy} onCancel={resetEditors} onSubmit={(form) => submitClose(posId, form)} />
+                      </td>
+                    </tr>
+                  )}
+
+                  {detailsFor === posId && posId && (
+                    <tr className="border-b border-border/60 bg-bg-input/30">
+                      <td colSpan={COLS} className="px-4 py-4">
+                        <PositionDetail key={`${p.position_id}:${p.expiration}:${p.strike}`} symbol={symbol} position={p} />
                       </td>
                     </tr>
                   )}

@@ -203,6 +203,8 @@ export interface SymbolDisambiguationResult {
 }
 
 export interface SymbolDetail {
+  has_symbol_config?: boolean;
+  detail_loaded_at?: string;
   option_timing?: OptionTimingSnapshot | null;
   symbol: string;
   display_name: string;

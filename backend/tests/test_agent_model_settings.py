@@ -249,7 +249,7 @@ def test_set_function_models_updates_routing(monkeypatch):
     assert created[2] == ("new-supervisor-model", "azure", c3)
 
 
-def test_forecast_report_chat_runner_uses_dedicated_function_and_limits(monkeypatch):
+def test_forecast_report_chat_runner_uses_dedicated_function_without_token_cap(monkeypatch):
     routed = []
     captured = {}
 
@@ -283,7 +283,6 @@ def test_forecast_report_chat_runner_uses_dedicated_function_and_limits(monkeypa
         instructions="forecast-only instructions",
         message="bounded forecast context",
         temperature=0.2,
-        max_completion_tokens=700,
     )
 
     result = asyncio.run(
@@ -292,7 +291,27 @@ def test_forecast_report_chat_runner_uses_dedicated_function_and_limits(monkeypa
 
     assert result == "brief reply"
     assert routed == [(None, "forecast_report_chat")]
-    assert captured["options"] == {"max_tokens": 700}
+    assert captured["options"] == {}
+
+
+@pytest.mark.parametrize("budget", [None, 2048])
+def test_sync_completion_omits_unset_budget_and_preserves_nonchat_default(budget):
+    from unittest.mock import Mock
+
+    from src.llm import chat_completion
+
+    client = Mock()
+    client.chat.completions.create.return_value = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="reply"))],
+    )
+    kwargs = {} if budget == 2048 else {"max_completion_tokens": budget}
+    assert chat_completion(
+        client, model="configured-model", messages=[], **kwargs,
+    ) == "reply"
+    expected = {"model": "configured-model", "messages": [], "temperature": 0.7}
+    if budget is not None:
+        expected["max_completion_tokens"] = budget
+    assert client.chat.completions.create.call_args.kwargs == expected
 
 
 class FakeCosmos:

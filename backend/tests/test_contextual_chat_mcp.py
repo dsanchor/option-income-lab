@@ -199,19 +199,22 @@ def test_activity_route_preserves_historical_live_contract_and_shared_tools(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["initial", "follow_up"])
-async def test_forecast_initial_is_tool_free_follow_up_gets_shared_tools(shared_tools, mode):
+@pytest.mark.parametrize("deployment", ["gpt-5.6-luna", "other-model"])
+async def test_forecast_initial_is_tool_free_follow_up_gets_shared_tools(
+    shared_tools, mode, deployment,
+):
     events, agents, _ = shared_tools
     routed = []
     runner = module.AgentRunner.__new__(module.AgentRunner)
     runner._get_client = lambda **kwargs: routed.append(kwargs) or "forecast-client"
-    runner._resolve_model_deployment = lambda **kwargs: "gpt-5.6-luna"
+    runner._resolve_model_deployment = lambda **kwargs: deployment
     prompt = build_forecast_report_chat_prompt(
         mode=mode, forecast_context={"symbol": "MSFT", "historical_measurement": 4},
         **({"message": "Compare this with current news"} if mode == "follow_up" else {}),
     )
     await runner.run_forecast_report_chat(symbol="MSFT", prompt=prompt)
     assert routed == [{"model": None, "function_id": "forecast_report_chat"}]
-    assert agents[0]["options"] == {"max_tokens": 700 if mode == "initial" else 1200}
+    assert agents[0]["options"] == ({} if "luna" in deployment else {"temperature": 0.2})
     assert agents[0]["message"] == prompt.message
     if mode == "initial":
         assert events == []
@@ -253,8 +256,8 @@ def test_symbol_route_keeps_context_history_model_and_shared_mcp(
     assert selected == ["symbol_chat"]
     assert agents[0]["client"] == (deployment, llm)
     assert agents[0]["options"] == (
-        {"max_tokens": 2048} if "luna" in deployment
-        else {"max_tokens": 2048, "temperature": 0.7}
+        {} if "luna" in deployment
+        else {"temperature": 0.7}
     )
     assert "focused exclusively on MSFT" in agents[0]["instructions"]
     assert body["context"] not in agents[0]["instructions"]

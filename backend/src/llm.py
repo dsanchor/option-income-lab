@@ -77,13 +77,16 @@ def chat_completion(
     model: str,
     messages: list,
     temperature: float = 0.7,
-    max_completion_tokens: int = 2048,
+    max_completion_tokens: int | None = 2048,
 ) -> str:
-    """Run a chat completion and return the assistant text."""
+    """Run a completion; None leaves the output budget to the provider."""
+    options = {}
+    if max_completion_tokens is not None:
+        options["max_completion_tokens"] = max_completion_tokens
     response = client.chat.completions.create(
         model=model,
         messages=messages,
         temperature=temperature,
-        max_completion_tokens=max_completion_tokens,
+        **options,
     )
     return response.choices[0].message.content

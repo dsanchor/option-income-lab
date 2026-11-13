@@ -120,6 +120,58 @@ function editorHarness(field = "expiration", value = "2026-11-20") {
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+test("Roll and Close open before expanded position details and cancel preserves details", () => {
+  const state = [];
+  let cursor = 0;
+  const PositionDetail = () => null;
+  const { default: PositionsTable } = loadModule("src/components/PositionsTable.tsx", {
+    react: {
+      Fragment: Symbol.for("react.fragment"),
+      useMemo: (compute) => compute(),
+      useState: (initial) => {
+        const index = cursor++;
+        if (!(index in state)) state[index] = typeof initial === "function" ? initial() : initial;
+        return [state[index], (value) => {
+          state[index] = typeof value === "function" ? value(state[index]) : value;
+        }];
+      },
+    },
+    "next/navigation": { useRouter: () => ({ refresh() {} }) },
+    "@/components/PositionDetail": { default: PositionDetail, __esModule: true },
+  });
+  function elements(node) {
+    if (Array.isArray(node)) return node.flatMap(elements);
+    if (!node || typeof node !== "object") return [];
+    return [node, ...elements(node.props?.children)];
+  }
+  function render() {
+    cursor = 0;
+    return elements(PositionsTable({
+      symbol: "AAPL",
+      positions: [{ position_id: "pos1", status: "active", type: "call", strike: 200 }],
+    }));
+  }
+  render().find((node) => node.type === "tr" && node.props.onClick).props.onClick();
+  for (const action of ["Roll", "Close"]) {
+    render().find((node) => node.type === "button" && node.props.children === action).props.onClick();
+    const nodes = render();
+    const rows = nodes.filter((node) => node.type === "tr");
+    const detailRow = rows.findIndex((row) => elements(row).some((node) => node.type === PositionDetail));
+    const actionRow = rows.findIndex((row) => elements(row).some((node) => (
+      action === "Roll" ? node.type === "form" : node.type?.name === "CloseForm"
+    )));
+    assert.ok(actionRow > 0, `${action} appears after the position summary`);
+    assert.equal(detailRow, actionRow + 1, `${action} appears immediately before details`);
+    const actionNodes = elements(rows[actionRow]);
+    if (action === "Roll") {
+      actionNodes.find((node) => node.type === "button" && node.props.children === "Cancel").props.onClick();
+    } else {
+      actionNodes.find((node) => node.type?.name === "CloseForm").props.onCancel();
+    }
+    assert.ok(render().some((node) => node.type === PositionDetail));
+  }
+});
+
 test("inline editor saves the exact date, disables pending controls and refreshes once", async (t) => {
   const editor = editorHarness();
   let finish;

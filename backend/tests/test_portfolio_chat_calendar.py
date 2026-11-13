@@ -1,7 +1,7 @@
 """
-Test suite for Portfolio Chat calendar context (POST /api/chat, mode=portfolio).
+Test suite for legacy Portfolio Chat calendar context (POST /api/chat, mode=portfolio).
 
-Covers the `include_calendar_events` flag per docs/chat.md contract:
+Covers the backward-compatible `include_calendar_events` API flag:
 
   1. Flag false/omitted  → no get_calendar_events() call, no UPCOMING CALENDAR section.
   2. Flag true           → exactly one call; events filtered to context_symbols only.
@@ -15,15 +15,15 @@ Covers the `include_calendar_events` flag per docs/chat.md contract:
   8. Enabled but empty   → explicit "No earnings or ex-dividend events found …" marker.
   9. Calendar failure    → request succeeds; activities context preserved;
                            "(Calendar data unavailable)" marker in prompt.
-  10. Frontend contract  → default-off toggle; include_calendar_events sent only
-                           in portfolio mode payload.
+
+The removed mode chooser is covered by the direct Chat experience tests in
+frontend/tests/globalChat.test.mjs.
 
 Pattern: hermetic — no network, no real LLM, no real CosmosDB.
 """
 
 import datetime as _dt_mod
 import re
-from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
@@ -816,82 +816,3 @@ class TestCalendarFailureDegradation:
         _post(client, include_calendar_events=False)
         prompt = _system_prompt()
         assert "(Calendar data unavailable)" not in prompt
-
-
-# ===========================================================================
-# 10. Frontend contract: default-off; sent only in portfolio mode payload
-# ===========================================================================
-
-class TestFrontendCalendarContract:
-    """
-    Static source analysis of GlobalChatView.tsx.
-    No runtime test runner — asserts invariants on the source text directly,
-    following the pattern established for frontend contract coverage in this project.
-    """
-
-    @pytest.fixture(scope="class")
-    def tsx_source(self):
-        path = Path(__file__).parent.parent.parent / (
-            "frontend/src/components/GlobalChatView.tsx"
-        )
-        return path.read_text(encoding="utf-8")
-
-    def test_include_calendar_events_default_is_false(self, tsx_source):
-        """useState(false) initialises includeCalendarEvents to OFF."""
-        assert "includeCalendarEvents, setIncludeCalendarEvents] = useState(false)" in tsx_source
-
-    def test_include_calendar_events_sent_only_in_portfolio_else_branch(self, tsx_source):
-        """
-        The send() function sends include_calendar_events inside the else (portfolio) branch,
-        NOT inside the if (quick-analysis) branch.
-        """
-        # Find the send() function block.
-        send_idx = tsx_source.find("async function send(")
-        assert send_idx != -1, "send() function not found in GlobalChatView.tsx"
-        send_block = tsx_source[send_idx: send_idx + 2000]
-
-        # The if branch is for quick-analysis; the else is for portfolio.
-        if_idx = send_block.find('if (mode === "quick-analysis")')
-        else_idx = send_block.find("} else {", if_idx)
-        cal_idx = send_block.find("include_calendar_events")
-
-        assert cal_idx != -1, "include_calendar_events not found in send()"
-        # calendar key must appear after the else { (inside portfolio branch)
-        assert cal_idx > else_idx, (
-            "include_calendar_events must be inside the portfolio else-branch of send(), "
-            "not in the quick-analysis if-branch"
-        )
-
-    def test_include_calendar_events_not_in_quick_analysis_branch(self, tsx_source):
-        send_idx = tsx_source.find("async function send(")
-        send_block = tsx_source[send_idx: send_idx + 2000]
-
-        if_idx = send_block.find('if (mode === "quick-analysis")')
-        else_idx = send_block.find("} else {", if_idx)
-        # The quick-analysis branch is between if_idx and else_idx.
-        qa_branch = send_block[if_idx:else_idx]
-        assert "include_calendar_events" not in qa_branch
-
-    def test_toggle_rendered_only_in_portfolio_config_phase(self, tsx_source):
-        """The toggle UI element is inside the portfolio-config phase block."""
-        # Find the portfolio-config phase render block.
-        portfolio_cfg_idx = tsx_source.find('phase === "portfolio-config"')
-        assert portfolio_cfg_idx != -1
-        # The calendar toggle label text should appear in that section.
-        toggle_label_idx = tsx_source.find(
-            "Include earnings", portfolio_cfg_idx
-        )
-        assert toggle_label_idx != -1, (
-            "Calendar toggle label not found inside portfolio-config render block"
-        )
-
-    def test_include_calendar_events_state_is_independent_of_include_symbol_data(
-        self, tsx_source
-    ):
-        """Both toggles are separate useState declarations with their own default."""
-        assert "includeSymbolData, setIncludeSymbolData] = useState(false)" in tsx_source
-        assert "includeCalendarEvents, setIncludeCalendarEvents] = useState(false)" in tsx_source
-        # They must be separate declarations (not sharing state).
-        sym_idx = tsx_source.find("includeSymbolData, setIncludeSymbolData")
-        cal_idx = tsx_source.find("includeCalendarEvents, setIncludeCalendarEvents")
-        assert sym_idx != cal_idx

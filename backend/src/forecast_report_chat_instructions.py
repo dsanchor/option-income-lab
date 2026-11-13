@@ -11,13 +11,11 @@ from dataclasses import dataclass
 from typing import Any
 
 __all__ = [
-    "FOLLOW_UP_MAX_COMPLETION_TOKENS",
     "FOLLOW_UP_MODE",
     "FORECAST_REPORT_CHAT_FUNCTION_ID",
     "FORECAST_REPORT_CHAT_INSTRUCTIONS",
     "FORECAST_REPORT_CHAT_TEMPERATURE",
     "INITIAL_MODE",
-    "INITIAL_REPORT_MAX_COMPLETION_TOKENS",
     "INITIAL_REPORT_TARGET_WORDS",
     "SUPPORTED_MODES",
     "ForecastReportChatPrompt",
@@ -28,8 +26,6 @@ __all__ = [
 
 FORECAST_REPORT_CHAT_FUNCTION_ID = "forecast_report_chat"
 FORECAST_REPORT_CHAT_TEMPERATURE = 0.2
-INITIAL_REPORT_MAX_COMPLETION_TOKENS = 700
-FOLLOW_UP_MAX_COMPLETION_TOKENS = 1200
 INITIAL_REPORT_TARGET_WORDS = (120, 220)
 
 INITIAL_MODE = "initial"
@@ -130,12 +126,11 @@ terminology. Keep Markdown compact and professional.
 
 @dataclass(frozen=True)
 class ForecastReportChatPrompt:
-    """Framework-neutral prompt inputs and generation limits."""
+    """Framework-neutral prompt inputs and generation preferences."""
 
     mode: str
     instructions: str
     message: str
-    max_completion_tokens: int
     temperature: float = FORECAST_REPORT_CHAT_TEMPERATURE
 
 
@@ -156,7 +151,7 @@ def build_forecast_report_chat_prompt(
 
     ``forecast_context`` must be the server-authored context object. ``history``
     and ``message`` are serialized as quoted JSON data so they cannot become a
-    second instruction channel. Bounds and role/order validation belong to the
+    second instruction channel. Schema and role/order validation belong to the
     route layer.
     """
 
@@ -173,7 +168,6 @@ def build_forecast_report_chat_prompt(
             "Initial mode rules."
         )
         conversation: Mapping[str, Any] = {"history": [], "message": None}
-        max_tokens = INITIAL_REPORT_MAX_COMPLETION_TOKENS
     else:
         if not isinstance(message, str) or not message.strip():
             raise ValueError("Follow-up mode requires a non-empty message")
@@ -182,7 +176,6 @@ def build_forecast_report_chat_prompt(
             "mode rules."
         )
         conversation = {"history": list(history), "message": message.strip()}
-        max_tokens = FOLLOW_UP_MAX_COMPLETION_TOKENS
 
     context_json = json.dumps(
         forecast_context, ensure_ascii=False, separators=(",", ":")
@@ -202,5 +195,4 @@ def build_forecast_report_chat_prompt(
         mode=mode,
         instructions=FORECAST_REPORT_CHAT_INSTRUCTIONS,
         message=prompt_message,
-        max_completion_tokens=max_tokens,
     )

@@ -56,7 +56,7 @@ purged. If another edit changes the symbol concurrently, refresh and retry.
 The API is `PATCH /api/symbols/{symbol}/positions/{position_id}/expiration` with
 `{"expiration": "2026-10-16"}`.
 
-## Position contract quantities
+## Position contract quantities and historical repair
 
 The positions table and expanded detail show the same backend-resolved **Total**
 and **Remaining** contract counts, including an explicit **Unknown** with the
@@ -83,3 +83,84 @@ notes field, generated `pos_..._YYYYMMDD_HHMMSS` identity and timezone-aware
 historical writer's one-contract convention, not a reconstruction of the
 investor's intended manual quantity. Closed/rolled documents without explicit
 quantity evidence remain unknown and are **not** guessed or reopened.
+
+`backend/scripts/repair_position_contracts.py` materializes only **missing**
+canonical `contracts` when the shared resolver establishes an original total:
+an explicit, valid `quantity` alias (including closed/rolled records), or the
+restricted historical fallback above. It requires unambiguous position IDs,
+recognized lifecycle status/type, a supported/absent schema marker, valid
+remaining evidence, and a document ETag. It does not copy a remaining-only
+count into the original total, infer totals from premium/ledger/share data,
+rewrite existing canonical values (even numeric strings), or repair explicit
+null, invalid, conflicting, modern missing, or ambiguous partial quantities.
+Existing repair provenance on a quantity-less record is also left for review,
+not overwritten.
+`closed_contracts`, `contracts_closed`, `assigned_contracts`,
+`contracts_assigned`, `partial_closes`, and `partial_assignments` are treated
+conservatively as partial-lifecycle evidence. Skips include exact reasons.
+
+Example operator workflow, **not executed against any live database as part of
+this implementation**. Use separately authorized target credentials in
+`COSMOSDB_ENDPOINT` / `COSMOSDB_KEY`; the script does not load `.env`:
+
+```bash
+cd backend
+# Default mode is dry-run. Repeat --symbol for an explicitly bounded batch.
+python3 scripts/repair_position_contracts.py --symbol AAPL \
+  --database stock-options-manager --symbols-container symbols \
+  --max-documents 10 --max-positions 100 --dry-run
+
+# Review actions, skips, target and sha256 above; reuse exactly the same scope.
+python3 scripts/repair_position_contracts.py --symbol AAPL \
+  --database stock-options-manager --symbols-container symbols \
+  --max-documents 10 --max-positions 100 --apply \
+  --plan-sha256 REVIEWED_SHA256 --confirm REPAIR_POSITION_CONTRACTS
+```
+
+For **all symbols**, replace the repeated `--symbol` flags with the explicit,
+mutually exclusive `--all-symbols` scope:
+
+```bash
+cd backend  # Omit this if already inside backend.
+python3 scripts/repair_position_contracts.py --all-symbols \
+  --max-documents 1000 --max-positions 10000 --dry-run
+
+# Review the complete report; paste its sha256, keeping the same target/bounds.
+python3 scripts/repair_position_contracts.py --all-symbols \
+  --max-documents 1000 --max-positions 10000 --apply \
+  --plan-sha256 REVIEWED_SHA256 --confirm REPAIR_POSITION_CONTRACTS
+```
+
+All-mode discovery is read-only and includes **every** `symbol_config` in the
+configured symbols container, even configurations without positions. It uses
+their actual exact symbol partition values without uppercasing or rewriting
+case-sensitive identities. The deduplicated, sorted discovered scope and all
+document snapshots are bound into the plan hash. Apply rediscovers the scope;
+new or removed symbols/documents invalidate the reviewed hash. An empty
+container is a successful no-op and produces no backup. Discovery and planning
+abort on the finite bounds above rather than silently omitting documents.
+These are the maximum supported bounds; if exceeded, use explicit smaller
+`--symbol` batches. No live discovery or repair was run for this implementation.
+
+The plan hash binds the target endpoint fingerprint/database/container, exact symbols, bounds,
+snapshots/ETags, candidates and skips. Bounds abort rather than truncate.
+Credentials come only from the two environment variables above; missing values
+fail clearly. Neither the endpoint nor the key is printed in reports; only a
+SHA-256 endpoint fingerprint identifies the account. Database and container
+use the existing non-secret defaults, with the explicit CLI overrides shown.
+Changed plans require a new audit. Before writing, all affected originals are
+re-read and saved to an exclusive, private (`0600`), fsynced and read-verified
+JSON backup under `backend/scripts/migration_backups/` (or `--backup-dir` inside
+the current project directory). Retain this sensitive backup securely.
+Every replacement uses ETag `IfNotModified`, preserves unrelated fields, and
+is read-verified afterward. No upserts/deletes or blind retries occur; concurrent
+edits fail closed. The script adds schema v2 if absent and repair provenance,
+retaining the historical warning after materialization.
+
+Apply is not transactional across symbol documents: the report identifies
+updated documents, CAS conflicts and failures. Exit codes are 0 for success
+(including no candidates), 2 for rejected/preflight/backup failures, and 3 for
+apply conflicts or verification failures. After a partial run, audit again and
+review a new hash; repaired positions become no-ops. There is no automatic
+restore that could overwrite later user edits: backups retain the exact
+pre-write documents/ETags for separately reviewed recovery.

@@ -37,7 +37,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
 
 const tabsSrc     = readFileSync(join(root, "src/components/SymbolDetailTabs.tsx"), "utf8");
-const pageSrc     = readFileSync(join(root, "src/app/symbols/[symbol]/page.tsx"), "utf8");
+const pageSrc     = readFileSync(join(root, "src/app/symbols/[symbol]/page.tsx"), "utf8")
+  + readFileSync(join(root, "src/components/SymbolDetailPanels.tsx"), "utf8");
 const cardSrc     = readFileSync(join(root, "src/components/SymbolConfigurationCard.tsx"), "utf8");
 const holdingsSrc = readFileSync(join(root, "src/components/PortfolioHoldingsCard.tsx"), "utf8");
 

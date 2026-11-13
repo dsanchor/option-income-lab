@@ -7,6 +7,15 @@ Options Chat and Quick Analysis are no longer global choices. A local greeting
 does not invoke the model. **New conversation** clears the ephemeral history.
 The technical `api` mode and `api_chat` model settings remain compatible.
 
+The application imposes no token, message-length, conversation-history, request-body,
+or response-length ceilings on these chats, including the legacy conversational
+API modes. Forecast chat includes all sanitized forecast rows in the selected
+range without row-count or context-byte truncation. Model/provider context and
+output limits and server/platform transport constraints still apply; genuine
+provider errors remain errors. Schema validation, data access boundaries, and
+the selected forecast ranges are unchanged. The initial forecast report retains
+a compact writing preference, not an enforced output cap.
+
 ## Shared read-only MCP access
 
 Chat, activity chats, Symbol chats, and forecast follow-ups share the existing

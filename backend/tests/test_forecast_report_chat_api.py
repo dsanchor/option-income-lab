@@ -205,7 +205,7 @@ def test_initial_success_uses_authoritative_forecast_only_context(client):
     }
 
 
-def test_follow_up_quotes_bounded_history_without_accepting_context(client):
+def test_follow_up_quotes_history_without_accepting_context(client):
     response = client.post(
         "/api/symbols/MSFT/forecasts/chat",
         json={
@@ -258,15 +258,60 @@ def test_follow_up_quotes_bounded_history_without_accepting_context(client):
         ({
             "mode": "follow_up",
             "range": "30d",
-            "message": "x" * 2001,
+            "message": "",
             "history": [{"role": "assistant", "content": "report"}],
-        }, 413),
+        }, 400),
+        ({
+            "mode": "follow_up",
+            "range": "30d",
+            "message": "question",
+            "history": [],
+        }, 400),
+        ({
+            "mode": "follow_up",
+            "range": "30d",
+            "message": "question",
+            "history": [{"role": "assistant", "content": 1}],
+        }, 400),
+        ({
+            "mode": "follow_up",
+            "range": "30d",
+            "message": "question",
+            "history": [
+                {"role": "assistant", "content": "report"},
+                {"role": "user", "content": "question"},
+            ],
+        }, 400),
     ],
 )
-def test_validation_rejects_invalid_or_oversize_input(client, payload, status):
+def test_validation_rejects_invalid_input(client, payload, status):
     response = client.post("/api/symbols/MSFT/forecasts/chat", json=payload)
     assert response.status_code == status
     assert response.json()["error"]
+
+
+def test_long_conversation_and_reply_are_preserved_without_app_caps(client, monkeypatch):
+    message = "é" * 2001
+    history = [
+        {"role": "assistant" if index % 2 == 0 else "user", "content": "é" * 10001}
+        for index in range(13)
+    ]
+    reply = "Full model response " * 2000
+
+    async def long_reply(self, *, symbol, prompt):
+        self.prompts.append(prompt)
+        return reply
+
+    monkeypatch.setattr(FakeRunner, "run_forecast_report_chat", long_reply)
+    payload = {"mode": "follow_up", "range": "30d", "message": message, "history": history}
+    assert len(json.dumps(payload).encode()) > 128 * 1024
+    response = client.post("/api/symbols/MSFT/forecasts/chat", json=payload)
+    assert response.status_code == 200
+    assert response.json()["reply"] == reply
+    conversation_text = FakeRunner.prompts[-1].message.split(
+        "UNTRUSTED_CONVERSATION_JSON\n", 1,
+    )[1].split("\n\nTASK", 1)[0]
+    assert json.loads(conversation_text) == {"message": message, "history": history}
 
 
 def test_content_type_malformed_json_missing_symbol_and_empty_history(client):
@@ -370,14 +415,14 @@ def test_context_recursively_excludes_unallowlisted_and_untyped_values(client):
     }
 
 
-def test_context_deterministically_truncates_rows(client):
+def test_context_keeps_all_sanitized_rows_without_row_or_byte_caps(client):
     client.app.state.cosmos.forecasts = [
         _forecast(
             f"2026-09-{(index % 28) + 1:02d}",
             100 + index,
             reason="x" * 3500,
         )
-        for index in range(130)
+        for index in range(200)
     ]
     response = client.post(
         "/api/symbols/MSFT/forecasts/chat",
@@ -385,9 +430,17 @@ def test_context_deterministically_truncates_rows(client):
     )
     assert response.status_code == 200
     meta = response.json()["context_meta"]
-    assert meta["forecast_count"] == 130
-    assert meta["rows_in_context"] <= 100
-    assert meta["truncated"] is True
+    assert meta["forecast_count"] == 200
+    assert meta["rows_in_context"] == 200
+    assert meta["truncated"] is False
+    context_text = FakeRunner.prompts[-1].message.split(
+        "AUTHORITATIVE_SERVER_FORECAST_CONTEXT_JSON\n", 1,
+    )[1].split("\n\nUNTRUSTED_CONVERSATION_JSON", 1)[0]
+    context = json.loads(context_text)
+    assert len(context_text.encode()) > 96 * 1024
+    assert len(context["rows"]) == 200
+    assert {row["price_at_creation"] for row in context["rows"]} == set(range(100, 300))
+    assert all("reason" not in row["reading"] for row in context["rows"])
 
 
 @pytest.fixture

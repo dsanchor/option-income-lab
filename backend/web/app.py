@@ -2328,6 +2328,9 @@ def _compute_symbol_detail(
     symbol: str,
     securities_svc=None,
     holdings_svc=None,
+    *,
+    section=None,
+    resolved_security=None,
 ) -> Optional[dict]:
     """View-model for the Symbol detail page (mirrors the legacy HTML route).
 
@@ -2341,16 +2344,32 @@ def _compute_symbol_detail(
     - Returns None if the symbol does not exist.
     - Returns a dict with `_multiple_choices` key (list of candidates) if the
       bare ticker resolves to multiple security_master documents.
+
+    Scoped reads defer portfolio work, option history/linkage and plans to
+    their own requests. The unscoped response retains the legacy contract.
     """
     sym = _ticker_from_symbol_param(symbol)
     doc = cosmos.get_symbol(sym)
+    needs_options = section in (None, "options")
+    needs_stocks = section in (None, "stocks")
+    needs_plans = section in (None, "plans")
+    needs_summary = section in (None, "summary")
+    if section and resolved_security and doc:
+        configured_id = doc.get("security_id")
+        configured_mic = _resolve_screener_mic(doc.get("exchange"))
+        if (
+            configured_id and configured_id != resolved_security.get("security_id")
+        ) or (
+            not configured_id and configured_mic != resolved_security.get("exchange_mic")
+        ):
+            doc = None
     from src.option_timing_store import load_current
 
     # ── portfolio_only path: no symbol_config but may have security + ledger ──
     if doc is None:
-        security_doc = None
+        security_doc = resolved_security
         portfolio_field = None
-        if securities_svc:
+        if securities_svc and security_doc is None:
             # Try to find a security_master by ticker (single match assumed here;
             # the endpoint already handled the multiple-match 300 case)
             try:
@@ -2364,14 +2383,14 @@ def _compute_symbol_detail(
             except Exception:
                 pass
 
-        if security_doc and holdings_svc:
+        if needs_stocks and security_doc and holdings_svc:
             security_id = security_doc.get("security_id", "")
             try:
                 h_result = holdings_svc.compute_holdings()
                 holding = next(
                     (h for h in h_result.get("holdings", [])
                      if h.get("security_id") == security_id or
-                     h.get("ticker", "").upper() == sym),
+                     (section is None and h.get("ticker", "").upper() == sym)),
                     None,
                 )
                 # Fetch movements independently of holding presence (same fix as main path).
@@ -2413,6 +2432,8 @@ def _compute_symbol_detail(
                     }
             except Exception as exc:
                 logger.warning("_compute_symbol_detail portfolio_only lookup failed: %s", exc)
+                if section == "stocks":
+                    raise
 
         if security_doc is None:
             return None  # Neither config nor security → genuine 404
@@ -2442,7 +2463,7 @@ def _compute_symbol_detail(
             "updated_at": security_doc.get("updated_at"),
             "_etag": security_doc.get("_etag", ""),
         }
-        symbol_state = "portfolio_only" if portfolio_field else "watchlist_only"
+        symbol_state = ("portfolio_only" if portfolio_field else "watchlist_only") if needs_stocks else None
         from src.us_exchange_eligibility import is_us_options_eligible as _is_elig
         _po_tv_symbol = security_field["effective_tradingview_symbol"]
         return {
@@ -2466,18 +2487,19 @@ def _compute_symbol_detail(
             "security": security_field,
             "portfolio": portfolio_field,
             "symbol_state": symbol_state,
+            **({"has_symbol_config": False} if section else {}),
             "us_options_eligible": _is_elig(_po_mic),
             "option_timing": load_current(
                 cosmos, sym, security_doc.get("security_id"), _is_elig(_po_mic),
-            ),
+            ) if needs_summary else None,
             "tradingview_symbol": _po_tv_symbol,
         }
 
-    plans = _sort_by_updated_at_desc(cosmos.get_plans(sym))
+    plans = _sort_by_updated_at_desc(cosmos.get_plans(sym)) if needs_plans else []
 
     # Unified recent activity + alert feed across all agent types.
     activities: List[Dict] = []
-    for agent_type, meta in AGENT_TYPES.items():
+    for agent_type, meta in (AGENT_TYPES.items() if needs_options else []):
         acts = cosmos.get_recent_activities(sym, agent_type, max_entries=50)
         for a in acts:
             a["_agent_key"] = str(a.get("agent_type", ""))
@@ -2500,7 +2522,7 @@ def _compute_symbol_detail(
             latest_monitor[pid] = act
 
     positions = []
-    for pos in doc.get("positions", []):
+    for pos in (doc.get("positions", []) if needs_options else []):
         p = dict(pos)
         mon = latest_monitor.get(pos.get("position_id"))
         if mon and (
@@ -2516,7 +2538,7 @@ def _compute_symbol_detail(
         p["display_buyback"] = _parse_numeric(pos.get("buyback_cost"))
         positions.append(p)
 
-    if securities_svc and holdings_svc:
+    if needs_options and securities_svc and holdings_svc:
         try:
             linkage = build_option_position_linkage(
                 [doc],
@@ -2552,9 +2574,11 @@ def _compute_symbol_detail(
     clean = _clean_doc({**doc, "positions": positions})
 
     # ── Security master lookup (canonical identity) ───────────────────────
-    security_doc = None
-    security_id_from_config = clean.get("security_id")
-    if securities_svc and security_id_from_config:
+    security_doc = resolved_security
+    security_id_from_config = clean.get("security_id") or (
+        resolved_security.get("security_id") if resolved_security else None
+    )
+    if securities_svc and security_id_from_config and security_doc is None:
         try:
             security_doc = securities_svc.get_security(security_id_from_config)
         except Exception as exc:
@@ -2591,7 +2615,7 @@ def _compute_symbol_detail(
 
     # ── Portfolio holdings for this symbol ───────────────────────────────
     portfolio_field = None
-    if holdings_svc and security_id_from_config:
+    if needs_stocks and holdings_svc and security_id_from_config:
         try:
             holdings_result = holdings_svc.compute_holdings()
             holding = next(
@@ -2599,7 +2623,7 @@ def _compute_symbol_detail(
                  if h.get("security_id") == security_id_from_config),
                 None,
             )
-            if holding is None:
+            if holding is None and section is None:
                 # Ticker fallback for configs without security_id yet populated
                 holding = next(
                     (h for h in holdings_result.get("holdings", [])
@@ -2660,6 +2684,8 @@ def _compute_symbol_detail(
                 "_compute_symbol_detail: portfolio lookup failed for %s: %s",
                 sym, exc,
             )
+            if section == "stocks":
+                raise
 
     # ── Symbol state classification ────────────────────────────────────────
     has_config = bool(doc)  # we already have the doc at this point
@@ -2680,6 +2706,8 @@ def _compute_symbol_detail(
         symbol_state = "portfolio_historical"
     else:
         symbol_state = "portfolio_only"
+    if not needs_stocks:
+        symbol_state = None
 
     # ── US-options eligibility flag (§J.2 danny-unified-watchlist-contract.md) ──
     from src.us_exchange_eligibility import is_us_options_eligible
@@ -2718,7 +2746,7 @@ def _compute_symbol_detail(
             "call_exposure": summary_call_exposure,
             "active_count": len(active_positions),
         },
-        "next_earnings_date": cosmos.get_next_earnings_date(sym),
+        "next_earnings_date": cosmos.get_next_earnings_date(sym) if needs_summary else None,
         "is_paused": is_watchlist_paused(doc),
         # canonical identity
         "security_id": security_id_from_config,
@@ -2727,18 +2755,22 @@ def _compute_symbol_detail(
         "portfolio": portfolio_field,
         # symbol state classification
         "symbol_state": symbol_state,
+        **({"has_symbol_config": True} if section else {}),
         # US-options eligibility (Amendment J)
         "us_options_eligible": us_options_eligible,
         "option_timing": load_current(
             cosmos, sym, security_id_from_config, us_options_eligible,
-        ),
+        ) if needs_summary else None,
         # TradingView symbol (danny-tradingview-symbol-contract.md)
         "tradingview_symbol": tradingview_symbol,
     }
 
 
 @app.get("/api/symbols/{symbol}/detail")
-async def api_symbol_detail(request: Request, symbol: str):
+async def api_symbol_detail(
+    request: Request, symbol: str,
+    section: Optional[str] = Query(default=None, pattern="^(summary|options|stocks|plans)$"),
+):
     """GET /api/symbols/{symbol}/detail — unified symbol detail.
 
     Accepts both canonical MIC:TICKER (e.g. XNYS:AAPL) and bare ticker (AAPL).
@@ -2746,6 +2778,10 @@ async def api_symbol_detail(request: Request, symbol: str):
     For bare tickers that match multiple security_master documents this endpoint
     returns HTTP 300 Multiple Choices with the list of candidates so the
     frontend can render a disambiguation page.
+
+    Optional ``section=summary|stocks|options|plans`` loads only that section's
+    dependencies. Summary is the fast navigation path; other sections are
+    requested asynchronously by the active detail tab.
     """
     try:
         cosmos = _get_cosmos(request)
@@ -2759,7 +2795,7 @@ async def api_symbol_detail(request: Request, symbol: str):
 
         securities_svc = CosmosSecuritiesService(cosmos.container)
         portfolio_container = getattr(cosmos, "portfolio_container", None)
-        if portfolio_container is not None:
+        if portfolio_container is not None and section in (None, "stocks", "options"):
             holdings_svc = HoldingsService(
                 CosmosPortfolioService(portfolio_container, None),
                 securities_svc,
@@ -2769,6 +2805,7 @@ async def api_symbol_detail(request: Request, symbol: str):
 
         # ── Resolve symbol parameter to a bare TICKER for symbol_config lookup ──
         # MIC:TICKER → canonical; bare TICKER → check for ambiguity first.
+        resolved_security = None
         if ":" in symbol:
             # Canonical MIC:TICKER route — extract ticker for config lookup
             parts = symbol.split(":", 1)
@@ -2781,6 +2818,7 @@ async def api_symbol_detail(request: Request, symbol: str):
                     status_code=404,
                 )
             lookup_ticker = ticker
+            resolved_security = canonical_sec
         else:
             lookup_ticker = _ticker_from_symbol_param(symbol)
             # Check for ambiguity via security_master
@@ -2811,6 +2849,8 @@ async def api_symbol_detail(request: Request, symbol: str):
                         },
                         status_code=300,
                     )
+                if len(ticker_matches) == 1:
+                    resolved_security = ticker_matches[0]
             except Exception as exc:
                 logger.warning("api_symbol_detail: security_master list failed: %s", exc)
 
@@ -2819,12 +2859,21 @@ async def api_symbol_detail(request: Request, symbol: str):
             lookup_ticker,
             securities_svc=securities_svc,
             holdings_svc=holdings_svc,
+            **({"section": section, "resolved_security": resolved_security} if section else {}),
         )
         if data is None:
             return JSONResponse(
                 {"error": f"Symbol {symbol} not found"},
                 status_code=404,
             )
+        if section == "summary":
+            data["detail_loaded_at"] = datetime.now(timezone.utc).isoformat()
+        elif section == "stocks":
+            data = {k: data[k] for k in ("portfolio", "symbol_state", "security_id", "security")}
+        elif section == "options":
+            data = {k: data[k] for k in ("positions", "activities", "agent_types")}
+        elif section == "plans":
+            data = {"plans": data["plans"]}
         return JSONResponse(data)
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=503)
@@ -5838,14 +5887,6 @@ def _resolve_forecast_range(range_param, date_from, date_to):
 
 
 _FORECAST_CHAT_RANGES = frozenset({"1d", "7d", "30d", "90d"})
-_FORECAST_CHAT_MAX_BODY_BYTES = 128 * 1024
-_FORECAST_CHAT_MAX_CONTEXT_BYTES = 96 * 1024
-_FORECAST_CHAT_MAX_ROWS = 100
-_FORECAST_CHAT_MAX_HISTORY = 12
-_FORECAST_CHAT_MAX_HISTORY_MESSAGE_CHARS = 4000
-_FORECAST_CHAT_MAX_HISTORY_CHARS = 20000
-_FORECAST_CHAT_MAX_MESSAGE_CHARS = 2000
-_FORECAST_CHAT_MAX_OUTPUT_CHARS = 24000
 _FORECAST_CHAT_HORIZONS = ("1d", "1w", "2w", "4w")
 _FORECAST_CHAT_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _FORECAST_CHAT_STATUS_VALUES = frozenset({"open", "closed"})
@@ -6173,10 +6214,10 @@ def _build_forecast_data(cosmos, symbol, date_from, date_to, *, predictions=None
     }
 
 
-def _build_bounded_forecast_chat_context(forecast_data, range_key):
+def _build_forecast_chat_context(forecast_data, range_key):
     rows = [
         _forecast_chat_row(row)
-        for row in forecast_data["rows"][:_FORECAST_CHAT_MAX_ROWS]
+        for row in forecast_data["rows"]
     ]
     selected_count = forecast_data["count"]
     context = {
@@ -6229,19 +6270,7 @@ def _build_bounded_forecast_chat_context(forecast_data, range_key):
         },
         "rows": rows,
     }
-    context = _forecast_chat_compact(context)
-    rows = context["rows"]
-    while len(json.dumps(
-        context, ensure_ascii=False, separators=(",", ":")
-    ).encode("utf-8")) > _FORECAST_CHAT_MAX_CONTEXT_BYTES and len(rows) > 1:
-        rows.pop()
-        context["truncation"]["truncated"] = True
-        context["truncation"]["rows_in_context"] = len(rows)
-    if len(json.dumps(
-        context, ensure_ascii=False, separators=(",", ":")
-    ).encode("utf-8")) > _FORECAST_CHAT_MAX_CONTEXT_BYTES:
-        raise ValueError("Forecast context exceeds the supported size")
-    return context
+    return _forecast_chat_compact(context)
 
 
 def _validate_forecast_chat_payload(payload):
@@ -6266,16 +6295,11 @@ def _validate_forecast_chat_payload(payload):
     history = payload.get("history")
     if not isinstance(message, str) or not message.strip():
         raise ValueError("Follow-up mode requires a non-empty message")
-    if len(message) > _FORECAST_CHAT_MAX_MESSAGE_CHARS:
-        raise OverflowError("Message exceeds 2,000 characters")
     if not isinstance(history, list):
         raise ValueError("Follow-up history must be an array")
     if not history:
         raise ValueError("Follow-up history must start with the initial report")
-    if len(history) > _FORECAST_CHAT_MAX_HISTORY:
-        raise OverflowError("History exceeds 12 messages")
     expected_role = "assistant"
-    total_chars = 0
     normalized = []
     for item in history:
         if not isinstance(item, dict) or set(item) != {"role", "content"}:
@@ -6285,15 +6309,10 @@ def _validate_forecast_chat_payload(payload):
             raise ValueError("History must alternate assistant/user and end with assistant")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("History content must be a non-empty string")
-        if len(content) > _FORECAST_CHAT_MAX_HISTORY_MESSAGE_CHARS:
-            raise OverflowError("A history message exceeds 4,000 characters")
-        total_chars += len(content)
         normalized.append({"role": role, "content": content})
         expected_role = "user" if role == "assistant" else "assistant"
     if normalized[-1]["role"] != "assistant":
         raise ValueError("History must end with an assistant message")
-    if total_chars > _FORECAST_CHAT_MAX_HISTORY_CHARS:
-        raise OverflowError("History exceeds 20,000 characters")
     return mode, range_key, message.strip(), normalized
 
 
@@ -6530,15 +6549,11 @@ async def api_symbol_forecasts_chat(request: Request, symbol: str):
             status_code=400,
         )
     body = await request.body()
-    if len(body) > _FORECAST_CHAT_MAX_BODY_BYTES:
-        return JSONResponse({"error": "Request body is too large"}, status_code=413)
     try:
         payload = json.loads(body)
         mode, range_key, message, history = _validate_forecast_chat_payload(payload)
     except json.JSONDecodeError:
         return JSONResponse({"error": "Malformed JSON body"}, status_code=400)
-    except OverflowError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=413)
     except (TypeError, ValueError) as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -6562,11 +6577,9 @@ async def api_symbol_forecasts_chat(request: Request, symbol: str):
     date_from, date_to = _resolve_forecast_range(range_key, None, None)
     try:
         forecast_data = _build_forecast_data(cosmos, sym, date_from, date_to)
-        context = _build_bounded_forecast_chat_context(
+        context = _build_forecast_chat_context(
             forecast_data, range_key
         )
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=413)
     except Exception:
         logger.exception("Forecast context unavailable symbol=%s range=%s", sym, range_key)
         return JSONResponse(
@@ -6604,8 +6617,6 @@ async def api_symbol_forecasts_chat(request: Request, symbol: str):
         )
         if not reply:
             raise RuntimeError("The configured model returned an empty response")
-        if len(reply) > _FORECAST_CHAT_MAX_OUTPUT_CHARS:
-            raise RuntimeError("The configured model response exceeded the output limit")
     except Exception as exc:
         logger.exception(
             "Forecast report generation failed symbol=%s range=%s mode=%s",
@@ -11379,7 +11390,7 @@ async def chat_api(request: Request):
             model=model,
             messages=api_messages,
             temperature=0.7,
-            max_completion_tokens=2048,
+            max_completion_tokens=None,
         )
         return JSONResponse({"reply": reply})
 
@@ -11617,7 +11628,7 @@ async def symbol_chat_api(request: Request, symbol: str):
         from src.llm import create_async_chat_client
         from src.agent_runner import run_contextual_chat
 
-        options = {"max_tokens": 2048}
+        options = {}
         if "luna" not in model.lower():
             options["temperature"] = 0.7
         reply = await run_contextual_chat(

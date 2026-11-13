@@ -7,14 +7,7 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ symbol: string }> },
 ) {
-  const contentLength = Number(req.headers.get("content-length") ?? "0");
-  if (Number.isFinite(contentLength) && contentLength > 128 * 1024) {
-    return Response.json({ error: "Request body is too large" }, { status: 413 });
-  }
   const rawBody = await req.text();
-  if (new TextEncoder().encode(rawBody).byteLength > 128 * 1024) {
-    return Response.json({ error: "Request body is too large" }, { status: 413 });
-  }
   const mediaType = req.headers
     .get("content-type")
     ?.split(";", 1)[0]

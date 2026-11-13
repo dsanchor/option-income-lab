@@ -4397,7 +4397,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
             model=None,
             function_id="forecast_report_chat",
         )
-        options = {"max_tokens": prompt.max_completion_tokens}
+        options = {}
         if "luna" not in deployment.lower():
             options["temperature"] = prompt.temperature
         client = self._get_client(model=None, function_id="forecast_report_chat")

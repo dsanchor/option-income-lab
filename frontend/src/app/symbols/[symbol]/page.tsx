@@ -1,24 +1,19 @@
+import { Suspense } from "react";
 import { API_BASE_URL } from "@/lib/api";
 import { decodeSymbolParam } from "@/lib/symbolEncoding";
 import { isUSOptionsEligible } from "@/lib/exchangeEligibility";
 import SymbolActions from "@/components/SymbolActions";
-import RecentActivities from "@/components/RecentActivities";
-import PositionsTable from "@/components/PositionsTable";
-import SymbolSummary from "@/components/SymbolSummary";
+import SymbolSummary, { SymbolMembershipBadge } from "@/components/DeferredSymbolSummary";
 import SymbolForecastSummary from "@/components/SymbolForecastSummary";
-import AddPositionForm from "@/components/AddPositionForm";
-import SymbolPlansTable from "@/components/SymbolPlansTable";
+import { SymbolOptionsPanel, SymbolStocksPanel, SymbolPlansPanel } from "@/components/SymbolDetailPanels";
 import { RtChartProvider, RtChartButton, RtChartPanel } from "@/components/RtChart";
 import TradingViewSymbolInfo from "@/components/TradingViewSymbolInfo";
-import PortfolioHoldingsCard from "@/components/PortfolioHoldingsCard";
 import DetailSection from "@/components/DetailSection";
-import StockTransactionsTable from "@/components/StockTransactionsTable";
 import SymbolDisambiguation from "@/components/SymbolDisambiguation";
 import SymbolConfigurationCard from "@/components/SymbolConfigurationCard";
 import SymbolDetailTabs from "@/components/SymbolDetailTabs";
 import OptionTiming from "@/components/OptionTiming";
 import type { SymbolDetail, SymbolDisambiguationResult } from "@/types/symbol-detail";
-import type { Plan as PlanRow } from "@/types/plans";
 
 export const dynamic = "force-dynamic";
 
@@ -30,8 +25,8 @@ type DetailResult =
 async function getData(symbol: string): Promise<DetailResult> {
   const safeSymbol = decodeSymbolParam(symbol);
   try {
-    const url = `${API_BASE_URL}/api/symbols/${encodeURIComponent(safeSymbol)}/detail`;
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    const url = `${API_BASE_URL}/api/symbols/${encodeURIComponent(safeSymbol)}/detail?section=summary`;
+    const res = await fetch(url, { headers: { Accept: "application/json" }, cache: "no-store" });
 
     if (res.status === 300) {
       const body = await res.json() as SymbolDisambiguationResult;
@@ -83,18 +78,12 @@ export default async function SymbolDetailPage({
 
   const d = result.data;
   const enr = d.enrichment ?? {};
-  const positions = d.positions ?? [];
-  const activities = d.activities ?? [];
-  const plans = d.plans ?? [];
   const symbolState = d.symbol_state ?? null;
 
-  const hasPortfolio = d.portfolio != null;
   const hasAgentContent =
-    symbolState === "watchlist_only" ||
+    d.has_symbol_config ?? (symbolState === "watchlist_only" ||
     symbolState === "watchlist_and_portfolio" ||
-    symbolState == null; // legacy — show if state unknown
-
-  const hasOptions = hasAgentContent || positions.length > 0 || activities.length > 0;
+    symbolState == null); // legacy — show if state unknown
 
   // Use backend-resolved flag when available (fail-closed); fall back to local helper.
   const usOptionsEligible =
@@ -104,6 +93,7 @@ export default async function SymbolDetailPage({
 
   // security_id to query movements — prefer canonical form from security master
   const stocksSecurityId = d.security?.security_id ?? d.security_id ?? null;
+  const detailSymbol = stocksSecurityId ?? symbol;
 
   return (
     <div className="space-y-6">
@@ -129,11 +119,7 @@ export default async function SymbolDetailPage({
                   <span>{d.security.listing_currency}</span>
                 </>
               )}
-              {symbolState && (
-                <span className={`inline-block rounded-[var(--radius-pill)] border px-2 py-0.5 ${membershipBadgeClass(symbolState)}`}>
-                  {membershipBadgeLabel(symbolState)}
-                </span>
-              )}
+              <SymbolMembershipBadge detailSymbol={detailSymbol} snapshot={d.detail_loaded_at} fallback={symbolState} />
             </div>
           )}
           <RtChartButton />
@@ -151,9 +137,15 @@ export default async function SymbolDetailPage({
           enrichment={enr}
           summary={d.summary}
           currentShares={d.portfolio?.current_shares}
+          detailSymbol={detailSymbol}
+          snapshot={d.detail_loaded_at}
         />
         <OptionTiming symbol={d.security?.security_id ?? d.security_id ?? symbol} snapshot={d.option_timing} />
-        <SymbolForecastSummary symbol={d.security?.security_id ?? d.security_id ?? symbol} />
+        {usOptionsEligible && (
+          <Suspense fallback={<div role="status" className="py-4 text-sm text-text-muted">Loading projection…</div>}>
+            <SymbolForecastSummary symbol={d.security?.security_id ?? d.security_id ?? symbol} />
+          </Suspense>
+        )}
       </DetailSection>
 
       {/* Symbol configuration — always visible, below Summary */}
@@ -170,34 +162,21 @@ export default async function SymbolDetailPage({
       <SymbolDetailTabs
         optionsPanel={
           <div className="space-y-6">
-            {hasOptions && usOptionsEligible ? (
-              <>
-                <PositionsTable symbol={symbol} positions={positions} />
-                <AddPositionForm symbol={symbol} />
-                {(hasAgentContent || activities.length > 0) && (
-                  <RecentActivities activities={activities} agentTypes={d.agent_types ?? []} />
-                )}
-              </>
+            {usOptionsEligible ? (
+              <SymbolOptionsPanel symbol={detailSymbol} snapshot={d.detail_loaded_at} hasAgentContent={hasAgentContent} />
             ) : (
               <p className="text-sm text-text-muted py-4">
-                {usOptionsEligible
-                  ? "No open positions or recent options activity."
-                  : "US options (XNYS/XNAS) are not available for this exchange."}
+                US options (XNYS/XNAS) are not available for this exchange.
               </p>
             )}
           </div>
         }
         stocksPanel={
           stocksSecurityId && (
-            <div className="space-y-6">
-              {hasPortfolio && (
-                <PortfolioHoldingsCard portfolio={d.portfolio!} symbolState={symbolState} />
-              )}
-              <StockTransactionsTable securityId={stocksSecurityId} />
-            </div>
+            <SymbolStocksPanel symbol={detailSymbol} snapshot={d.detail_loaded_at} securityId={stocksSecurityId} />
           )
         }
-        plansPanel={<SymbolPlansTable plans={plans as unknown as PlanRow[]} />}
+        plansPanel={<SymbolPlansPanel symbol={detailSymbol} snapshot={d.detail_loaded_at} />}
         actions={
           usOptionsEligible && (
             <SymbolActions
@@ -214,24 +193,4 @@ export default async function SymbolDetailPage({
       />
     </div>
   );
-}
-
-function membershipBadgeLabel(state: string): string {
-  switch (state) {
-    case "watchlist_only": return "Watchlist";
-    case "portfolio_only": return "Portfolio";
-    case "watchlist_and_portfolio": return "Portfolio + Watchlist";
-    case "portfolio_historical": return "Portfolio (historical)";
-    default: return state;
-  }
-}
-
-function membershipBadgeClass(state: string): string {
-  switch (state) {
-    case "watchlist_only": return "border-accent-blue/40 bg-accent-blue/10 text-accent-blue";
-    case "portfolio_only":
-    case "watchlist_and_portfolio": return "border-accent-green/40 bg-accent-green/10 text-accent-green";
-    case "portfolio_historical": return "border-border bg-bg-input text-text-muted";
-    default: return "border-border bg-bg-input text-text-muted";
-  }
 }

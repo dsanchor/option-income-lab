@@ -55,6 +55,7 @@ export default function SymbolDetailTabs({
   actions,
 }: Props) {
   const [activeTab, setActiveTab] = useState<TabId>("stocks");
+  const [ready, setReady] = useState(false);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   // Resolve explicit deep links on mount and keep the selected panel aligned
@@ -62,6 +63,7 @@ export default function SymbolDetailTabs({
   useEffect(() => {
     const syncTabFromLocation = () => {
       setActiveTab(HASH_TO_TAB[window.location.hash] ?? "stocks");
+      setReady(true);
     };
 
     syncTabFromLocation();
@@ -150,7 +152,7 @@ export default function SymbolDetailTabs({
             id={`sym-panel-${tab.id}`}
             aria-labelledby={`sym-tab-${tab.id}`}
           >
-            {panels[tab.id]}
+            {ready ? panels[tab.id] : <p role="status" className="text-sm text-text-muted">Loading section…</p>}
           </div>
         ) : null,
       )}

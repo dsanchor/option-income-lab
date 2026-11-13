@@ -3,13 +3,11 @@ import json
 import pytest
 
 from src.forecast_report_chat_instructions import (
-    FOLLOW_UP_MAX_COMPLETION_TOKENS,
     FOLLOW_UP_MODE,
     FORECAST_REPORT_CHAT_FUNCTION_ID,
     FORECAST_REPORT_CHAT_INSTRUCTIONS,
     FORECAST_REPORT_CHAT_TEMPERATURE,
     INITIAL_MODE,
-    INITIAL_REPORT_MAX_COMPLETION_TOKENS,
     INITIAL_REPORT_TARGET_WORDS,
     build_forecast_report_chat_prompt,
 )
@@ -42,11 +40,9 @@ def _context():
     }
 
 
-def test_public_contract_has_dedicated_function_and_brief_limits():
+def test_public_contract_has_dedicated_function_and_compact_style():
     assert FORECAST_REPORT_CHAT_FUNCTION_ID == "forecast_report_chat"
     assert FORECAST_REPORT_CHAT_TEMPERATURE == 0.2
-    assert INITIAL_REPORT_MAX_COMPLETION_TOKENS == 700
-    assert FOLLOW_UP_MAX_COMPLETION_TOKENS == 1200
     assert INITIAL_REPORT_TARGET_WORDS == (120, 220)
 
 
@@ -83,7 +79,6 @@ def test_initial_prompt_contains_only_server_context_and_empty_conversation():
     )
 
     assert prompt.mode == INITIAL_MODE
-    assert prompt.max_completion_tokens == 700
     assert prompt.temperature == 0.2
     assert prompt.instructions == FORECAST_REPORT_CHAT_INSTRUCTIONS
     assert '"symbol":"MSFT"' in prompt.message
@@ -101,7 +96,6 @@ def test_follow_up_prompt_quotes_history_and_message_as_json_data():
     )
 
     assert prompt.mode == FOLLOW_UP_MODE
-    assert prompt.max_completion_tokens == FOLLOW_UP_MAX_COMPLETION_TOKENS
     conversation_text = prompt.message.split(
         "UNTRUSTED_CONVERSATION_JSON\n", 1
     )[1].split("\n\nTASK\n", 1)[0]
