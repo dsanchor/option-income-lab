@@ -12,7 +12,9 @@ Public API:
     build_buy_tracker_evidence(fetch_data, now=None) -> dict
     normalize_buy_tracker_activity(activity_data, evidence) -> dict
     build_rule_evaluation(agent_type, activity_data, phase=None,
-                           category=None, enrichment_data=None) -> dict
+                           category=None, enrichment_data=None,
+                           ex_dividend_evidence=None) -> dict
+    add_ex_dividend_diagnostic(evaluation, evidence, phase) -> dict
     merge_phase_evaluations(assessment_eval, roll_eval) -> dict
 """
 
@@ -2193,12 +2195,37 @@ def _sort_for_display(rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 _MONITOR_AGENT_TYPES = {"open_call_monitor", "open_put_monitor"}
 
 
+def add_ex_dividend_diagnostic(evaluation: dict, evidence: dict, phase: str) -> dict:
+    """Return a reporting-only copy; callers retain the original review input."""
+    result = copy.deepcopy(evaluation)
+    if result.get("agent_type") != "open_call_monitor":
+        return result
+    rule_id = "ocm_r_ex_div_risk" if phase == "roll" else "ocm_a_ex_div_risk"
+    for phase_block in result.get("phases", []):
+        if phase_block["phase"] != phase:
+            continue
+        rules = [rule for rule in phase_block["rules"] if rule["rule_id"] != rule_id]
+        rules.append(_rule(
+            rule_id, "Ex-Dividend Early-Assignment Diagnostic", "calendar",
+            evidence["status"],
+            "Monitor ITM American-style calls spanning ex-date; dividend vs bid extrinsic",
+            evidence["observed"], "deterministic",
+            detail=evidence["detail"], blocking=False, data_refs=evidence["data_refs"],
+        ))
+        phase_block["rules"] = _sort_for_display(rules)
+    all_rules = [rule for block in result.get("phases", []) for rule in block["rules"]]
+    result["first_blocker"] = _first_blocker(all_rules)
+    result["summary_counts"] = _summary_counts(all_rules)
+    return result
+
+
 def build_rule_evaluation(
     agent_type: str,
     activity_data: Dict[str, Any],
     phase: Optional[str] = None,
     category: Optional[str] = None,
     enrichment_data: Optional[Dict[str, Any]] = None,
+    ex_dividend_evidence: dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Build the rule_evaluation object from parsed activity JSON.
 
@@ -2210,6 +2237,9 @@ def build_rule_evaluation(
     ``phase`` ("assessment" or "roll") MUST be supplied and the result uses
     the ``phases`` array format (A1.3). For all other agent types, ``phase``
     is ignored and a flat ``rules`` array is returned with ``phase: null``.
+
+    ``ex_dividend_evidence`` is trusted, application-authored reporting only,
+    never read from activity/model fields and never a blocking gate.
     """
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -2230,7 +2260,7 @@ def build_rule_evaluation(
             phase_name = "assessment"
 
         phases = [{"phase": phase_name, "rules": _sort_for_display(rules)}]
-        return {
+        evaluation = {
             "schema_version": SCHEMA_VERSION,
             "agent_type": agent_type,
             "phases": phases,
@@ -2238,6 +2268,10 @@ def build_rule_evaluation(
             "first_blocker": _first_blocker(rules),
             "summary_counts": _summary_counts(rules),
         }
+        return (
+            add_ex_dividend_diagnostic(evaluation, ex_dividend_evidence, phase_name)
+            if ex_dividend_evidence is not None else evaluation
+        )
 
     if agent_type == "covered_call":
         rules = build_covered_call_rules(activity_data, category)

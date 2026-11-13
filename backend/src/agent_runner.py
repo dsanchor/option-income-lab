@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 import json
@@ -38,12 +39,14 @@ from .yfinance_data_provider import YFinanceDataProvider, create_provider, get_s
 from .supervisor_instructions import get_supervisor_instructions, SUPERVISOR_OUTPUT_SCHEMA, DUAL_ROLL_AUDIT
 from .alpha_instructions import get_alpha_instructions, ALPHA_OUTPUT_SCHEMA, RELAXABLE_PARAMETERS, DUAL_ROLL_COMPARISON
 from .rule_evaluator import (
+    add_ex_dividend_diagnostic,
     build_buy_tracker_evidence,
     build_rule_evaluation,
     merge_phase_evaluations,
     normalize_buy_tracker_activity,
 )
 from .category_params import normalize_category
+from .ex_dividend_diagnostic import build_ex_dividend_evidence
 from .dual_roll import build_roll_alternatives, build_roll_pair_context, roll_source_available, scope_alpha_review, scope_supervisor_review
 
 # Canonical timestamp format — used for ALL activity and alert log entries.
@@ -3366,6 +3369,30 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 market_data=data,
                 source_chain=dual_roll_source_chain,
             )
+            # Reporting seam only: resolve calendar evidence after all policy,
+            # quote corrections and candidate selection have finished.
+            diagnostic_calendar_date = None
+            diagnostic_calendar_failed = False
+            if position_type == "call":
+                try:
+                    diagnostic_calendar_date = cosmos.get_next_calendar_event_date(symbol, "ex_dividend")
+                except Exception:
+                    diagnostic_calendar_failed = True
+                    logger.warning("Ex-dividend diagnostic calendar unavailable for %s", symbol, exc_info=True)
+
+            def ex_dividend_evidence_for(contract_strike, contract_expiration, scope):
+                if position_type != "call":
+                    return None
+                return build_ex_dividend_evidence(
+                    data, dual_roll_source_chain,
+                    strike=contract_strike, expiration=contract_expiration,
+                    option_type=position_type,
+                    now=datetime.fromisoformat(analysis_ts.replace("Z", "+00:00")),
+                    calendar_date=diagnostic_calendar_date,
+                    calendar_lookup_failed=diagnostic_calendar_failed,
+                    scope=scope,
+                )
+
             if roll_alternatives is not None:
                 activity_payload["roll_alternatives"] = roll_alternatives
                 activity_payload["symbol_category"] = normalize_category(symbol_category)
@@ -3411,6 +3438,31 @@ Output your activity in the required JSON format. Use the timestamp above in you
             # design §5) -- see run_symbol_agent for the full rationale.
             activity_payload["run_id"] = run_id
 
+            # Keep review prompts/policy identical: diagnostics are persisted
+            # for the user, not supplied to Supervisor or Alpha as new signals.
+            review_activity_payload = deepcopy(activity_payload)
+            if agent_type == "open_call_monitor":
+                activity_payload["rule_evaluation"] = add_ex_dividend_diagnostic(
+                    activity_payload["rule_evaluation"],
+                    ex_dividend_evidence_for(strike, expiration, "held"), "assessment",
+                )
+                if _rule_eval_has_roll_phase:
+                    activity_payload["rule_evaluation"] = add_ex_dividend_diagnostic(
+                        activity_payload["rule_evaluation"],
+                        ex_dividend_evidence_for(
+                            activity_payload.get("new_strike"), activity_payload.get("new_expiration"), "proposed",
+                        ), "roll",
+                    )
+                if roll_alternatives is not None:
+                    for alternative_id, alternative in roll_alternatives["alternatives"].items():
+                        if alternative["status"] == "available":
+                            alternative["rule_evaluation"] = add_ex_dividend_diagnostic(
+                                alternative["rule_evaluation"],
+                                ex_dividend_evidence_for(
+                                    alternative.get("new_strike"), alternative.get("new_expiration"), alternative_id,
+                                ), "roll",
+                            )
+
             # Write activity to CosmosDB (unified write path)
             dec_doc = cosmos.write_activity(
                 symbol=symbol,
@@ -3433,7 +3485,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 # Both supervisor + alpha run in parallel
                 supervisor_view, alpha_view = await asyncio.gather(
                     self._run_supervisor_review(
-                        activity_payload=activity_payload,
+                        activity_payload=review_activity_payload,
                         market_data=market_data,
                         previous_context=previous_context,
                         agent_type=agent_type,
@@ -3443,7 +3495,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                         parent_trace_id=final_phase_trace_id,
                     ),
                     self._run_alpha_review(
-                        activity_payload=activity_payload,
+                        activity_payload=review_activity_payload,
                         market_data=alpha_market_data,
                         previous_context=previous_context,
                         agent_type=agent_type,
@@ -3559,7 +3611,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                             "status": "skipped_incomplete_quotes",
                         }
                     supervisor_view = await self._run_supervisor_review(
-                        activity_payload=activity_payload,
+                        activity_payload=review_activity_payload,
                         market_data=market_data,
                         previous_context=previous_context,
                         agent_type=agent_type,
@@ -3575,7 +3627,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                     # Both supervisor + alpha run in parallel
                     supervisor_view, alpha_view = await asyncio.gather(
                         self._run_supervisor_review(
-                            activity_payload=activity_payload,
+                            activity_payload=review_activity_payload,
                             market_data=market_data,
                             previous_context=previous_context,
                             agent_type=agent_type,
@@ -3585,7 +3637,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                             parent_trace_id=final_phase_trace_id,
                         ),
                         self._run_alpha_review(
-                            activity_payload=activity_payload,
+                            activity_payload=review_activity_payload,
                             market_data=alpha_market_data,
                             previous_context=previous_context,
                             agent_type=agent_type,
@@ -3608,7 +3660,7 @@ Output your activity in the required JSON format. Use the timestamp above in you
                 else:
                     # Supervisor runs alone (unconditional)
                     supervisor_view = await self._run_supervisor_review(
-                        activity_payload=activity_payload,
+                        activity_payload=review_activity_payload,
                         market_data=market_data,
                         previous_context=previous_context,
                         agent_type=agent_type,
