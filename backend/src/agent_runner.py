@@ -1,6 +1,6 @@
 import asyncio
 from copy import deepcopy
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from contextvars import ContextVar
 import json
 import logging
@@ -23,6 +23,7 @@ from agent_framework.openai import OpenAIChatCompletionClient
 
 from .cosmos_db import CosmosDBService, is_watchlist_paused
 from .llm import LlmConfig, create_async_chat_client
+from .chat_mcp_instructions import CHAT_MCP_INSTRUCTIONS, OIL_CHAT_TOOLS
 from .context import ContextProvider
 from .options_chain_filters import (
     filter_options_chain_by_type,
@@ -132,7 +133,7 @@ async def _api_chat_news_tool(url: str | None):
             available = True
         except Exception:
             logger.warning(
-                "Optional financial news MCP discovery failed; continuing API Chat without news",
+                "Optional financial news MCP discovery failed; continuing Chat without news",
                 exc_info=True,
             )
         yield tool if available else None
@@ -141,6 +142,76 @@ async def _api_chat_news_tool(url: str | None):
             await tool.close()
         except Exception:
             logger.warning("Optional financial news MCP cleanup failed", exc_info=True)
+
+
+class ChatMCPConnectionError(RuntimeError):
+    """A configured chat capability could not complete its turn."""
+
+
+@asynccontextmanager
+async def chat_mcp_tools(
+    instructions: str, *, mcp_url: str | None = None,
+    financial_news_mcp_url: str | None = None,
+):
+    """Own one turn's shared MCP sessions; absent business configuration is explicit."""
+    instructions += "\n\n" + CHAT_MCP_INSTRUCTIONS
+    async with AsyncExitStack() as stack:
+        tools = []
+        if mcp_url:
+            tool = MCPStreamableHTTPTool(
+                name="oil-mcp", url=mcp_url, request_timeout=30,
+                allowed_tools=OIL_CHAT_TOOLS, load_prompts=False,
+            )
+            try:
+                await stack.enter_async_context(tool)
+            except Exception as exc:
+                try:
+                    await tool.close()
+                except Exception:
+                    logger.warning("Business MCP cleanup failed after connection failure", exc_info=True)
+                raise ChatMCPConnectionError("Chat business MCP server is unavailable") from exc
+            if not tool.functions:
+                raise ChatMCPConnectionError("No allowed business MCP tools are available")
+            tools.append(tool)
+        else:
+            instructions += (
+                "\nBusiness MCP tools are unavailable for this turn. For business facts, "
+                "use only supplied context; explicitly disclose this limitation when current business "
+                "data is needed. Never pretend you retrieved live data."
+            )
+        news_tool = await stack.enter_async_context(
+            _api_chat_news_tool(financial_news_mcp_url)
+        )
+        if news_tool is not None:
+            tools.append(news_tool)
+        else:
+            instructions += (
+                "\nFinancial news access is unavailable for this turn. "
+                "If current news is needed, explicitly say you cannot retrieve it; "
+                "do not invent headlines or treat this as evidence that no news/events exist."
+            )
+        yield tools, instructions
+
+
+async def run_contextual_chat(
+    *, client, name: str, instructions: str, message: str, options=None,
+):
+    """Execute a contextual turn using only server-configured shared MCPs."""
+    try:
+        async with chat_mcp_tools(
+            instructions,
+            mcp_url=os.environ.get("OIL_MCP_URL", "").strip() or None,
+            financial_news_mcp_url=os.environ.get("FINANCIAL_NEWS_MCP_URL", "").strip() or None,
+        ) as (tools, system_instructions):
+            agent = Agent(
+                client=client, name=name, instructions=system_instructions, tools=tools,
+            )
+            result = await agent.run(message, **({"options": options} if options is not None else {}))
+            return (result.text or str(result)).strip()
+    except ChatMCPConnectionError:
+        raise
+    except Exception as exc:
+        raise ChatMCPConnectionError("Chat tools or configured model are unavailable") from exc
 
 
 class AgentRunner:
@@ -4322,14 +4393,6 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
             prompt.mode,
             "forecast_report_chat",
         )
-        agent = Agent(
-            client=self._get_client(
-                model=None,
-                function_id="forecast_report_chat",
-            ),
-            name="ForecastReportChatAgent",
-            instructions=prompt.instructions,
-        )
         deployment = self._resolve_model_deployment(
             model=None,
             function_id="forecast_report_chat",
@@ -4337,11 +4400,18 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
         options = {"max_tokens": prompt.max_completion_tokens}
         if "luna" not in deployment.lower():
             options["temperature"] = prompt.temperature
-        result = await agent.run(
-            prompt.message,
-            options=options,
-        )
-        reply = (result.text or str(result)).strip()
+        client = self._get_client(model=None, function_id="forecast_report_chat")
+        if prompt.mode == "follow_up":
+            reply = await run_contextual_chat(
+                client=client, name="ForecastReportChatAgent",
+                instructions=prompt.instructions, message=prompt.message, options=options,
+            )
+        else:
+            agent = Agent(
+                client=client, name="ForecastReportChatAgent", instructions=prompt.instructions,
+            )
+            result = await agent.run(prompt.message, options=options)
+            reply = (result.text or str(result)).strip()
         logger.info(
             "Forecast report chat completed symbol=%s mode=%s duration=%.2fs "
             "output_chars=%d function_id=%s",
@@ -4402,24 +4472,11 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
         """
         run_start = time.time()
         logger.info("Starting API chat function_id=%s", "api_chat")
-        mcp_tool = MCPStreamableHTTPTool(
-            name="oil-mcp",
-            url=mcp_url,
-            request_timeout=30,
-        )
         try:
-            async with mcp_tool, _api_chat_news_tool(financial_news_mcp_url) as news_tool:
-                tools = [mcp_tool]
-                instructions = prompt.instructions
-                if news_tool is not None:
-                    tools.append(news_tool)
-                else:
-                    instructions += (
-                        "\n\nFinancial news access is unavailable for this turn. "
-                        "Continue using business tools as needed. If current news is "
-                        "needed, explicitly say you cannot retrieve it; do not invent "
-                        "headlines or treat this as evidence that no news/events exist."
-                    )
+            async with chat_mcp_tools(
+                prompt.instructions, mcp_url=mcp_url,
+                financial_news_mcp_url=financial_news_mcp_url,
+            ) as (tools, instructions):
                 agent = Agent(
                     client=self._get_client(model=None, function_id="api_chat"),
                     name="ApiChatAgent",
@@ -4433,7 +4490,7 @@ All market data has been pre-fetched above. Do NOT use any browser tools — ana
                 result = await agent.run(prompt.message, options=options)
         except Exception as exc:
             logger.exception("API chat MCP tool invocation failed")
-            raise RuntimeError(f"API Chat MCP server is unavailable: {exc}") from exc
+            raise RuntimeError("Chat MCP server or model is unavailable") from exc
         reply = (result.text or str(result)).strip()
         logger.info(
             "API chat completed duration=%.2fs output_chars=%d function_id=%s",

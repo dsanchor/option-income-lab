@@ -104,7 +104,7 @@ AI_FUNCTIONS = {
         "default_model": "gpt-5.4-mini",
     },
     "api_chat": {
-        "label": "API Chat",
+        "label": "Chat",
         "group": "Chat",
         "description": (
             "General-purpose assistant with live read access to business "

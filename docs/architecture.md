@@ -134,7 +134,7 @@ The yfinance provider includes a built-in TTL cache that sits between consumers 
 - Rate limiting (2 calls/sec) prevents Yahoo Finance throttling
 - The cache is process-local (in-memory) — no external infrastructure required
 
-**Consumers:** The cache is used by the `/chat` endpoint (Portfolio Chat and Quick Analysis), the Report Agent, and the per-symbol analysis runner. Any component that calls `YFinanceDataProvider` benefits from deduplication transparently.
+**Consumers:** The cache is used by contextual Symbol/activity chats, the Report Agent, and the per-symbol analysis runner. Main Chat opens directly and shares read-only MCP connections with contextual chats (forecast follow-ups only, not initial reports). Legacy global chat API modes remain compatible but are no longer UI choices. Any component that calls `YFinanceDataProvider` benefits from deduplication transparently.
 
 ## Options Chain Cache
 

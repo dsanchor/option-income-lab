@@ -101,7 +101,7 @@ Eight specialized AI agents power the backend:
 |----------|-------------|
 | [**Key Concepts**](docs/concepts.md) | Activities vs Alerts, Position Monitors, DPS, Supervisor & Alpha Advisor, Position Lifecycle |
 | [**Architecture**](docs/architecture.md) | System design, agent pipeline, data flow, pre-fetch architecture, CosmosDB model, project structure |
-| [**Dual-Mode Chat**](docs/chat.md) | Portfolio Chat, Quick Analysis, Per-Activity Chat with historical vs live data separation |
+| [**Chat**](docs/chat.md) | Direct Chat and contextual activity, Symbol, and forecast follow-ups with shared read-only MCP access |
 | [**DGI Screener & Skills**](docs/screener.md) | Top 20 screener, momentum analysis, Buy Tracker, category-based strategy skills |
 | [**Agents**](docs/agents.md) | Summarization Agent, Symbol Report, Action Plans monitor |
 | [**Output**](docs/output.md) | Activity & alert documents, example JSON, Telegram notifications |
@@ -154,8 +154,8 @@ Suspend a symbol's following agents (Covered Call, Cash-Secured Put, Buy Tracker
 → [Pause Watchlist Until Earnings](docs/concepts.md#pause-watchlist-until-earnings)
 
 ### 💬 Chat & Reports
-- **Portfolio Chat** — Analyze tracked symbols with CosmosDB context (positions, activities, alerts)
-- **Quick Analysis** — Fetch live Yahoo data for any symbol without saving to database
+- **Chat** — Opens directly with read-only business-data tools and optional public financial news
+- **Contextual Chats** — Keep activity, Symbol, and forecast conversations in context with the same MCP connections; initial forecast reports remain snapshot-only
 - **Per-Activity Chat** — Ephemeral advisory on specific decisions with historical vs live data separation
 - **Symbol Reports** — On-demand deep-dive combining technicals, dividends, options chain, risk assessment
 

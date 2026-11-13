@@ -292,7 +292,7 @@ def test_forecast_report_chat_runner_uses_dedicated_function_and_limits(monkeypa
 
     assert result == "brief reply"
     assert routed == [(None, "forecast_report_chat")]
-    assert captured["options"] == {"temperature": 0.2, "max_tokens": 700}
+    assert captured["options"] == {"max_tokens": 700}
 
 
 class FakeCosmos:

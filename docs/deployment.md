@@ -873,9 +873,12 @@ server over Streamable HTTP. It reuses the same `api` image
   reference, to avoid a circular ARM dependency) — see `OIL_MCP_URL` and
   `OIL_API_INTERNAL_URL` in [Environment Variables](#environment-variables) below. No
   manual configuration is required when using the automated provisioner or CI/CD.
-- The frontend's **API Chat** mode (`mode: "api"` in `/api/chat`) is a general-purpose
-  assistant backed by this MCP server, giving it live read access to all tracked
-  business data, independent of the existing Options Chat / Quick Analysis modes.
+- The frontend's **Chat** (`mode: "api"` in `/api/chat`, AI function `api_chat`)
+  opens directly as a general-purpose assistant backed by this MCP server.
+  Activity, Symbol, and forecast follow-up chats reuse the same server-configured
+  business and optional financial-news connections. Initial forecast reports stay
+  snapshot-only. Missing business MCP configuration disables main Chat; contextual
+  chats retain supplied context with an explicit tool-unavailable limitation.
 
 CI/CD (`.github/workflows/docker-publish.yml`) deploys `mcp` from the same built `api`
 image — there is no separate build job — immediately after the `api` deploy step and

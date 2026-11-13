@@ -12,6 +12,8 @@ Pattern:
 """
 
 import json
+from typing import ClassVar
+
 import pytest
 from starlette.testclient import TestClient
 
@@ -93,11 +95,14 @@ class FakeAgent:
     """Fake Agent that captures message and returns mock answer."""
     
     captured_messages = []  # Module-level storage for assertions
+    captured_agents: ClassVar[list] = []
     
-    def __init__(self, client, name, instructions):
+    def __init__(self, client, name, instructions, tools):
         self.client = client
         self.name = name
         self.instructions = instructions
+        self.tools = tools
+        self.captured_agents.append(self)
     
     async def run(self, message):
         """Capture message and return mock result."""
@@ -180,9 +185,12 @@ def test_app(fake_cosmos, monkeypatch):
     
     # Clear captured messages
     FakeAgent.captured_messages.clear()
+    FakeAgent.captured_agents.clear()
     
     # Monkeypatch late-imported symbols
-    monkeypatch.setattr("agent_framework.Agent", FakeAgent)
+    monkeypatch.setattr("src.agent_runner.Agent", FakeAgent)
+    monkeypatch.delenv("OIL_MCP_URL", raising=False)
+    monkeypatch.delenv("FINANCIAL_NEWS_MCP_URL", raising=False)
     monkeypatch.setattr("src.llm.create_async_chat_client", fake_create_async_chat_client)
     monkeypatch.setattr("src.config.Config", FakeConfig)
     
@@ -259,6 +267,8 @@ def test_happy_path_returns_200_with_answer(test_app):
     )
     
     assert response.status_code == 200
+    assert FakeAgent.captured_agents[0].tools == []
+    assert "Business MCP tools are unavailable" in FakeAgent.captured_agents[0].instructions
     data = response.json()
     assert "answer" in data
     assert data["answer"] == "MOCK ANSWER"

@@ -1,70 +1,36 @@
-# Dual-Mode Chat Experience
+# Chat
 
 [← Back to README](../README.md)
 
-The `/chat` page now offers two distinct modes for analysis:
+The Chat menu opens `/chat` directly. The former API Chat is now **Chat**;
+Options Chat and Quick Analysis are no longer global choices. A local greeting
+does not invoke the model. **New conversation** clears the ephemeral history.
+The technical `api` mode and `api_chat` model settings remain compatible.
 
-### Portfolio Chat
+## Shared read-only MCP access
 
-Analyze tracked symbols using your CosmosDB watchlist and position data. The chat context includes:
-- Recent activities and alerts for the selected symbol
-- Open positions (strike, expiration, status)
-- Historical decisions and risk flags
+Chat, activity chats, Symbol chats, and forecast follow-ups share the existing
+`OIL_MCP_URL` business connection and optional `FINANCIAL_NEWS_MCP_URL` connection.
+URLs come only from server environment configuration. Only existing allowlisted
+business tools and `get_financial_news` are exposed, not administrative tools.
+Each turn owns and closes its connections.
 
-Perfect for in-depth analysis of symbols you're actively tracking.
+Main Chat requires the business MCP. Contextual chats can still answer from their
+supplied context when it is not configured, with an explicit unavailable-tool
+limitation. A configured business connection failure returns an error; optional
+news discovery failure leaves business access available and discloses that news
+cannot be retrieved.
 
-**How to use:**
-1. Visit `/chat`
-2. Click "Portfolio Chat"
-3. Select a tracked symbol or ask general questions about your portfolio
-4. Get insights based on your historical data and positions
+Activity chats retain the exact historical agent decision and separately labeled
+current market data. Symbol chats retain their Symbol scope and US-options
+eligibility checks. Forecast initial reports remain bounded to their validated
+historical snapshot and never connect to MCP. Forecast follow-ups may retrieve
+additional same-Symbol evidence, clearly separating source/time and live data from
+the selected historical snapshot. All chats retain independent model settings.
 
-**Context toggles (all default OFF, independent of each other):**
+Conversation, business context, and tool responses are data, not instructions.
+External news receives only public tickers/topics, never conversation history,
+activities, positions, holdings, accounts, balances, or identity. News is optional,
+limited to recent articles, and not proof that no event occurred.
 
-| Toggle | Label | What it adds |
-|--------|-------|-------------|
-| `include_symbol_data` | Include symbol data | Fundamentals, technicals, and quality metrics from stored enrichment |
-| `include_calendar_events` | Include earnings & ex-dividend calendar | Persisted earnings and ex-dividend dates from the current UTC date through the next 3 calendar months |
-
-The calendar toggle reads from `cosmos.get_calendar_events()` (already-synced data only — no live Yahoo Finance calls). Events are filtered to the symbols present in the assembled agent context. If enabled but no matching events exist, the advisor is informed explicitly. If the calendar read fails, a compact unavailable marker is appended and the rest of the portfolio context remains intact.
-
-### Quick Analysis
-
-Analyze any symbol (tracked or not) using live Yahoo Finance data, without saving to your database. Quick Analysis fetches:
-- Real-time overview (market cap, P/E, dividend yield, etc.)
-- Technical indicators (RSI, MACD, moving averages, etc.)
-- Analyst forecasts (price targets, ratings)
-- Options chain (if available)
-- Dividend history
-
-Perfect for researching new symbols before committing to tracking.
-
-**How to use:**
-1. Visit `/chat`
-2. Click "Quick Analysis"
-3. Enter a symbol and select its market (NASDAQ, NYSE, AMEX, OTC)
-4. Click "Fetch & Analyze"
-5. Chat about the symbol with live data context
-6. Use "Change Mode" to switch back to Portfolio Chat or select a different symbol
-
-**Configuration:** Quick Analysis is read-only — data is fetched but never saved to CosmosDB. Rate limiting is handled gracefully with clear error messages.
-
-### Per-Activity Chat
-
-Accessible from individual activity detail pages via a **"Chat"** button next to the Delete button, this feature provides a read-only LLM advisory conversation about a specific agent decision. Designed for "why did the agent decide this?" questions and "what does this mean given today's market?" exploration.
-
-**How it works:**
-1. Click the "Chat" button on any activity detail page to open an ephemeral chat panel
-2. Ask questions about the activity — the LLM's decision rationale, position context, or implications
-3. The LLM receives two-tier context with strict separation:
-   - **AGENT DECISION block (historical):** The persisted activity record and position snapshot at decision time — exact, immutable data the agent used
-   - **CURRENT MARKET DATA block (live):** Re-fetched options chain and technical analysis labeled as "current, not what the agent used" — for comparing then vs. now
-4. The chat maintains conversation history within the session but never persists it — close the panel and it's gone
-5. **Read-only enforcement:** Zero database writes; the LLM cannot execute trades, modify positions, or alter activities
-
-**Key principles:**
-- **Historical vs. live separation:** Clearly distinguishes what the agent saw (historical snapshot) from what's happening now (live re-fetch)
-- **Ephemeral by design:** No chat persistence; lightweight advisory layer without bloating activity records
-- **Graceful degradation:** If live options chain or technicals are unavailable, the chat still functions with historical data only
-
-**Configuration:** Model configurable via `activity_chat.model` in `config.yaml` (default: `gpt-5.4-mini`).
+Import chat and non-conversational report/explanation jobs are unchanged.

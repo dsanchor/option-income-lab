@@ -22,6 +22,7 @@ async def test_api_chat_optional_news_registration_and_cleanup(
     class PrimaryTool:
         def __init__(self, **kwargs):
             self.name = kwargs["name"]
+            self.functions = [SimpleNamespace(name="list_symbols")]
 
         async def __aenter__(self):
             events.append("primary-enter")
@@ -102,6 +103,54 @@ async def test_news_setup_context_does_not_swallow_model_or_tool_failure(monkeyp
         async with module._api_chat_news_tool("https://news.internal/mcp"):
             raise RuntimeError("model/tool failed")
     assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_real_sdk_shared_business_access_excludes_admin_and_mutating_tools(monkeypatch):
+    methods = []
+
+    def upstream(request):
+        if request.method != "POST":
+            return httpx.Response(200)
+        body = json.loads(request.content)
+        method = body["method"]
+        methods.append(method)
+        if method.startswith("notifications/"):
+            return httpx.Response(204)
+        if method == "initialize":
+            result = {
+                "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "oil-mcp", "version": "1.0.0"},
+            }
+        elif method == "tools/list":
+            result = {"tools": [
+                {"name": name, "description": name,
+                 "inputSchema": {"type": "object", "properties": {}}}
+                for name in ("list_symbols", "delete_symbol", "get_settings")
+            ]}
+        elif method == "tools/call":
+            assert body["params"]["name"] == "list_symbols"
+            result = {"content": [{"type": "text", "text": "MSFT"}]}
+        else:
+            assert method == "ping"
+            result = {}
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result})
+
+    real_tool = module.MCPStreamableHTTPTool
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        monkeypatch.setattr(
+            module, "MCPStreamableHTTPTool",
+            lambda **kwargs: real_tool(**kwargs, http_client=client),
+        )
+        async with module.chat_mcp_tools(
+            "Contextual chat rules", mcp_url="https://business.internal/mcp",
+        ) as (tools, _):
+            assert len(tools) == 1
+            assert [f.name for f in tools[0].functions] == ["list_symbols"]
+            result = await tools[0].call_tool("list_symbols")
+            assert result[0].text == "MSFT"
+    assert "tools/call" in methods
+    assert "prompts/list" not in methods
 
 
 @pytest.mark.asyncio

@@ -146,6 +146,20 @@ def client(monkeypatch):
     return TestClient(app, raise_server_exceptions=False)
 
 
+def test_configured_follow_up_mcp_failure_returns_503(client, monkeypatch):
+    from src.agent_runner import ChatMCPConnectionError
+
+    async def unavailable(self, **kwargs):
+        raise ChatMCPConnectionError("Chat business MCP server is unavailable")
+
+    monkeypatch.setattr(FakeRunner, "run_forecast_report_chat", unavailable)
+    response = client.post("/api/symbols/MSFT/forecasts/chat", json={
+        "mode": "follow_up", "range": "30d", "message": "What changed?",
+        "history": [{"role": "assistant", "content": "Initial report"}],
+    })
+    assert response.status_code == 503
+
+
 def test_initial_success_uses_authoritative_forecast_only_context(client):
     table_response = client.get(
         "/api/symbols/MSFT/forecasts",
