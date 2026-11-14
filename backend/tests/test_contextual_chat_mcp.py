@@ -60,6 +60,15 @@ def shared_tools(monkeypatch):
 
         async def run(self, message, **kwargs):
             self.kwargs.update(message=message, options=kwargs.get("options"))
+            if message.startswith("=== SELECTED ACTIVITY"):
+                activity = json.loads(message.split("\n", 1)[1].split("\n\n===")[0])
+                assert activity["activity_id"] == "activity-123"
+                assert activity["record"]["decision"] == "WAIT"
+                assert "Current technicals" not in message
+                if message.endswith('"Why WAIT?"'):
+                    # Selected historical evidence is already supplied; no tool
+                    # fetch is needed to load it or to explain this decision.
+                    return SimpleNamespace(text=activity["record"]["reason"])
             evidence = []
             for tool in self.kwargs.get("tools", []):
                 name = "get_symbol_detail" if tool.name == "oil-mcp" else "get_financial_news"
@@ -157,13 +166,19 @@ async def test_tool_invocation_failure_propagates_with_all_sessions_closed(share
 
 
 @pytest.mark.parametrize("model_failure", [False, True])
-def test_activity_route_preserves_historical_live_contract_and_shared_tools(
-    shared_tools, monkeypatch, caplog, model_failure,
+@pytest.mark.parametrize("question", ["Why WAIT?", "What changed?"])
+def test_activity_route_supplies_selected_evidence_and_uses_tools_only_on_demand(
+    shared_tools, monkeypatch, caplog, model_failure, question,
 ):
     import web.app as web
 
     events, agents, _ = shared_tools
-    activity = {"symbol": "MSFT", "decision": "WAIT", "timestamp": "2026-10-01"}
+    activity = {
+        "symbol": "MSFT", "decision": "WAIT", "timestamp": "2026-10-01",
+        "reason": "Persisted reason", "position_id": "pos-1",
+        "supervisor_view": {"one_liner": "Persisted supervisor evidence"},
+        "options_chain": {"calls": ["giant historic chain" * 100_000]},
+    }
     cosmos = SimpleNamespace(
         get_activity_by_id=lambda activity_id: activity,
         get_symbol=lambda symbol: {"symbol": "MSFT"},
@@ -189,7 +204,7 @@ def test_activity_route_preserves_historical_live_contract_and_shared_tools(
 
         monkeypatch.setattr(module.Agent, "run", fail_model)
     response = TestClient(web.app).post("/api/activities/activity-123/chat", json={
-        "message": "What changed?",
+        "message": question,
         "history": [{"role": "assistant", "content": "Previous explanation"}],
     })
     if model_failure:
@@ -201,14 +216,24 @@ def test_activity_route_preserves_historical_live_contract_and_shared_tools(
         assert events[-2:] == ["news-close", "business-close"]
         return
     assert response.status_code == 200
-    assert response.json() == {"answer": "Business evidence; News evidence"}
+    assert response.json() == {
+        "answer": "Persisted reason" if question == "Why WAIT?" else "Business evidence; News evidence",
+    }
     assert agents[0]["client"] == ("activity-model", llm)
     message = agents[0]["message"]
-    assert "AGENT DECISION (historical, exact" in message
+    assert "SELECTED ACTIVITY (persisted historical evidence" in message
     assert '"decision": "WAIT"' in message
-    assert "CURRENT MARKET DATA (LIVE NOW — NOT what the agents used)" in message
-    assert "Current technicals" in message
-    assert "ASSISTANT: Previous explanation" in message
+    assert "Persisted supervisor evidence" in message
+    assert "giant historic chain" not in message
+    assert "CURRENT MARKET DATA" not in message
+    assert "Current technicals" not in message
+    assert '"role": "assistant", "content": "Previous explanation"' in message
+    if question == "Why WAIT?":
+        assert "business-call" not in events
+        assert "news-call" not in events
+    else:
+        assert "business-call" in events
+        assert "news-call" in events
     assert events[-2:] == ["news-close", "business-close"]
 
 
