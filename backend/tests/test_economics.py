@@ -573,6 +573,159 @@ def test_build_economics_report_excludes_paper_positions_from_real_aggregates():
     assert report["by_type"]["puts"]["count"] == 4
 
 
+def _cross_period_option_inputs(option_type="call", opening_date="2026-01-15"):
+    closing_date = "2026-02-15" if opening_date.startswith("2026") else "2026-01-15"
+    docs = [{
+        "symbol": "AAPL",
+        "security_id": "XNAS:AAPL",
+        "positions": [{
+            "position_id": "cross-period",
+            "type": option_type,
+            "strike": 100,
+            "expiration": "2026-03-20",
+            "opened_at": f"{opening_date}T00:00:00Z",
+            "closed_at": f"{closing_date}T00:00:00Z",
+            "status": "closed",
+            "close_reason": "manual",
+        }],
+    }]
+    movements = [
+        _movement("cross-sell", f"{option_type.upper()}_SELL", "XNAS:AAPL",
+                  "cross-period", opening_date, ACCOUNT_1, "102", "2", "100"),
+        _movement("cross-buy", f"{option_type.upper()}_BUY", "XNAS:AAPL",
+                  "cross-period", closing_date, ACCOUNT_1, "28", "2", "30"),
+    ]
+    return docs, movements
+
+
+@pytest.mark.parametrize("option_type", ["call", "put"])
+def test_option_cash_flows_follow_each_movement_month_and_preserve_lifetime_roc(option_type):
+    docs, movements = _cross_period_option_inputs(option_type)
+    report = _build_economics_report(docs, movements=movements, securities=_sample_securities())
+
+    _assert_rows_include(report["monthly"], [
+        {"year": 2026, "month": 1, "total_premium_usd": 102.0, "total_buyback_usd": 0.0,
+         "net_income_eur": 100.0, "total_commission_eur": 2.0, "positions_count": 1},
+        {"year": 2026, "month": 2, "total_premium_usd": 0.0, "total_buyback_usd": 28.0,
+         "net_income_eur": -30.0, "total_commission_eur": 2.0, "positions_count": 1},
+    ])
+    _assert_includes(report["summary"], {
+        "net_income_eur": 70.0, "net_option_usd_gross": 74.0,
+        "total_commission_eur": 4.0, "avg_roc_pct": 0.74,
+        "win_rate": 100.0, "total_positions": 1,
+    })
+    _assert_includes(report["positions"][0], {
+        "premium_usd": 102.0, "buyback_usd": 28.0,
+        "net_income_eur": 70.0, "roc_pct": 0.74,
+    })
+    split_field = f"{option_type}s_net_income_eur"
+    assert [row[split_field] for row in report["monthly"]] == [100.0, -30.0]
+    assert sum(row["net_income_eur"] for row in report["monthly"]) == report["summary"]["net_income_eur"]
+    for month, expected_net in [(1, 100.0), (2, -30.0)]:
+        scoped = _build_economics_report(
+            docs, movements=movements, securities=_sample_securities(),
+            year=2026, month_filter=[month],
+        )
+        assert scoped["summary"]["net_income_eur"] == expected_net
+        assert scoped["positions"][0]["net_income_eur"] == 70.0
+        assert scoped["positions"][0]["roc_annualized"] == report["positions"][0]["roc_annualized"]
+
+
+@pytest.mark.parametrize("option_type", ["call", "put"])
+@pytest.mark.parametrize("filters", [
+    {"year": 2026}, {"month_filter": [1]}, {"year": 2026, "month_filter": [1]},
+])
+def test_option_buy_only_period_includes_prior_year_position_and_scopes_all_totals(option_type, filters):
+    docs, movements = _cross_period_option_inputs(option_type, "2025-12-15")
+    report = _build_economics_report(
+        docs, movements=movements, securities=_sample_securities(), **filters,
+    )
+    assert report["filters"]["years"] == [2026, 2025]
+    assert len(report["positions"]) == 1
+    for group in (report["summary"], report["by_symbol"][0],
+                  report["by_type"][f"{option_type}s"], report["monthly"][0]):
+        _assert_includes(group, {
+            "total_premium_usd": 0.0, "total_buyback_usd": 28.0,
+            "net_option_usd_gross": -28.0, "net_income_eur": -30.0,
+            "total_commission_eur": 2.0, "avg_roc_pct": 0.74,
+        })
+    assert [(row["year"], row["month"]) for row in report["monthly"]] == [(2026, 1)]
+    assert report["positions"][0]["net_income_eur"] == 70.0
+    assert report["positions"][0]["roc_pct"] == 0.74
+    assert report["summary"]["win_rate"] == 100.0
+
+
+def test_option_period_filters_preserve_account_paper_and_position_filters():
+    docs, movements = _cross_period_option_inputs()
+    docs += _sample_option_symbol_docs_with_paper()
+    movements += _sample_option_movements_with_paper()
+    movements.append(_movement(
+        "outside-account", "CALL_BUY", "XNAS:AAPL", "cross-period",
+        "2026-02-15", ACCOUNT_2, "998", "1", "999",
+    ))
+    report = _build_economics_report(
+        docs, movements=movements, securities=_sample_securities(),
+        year=2026, month_filter=[2], account_filter=[ACCOUNT_1],
+        symbol_filter=["AAPL", "SHOP"], option_type="call",
+    )
+    assert report["summary"]["net_income_eur"] == -30.0
+    assert report["summary"]["total_positions"] == 1
+    assert report["summary"]["coverage"]["excluded_paper_positions"] == 1
+    assert report["summary"]["coverage"]["linked_positions"] == 1
+    assert report["positions"][0]["net_income_eur"] == 1.2  # Paper row remains inspectable.
+    real = next(row for row in report["positions"] if not row["is_paper"])
+    assert real["net_income_eur"] == 70.0
+    closed = _build_economics_report(
+        docs, movements=movements, securities=_sample_securities(),
+        year=2026, month_filter=[2], account_filter=[ACCOUNT_1],
+        symbol_filter=["AAPL", "SHOP"], option_type="call", status_filter="closed",
+    )
+    assert [row["position_id"] for row in closed["positions"]] == ["cross-period"]
+    assert closed["summary"]["net_income_eur"] == -30.0
+
+
+@pytest.mark.parametrize("trade_date", [None, "", "not-a-date", "2026-02-30"])
+def test_option_invalid_movement_date_warns_without_opening_month_cash_fallback(trade_date):
+    docs, movements = _cross_period_option_inputs()
+    movements[1]["trade_date"] = trade_date
+    report = _build_economics_report(docs, movements=movements, securities=_sample_securities())
+    assert report["summary"]["net_income_eur"] == 100.0
+    assert [row["net_income_eur"] for row in report["monthly"]] == [100.0]
+    assert report["positions"][0]["net_income_eur"] == 70.0
+    assert "OPTION_MOVEMENT_DATE_INVALID" in report["positions"][0]["warnings"]
+
+
+def test_option_multiple_movements_count_position_once_per_month():
+    docs, movements = _cross_period_option_inputs()
+    movements.append(_movement(
+        "second-buy", "CALL_BUY", "XNAS:AAPL", "cross-period",
+        "2026-02-20T18:00:00Z", ACCOUNT_1, "9", "1", "10",
+    ))
+    report = _build_economics_report(docs, movements=movements, securities=_sample_securities())
+    _assert_includes(report["monthly"][1], {
+        "net_income_eur": -40.0, "total_commission_eur": 3.0,
+        "positions_count": 1, "calls_count": 1,
+    })
+    assert report["summary"]["net_income_eur"] == 60.0
+
+
+def test_option_unfiltered_totals_preserve_position_rounding_for_fractional_fx():
+    docs, movements = _cross_period_option_inputs()
+    docs[0]["positions"].append({**docs[0]["positions"][0], "position_id": "second-position"})
+    movements[0]["net"]["eur_amount"] = "100.004"
+    movements[1]["net"]["eur_amount"] = "30.001"
+    movements += [
+        {**movement, "id": f"second-{movement['id']}", "option_position_id": "second-position"}
+        for movement in movements
+    ]
+    report = _build_economics_report(docs, movements=movements, securities=_sample_securities())
+    for field in ("premium_usd", "buyback_usd", "net_option_usd_gross",
+                  "net_income_eur", "total_commission_eur"):
+        summary_field = {"premium_usd": "total_premium_usd", "buyback_usd": "total_buyback_usd"}.get(field, field)
+        assert report["summary"][summary_field] == sum(position[field] for position in report["positions"])
+    assert report["summary"]["net_income_eur"] == 140.0
+
+
 class _FakeEconomicsCosmos(FakeCosmos):
     def __init__(self, symbol_docs):
         super().__init__()
@@ -724,12 +877,36 @@ def test_api_economics_overview_uses_eur_options_fields_and_coverage(economics_c
         "dividend_events": 1,
     })
     assert body["meta"] == {
-        "options_bucket_field": "opened_at",
+        "options_bucket_field": "trade_date",
         "dividends_bucket_field": "trade_date",
         "options_currency": "EUR",
         "dividends_currency": "EUR",
         "combined_total_available": True,
     }
+
+
+def test_api_overview_and_options_share_cross_month_cash_flows(economics_client):
+    docs, movements = _cross_period_option_inputs("call", "2025-12-15")
+    app.state.cosmos._symbol_docs = docs
+    for movement in movements:
+        app.state.cosmos.portfolio_container._store[movement["id"]] = movement
+
+    options = economics_client.get("/api/economics?account_id=acct-1&year=2026&month=1")
+    overview = economics_client.get("/api/economics/overview?account_id=acct-1&year=2026&month=1")
+    assert options.status_code == overview.status_code == 200
+    assert options.json()["summary"]["net_income_eur"] == -30.0
+    body = overview.json()
+    assert body["summary"]["options_net_eur"] == -30.0
+    assert body["summary"]["combined_net_eur"] == -21.0  # Includes the existing EUR 9 dividend.
+    _assert_rows_include(body["monthly"], [
+        {"month": "2026-01", "options_net_eur": -30.0, "combined_net_eur": -21.0},
+    ])
+    assert body["meta"]["options_bucket_field"] == "trade_date"
+    all_history = economics_client.get("/api/economics/overview?account_id=acct-1").json()
+    assert all_history["summary"]["options_net_eur"] == 70.0
+    assert [(row["month"], row["options_net_eur"]) for row in all_history["monthly"]] == [
+        ("2025-12", 100.0), ("2026-01", -30.0),
+    ]
 
 
 def test_api_economics_overview_reports_excluded_paper_positions():

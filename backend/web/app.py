@@ -283,12 +283,34 @@ def _sum_movement_amount(movements: List[Dict[str, Any]], *path: str) -> float:
     return total
 
 
-def _build_position_economics_group(positions: List[Dict[str, Any]]) -> Dict[str, float]:
-    total_premium_usd = sum(position["premium_usd"] for position in positions)
-    total_buyback_usd = sum(position["buyback_usd"] for position in positions)
-    net_option_usd_gross = sum(position["net_option_usd_gross"] for position in positions)
-    net_income_eur = sum(position["net_income_eur"] for position in positions)
-    total_commission_eur = sum(position["total_commission_eur"] for position in positions)
+def _build_position_economics_group(
+    positions: list[dict[str, Any]],
+    period: tuple[int, int] | None = None,
+) -> dict[str, float]:
+    # Financial totals use dated ledger flows; position statistics and RoC
+    # retain the complete account-scoped lifetime result.
+    position_flows = [
+        [flow for flow in position["_cash_flows"]
+         if period is None or flow["_period"] == period]
+        for position in positions
+    ]
+    total_premium_usd = sum(
+        _round2(sum(flow["premium_usd"] for flow in flows))
+        for flows in position_flows
+    )
+    total_buyback_usd = sum(
+        _round2(sum(flow["buyback_usd"] for flow in flows))
+        for flows in position_flows
+    )
+    net_option_usd_gross = total_premium_usd - total_buyback_usd
+    net_income_eur = sum(
+        _round2(sum(flow["net_income_eur"] for flow in flows))
+        for flows in position_flows
+    )
+    total_commission_eur = sum(
+        _round2(sum(flow["total_commission_eur"] for flow in flows))
+        for flows in position_flows
+    )
 
     roc_positions = [
         position for position in positions
@@ -372,6 +394,12 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
     available_years: set[int] = set()
     available_symbols: set[str] = set()
 
+    def in_period(group_year: int | None, group_month: int | None) -> bool:
+        return (
+            (year is None or group_year == year)
+            and (month_filter is None or group_month in month_filter)
+        )
+
     for linked_position in linkage.get("positions", []):
         symbol = str(linked_position.get("symbol", "")).upper()
         position_id = linked_position.get("position_id")
@@ -399,6 +427,34 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
         closing_net_eur = _sum_movement_amount(closing_moves, "net", "eur_amount")
         net_income_eur = _round2(opening_net_eur - closing_net_eur)
         total_commission_eur = _round2(_sum_movement_amount(scoped_option_moves, "fees", "total_eur"))
+
+        cash_flows = []
+        warnings = list(linked_position.get("warnings", []))
+        for movement in scoped_option_moves:
+            trade_dt = _parse_datetime_value(movement.get("trade_date"))
+            if trade_dt is None:
+                if "OPTION_MOVEMENT_DATE_INVALID" not in warnings:
+                    warnings.append("OPTION_MOVEMENT_DATE_INVALID")
+                logger.warning(
+                    "Option economics excluded undated movement %s for position %s",
+                    movement.get("id"), position_id,
+                )
+                continue
+            available_years.add(trade_dt.year)
+            if not in_period(trade_dt.year, trade_dt.month):
+                continue
+            is_opening = movement.get("txn_type") == expected_open_txn
+            is_closing = movement.get("txn_type") == expected_close_txn
+            cash_flows.append({
+                "_period": (trade_dt.year, trade_dt.month),
+                "premium_usd": _sum_movement_amount([movement], "gross", "amount") if is_opening else 0.0,
+                "buyback_usd": _sum_movement_amount([movement], "gross", "amount") if is_closing else 0.0,
+                "net_income_eur": (
+                    _sum_movement_amount([movement], "net", "eur_amount")
+                    * (1 if is_opening else -1 if is_closing else 0)
+                ),
+                "total_commission_eur": _sum_movement_amount([movement], "fees", "total_eur"),
+            })
 
         days_to_expiration = None
         if opened_dt and expiration_dt:
@@ -454,13 +510,14 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
             "linked_accounts": linked_position.get("linked_accounts", []),
             "linked_movement_count": linked_position.get("linked_movement_count", 0),
             "coverage_status": linked_position.get("coverage_status", "unlinked"),
-            "warnings": linked_position.get("warnings", []),
+            "warnings": warnings,
             "resolved_security_id": linked_position.get("resolved_security_id"),
             "_opened_year": opened_dt.year if opened_dt else None,
             "_opened_month": opened_dt.month if opened_dt else None,
             "_roc_strike": (strike * 100) if strike not in (None, 0) else None,
             "_scoped_has_opening_sell": bool(opening_moves),
             "_scoped_has_closing_buy": bool(closing_moves),
+            "_cash_flows": cash_flows,
         }
         all_positions.append(position_data)
         available_symbols.add(symbol)
@@ -469,8 +526,10 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
 
     filtered_positions = [
         position for position in all_positions
-        if (year is None or position["_opened_year"] == year)
-        and (month_filter is None or position["_opened_month"] in month_filter)
+        if (
+            position["_cash_flows"]
+            or in_period(position["_opened_year"], position["_opened_month"])
+        )
         and (normalized_symbol_filter is None or position["symbol"] in normalized_symbol_filter)
         and (option_type is None or position["type"] == option_type)
         and (status_filter is None or position["status"] == status_filter)
@@ -525,17 +584,26 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
     symbol_groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for position in reportable_positions:
         symbol_groups[position["symbol"]].append(position)
-        if position["_opened_year"] and position["_opened_month"]:
-            monthly_groups[(position["_opened_year"], position["_opened_month"])].append(position)
+        periods = {flow["_period"] for flow in position["_cash_flows"]}
+        # Retain opening-period coverage for positions without linked cash,
+        # without attributing any later cash to their opening date.
+        if (
+            position["_opened_year"] and position["_opened_month"]
+            and in_period(position["_opened_year"], position["_opened_month"])
+        ):
+            periods.add((position["_opened_year"], position["_opened_month"]))
+        for period in periods:
+            monthly_groups[period].append(position)
 
     monthly = []
     for (group_year, group_month) in sorted(monthly_groups):
         group_positions = monthly_groups[(group_year, group_month)]
-        metrics = _build_position_economics_group(group_positions)
+        period = (group_year, group_month)
+        metrics = _build_position_economics_group(group_positions, period)
         calls_in_group = [position for position in group_positions if position["type"] == "call"]
         puts_in_group = [position for position in group_positions if position["type"] == "put"]
-        calls_metrics = _build_position_economics_group(calls_in_group)
-        puts_metrics = _build_position_economics_group(puts_in_group)
+        calls_metrics = _build_position_economics_group(calls_in_group, period)
+        puts_metrics = _build_position_economics_group(puts_in_group, period)
         monthly.append({
             "month": group_month,
             "year": group_year,
@@ -885,7 +953,7 @@ def _build_economics_overview_report(
             "source": source,
         },
         "meta": {
-            "options_bucket_field": "opened_at",
+            "options_bucket_field": "trade_date",
             "dividends_bucket_field": "trade_date",
             "options_currency": "EUR",
             "dividends_currency": "EUR",

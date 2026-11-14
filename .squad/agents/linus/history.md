@@ -129,3 +129,12 @@
   volatility bands, calibration, and CSP/CC badges distinct; percentages require
   sample sizes, conflicts and missing evidence stay explicit, and strategy
   labels remain compatibility context rather than trade recommendations.
+- **2026-11-14:** Options Economics financial aggregates now follow each
+  account-scoped ledger movement's `trade_date`, including buy-only closing
+  months/years and that movement's commission. Position rows, RoC, win rate,
+  and per-position rounding retain lifetime semantics; opening-period coverage
+  remains visible without moving later cash backward. Invalid movement dates
+  are excluded from dated totals with `OPTION_MOVEMENT_DATE_INVALID`, never
+  imputed from opening dates. Overview advertises `trade_date` and consumes the
+  same cash-flow series. Focused frontend contracts pass; broad parity has 15
+  existing Symbols/paper-presentation failures and Ruff has no new violations.
