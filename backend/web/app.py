@@ -8451,8 +8451,13 @@ Technical Analysis:
 
         cfg = Config()
         model = cfg.activity_chat_model
+        llm_config = _function_llm_config(cfg, "activity_chat")
+        logger.info(
+            "Activity chat starting for %s: model=%s",
+            activity_id, model,
+        )
         client = create_async_chat_client(
-            model, _function_llm_config(cfg, "activity_chat")
+            model, llm_config
         )
         answer = await run_contextual_chat(
             client=client,
@@ -8464,6 +8469,7 @@ Technical Analysis:
         return JSONResponse({"answer": answer})
 
     except RuntimeError as e:
+        logger.exception("Activity chat unavailable for %s", activity_id)
         return JSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
         logger.exception("Activity chat error for %s", activity_id)

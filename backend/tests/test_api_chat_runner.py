@@ -1,12 +1,14 @@
 """API-only optional news lifecycle and real SDK transport compatibility."""
 
+import asyncio
 import json
 from types import SimpleNamespace
 
 import httpx
 import pytest
-import src.agent_runner as module
 from agent_framework.exceptions import ToolExecutionException
+
+import src.agent_runner as module
 from src.api_chat_instructions import build_api_chat_prompt
 
 
@@ -103,6 +105,71 @@ async def test_news_setup_context_does_not_swallow_model_or_tool_failure(monkeyp
         async with module._api_chat_news_tool("https://news.internal/mcp"):
             raise RuntimeError("model/tool failed")
     assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_contextual_chat_real_news_initialize_timeout_keeps_business_tools(monkeypatch, caplog):
+    methods = []
+
+    async def upstream(request):
+        if request.method != "POST":
+            return httpx.Response(405)
+        body = json.loads(request.content)
+        method = body["method"]
+        methods.append((request.url.host, method))
+        if request.url.host == "news.internal" and method == "initialize":
+            await asyncio.sleep(0.2)
+        if method.startswith("notifications/"):
+            return httpx.Response(204)
+        if method == "initialize":
+            result = {
+                "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "test-mcp", "version": "1.0.0"},
+            }
+        elif method == "tools/list":
+            result = {"tools": [{
+                "name": "list_symbols", "description": "List symbols",
+                "inputSchema": {"type": "object", "properties": {}},
+            }]}
+        elif method == "tools/call":
+            result = {"content": [{"type": "text", "text": "Business evidence"}]}
+        else:
+            assert method == "ping"
+            result = {}
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result})
+
+    class Agent:
+        def __init__(self, **kwargs):
+            self.tools = kwargs["tools"]
+            assert "Financial news access is unavailable" in kwargs["instructions"]
+
+        async def run(self, message):
+            assert [tool.name for tool in self.tools] == ["oil-mcp"]
+            result = await self.tools[0].call_tool("list_symbols")
+            return SimpleNamespace(text=result[0].text)
+
+    real_business = module.MCPStreamableHTTPTool
+    real_news = module._FinancialNewsMCPTool
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        monkeypatch.setattr(module, "MCPStreamableHTTPTool",
+                            lambda **kwargs: real_business(**kwargs, http_client=client))
+
+        def news_tool(**kwargs):
+            kwargs["request_timeout"] = 0.02
+            return real_news(**kwargs, http_client=client)
+
+        monkeypatch.setattr(module, "_FinancialNewsMCPTool", news_tool)
+        monkeypatch.setattr(module, "Agent", Agent)
+        monkeypatch.setenv("OIL_MCP_URL", "https://business.internal/mcp")
+        monkeypatch.setenv("FINANCIAL_NEWS_MCP_URL", "https://news.internal/mcp")
+        result = await module.run_contextual_chat(
+            client="test-client", name="ActivityChat", instructions="Activity rules",
+            message="Question",
+        )
+    assert result == "Business evidence"
+    assert ("business.internal", "tools/call") in methods
+    assert ("news.internal", "tools/list") not in methods
+    assert "Optional financial news MCP discovery failed" in caplog.text
 
 
 @pytest.mark.asyncio

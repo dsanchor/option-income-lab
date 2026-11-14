@@ -4,10 +4,11 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from starlette.testclient import TestClient
+
 import src.agent_runner as module
 from src.forecast_report_chat_instructions import build_forecast_report_chat_prompt
 from src.llm import LlmConfig
-from starlette.testclient import TestClient
 
 
 @pytest.fixture
@@ -155,8 +156,9 @@ async def test_tool_invocation_failure_propagates_with_all_sessions_closed(share
     assert events[-2:] == ["news-close", "business-close"]
 
 
+@pytest.mark.parametrize("model_failure", [False, True])
 def test_activity_route_preserves_historical_live_contract_and_shared_tools(
-    shared_tools, monkeypatch,
+    shared_tools, monkeypatch, caplog, model_failure,
 ):
     import web.app as web
 
@@ -181,10 +183,23 @@ def test_activity_route_preserves_historical_live_contract_and_shared_tools(
         "src.options_chain_cache.get_options_chain_cache",
         lambda: SimpleNamespace(get_or_load=lambda symbol: {"calls": {}, "puts": {}}),
     )
+    if model_failure:
+        async def fail_model(*args, **kwargs):
+            raise RuntimeError("Synthetic model request rejected")
+
+        monkeypatch.setattr(module.Agent, "run", fail_model)
     response = TestClient(web.app).post("/api/activities/activity-123/chat", json={
         "message": "What changed?",
         "history": [{"role": "assistant", "content": "Previous explanation"}],
     })
+    if model_failure:
+        assert response.status_code == 503
+        assert response.json() == {"error": "Chat tools or configured model are unavailable"}
+        assert "Synthetic model request rejected" not in response.text
+        assert "Activity chat unavailable for activity-123" in caplog.text
+        assert "Synthetic model request rejected" in caplog.text
+        assert events[-2:] == ["news-close", "business-close"]
+        return
     assert response.status_code == 200
     assert response.json() == {"answer": "Business evidence; News evidence"}
     assert agents[0]["client"] == ("activity-model", llm)
