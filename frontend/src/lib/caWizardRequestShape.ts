@@ -12,7 +12,9 @@
  *     CONSOLIDATION_OUT, CONSOLIDATION_IN, FRACTIONAL_CASH_OUT}
  *   - Required legs per event_type validated before submit
  *   - withholding.*.rate_pct is server-derived — must NOT be sent or trusted
- *   - amount_eur is the primary input; rate_pct will be derived server-side
+ *   - amount_eur is the accounting input; USD/US cash forms convert native
+ *     origin withholding to EUR before sending the existing shape
+ *   - rate_pct will be derived server-side
  */
 
 import type {

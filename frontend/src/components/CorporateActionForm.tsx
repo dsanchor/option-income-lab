@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { RefreshCw, ChevronDown, ChevronRight } from "lucide-react";
 import { createCorporateAction, correctCorporateActionGroup, getFxRate } from "@/lib/portfolio-api";
 import type {
@@ -17,9 +17,17 @@ import type {
   ShareFmv,
   ShareFmvSource,
   ShareFmvFxSource,
+  FxRateSource,
 } from "@/types/portfolio";
 import type { SecurityMaster } from "@/types/portfolio";
 import { formatAccountName } from "@/lib/accountDisplay";
+import {
+  cashDividendFxError,
+  eurToNative,
+  updateCashDividendFx,
+  usesUsdSource,
+  validFxContext,
+} from "@/lib/cashDividendFx";
 import {
   buildManualShareFmv,
   manualShareFmvValidationError,
@@ -93,6 +101,8 @@ export interface CaFormState {
   ex_dividend_date: string;
   currency: string;
   fx_rate: string;         // shared FX rate for all legs (EUR base)
+  fx_rate_source: FxRateSource;
+  fx_preserve_initial: boolean;
   notes: string;
 
   // CASH_DIVIDEND leg (CASH_DIVIDEND, DIVIDEND_WITH_SCRIP)
@@ -101,6 +111,7 @@ export interface CaFormState {
   cd_fees: string;
   cd_wht_src_country: string;
   cd_wht_src_amount: string;
+  cd_wht_src_usd: string | null;
   cd_wht_dest_state: WhtDestState;
   cd_wht_dest_country: string;
   cd_wht_dest_amount: string;
@@ -167,12 +178,15 @@ const defaultState = (): CaFormState => ({
   ex_dividend_date: "",
   currency: "EUR",
   fx_rate: "",
+  fx_rate_source: "ECB",
+  fx_preserve_initial: false,
   notes: "",
   cd_gross: "",
   cd_gross_eur: "",
   cd_fees: "",
   cd_wht_src_country: "",
   cd_wht_src_amount: "",
+  cd_wht_src_usd: null,
   cd_wht_dest_state: "not_captured",
   cd_wht_dest_country: "ES",
   cd_wht_dest_amount: "",
@@ -233,6 +247,7 @@ export function buildCaInitialState(legs: LedgerMovement[], representative: Ledg
     payment_date: representative.trade_date ?? "",
     currency,
     fx_rate: fxRate,
+    fx_rate_source: baseLeg.fx?.rate_source ?? "ECB",
     notes: "",
   };
 
@@ -242,6 +257,9 @@ export function buildCaInitialState(legs: LedgerMovement[], representative: Ledg
     state.cd_fees = cdLeg.fees?.total ?? "";
     state.cd_wht_src_country = cdLeg.withholding?.source?.country ?? "";
     state.cd_wht_src_amount = cdLeg.withholding?.source?.amount_eur ?? "";
+    state.cd_wht_src_usd = usesUsdSource(currency, state.cd_wht_src_country)
+      ? eurToNative(state.cd_wht_src_amount, fxRate)
+      : null;
     const dest = cdLeg.withholding?.destination;
     if (!dest) {
       state.cd_wht_dest_state = "not_captured";
@@ -309,34 +327,77 @@ export function buildCaInitialState(legs: LedgerMovement[], representative: Ledg
 
 // ─── FX helper ────────────────────────────────────────────────────────────────
 
-function FxHelper({ currency, date, onRate }: { currency: string; date: string; onRate: (r: string) => void }) {
+function FxHelper({ currency, date, currentRate, rateSource, automatic, preserveInitial, getRevision, canAutoFetch, onRate }: {
+  currency: string;
+  date: string;
+  currentRate: string;
+  rateSource: FxRateSource;
+  automatic: boolean;
+  preserveInitial: boolean;
+  getRevision: () => number;
+  canAutoFetch: () => boolean;
+  onRate: (rate: string, currency: string, date: string, revision: number) => boolean;
+}) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [rate, setRate] = useState<string | null>(null);
+  const [observation, setObservation] = useState<{ rate: string; date: string; currency: string; requestedDate: string } | null>(null);
+  const requestId = useRef(0);
 
   const fetch = useCallback(async () => {
-    if (!currency || currency === "EUR" || !date) return;
+    if (!validFxContext(currency, date)) return;
+    const id = ++requestId.current;
+    const revision = getRevision();
     setLoading(true);
     setErr(null);
     try {
       const r = await getFxRate(currency, "EUR", date);
-      setRate(r.rate);
-      onRate(r.rate);
+      if (id !== requestId.current) return;
+      if (r.from_currency !== currency || r.to_currency !== "EUR" ||
+          !validFxContext(currency, r.date) || r.date > date ||
+          !Number.isFinite(Number(r.rate)) || Number(r.rate) <= 0) {
+        throw new Error("Invalid FX observation");
+      }
+      if (onRate(r.rate, currency, date, revision)) {
+        setObservation({ rate: r.rate, date: r.date, currency, requestedDate: date });
+      }
     } catch {
-      setErr("FX rate unavailable");
+      if (id !== requestId.current) return;
+      if (onRate("", currency, date, revision)) {
+        setObservation(null);
+        setErr("FX rate unavailable — enter a rate manually or retry.");
+      }
     } finally {
-      setLoading(false);
+      if (id === requestId.current) setLoading(false);
     }
-  }, [currency, date, onRate]);
+  }, [currency, date, getRevision, onRate]);
+
+  useEffect(() => {
+    const revision = getRevision();
+    const timer = setTimeout(() => {
+      setLoading(false);
+      setErr(null);
+      if (automatic && !preserveInitial && canAutoFetch() && revision === getRevision()) void fetch();
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      requestId.current += 1;
+    };
+  }, [automatic, preserveInitial, fetch, getRevision, canAutoFetch]);
 
   if (!currency || currency === "EUR") return null;
 
   return (
     <div className="col-span-full flex flex-wrap items-center gap-2 text-xs text-text-muted">
-      {rate ? (
+      {currentRate ? (
         <>
-          <span className="text-accent-green">1 {currency} = {rate} EUR</span>
-          <button type="button" onClick={fetch} className="text-text-muted hover:text-text" aria-label="Refresh rate">
+          <span className="text-accent-green">
+            1 {currency} = {currentRate} EUR
+            {rateSource === "MANUAL" ? " (manual)" :
+              observation?.rate === currentRate && observation.currency === currency && observation.requestedDate === date
+                ? ` · ECB publication: ${observation.date}`
+                : " (stored rate; publication date not recorded)"}
+          </span>
+          <button type="button" onClick={fetch} disabled={loading || !validFxContext(currency, date)} className="text-text-muted hover:text-text disabled:opacity-40" aria-label="Refresh rate">
             <RefreshCw size={10} />
           </button>
         </>
@@ -344,7 +405,7 @@ function FxHelper({ currency, date, onRate }: { currency: string; date: string; 
         <button
           type="button"
           onClick={fetch}
-          disabled={loading || !date}
+          disabled={loading || !validFxContext(currency, date)}
           className="underline hover:text-text disabled:opacity-40"
         >
           {loading ? "Fetching…" : `Get ${currency}/EUR rate`}
@@ -584,9 +645,9 @@ function buildWithholding(
   return { source: src, destination: dest };
 }
 
-function makeFx(fxRate: string, currency: string) {
+function makeFx(fxRate: string, currency: string, rateSource: FxRateSource = "ECB") {
   if (!fxRate || currency === "EUR") return undefined;
-  return { rate: fxRate, rate_source: "ECB" as const };
+  return { rate: fxRate, rate_source: rateSource };
 }
 
 // ─── Build legs from form state ────────────────────────────────────────────────
@@ -612,7 +673,7 @@ function buildLegs(form: CaFormState): CorporateActionLegRequest[] {
       gross: makeGross(form.cd_gross, form.currency, form.cd_gross_eur),
       fees: makeFees(form.cd_fees, form.currency),
       withholding: wht ?? undefined,
-      fx: makeFx(form.fx_rate, form.currency),
+      fx: makeFx(form.fx_rate, form.currency, form.fx_rate_source),
     });
   }
 
@@ -653,7 +714,7 @@ function buildLegs(form: CaFormState): CorporateActionLegRequest[] {
             fxSource: form.sa_fmv_fx_source,
           }),
       share_fmv_instruction: requestYahooFmv ? { source: "YAHOO_OPEN" } : undefined,
-      fx: makeFx(form.fx_rate, form.currency),
+      fx: makeFx(form.fx_rate, form.currency, form.fx_rate_source),
       notes: form.sa_notes || undefined,
     });
   }
@@ -664,7 +725,7 @@ function buildLegs(form: CaFormState): CorporateActionLegRequest[] {
       leg_type: "CASH_TOP_UP",
       trade_date: form.payment_date,
       gross: makeGross(form.ctu_gross, form.currency, form.ctu_gross_eur),
-      fx: makeFx(form.fx_rate, form.currency),
+      fx: makeFx(form.fx_rate, form.currency, form.fx_rate_source),
     });
   }
 
@@ -691,7 +752,7 @@ function buildLegs(form: CaFormState): CorporateActionLegRequest[] {
         quantity: form.fco_quantity || undefined,
         gross: makeGross(form.fco_gross, form.currency, form.fco_gross_eur),
         fees: makeFees(form.fco_fees, form.currency),
-        fx: makeFx(form.fx_rate, form.currency),
+        fx: makeFx(form.fx_rate, form.currency, form.fx_rate_source),
       });
     }
   }
@@ -708,6 +769,8 @@ function validate(form: CaFormState): string | null {
   const ev = form.event_type;
   if (ev === "CASH_DIVIDEND" || ev === "DIVIDEND_WITH_SCRIP") {
     if (!form.cd_gross) return "Cash dividend gross amount is required.";
+    const fxError = cashDividendFxError(form);
+    if (fxError) return fxError;
   }
   if (ev === "DIVIDEND_WITH_SCRIP" || ev === "SCRIP_DIVIDEND") {
     if (!form.sa_quantity) return "Share acquisition quantity is required.";
@@ -884,7 +947,12 @@ export default function CorporateActionForm({
 }: CorporateActionFormProps) {
   const [form, setForm] = useState<CaFormState>(() => {
     const initial = { ...defaultState(), ...initialState };
+    initial.fx_preserve_initial = mode === "correct" && Boolean(initial.fx_rate);
+    if (usesUsdSource(initial.currency, initial.cd_wht_src_country) && initial.cd_wht_src_usd === null) {
+      initial.cd_wht_src_usd = eurToNative(initial.cd_wht_src_amount, initial.fx_rate);
+    }
     if (initial.currency === "EUR") {
+      initial.cd_gross_eur = initial.cd_gross;
       initial.sa_gross_eur = initial.sa_gross;
       initial.sa_fees_eur = initial.sa_fees;
     }
@@ -898,7 +966,9 @@ export default function CorporateActionForm({
       initial.sa_fees,
       initial.sa_fees_eur,
     );
-    return initial;
+    return mode === "create"
+      ? updateCashDividendFx(initial, { fx_rate: initial.fx_rate })
+      : initial;
   });
   const [correctionNote, setCorrectionNote] = useState("");
   const [saving, setSaving] = useState(false);
@@ -911,10 +981,36 @@ export default function CorporateActionForm({
   const [clientRequestId] = useState(() => crypto.randomUUID());
   const requestInFlight = useRef(false);
 
-  const set = useCallback((patch: Partial<CaFormState>) => setForm((f) => ({ ...f, ...patch })), []);
+  const fxRevision = useRef(0);
+  const manualFxOverride = useRef(form.fx_rate_source === "MANUAL");
+  const fxContext = useRef({ currency: form.currency, date: form.payment_date });
+  const getFxRevision = useCallback(() => fxRevision.current, []);
+  const canAutoFetchFx = useCallback(() => !manualFxOverride.current, []);
+  const set = useCallback((patch: Partial<CaFormState>) => {
+    if (patch.currency !== undefined || patch.payment_date !== undefined || patch.fx_rate !== undefined) {
+      fxRevision.current += 1;
+    }
+    if ((patch.currency !== undefined && patch.currency !== fxContext.current.currency) ||
+        (patch.payment_date !== undefined && patch.payment_date !== fxContext.current.date)) {
+      manualFxOverride.current = false;
+    }
+    if (patch.currency !== undefined) fxContext.current.currency = patch.currency;
+    if (patch.payment_date !== undefined) fxContext.current.date = patch.payment_date;
+    if (patch.fx_rate_source === "MANUAL") manualFxOverride.current = true;
+    setForm((f) => updateCashDividendFx(f, patch));
+  }, []);
+  const applyFxRate = useCallback((rate: string, currency: string, date: string, revision: number) => {
+    if (revision !== fxRevision.current) return false;
+    manualFxOverride.current = false;
+    setForm((f) => f.currency === currency && f.payment_date === date
+      ? updateCashDividendFx(f, { fx_rate: rate, fx_rate_source: "ECB" })
+      : f);
+    return true;
+  }, []);
 
   const isCorrect = mode === "correct";
   const hasCashDiv = form.event_type === "CASH_DIVIDEND" || form.event_type === "DIVIDEND_WITH_SCRIP";
+  const usdSource = usesUsdSource(form.currency, form.cd_wht_src_country);
   const hasShareAcq =
     form.event_type === "DIVIDEND_WITH_SCRIP" ||
     form.event_type === "SCRIP_DIVIDEND";
@@ -1160,7 +1256,7 @@ export default function CorporateActionForm({
                 step="any"
                 min="0"
                 value={form.fx_rate}
-                onChange={(e) => set({ fx_rate: e.target.value })}
+                onChange={(e) => set({ fx_rate: e.target.value, fx_rate_source: "MANUAL" })}
                 placeholder="0.000000000"
                 className={inputCls}
               />
@@ -1168,7 +1264,13 @@ export default function CorporateActionForm({
             <FxHelper
               currency={form.currency}
               date={form.payment_date}
-              onRate={(r) => set({ fx_rate: r })}
+              currentRate={form.fx_rate}
+              rateSource={form.fx_rate_source}
+              automatic={hasCashDiv}
+              preserveInitial={form.fx_preserve_initial}
+              getRevision={getFxRevision}
+              canAutoFetch={canAutoFetchFx}
+              onRate={applyFxRate}
             />
           </>
         )}
@@ -1196,7 +1298,7 @@ export default function CorporateActionForm({
             <div className="space-y-3">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div>
-                  <label className={labelCls}>Gross amount *</label>
+                  <label className={labelCls}>Gross amount ({form.currency}) *</label>
                   <input
                     type="number"
                     step="any"
@@ -1210,13 +1312,13 @@ export default function CorporateActionForm({
                 </div>
                 {form.currency !== "EUR" && (
                   <div>
-                    <label className={labelCls}>EUR equivalent</label>
+                    <label className={labelCls}>EUR equivalent (auto)</label>
                     <input
                       type="number"
                       step="any"
                       min="0"
                       value={form.cd_gross_eur}
-                      onChange={(e) => set({ cd_gross_eur: e.target.value })}
+                      readOnly
                       placeholder="0.00"
                       className={inputCls}
                     />
@@ -1252,17 +1354,25 @@ export default function CorporateActionForm({
                     />
                   </div>
                   <div>
-                    <label className={labelCls}>Amount € (primary)</label>
+                    <label className={labelCls}>{usdSource ? "Amount USD (primary)" : "Amount € (primary)"}</label>
                     <input
                       type="number"
                       step="any"
                       min="0"
-                      value={form.cd_wht_src_amount}
-                      onChange={(e) => set({ cd_wht_src_amount: e.target.value })}
+                      value={usdSource ? (form.cd_wht_src_usd ?? "") : form.cd_wht_src_amount}
+                      onChange={(e) => set(usdSource
+                        ? { cd_wht_src_usd: e.target.value }
+                        : { cd_wht_src_amount: e.target.value })}
                       placeholder="0.00"
                       className={inputCls}
                     />
                   </div>
+                  {usdSource && (
+                    <div>
+                      <label className={labelCls}>Origin withholding EUR (auto)</label>
+                      <input type="number" step="any" value={form.cd_wht_src_usd === null ? "" : form.cd_wht_src_amount} readOnly placeholder="0.00" className={inputCls} />
+                    </div>
+                  )}
                   <WhtRateDisplay amount={form.cd_wht_src_amount} grossEur={cdGrossEur} />
                 </div>
               </div>

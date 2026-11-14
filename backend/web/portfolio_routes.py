@@ -48,7 +48,7 @@ from src.portfolio.symbol_config_sync import ensure_symbol_config
 from src.portfolio.fx_service import (
     FxUnavailableError,
     FxRateNotFoundError,
-    get_fx_rate,
+    get_historical_fx_rate,
 )
 from src.portfolio.models import OPTION_TXN_TYPES
 from src.portfolio.share_fmv_service import YahooFmvError
@@ -1710,7 +1710,7 @@ async def get_fx_rate_endpoint(
     to_currency: str = Query(default="EUR", description="Target currency (must be EUR)"),
     date: Optional[str] = Query(default=None, description="Date YYYY-MM-DD; defaults to today"),
 ):
-    """GET /api/fx/rates — look up EUR reference rate from ECB."""
+    """GET /api/fx/rates — return EUR-per-unit rate and actual ECB publication date."""
     from_currency = from_currency.strip().upper()
     to_currency = to_currency.strip().upper()
 
@@ -1718,9 +1718,7 @@ async def get_fx_rate_endpoint(
         return _err("validation_error", "Only EUR is supported as to_currency", 400)
 
     try:
-        rate = get_fx_rate(from_currency, to_currency, rate_date=date)
-        from datetime import date as _date
-        effective_date = date or _date.today().isoformat()
+        rate, effective_date = get_historical_fx_rate(from_currency, to_currency, rate_date=date)
         return JSONResponse({
             "from_currency": from_currency,
             "to_currency": to_currency,

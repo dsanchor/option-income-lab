@@ -520,7 +520,7 @@ export interface BatchReassignmentPreviewResponse {
 export interface FxRateResponse {
   from_currency: string;
   to_currency: string;
-  date: string;
+  date: string;                  // actual ECB publication date, not necessarily the requested date
   rate: string;
   rate_source: string;
   note?: string | null;

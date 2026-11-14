@@ -13,7 +13,7 @@ Covers:
 - ECB XML single-line format: date + rates on same line (regression for continue bug)
 
 The service makes real HTTP calls to ECB. All tests (except EUR→EUR)
-mock `src.portfolio.fx_service.get_fx_rate` to avoid network dependency.
+mock `web.portfolio_routes.get_historical_fx_rate` to avoid network dependency.
 """
 
 from __future__ import annotations
@@ -38,18 +38,18 @@ def client():
         yield c, fake
 
 
-def _mock_rate(c, from_currency, rate, date="2024-06-15"):
-    """Patch get_fx_rate where the route uses it and call the FX endpoint."""
+def _mock_rate(c, from_currency, rate, date="2024-06-15", effective_date=None):
+    """Patch the FX observation where the route uses it."""
     rate_str = str(Decimal(str(rate)).quantize(Decimal("0.000000001")))
-    with patch("web.portfolio_routes.get_fx_rate", return_value=rate_str):
+    with patch("web.portfolio_routes.get_historical_fx_rate", return_value=(rate_str, effective_date or date)):
         return c.get(
             f"/api/fx/rates?from_currency={from_currency}&to_currency=EUR&date={date}"
         )
 
 
 def _mock_rate_error(c, from_currency, exc, date="2024-06-15"):
-    """Patch get_fx_rate to raise an exception and call the FX endpoint."""
-    with patch("web.portfolio_routes.get_fx_rate", side_effect=exc):
+    """Patch the FX observation to raise an exception."""
+    with patch("web.portfolio_routes.get_historical_fx_rate", side_effect=exc):
         return c.get(
             f"/api/fx/rates?from_currency={from_currency}&to_currency=EUR&date={date}"
         )
@@ -119,6 +119,13 @@ class TestSuccessfulRateLookup:
         resp = _mock_rate(c, "USD", "0.921500000", date="2024-06-15")
         assert resp.status_code == 200
         assert "date" in resp.json()
+
+    def test_weekend_lookup_reports_actual_publication_date(self, client):
+        c, _ = client
+        resp = _mock_rate(c, "USD", "0.921500000", date="2024-06-15", effective_date="2024-06-14")
+        assert resp.status_code == 200
+        assert resp.json()["date"] == "2024-06-14"
+        assert resp.json()["rate"] == "0.921500000"
 
     def test_response_has_rate_source_ecb(self, client):
         c, _ = client
@@ -252,7 +259,7 @@ class TestFxOptionalDate:
     def test_no_date_param_200(self, client):
         c, _ = client
         rate_str = str(Decimal("0.9215").quantize(Decimal("0.000000001")))
-        with patch("web.portfolio_routes.get_fx_rate", return_value=rate_str):
+        with patch("web.portfolio_routes.get_historical_fx_rate", return_value=(rate_str, "2024-06-14")):
             resp = c.get("/api/fx/rates?from_currency=USD&to_currency=EUR")
         assert resp.status_code == 200
 
