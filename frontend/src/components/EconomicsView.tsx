@@ -268,6 +268,8 @@ function CoverageBanner({ coverage, hasAccountFilter }: { coverage: EconomicsCov
 
 const CALLS_COLOR = "#a78bfa";
 const PUTS_COLOR = "#22d3ee";
+const CALLS_BUYBACK_COLOR = "#f59e0b";
+const PUTS_BUYBACK_COLOR = "#fb7185";
 const NET_COLOR = "#5b61ff";
 
 function ChartTooltip({
@@ -299,13 +301,15 @@ function MonthlyNetChart({ rows, avgLast12 }: { rows: EconomicsMonthlyRow[]; avg
 
   const chartData = rows.map((row) => ({
     label: row.label,
-    calls_net_income_eur: row.calls_net_income_eur,
-    puts_net_income_eur: row.puts_net_income_eur,
+    calls_premium_net_eur: row.calls_premium_net_eur,
+    puts_premium_net_eur: row.puts_premium_net_eur,
+    calls_buyback_net_eur: row.calls_buyback_net_eur,
+    puts_buyback_net_eur: row.puts_buyback_net_eur,
     net_income_eur: row.net_income_eur,
   }));
 
   return (
-    <div style={{ height: 260 }}>
+    <div style={{ height: 290 }}>
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 4, left: 2 }} barGap={2}>
           <CartesianGrid stroke="rgba(148,163,184,0.08)" strokeDasharray="3 3" vertical={false} />
@@ -342,8 +346,10 @@ function MonthlyNetChart({ rows, avgLast12 }: { rows: EconomicsMonthlyRow[]; avg
           )}
           <Tooltip cursor={{ fill: "rgba(148,163,184,0.08)" }} content={<ChartTooltip />} />
           <Legend wrapperStyle={{ fontSize: 11, color: "#8d969e" }} iconType="circle" iconSize={8} />
-          <Bar dataKey="calls_net_income_eur" name="Calls Net" fill={CALLS_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
-          <Bar dataKey="puts_net_income_eur" name="Puts Net" fill={PUTS_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+          <Bar dataKey="calls_premium_net_eur" name="Calls Premiums" fill={CALLS_COLOR} radius={[3, 3, 0, 0]} maxBarSize={18} isAnimationActive={false} />
+          <Bar dataKey="puts_premium_net_eur" name="Puts Premiums" fill={PUTS_COLOR} radius={[3, 3, 0, 0]} maxBarSize={18} isAnimationActive={false} />
+          <Bar dataKey="calls_buyback_net_eur" name="Calls Buybacks (cost)" fill={CALLS_BUYBACK_COLOR} radius={[3, 3, 0, 0]} maxBarSize={18} isAnimationActive={false} />
+          <Bar dataKey="puts_buyback_net_eur" name="Puts Buybacks (cost)" fill={PUTS_BUYBACK_COLOR} radius={[3, 3, 0, 0]} maxBarSize={18} isAnimationActive={false} />
           <Bar dataKey="net_income_eur" name="Net" fill={NET_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
         </BarChart>
       </ResponsiveContainer>
@@ -1072,6 +1078,7 @@ export default function EconomicsView({
               <div>
                 <h3 className="mb-2 text-sm font-medium text-text-muted">Monthly Net Cash Flow (EUR)</h3>
                 <MonthlyNetChart rows={data.monthly} avgLast12={avgLast12} />
+                <p className="mt-2 text-xs text-text-muted">After fees: Net = Calls Premiums + Puts Premiums − Calls Buybacks − Puts Buybacks. Buyback costs are shown positive for comparison.</p>
               </div>
               <div>
                 <h3 className="mb-2 text-sm font-medium text-text-muted">Calls vs Puts Net Cash Flow (EUR)</h3>

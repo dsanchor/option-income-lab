@@ -16,6 +16,17 @@ const dividendsView = src("src/components/DividendsView.tsx");
 const overviewView = src("src/components/EconomicsOverviewView.tsx");
 
 describe("Economics type contracts", () => {
+  it("adds after-fee premium and positive buyback fields without replacing legacy type nets", () => {
+    const monthly = economicsTypes.split("export interface EconomicsMonthlyRow {")[1].split("\n}")[0];
+    for (const field of [
+      "calls_premium_net_eur", "puts_premium_net_eur",
+      "calls_buyback_net_eur", "puts_buyback_net_eur",
+      "calls_net_income_eur", "puts_net_income_eur", "net_income_eur",
+    ]) {
+      assert.ok(monthly.includes(`${field}: number;`), `Monthly rows need ${field}.`);
+    }
+  });
+
   it("exports the new dividends and overview report types", () => {
     for (const name of [
       "DividendsSummary",

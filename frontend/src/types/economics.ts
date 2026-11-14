@@ -35,6 +35,12 @@ export interface EconomicsMonthlyRow {
   total_commission_eur: number;
   calls_net_income_eur: number;
   puts_net_income_eur: number;
+  /** Opening ledger premiums after fees, before subtracting buybacks. */
+  calls_premium_net_eur: number;
+  puts_premium_net_eur: number;
+  /** Positive closing cash costs including fees, subtracted from final net. */
+  calls_buyback_net_eur: number;
+  puts_buyback_net_eur: number;
   positions_count: number;
   avg_roc_pct: number;
   avg_roc_annualized: number;

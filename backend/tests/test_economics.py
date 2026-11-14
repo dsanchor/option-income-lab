@@ -360,6 +360,10 @@ def test_build_economics_report_uses_linked_ledger_movements_and_new_summary_fie
             "total_commission_eur": 0.4,
             "calls_net_income_eur": 0.7,
             "puts_net_income_eur": 3.0,
+            "calls_premium_net_eur": 2.4,
+            "puts_premium_net_eur": 3.0,
+            "calls_buyback_net_eur": 1.7,
+            "puts_buyback_net_eur": 0.0,
             "positions_count": 4,
             "avg_roc_pct": 0.01,
             "avg_roc_annualized": 0.07,
@@ -377,6 +381,10 @@ def test_build_economics_report_uses_linked_ledger_movements_and_new_summary_fie
             "total_commission_eur": 0.25,
             "calls_net_income_eur": 1.4,
             "puts_net_income_eur": -0.55,
+            "calls_premium_net_eur": 1.4,
+            "puts_premium_net_eur": 0.9,
+            "calls_buyback_net_eur": 0.0,
+            "puts_buyback_net_eur": 1.45,
             "positions_count": 4,
             "avg_roc_pct": 0.01,
             "avg_roc_annualized": 0.06,
@@ -598,6 +606,65 @@ def _cross_period_option_inputs(option_type="call", opening_date="2026-01-15"):
     return docs, movements
 
 
+def _assert_monthly_cash_breakdown(row):
+    calls_net = round(row["calls_premium_net_eur"] - row["calls_buyback_net_eur"], 2)
+    puts_net = round(row["puts_premium_net_eur"] - row["puts_buyback_net_eur"], 2)
+    assert calls_net == row["calls_net_income_eur"]
+    assert puts_net == row["puts_net_income_eur"]
+    assert round(calls_net + puts_net, 2) == row["net_income_eur"]
+
+
+def test_monthly_cash_breakdown_combines_calls_puts_and_same_month_new_premiums():
+    docs, movements = _cross_period_option_inputs("call")
+    put_docs, put_movements = _cross_period_option_inputs("put")
+    put_docs[0]["positions"][0]["position_id"] = "cross-period-put"
+    for movement in put_movements:
+        movement["id"] = f"put-{movement['id']}"
+        movement["option_position_id"] = "cross-period-put"
+    docs[0]["positions"] += put_docs[0]["positions"]
+    movements += put_movements
+    movements.append(_movement(
+        "additional-call-sell", "CALL_SELL", "XNAS:AAPL", "cross-period",
+        "2026-02-10", ACCOUNT_1, "60", "2", "48",
+    ))
+    report = _build_economics_report(docs, movements=movements, securities=_sample_securities())
+    _assert_rows_include(report["monthly"], [
+        {"calls_premium_net_eur": 100.0, "puts_premium_net_eur": 100.0,
+         "calls_buyback_net_eur": 0.0, "puts_buyback_net_eur": 0.0,
+         "net_income_eur": 200.0},
+        {"calls_premium_net_eur": 48.0, "puts_premium_net_eur": 0.0,
+         "calls_buyback_net_eur": 30.0, "puts_buyback_net_eur": 30.0,
+         "calls_net_income_eur": 18.0, "puts_net_income_eur": -30.0,
+         "net_income_eur": -12.0},
+    ])
+    for row in report["monthly"]:
+        _assert_monthly_cash_breakdown(row)
+
+
+def test_monthly_cash_breakdown_reconciles_fractional_fx_at_position_precision():
+    docs, movements = _cross_period_option_inputs()
+    docs[0]["positions"].append({
+        **docs[0]["positions"][0], "position_id": "fractional-put", "type": "put",
+    })
+    movements[0]["net"]["eur_amount"] = "100.006"
+    movements[1]["net"]["eur_amount"] = "30.004"
+    movements[1]["trade_date"] = "2026-01-20"
+    movements += [
+        {**movement, "id": f"put-{movement['id']}", "option_position_id": "fractional-put",
+         "txn_type": movement["txn_type"].replace("CALL", "PUT")}
+        for movement in movements
+    ]
+    report = _build_economics_report(docs, movements=movements, securities=_sample_securities())
+    row = report["monthly"][0]
+    _assert_includes(row, {
+        "calls_premium_net_eur": 100.01, "puts_premium_net_eur": 100.01,
+        "calls_buyback_net_eur": 30.01, "puts_buyback_net_eur": 30.01,
+        "net_income_eur": 140.0,
+    })
+    _assert_monthly_cash_breakdown(row)
+    assert row["net_income_eur"] == report["summary"]["net_income_eur"]
+
+
 @pytest.mark.parametrize("option_type", ["call", "put"])
 def test_option_cash_flows_follow_each_movement_month_and_preserve_lifetime_roc(option_type):
     docs, movements = _cross_period_option_inputs(option_type)
@@ -620,6 +687,10 @@ def test_option_cash_flows_follow_each_movement_month_and_preserve_lifetime_roc(
     })
     split_field = f"{option_type}s_net_income_eur"
     assert [row[split_field] for row in report["monthly"]] == [100.0, -30.0]
+    assert [row[f"{option_type}s_premium_net_eur"] for row in report["monthly"]] == [100.0, 0.0]
+    assert [row[f"{option_type}s_buyback_net_eur"] for row in report["monthly"]] == [0.0, 30.0]
+    for row in report["monthly"]:
+        _assert_monthly_cash_breakdown(row)
     assert sum(row["net_income_eur"] for row in report["monthly"]) == report["summary"]["net_income_eur"]
     for month, expected_net in [(1, 100.0), (2, -30.0)]:
         scoped = _build_economics_report(
@@ -650,6 +721,11 @@ def test_option_buy_only_period_includes_prior_year_position_and_scopes_all_tota
             "total_commission_eur": 2.0, "avg_roc_pct": 0.74,
         })
     assert [(row["year"], row["month"]) for row in report["monthly"]] == [(2026, 1)]
+    _assert_includes(report["monthly"][0], {
+        f"{option_type}s_premium_net_eur": 0.0,
+        f"{option_type}s_buyback_net_eur": 30.0,
+    })
+    _assert_monthly_cash_breakdown(report["monthly"][0])
     assert report["positions"][0]["net_income_eur"] == 70.0
     assert report["positions"][0]["roc_pct"] == 0.74
     assert report["summary"]["win_rate"] == 100.0
@@ -669,6 +745,11 @@ def test_option_period_filters_preserve_account_paper_and_position_filters():
         symbol_filter=["AAPL", "SHOP"], option_type="call",
     )
     assert report["summary"]["net_income_eur"] == -30.0
+    _assert_includes(report["monthly"][0], {
+        "calls_premium_net_eur": 0.0, "puts_premium_net_eur": 0.0,
+        "calls_buyback_net_eur": 30.0, "puts_buyback_net_eur": 0.0,
+    })
+    _assert_monthly_cash_breakdown(report["monthly"][0])
     assert report["summary"]["total_positions"] == 1
     assert report["summary"]["coverage"]["excluded_paper_positions"] == 1
     assert report["summary"]["coverage"]["linked_positions"] == 1

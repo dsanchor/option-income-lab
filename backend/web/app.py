@@ -365,6 +365,22 @@ def _classify_position_win(position: Dict[str, Any]) -> Optional[bool]:
     return None
 
 
+def _monthly_option_cash_breakdown(
+    positions: list[dict[str, Any]], period: tuple[int, int],
+) -> tuple[float, float]:
+    premium_cents = 0
+    buyback_cents = 0
+    for position in positions:
+        flows = [flow for flow in position["_cash_flows"] if flow["_period"] == period]
+        opening_cents = round(_round2(sum(flow["premium_net_eur"] for flow in flows)) * 100)
+        net_cents = round(_round2(sum(flow["net_income_eur"] for flow in flows)) * 100)
+        premium_cents += opening_cents
+        # Allocate any fractional-FX rounding residual to closing costs so the
+        # breakdown reconciles with the existing per-position rounded net.
+        buyback_cents += opening_cents - net_cents
+    return premium_cents / 100, buyback_cents / 100
+
+
 def _build_economics_report(symbol_docs: List[Dict[str, Any]],
                             year: Optional[int] = None,
                             month_filter: Optional[List[int]] = None,
@@ -449,6 +465,7 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
                 "_period": (trade_dt.year, trade_dt.month),
                 "premium_usd": _sum_movement_amount([movement], "gross", "amount") if is_opening else 0.0,
                 "buyback_usd": _sum_movement_amount([movement], "gross", "amount") if is_closing else 0.0,
+                "premium_net_eur": _sum_movement_amount([movement], "net", "eur_amount") if is_opening else 0.0,
                 "net_income_eur": (
                     _sum_movement_amount([movement], "net", "eur_amount")
                     * (1 if is_opening else -1 if is_closing else 0)
@@ -604,6 +621,8 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
         puts_in_group = [position for position in group_positions if position["type"] == "put"]
         calls_metrics = _build_position_economics_group(calls_in_group, period)
         puts_metrics = _build_position_economics_group(puts_in_group, period)
+        calls_premium_net, calls_buyback_net = _monthly_option_cash_breakdown(calls_in_group, period)
+        puts_premium_net, puts_buyback_net = _monthly_option_cash_breakdown(puts_in_group, period)
         monthly.append({
             "month": group_month,
             "year": group_year,
@@ -615,6 +634,10 @@ def _build_economics_report(symbol_docs: List[Dict[str, Any]],
             "total_commission_eur": metrics["total_commission_eur"],
             "calls_net_income_eur": calls_metrics["net_income_eur"],
             "puts_net_income_eur": puts_metrics["net_income_eur"],
+            "calls_premium_net_eur": calls_premium_net,
+            "puts_premium_net_eur": puts_premium_net,
+            "calls_buyback_net_eur": calls_buyback_net,
+            "puts_buyback_net_eur": puts_buyback_net,
             "positions_count": metrics["count"],
             "avg_roc_pct": metrics["avg_roc_pct"],
             "avg_roc_annualized": metrics["avg_roc_annualized"],
