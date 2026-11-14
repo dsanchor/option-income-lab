@@ -297,7 +297,22 @@ function ChartTooltip({
 }
 
 function MonthlyNetChart({ rows, avgLast12 }: { rows: EconomicsMonthlyRow[]; avgLast12: number | null }) {
+  const [visibleSeries, setVisibleSeries] = useState({
+    calls_premium_net_eur: true,
+    puts_premium_net_eur: true,
+    calls_buyback_net_eur: true,
+    puts_buyback_net_eur: true,
+    net_income_eur: true,
+  });
   if (!rows.length) return <p className="text-sm text-text-muted">No data.</p>;
+
+  const seriesControls = [
+    { key: "calls_premium_net_eur", label: "Calls Premiums", color: CALLS_COLOR },
+    { key: "puts_premium_net_eur", label: "Puts Premiums", color: PUTS_COLOR },
+    { key: "calls_buyback_net_eur", label: "Calls Buybacks", color: CALLS_BUYBACK_COLOR },
+    { key: "puts_buyback_net_eur", label: "Puts Buybacks", color: PUTS_BUYBACK_COLOR },
+    { key: "net_income_eur", label: "Net", color: NET_COLOR },
+  ] as const;
 
   const chartData = rows.map((row) => ({
     label: row.label,
@@ -309,50 +324,62 @@ function MonthlyNetChart({ rows, avgLast12 }: { rows: EconomicsMonthlyRow[]; avg
   }));
 
   return (
-    <div style={{ height: 290 }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 4, left: 2 }} barGap={2}>
-          <CartesianGrid stroke="rgba(148,163,184,0.08)" strokeDasharray="3 3" vertical={false} />
-          <XAxis
-            dataKey="label"
-            tick={{ fill: "#8d969e", fontSize: 10 }}
-            tickLine={false}
-            axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
-            interval={0}
-            angle={-30}
-            textAnchor="end"
-            height={48}
-          />
-          <YAxis
-            tick={{ fill: "#8d969e", fontSize: 10 }}
-            tickLine={false}
-            axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
-            tickFormatter={(value) => eur(Number(value))}
-            width={72}
-          />
-          <ReferenceLine y={0} stroke="rgba(148,163,184,0.35)" />
-          {avgLast12 !== null && (
-            <ReferenceLine
-              y={avgLast12}
-              stroke="var(--accent-blue)"
-              strokeDasharray="4 4"
-              label={{
-                value: `12mo avg ${eur(avgLast12)}`,
-                position: "insideTopRight",
-                fill: "var(--color-text-muted)",
-                fontSize: 10,
-              }}
+    <div>
+      <div className="mb-3 flex flex-wrap gap-x-4 gap-y-2" role="group" aria-label="Visible cash-flow series">
+        {seriesControls.map((series) => (
+          <label key={series.key} className="flex cursor-pointer items-center gap-2 text-xs text-text-muted">
+            <input
+              type="checkbox"
+              checked={visibleSeries[series.key]}
+              onChange={(event) => setVisibleSeries((current) => ({
+                ...current,
+                [series.key]: event.target.checked,
+              }))}
+              style={{ accentColor: series.color }}
             />
-          )}
-          <Tooltip cursor={{ fill: "rgba(148,163,184,0.08)" }} content={<ChartTooltip />} />
-          <Legend wrapperStyle={{ fontSize: 11, color: "#8d969e" }} iconType="circle" iconSize={8} />
-          <Bar dataKey="calls_premium_net_eur" name="Calls Premiums" fill={CALLS_COLOR} radius={[3, 3, 0, 0]} maxBarSize={18} isAnimationActive={false} />
-          <Bar dataKey="puts_premium_net_eur" name="Puts Premiums" fill={PUTS_COLOR} radius={[3, 3, 0, 0]} maxBarSize={18} isAnimationActive={false} />
-          <Bar dataKey="calls_buyback_net_eur" name="Calls Buybacks (cost)" fill={CALLS_BUYBACK_COLOR} radius={[3, 3, 0, 0]} maxBarSize={18} isAnimationActive={false} />
-          <Bar dataKey="puts_buyback_net_eur" name="Puts Buybacks (cost)" fill={PUTS_BUYBACK_COLOR} radius={[3, 3, 0, 0]} maxBarSize={18} isAnimationActive={false} />
-          <Bar dataKey="net_income_eur" name="Net" fill={NET_COLOR} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
-        </BarChart>
-      </ResponsiveContainer>
+            {series.label}
+          </label>
+        ))}
+      </div>
+      <div style={{ height: 290 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 4, left: 2 }} barGap={2}>
+            <CartesianGrid stroke="rgba(148,163,184,0.08)" strokeDasharray="3 3" vertical={false} />
+            <XAxis
+              dataKey="label"
+              tick={{ fill: "#8d969e", fontSize: 10 }}
+              tickLine={false}
+              axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
+              interval={0}
+              angle={-30}
+              textAnchor="end"
+              height={48}
+            />
+            <YAxis
+              tick={{ fill: "#8d969e", fontSize: 10 }}
+              tickLine={false}
+              axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
+              tickFormatter={(value) => eur(Number(value))}
+              width={72}
+            />
+            <ReferenceLine y={0} stroke="rgba(148,163,184,0.35)" />
+            {avgLast12 !== null && (
+              <ReferenceLine
+                y={avgLast12}
+                stroke="var(--accent-blue)"
+                strokeDasharray="4 4"
+              />
+            )}
+            <Tooltip cursor={{ fill: "rgba(148,163,184,0.08)" }} content={<ChartTooltip />} />
+            <Legend wrapperStyle={{ fontSize: 11, color: "#8d969e" }} iconType="circle" iconSize={8} />
+            <Bar dataKey="calls_premium_net_eur" name="Calls Premiums" fill={CALLS_COLOR} hide={!visibleSeries.calls_premium_net_eur} radius={[3, 3, 0, 0]} maxBarSize={18} isAnimationActive={false} />
+            <Bar dataKey="puts_premium_net_eur" name="Puts Premiums" fill={PUTS_COLOR} hide={!visibleSeries.puts_premium_net_eur} radius={[3, 3, 0, 0]} maxBarSize={18} isAnimationActive={false} />
+            <Bar dataKey="calls_buyback_net_eur" name="Calls Buybacks (cost)" fill={CALLS_BUYBACK_COLOR} hide={!visibleSeries.calls_buyback_net_eur} radius={[3, 3, 0, 0]} maxBarSize={18} isAnimationActive={false} />
+            <Bar dataKey="puts_buyback_net_eur" name="Puts Buybacks (cost)" fill={PUTS_BUYBACK_COLOR} hide={!visibleSeries.puts_buyback_net_eur} radius={[3, 3, 0, 0]} maxBarSize={18} isAnimationActive={false} />
+            <Bar dataKey="net_income_eur" name="Net" fill={NET_COLOR} hide={!visibleSeries.net_income_eur} radius={[3, 3, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }

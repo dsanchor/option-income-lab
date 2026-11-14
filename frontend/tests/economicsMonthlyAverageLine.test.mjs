@@ -20,7 +20,7 @@ const compiledFormat = ts.transpileModule(formatSource, {
 const formatModuleUrl = `data:text/javascript;base64,${Buffer.from(compiledFormat).toString("base64")}`;
 const { averageLastNExcludingZero } = await import(formatModuleUrl);
 
-function renderMonthlyChart(rows, avgLast12 = null) {
+function createMonthlyChart(rows, avgLast12 = null) {
   const parsed = ts.createSourceFile("EconomicsView.tsx", economicsView, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const chart = parsed.statements.find((node) =>
     ts.isFunctionDeclaration(node) && node.name?.text === "MonthlyNetChart");
@@ -35,8 +35,25 @@ function renderMonthlyChart(rows, avgLast12 = null) {
     "ResponsiveContainer", "BarChart", "CartesianGrid", "XAxis", "YAxis",
     "ReferenceLine", "Tooltip", "ChartTooltip", "Legend", "Bar",
   ].map((name) => [name, name]));
-  runInNewContext(compiled, { exports, React, ...chartComponents, eur: (value) => `€${value}` });
-  return exports.MonthlyNetChart({ rows, avgLast12 });
+  let state;
+  const useState = (initial) => {
+    state ??= initial;
+    return [state, (update) => {
+      state = typeof update === "function" ? update(state) : update;
+    }];
+  };
+  runInNewContext(compiled, { exports, React, useState, ...chartComponents, eur: (value) => `€${value}` });
+  return { render: () => exports.MonthlyNetChart({ rows, avgLast12 }) };
+}
+
+function findElement(element, type) {
+  if (!React.isValidElement(element)) return null;
+  if (element.type === type) return element;
+  for (const child of React.Children.toArray(element.props.children)) {
+    const match = findElement(child, type);
+    if (match) return match;
+  }
+  return null;
 }
 
 describe("Monthly options cash-flow series", () => {
@@ -52,7 +69,7 @@ describe("Monthly options cash-flow series", () => {
         calls_buyback_net_eur: 20, puts_buyback_net_eur: 10, net_income_eur: -30,
         calls_net_income_eur: -20, puts_net_income_eur: -10 },
     ];
-    const chart = renderMonthlyChart(rows, 36).props.children.props.children;
+    const chart = findElement(createMonthlyChart(rows, 36).render(), "BarChart");
     const children = React.Children.toArray(chart.props.children);
     const bars = children.filter((child) => child.type === "Bar");
     assert.deepEqual(bars.map((bar) => bar.props.dataKey), [
@@ -77,6 +94,38 @@ describe("Monthly options cash-flow series", () => {
     assert.ok(children.some((child) => child.type === "Legend"));
     assert.match(economicsView, /Buyback costs are shown positive for comparison/);
   });
+
+  it("toggles all five series independently without changing the data or final net", () => {
+    const rows = [{
+      label: "Jan 2026", calls_premium_net_eur: 100, puts_premium_net_eur: 50,
+      calls_buyback_net_eur: 30, puts_buyback_net_eur: 10, net_income_eur: 110,
+    }];
+    const instance = createMonthlyChart(rows, 110);
+    const rendered = instance.render();
+    const group = React.Children.toArray(rendered.props.children)[0];
+    assert.equal(group.props["aria-label"], "Visible cash-flow series");
+    const controls = React.Children.toArray(group.props.children);
+    const originalData = findElement(rendered, "BarChart").props.data;
+    assert.equal(controls.length, 5);
+
+    for (let index = 0; index < controls.length; index += 1) {
+      const input = findElement(controls[index], "input");
+      assert.equal(input.props.checked, true);
+      input.props.onChange({ target: { checked: false } });
+      const updated = instance.render();
+      const bars = React.Children.toArray(findElement(updated, "BarChart").props.children)
+        .filter((child) => child.type === "Bar");
+      assert.deepEqual(bars.map((bar) => bar.props.hide), bars.map((_, i) => i <= index));
+      assert.deepEqual(findElement(updated, "BarChart").props.data, originalData);
+    }
+
+    for (let index = 0; index < controls.length; index += 1) {
+      findElement(controls[index], "input").props.onChange({ target: { checked: true } });
+      const bars = React.Children.toArray(findElement(instance.render(), "BarChart").props.children)
+        .filter((child) => child.type === "Bar");
+      assert.deepEqual(bars.map((bar) => bar.props.hide), bars.map((_, i) => i > index));
+    }
+  });
 });
 
 describe("Monthly net average reference line", () => {
@@ -94,12 +143,20 @@ describe("Monthly net average reference line", () => {
     );
   });
 
-  it("renders the shared value as a labeled horizontal reference line", () => {
+  it("retains the shared horizontal average line without an overlapping numeric label", () => {
     assert.match(economicsView, /\{avgLast12 !== null && \(\s*<ReferenceLine/);
     assert.match(economicsView, /y=\{avgLast12\}/);
-    assert.match(economicsView, /value: `12mo avg \$\{eur\(avgLast12\)\}`/);
     assert.match(economicsView, /stroke="var\(--accent-blue\)"/);
     assert.match(economicsView, /strokeDasharray="4 4"/);
+    const chart = findElement(createMonthlyChart([{
+      label: "Jan 2026", calls_premium_net_eur: 100, puts_premium_net_eur: 0,
+      calls_buyback_net_eur: 0, puts_buyback_net_eur: 0, net_income_eur: 100,
+    }], 100).render(), "BarChart");
+    const lines = React.Children.toArray(chart.props.children)
+      .filter((child) => child.type === "ReferenceLine");
+    const average = lines.find((line) => line.props.strokeDasharray === "4 4");
+    assert.equal(average.props.y, 100);
+    assert.equal(average.props.label, undefined);
   });
 
   it("preserves negative and exact-zero averages", () => {
