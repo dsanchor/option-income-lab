@@ -2414,6 +2414,44 @@ def _holdings_by_account(holdings_svc, security_id: str, main_holding: dict) -> 
     return result
 
 
+def _symbol_calendar(cosmos, symbol: str, *, today=None) -> dict:
+    """Classify saved dates on a UTC calendar-day basis, never infer recurrences.
+
+    The calendar is populated by the existing yfinance sync. A provider field
+    named "next" may have aged into the past since it was saved.
+    """
+    from datetime import date
+
+    today = today or datetime.now(timezone.utc).date()
+    calendar = {
+        event_type: {"next_date": None, "last_date": None}
+        for event_type in ("earnings", "ex_dividend")
+    }
+    try:
+        events = cosmos.get_calendar_events(symbol=symbol)
+    except Exception as exc:
+        logger.warning("Symbol calendar unavailable for %s: %s", symbol, exc)
+        return calendar
+    for event in events:
+        if not isinstance(event, dict) or event.get("symbol") != symbol:
+            continue
+        dates = calendar.get(event.get("type"))
+        raw_date = event.get("date")
+        if dates is None or not isinstance(raw_date, str):
+            continue
+        try:
+            event_date = date.fromisoformat(raw_date)
+        except ValueError:
+            continue
+        if event_date.isoformat() != raw_date:
+            continue
+        if event_date >= today:
+            dates["next_date"] = min(dates["next_date"] or raw_date, raw_date)
+        else:
+            dates["last_date"] = max(dates["last_date"] or raw_date, raw_date)
+    return calendar
+
+
 def _compute_symbol_detail(
     cosmos,
     symbol: str,
@@ -2427,7 +2465,7 @@ def _compute_symbol_detail(
 
     Returns the cleaned symbol doc plus a unified recent activity/alert feed,
     monitor-enriched active positions, action plans, watchlist toggles, summary
-    exposure stats, next earnings date and paused state.
+    exposure stats, saved calendar dates and paused state.
 
     Extended for Symbol Unification rev 3:
     - Accepts optional services for security_master lookup and portfolio holdings.
@@ -2438,6 +2476,10 @@ def _compute_symbol_detail(
 
     Scoped reads defer portfolio work, option history/linkage and plans to
     their own requests. The unscoped response retains the legacy contract.
+    Summary also exposes calendar.{earnings,ex_dividend}.{next_date,last_date}
+    from saved events: earliest date >= today UTC, latest date < today UTC.
+    Missing dates remain null; ticker-only events are not attached when the
+    requested security does not match the symbol configuration.
     """
     sym = _ticker_from_symbol_param(symbol)
     doc = cosmos.get_symbol(sym)
@@ -2573,6 +2615,7 @@ def _compute_symbol_detail(
             "plans": [],
             "summary": {"in_calls": 0, "put_exposure": 0, "call_exposure": 0, "active_count": 0},
             "next_earnings_date": None,
+            "calendar": None,
             "is_paused": False,
             "security_id": security_doc.get("security_id"),
             "security": security_field,
@@ -2838,6 +2881,7 @@ def _compute_symbol_detail(
             "active_count": len(active_positions),
         },
         "next_earnings_date": cosmos.get_next_earnings_date(sym) if needs_summary else None,
+        "calendar": _symbol_calendar(cosmos, sym) if needs_summary else None,
         "is_paused": is_watchlist_paused(doc),
         # canonical identity
         "security_id": security_id_from_config,
@@ -5731,6 +5775,9 @@ async def api_calendar(request: Request):
 async def api_calendar_refresh(request: Request):
     """Refresh calendar events from yfinance and store in CosmosDB.
 
+    Only earnings timestamps/calendar earnings dates and exDividendDate are
+    event evidence; fiscal-quarter ends and dividend payment dates are not.
+
     Skips portfolio-origin symbols that are now historical (zero shares, no
     active option position, no explicit watchlist interest) so stale
     positions don't keep consuming yfinance calls or reappearing on the
@@ -5787,7 +5834,6 @@ async def api_calendar_refresh(request: Request):
         earnings_ts = (
             info.get("earningsTimestampStart")
             or info.get("earningsTimestamp")
-            or info.get("mostRecentQuarter")
         )
         if not earnings_ts:
             # Try the calendar endpoint for next earnings
@@ -5825,8 +5871,6 @@ async def api_calendar_refresh(request: Request):
 
         # Ex-dividend date
         ex_div_ts = info.get("exDividendDate")
-        if not ex_div_ts:
-            ex_div_ts = info.get("lastDividendDate")
         if ex_div_ts:
             try:
                 ex_div_date = datetime.fromtimestamp(int(ex_div_ts), tz=timezone.utc).strftime("%Y-%m-%d")

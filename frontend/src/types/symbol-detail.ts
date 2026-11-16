@@ -122,6 +122,17 @@ export interface SymbolSummary {
   active_count: number;
 }
 
+/** Saved calendar evidence; today (UTC) is eligible as next, not last. */
+export interface SymbolCalendarDates {
+  next_date: string | null;
+  last_date: string | null;
+}
+
+export interface SymbolCalendar {
+  earnings: SymbolCalendarDates;
+  ex_dividend: SymbolCalendarDates;
+}
+
 // Symbol Unification rev 3 — new types
 
 export interface SecurityMasterInfo {
@@ -219,6 +230,7 @@ export interface SymbolDetail {
   plans: Plan[];
   summary: SymbolSummary;
   next_earnings_date?: string | null;
+  calendar?: SymbolCalendar | null;
   is_paused: boolean;
   // Symbol Unification rev 3 — new fields (null when not yet deployed by backend)
   security_id?: string | null;

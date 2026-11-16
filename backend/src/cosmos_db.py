@@ -2378,17 +2378,22 @@ class CosmosDBService:
             logger.warning("Failed to upsert calendar event for %s: %s", symbol, exc)
             return None
 
-    def get_calendar_events(self) -> list:
-        """Return all calendar events."""
+    def get_calendar_events(self, symbol: str | None = None) -> list:
+        """Return saved events, including past dates, optionally for one symbol."""
         if not self.calendar_container:
             self._init_calendar_container()
         if not self.calendar_container:
             return []
         try:
-            return list(self.calendar_container.query_items(
-                query="SELECT c.symbol, c.type, c.date, c.has_active_position, c.updated_at FROM c",
-                enable_cross_partition_query=True,
-            ))
+            query = "SELECT c.symbol, c.type, c.date, c.has_active_position, c.updated_at FROM c"
+            scope = {"enable_cross_partition_query": True}
+            if symbol is not None:
+                query += " WHERE c.symbol = @symbol"
+                scope = {
+                    "parameters": [{"name": "@symbol", "value": symbol}],
+                    "partition_key": symbol,
+                }
+            return list(self.calendar_container.query_items(query=query, **scope))
         except Exception as exc:
             logger.warning("Failed to read calendar events: %s", exc)
             return []

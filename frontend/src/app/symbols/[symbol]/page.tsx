@@ -5,6 +5,7 @@ import { isUSOptionsEligible } from "@/lib/exchangeEligibility";
 import SymbolActions from "@/components/SymbolActions";
 import SymbolSummary, { SymbolMembershipBadge } from "@/components/DeferredSymbolSummary";
 import SymbolForecastSummary from "@/components/SymbolForecastSummary";
+import SymbolCalendar from "@/components/SymbolCalendar";
 import { SymbolOptionsPanel, SymbolStocksPanel, SymbolPlansPanel } from "@/components/SymbolDetailPanels";
 import { RtChartProvider, RtChartButton, RtChartPanel } from "@/components/RtChart";
 import TradingViewSymbolInfo from "@/components/TradingViewSymbolInfo";
@@ -146,6 +147,7 @@ export default async function SymbolDetailPage({
             <SymbolForecastSummary symbol={d.security?.security_id ?? d.security_id ?? symbol} />
           </Suspense>
         )}
+        <SymbolCalendar calendar={d.calendar} />
       </DetailSection>
 
       {/* Symbol configuration — always visible, below Summary */}

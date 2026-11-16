@@ -1,5 +1,7 @@
 from collections import Counter
+from datetime import date
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +20,7 @@ def detail_client(monkeypatch):
     class Cosmos:
         container = object()
         portfolio_container = object()
+        calendar_container = object()
         doc = {
             "symbol": "MSFT", "security_id": "XNAS:MSFT", "exchange": "XNAS",
             "enrichment": {"category": "Growth", "metrics": {"current_price": 100}},
@@ -43,6 +46,13 @@ def detail_client(monkeypatch):
         def get_next_earnings_date(self, symbol):
             calls["earnings"] += 1
             return "2026-12-01"
+
+        def get_calendar_events(self, symbol=None):
+            calls["calendar"] += 1
+            return [
+                {"symbol": "MSFT", "type": "earnings", "date": "2099-12-01"},
+                {"symbol": "MSFT", "type": "ex_dividend", "date": "2020-11-14"},
+            ]
 
     class Securities:
         def __init__(self, *args):
@@ -104,6 +114,10 @@ def test_summary_is_lightweight_and_other_sections_load_independently(detail_cli
     assert summary["symbol_state"] is None
     assert summary["has_symbol_config"] is True
     assert summary["detail_loaded_at"]
+    assert summary["calendar"] == {
+        "earnings": {"next_date": "2099-12-01", "last_date": None},
+        "ex_dividend": {"next_date": None, "last_date": "2020-11-14"},
+    }
     assert all(calls[k] == 0 for k in ("holdings_init", "holdings", "movements", "plans", "activities", "alerts", "linkage"))
 
     options = client.get("/api/symbols/XNAS:MSFT/detail?section=options").json()
@@ -126,6 +140,7 @@ def test_summary_is_lightweight_and_other_sections_load_independently(detail_cli
     assert calls["holdings"] == 1
     assert calls["activities"] == agent_count
     assert calls["timing"] == 1
+    assert calls["calendar"] == 1
 
 
 def test_summary_refresh_changes_snapshot_and_canonical_collision_is_not_cross_asset(detail_client):
@@ -138,6 +153,7 @@ def test_summary_refresh_changes_snapshot_and_canonical_collision_is_not_cross_a
     assert other["enrichment"] == {}
     assert other["has_symbol_config"] is False
     assert other["us_options_eligible"] is False
+    assert other["calendar"] is None
     assert calls["holdings"] == calls["activities"] == 0
     other_stocks = client.get("/api/symbols/XLON:MSFT/detail?section=stocks").json()
     assert other_stocks["portfolio"] is None
@@ -173,3 +189,107 @@ def test_unscoped_detail_keeps_existing_full_contract(detail_client):
     assert "has_symbol_config" not in data
     assert calls["holdings"] == calls["plans"] == calls["linkage"] == calls["timing"] == 1
     assert calls["activities"] == calls["alerts"] == agent_count
+
+
+@pytest.mark.parametrize("event_type", ["earnings", "ex_dividend"])
+def test_calendar_prefers_nearest_future_and_retains_most_recent_past(event_type):
+    from web.app import _symbol_calendar
+
+    events = [
+        {"symbol": "MSFT", "type": event_type, "date": day}
+        for day in ("2026-12-01", "2026-08-01", "2026-11-20", "2026-11-15")
+    ]
+    cosmos = SimpleNamespace(get_calendar_events=lambda **kwargs: events)
+    result = _symbol_calendar(cosmos, "MSFT", today=date(2026, 11, 16))
+    assert result[event_type] == {"next_date": "2026-11-20", "last_date": "2026-11-15"}
+    other_type = "earnings" if event_type == "ex_dividend" else "ex_dividend"
+    assert result[other_type] == {"next_date": None, "last_date": None}
+
+    events[:] = [event for event in events if event["date"] < "2026-11-16"]
+    assert _symbol_calendar(cosmos, "MSFT", today=date(2026, 11, 16))[event_type] == {
+        "next_date": None, "last_date": "2026-11-15",
+    }
+
+    events.append({"symbol": "MSFT", "type": event_type, "date": "2026-11-16"})
+    assert _symbol_calendar(cosmos, "MSFT", today=date(2026, 11, 16))[event_type] == {
+        "next_date": "2026-11-16", "last_date": "2026-11-15",
+    }
+
+
+def test_calendar_unknown_ignores_invalid_dates_other_symbols_and_unrelated_events():
+    from web.app import _symbol_calendar
+
+    events = [
+        {"symbol": "MSFT", "type": kind, "date": day}
+        for kind in ("earnings", "ex_dividend")
+        for day in (None, "", "unknown", "2026-02-30", "20261120", "2026-11-20T00:00:00Z", 1795132800)
+    ] + [
+        {"symbol": "OTHER", "type": "earnings", "date": "2026-11-20"},
+        {"symbol": "MSFT", "type": "payment", "date": "2026-11-20"},
+        None,
+    ]
+    cosmos = SimpleNamespace(get_calendar_events=lambda **kwargs: events)
+    assert _symbol_calendar(cosmos, "MSFT", today=date(2026, 11, 16)) == {
+        kind: {"next_date": None, "last_date": None} for kind in ("earnings", "ex_dividend")
+    }
+
+
+def test_calendar_storage_failure_stays_unavailable(detail_client, monkeypatch):
+    client, _, _, _ = detail_client
+
+    def fail(**kwargs):
+        raise RuntimeError("calendar unavailable")
+
+    monkeypatch.setattr(client.app.state.cosmos, "get_calendar_events", fail)
+    response = client.get("/api/symbols/XNAS:MSFT/detail?section=summary")
+    assert response.status_code == 200
+    assert response.json()["calendar"] == {
+        kind: {"next_date": None, "last_date": None} for kind in ("earnings", "ex_dividend")
+    }
+
+
+def test_symbol_calendar_read_keeps_past_events_and_uses_symbol_partition():
+    from src.cosmos_db import CosmosDBService
+
+    cosmos = CosmosDBService.__new__(CosmosDBService)
+    cosmos.calendar_container = MagicMock()
+    events = [{"symbol": "MSFT", "type": "earnings", "date": "2020-01-01"}]
+    cosmos.calendar_container.query_items.return_value = iter(events)
+    assert cosmos.get_calendar_events(symbol="MSFT") == events
+    kwargs = cosmos.calendar_container.query_items.call_args.kwargs
+    assert kwargs["partition_key"] == "MSFT"
+    assert kwargs["parameters"] == [{"name": "@symbol", "value": "MSFT"}]
+    assert "WHERE c.symbol = @symbol" in kwargs["query"]
+    assert "@today" not in kwargs["query"]
+    assert "enable_cross_partition_query" not in kwargs
+
+    cosmos.get_calendar_events()
+    kwargs = cosmos.calendar_container.query_items.call_args.kwargs
+    assert kwargs["enable_cross_partition_query"] is True
+    assert "WHERE" not in kwargs["query"]
+
+
+def test_calendar_refresh_does_not_invent_event_dates_from_fiscal_period_or_payment(detail_client, monkeypatch):
+    client, _, _, _ = detail_client
+    cosmos = client.app.state.cosmos
+    monkeypatch.setattr(cosmos, "list_symbols", lambda: [cosmos.doc], raising=False)
+    write = MagicMock()
+    monkeypatch.setattr(cosmos, "upsert_calendar_event", write, raising=False)
+    monkeypatch.setattr("web.app._calendar_visible_symbols", lambda _: {"MSFT"})
+    ticker = SimpleNamespace(
+        info={"mostRecentQuarter": 1792454400, "lastDividendDate": 1792454400},
+        calendar={},
+    )
+    monkeypatch.setattr("web.app.yf", SimpleNamespace(Ticker=lambda _: ticker))
+    response = client.post("/api/calendar/refresh")
+    assert response.status_code == 200
+    assert response.json()["updated"] == 0
+    write.assert_not_called()
+
+    ticker.info = {"earningsTimestampStart": 1795132800, "exDividendDate": 1795046400}
+    response = client.post("/api/calendar/refresh")
+    assert response.json()["updated"] == 2
+    assert [call.args[:3] for call in write.call_args_list] == [
+        ("MSFT", "earnings", "2026-11-20"),
+        ("MSFT", "ex_dividend", "2026-11-19"),
+    ]
