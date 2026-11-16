@@ -19,14 +19,12 @@ export default function SymbolCalendar({ calendar }: { calendar?: Calendar | nul
                 {next ? (
                   <>Next: <time dateTime={next} className="font-mono">{next}</time></>
                 ) : (
-                  <>
-                    {last ? (
-                      <>Last: <time dateTime={last} className="font-mono">{last}</time></>
-                    ) : (
-                      <span className="text-text-muted">Date unavailable</span>
-                    )}
-                    <p className="mt-1 text-xs text-text-muted">No next date known at the moment.</p>
-                  </>
+                  <span className="text-text-muted">No next date known at the moment.</span>
+                )}
+                {last && (
+                  <p className="mt-1">
+                    Last: <time dateTime={last} className="font-mono">{last}</time>
+                  </p>
                 )}
               </dd>
             </div>

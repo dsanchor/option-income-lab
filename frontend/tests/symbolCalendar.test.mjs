@@ -27,14 +27,15 @@ for (const [kind, label, otherKind, otherLabel] of [
   ["earnings", "Earnings", "ex_dividend", "Ex-dividend"],
   ["ex_dividend", "Ex-dividend", "earnings", "Earnings"],
 ]) {
-  test(`${label} prefers next, independently of the other event's last-only state`, () => {
+  test(`${label} shows next and last, independently of the other event's last-only state`, () => {
     const html = markup({
       [kind]: { next_date: "2026-11-20", last_date: "2026-08-01" },
       [otherKind]: { next_date: null, last_date: "2026-11-14" },
     });
     const event = eventMarkup(html, label);
     assert.match(event, /Next: <time dateTime="2026-11-20"/);
-    assert.doesNotMatch(event, /Last:|2026-08-01|No next/);
+    assert.match(event, /Last: <time dateTime="2026-08-01"/);
+    assert.doesNotMatch(event, /No next/);
     const otherEvent = eventMarkup(html, otherLabel);
     assert.match(otherEvent, /Last: <time dateTime="2026-11-14"/);
     assert.match(otherEvent, /No next date known at the moment/);
@@ -46,10 +47,11 @@ for (const [kind, label, otherKind, otherLabel] of [
       [kind]: { next_date: null, last_date: null },
       [otherKind]: { next_date: "2026-11-20", last_date: null },
     });
-    assert.match(eventMarkup(html, label), /Date unavailable/);
+    assert.match(eventMarkup(html, label), /No next date known at the moment/);
+    assert.doesNotMatch(eventMarkup(html, label), /Date unavailable/);
     assert.doesNotMatch(eventMarkup(html, label), /Next:|Last:|<time/);
     assert.match(eventMarkup(html, otherLabel), /Next:/);
-    assert.doesNotMatch(eventMarkup(html, otherLabel), /unavailable|No next/);
+    assert.doesNotMatch(eventMarkup(html, otherLabel), /Last:|unavailable|No next/);
   });
 }
 
@@ -57,7 +59,8 @@ test("absent calendar evidence never fabricates a date", () => {
   for (const calendar of [undefined, null, {}]) {
     const html = markup(calendar);
     assert.match(html, /<h3[^>]*>Calendar</);
-    assert.equal((html.match(/Date unavailable/g) ?? []).length, 2);
+    assert.equal((html.match(/No next date known at the moment/g) ?? []).length, 2);
+    assert.doesNotMatch(html, /Date unavailable/);
     assert.doesNotMatch(html, /Next:|Last:|<time/);
   }
 });
