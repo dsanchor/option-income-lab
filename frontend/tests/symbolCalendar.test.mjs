@@ -65,6 +65,30 @@ test("absent calendar evidence never fabricates a date", () => {
   }
 });
 
+for (const [now, next, expected] of [
+  ["2026-11-16T23:59:59Z", "2026-11-20", "in 4 days"],
+  ["2026-11-16T23:59:59Z", "2026-11-17", "in 1 day"],
+  ["2026-11-16T00:00:01Z", "2026-11-16", "today"],
+  ["2026-12-31T12:00:00Z", "2027-01-01", "in 1 day"],
+  ["2028-02-28T12:00:00Z", "2028-03-01", "in 2 days"],
+  ["2026-03-07T23:59:59-05:00", "2026-03-09", "in 1 day"],
+  ["2026-11-17T00:00:01Z", "2026-11-16", "1 day ago"],
+]) {
+  test(`next-date countdown is ${expected} at ${now}`, (t) => {
+    t.mock.timers.enable({ apis: ["Date"], now: new Date(now) });
+    const html = markup({
+      earnings: { next_date: next, last_date: "2026-01-01" },
+      ex_dividend: { next_date: next, last_date: null },
+    });
+    for (const label of ["Earnings", "Ex-dividend"]) {
+      const event = eventMarkup(html, label);
+      assert.ok(event.includes(`(${expected})`));
+      assert.ok(event.includes(`dateTime="${next}"`));
+      assert.equal((event.match(/\(.*?\)/g) ?? []).length, 1);
+    }
+  });
+}
+
 test("Calendar follows Projection Fan inside Summary, outside the US-options gate", () => {
   const page = readFileSync(new URL("../src/app/symbols/[symbol]/page.tsx", import.meta.url), "utf8");
   assert.match(page, /<SymbolForecastSummary[^>]+\/>\s*<\/Suspense>\s*\)}\s*<SymbolCalendar calendar=\{d\.calendar\} \/>\s*<\/DetailSection>/);
