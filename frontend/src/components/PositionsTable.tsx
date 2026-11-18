@@ -65,7 +65,7 @@ const labelCls = "mb-1 block text-xs text-text-muted";
 
 export default function PositionsTable({ symbol, positions }: { symbol: string; positions: Position[] }) {
   const router = useRouter();
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState("active");
   const [days, setDays] = useState(0);
 
   // Which position currently has an open Roll / Close / Notes editor.
@@ -195,6 +195,14 @@ export default function PositionsTable({ symbol, positions }: { symbol: string; 
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <label className="flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
+            <input
+              type="checkbox"
+              checked={status === "active"}
+              onChange={(e) => setStatus(e.target.checked ? "active" : "")}
+            />
+            Only opened
+          </label>
           <div className="flex flex-wrap items-center gap-1 rounded-[var(--radius-pill)] border border-border bg-bg-card p-1" role="group" aria-label="Position status filter">
             {STATUS_FILTERS.map((s) => (
               <button
