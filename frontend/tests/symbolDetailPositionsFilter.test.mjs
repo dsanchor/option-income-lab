@@ -51,16 +51,6 @@ function positionsHarness(positions) {
       cursor = 0;
       return elements(loaded.exports.default({ symbol: "XNAS:AAPL", positions }));
     },
-    checkbox() {
-      const label = h.render().find((node) =>
-        node.type === "label" && node.props.children.includes("Only opened"));
-      assert.ok(label, "The checkbox has a visible wrapping label");
-      return elements(label).find((node) => node.type === "input" && node.props.type === "checkbox");
-    },
-    toggle(checked) {
-      h.checkbox().props.onChange({ target: { checked } });
-      return h.render();
-    },
     click(label, group = "Position status filter") {
       const scope = elements(h.render().find((node) => node.props?.["aria-label"] === group));
       const button = scope.find((node) => node.type === "button" && node.props.children === label);
@@ -91,29 +81,31 @@ const renderedIds = (tree) => tree
   .map((node) => node.key);
 
 describe("Symbol Detail Option Positions filter", () => {
-  it("defaults to checked and shows only canonical active positions, newest first", () => {
+  it("defaults to Active and shows only canonical active positions without a checkbox", () => {
     const h = positionsHarness(dataset);
-    assert.equal(h.checkbox().props.checked, true);
+    const activeButton = h.render().find((node) =>
+      node.type === "button" && node.props.children === "Active");
+    assert.ok(activeButton.props.className.includes("bg-accent-blue"));
+    assert.ok(!h.render().some((node) =>
+      node.type === "input" && node.props.type === "checkbox"));
     assert.deepEqual(renderedIds(h.render()), ["old-active", "active"]);
   });
 
-  it("restores every status when unchecked and reapplies the open filter when checked", () => {
+  it("restores every status with All and reapplies the open filter with Active", () => {
     const h = positionsHarness(dataset);
-    assert.deepEqual(renderedIds(h.toggle(false)), dataset.map((p) => p.position_id).reverse());
-    assert.equal(h.checkbox().props.checked, false);
-    assert.deepEqual(renderedIds(h.toggle(true)), ["old-active", "active"]);
+    assert.deepEqual(renderedIds(h.click("All")), dataset.map((p) => p.position_id).reverse());
+    assert.deepEqual(renderedIds(h.click("Active")), ["old-active", "active"]);
   });
 
-  it("keeps the existing status and date filters synchronized with the checkbox", () => {
+  it("preserves the existing status and date filters", () => {
     const h = positionsHarness(dataset);
     assert.deepEqual(renderedIds(h.click("Rolled")), ["rolled"]);
-    assert.equal(h.checkbox().props.checked, false);
-    assert.deepEqual(renderedIds(h.toggle(true)), ["old-active", "active"]);
+    assert.deepEqual(renderedIds(h.click("Closed")), ["closed-assigned", "closed-expired", "closed-manual"]);
+    assert.deepEqual(renderedIds(h.click("Active")), ["old-active", "active"]);
     assert.deepEqual(renderedIds(h.click("15d", "Position time period")), ["active"]);
-    assert.deepEqual(renderedIds(h.toggle(false)), dataset
+    assert.deepEqual(renderedIds(h.click("All")), dataset
       .filter((p) => p.position_id !== "old-active").map((p) => p.position_id).reverse());
-    h.click("Active");
-    assert.equal(h.checkbox().props.checked, true);
+    assert.deepEqual(renderedIds(h.click("Active")), ["active"]);
   });
 
   it("preserves the empty state and allows historical-only positions to be revealed", () => {
@@ -121,9 +113,9 @@ describe("Symbol Detail Option Positions filter", () => {
     assert.deepEqual(renderedIds(h.render()), []);
     assert.ok(h.render().some((node) =>
       node.type === "td" && node.props.children === "No positions match the current filters."));
-    assert.deepEqual(renderedIds(h.toggle(false)), ["rolled"]);
+    assert.deepEqual(renderedIds(h.click("All")), ["rolled"]);
     const empty = positionsHarness([]);
     assert.deepEqual(renderedIds(empty.render()), []);
-    assert.deepEqual(renderedIds(empty.toggle(false)), []);
+    assert.deepEqual(renderedIds(empty.click("All")), []);
   });
 });
