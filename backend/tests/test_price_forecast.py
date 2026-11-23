@@ -10,7 +10,6 @@ import pytest
 
 from src.price_forecast import (
     HORIZONS,
-    HORIZON_TREND_TIER,
     HV_WINDOW,
     LIFECYCLE_SESSIONS,
     MIN_HISTORY_BARS,
@@ -25,7 +24,12 @@ from src.price_forecast import (
     has_enough_history,
     horizon_for_offset,
     is_endpoint,
-    linear_trend,
+    adaptive_trend,
+    project_trend,
+    TREND_MIN_SAMPLES,
+    TREND_FALLBACK_FACTOR,
+    _trend_base,
+    _damped_delta,
     momentum_bias,
     graded_momentum_bias,
     price_inside,
@@ -521,46 +525,111 @@ def test_ewma_reacts_faster_than_flat_hv():
 
 
 # ---------------------------------------------------------------------------
-# Linear trend overlay
+# Adaptive damped trend
 # ---------------------------------------------------------------------------
 
-def test_linear_trend_none_on_short_series():
-    assert linear_trend([100.0, 101.0]) is None
-    assert linear_trend(None) is None
+def test_adaptive_trend_short_flat_invalid():
+    for prices in (None, [], [100, 101], [100] * 31, [100] * 31 + [math.nan],
+                   [100] * 31 + [0], [100] * 31 + [-1], [100] * 31 + [None],
+                   [100] * 31 + [math.inf], [100] * 31 + ["invalid"]):
+        assert adaptive_trend(prices) is None
+    flat = adaptive_trend([100] * 250)
+    assert flat["regime"] == "ranging"
+    assert flat["session_deltas"] == [0] * 21
+    assert all(c["n"] == 0 and c["status"] == "insufficient" for c in flat["calibration"].values())
+    assert compute_forecast_from_closes([100] * 60) is None  # zero volatility still unusable
+    fc = compute_forecast_from_closes([100 + i * 0.1 for i in range(35)],
+                                      trend_window_long=60)
+    assert fc["trend"] is None
+    assert all("trend_end" not in b for b in fc["horizons"].values())
 
 
-def test_linear_trend_recovers_known_slope():
-    # Perfectly linear series: slope per session == 0.5, residuals ~0.
-    closes = [100.0 + 0.5 * i for i in range(20)]
-    tr = linear_trend(closes, window=20)
-    assert tr is not None
-    assert tr["slope"] == pytest.approx(0.5, rel=1e-6)
-    assert tr["resid_std"] == pytest.approx(0.0, abs=1e-6)
-    assert tr["window"] == 20
+@pytest.mark.parametrize("direction", [-1, 1])
+def test_adaptive_smooth_trend_damps_and_reports_units(direction):
+    prices = [300 + direction * i * 0.5 for i in range(250)]
+    tr = adaptive_trend(prices)
+    assert tr["regime"] == "trending"
+    assert tr["efficiency"] == pytest.approx(1)
+    assert tr["short_slope"] == tr["long_slope"] == direction * 0.5
+    assert tr["slope_kind"] == "first_session_change"
+    assert tr["slope"] == tr["session_deltas"][1]
+    assert tr["slope"] * direction > 0
+    for spec in HORIZONS.values():
+        h = spec["end_session"]
+        assert abs(tr["session_deltas"][h]) <= abs(tr["drift"]) * h
+    # Equal calibration priors isolate damping from different sample sizes.
+    young = adaptive_trend(prices[:35])
+    path = young["session_deltas"]
+    assert abs((path[20] - path[10]) / 10) < abs((path[10] - path[5]) / 5) < abs(path[1])
 
 
-def test_linear_trend_respects_window():
-    closes = [100.0 + 0.5 * i for i in range(60)]
-    tr = linear_trend(closes, window=10)
-    assert tr["window"] == 10
+def test_adaptive_recent_reversal_overrides_slow_regime():
+    up = [100 + i * 0.5 for i in range(100)]
+    reversal = up + [up[-1] - i for i in range(1, 8)]
+    tr = adaptive_trend(reversal)
+    assert tr["regime"] == "reversal"
+    assert tr["short_slope"] < 0 < tr["long_slope"]
+    assert tr["recent_weight"] == 0.9
+    assert tr["slope"] < 0
+    # Momentum reading is deliberately independent, even when it contradicts.
+    fc = compute_forecast_from_closes(reversal, momentum="Bullish")
+    assert fc["trend"]["slope"] < 0
+    assert fc["reading"]["label"] == "Bullish"
+    assert fc["bias"] > 0
 
 
-def test_linear_trend_perfect_line_high_r2_no_shrink():
-    # Clean line: R²≈1 so the shrunk slope stays ≈ raw slope; quality "strong".
-    closes = [100.0 + 0.5 * i for i in range(20)]
-    tr = linear_trend(closes, window=20)
-    assert tr["r2"] == pytest.approx(1.0, abs=1e-6)
-    assert tr["slope"] == pytest.approx(tr["slope_raw"], rel=1e-6)
-    assert tr["quality"] == "strong"
+def test_adaptive_noisy_range_suppresses_drift():
+    tr = adaptive_trend([100 + (2 if i % 2 else -2) for i in range(250)])
+    assert tr["regime"] == "ranging"
+    assert tr["efficiency"] < 0.15
+    assert abs(tr["slope"]) < 0.1
+    assert "r2" not in tr
 
 
-def test_linear_trend_noisy_series_shrinks_slope():
-    # Zig-zag with no real drift: low R² → slope shrunk toward 0, quality "weak".
-    closes = [100.0 + (2.0 if i % 2 else -2.0) for i in range(20)]
-    tr = linear_trend(closes, window=20)
-    assert tr["r2"] < 0.2
-    assert abs(tr["slope"]) <= abs(tr["slope_raw"])
-    assert tr["quality"] == "weak"
+def test_predictive_calibration_maturity_minimum_and_exact_coefficient():
+    # Changing slopes make a retrospective full-series fit fail this oracle.
+    prices = [100 + i * 0.08 + 2.5 * math.sin(i / 8) for i in range(250)]
+    tr = adaptive_trend(prices)
+    for name, spec in HORIZONS.items():
+        h = spec["end_session"]
+        c = tr["calibration"][name]
+        origins = list(range(len(prices) - 1 - h, 30, -h))[:60]
+        assert c["n"] == len(origins)
+        assert c["latest_origin_offset"] == -h
+        assert c["latest_endpoint_offset"] == 0
+        assert c["sample_stride"] == h
+        xs = [_damped_delta(_trend_base(prices[:o + 1], 8, 32), h) / prices[o] for o in origins]
+        ys = [prices[o + h] / prices[o] - 1 for o in origins]
+        coefficient = max(0, min(1, sum(x*y for x, y in zip(xs, ys)) / sum(x*x for x in xs)))
+        assert c["factor"] == pytest.approx(coefficient * len(origins) / (len(origins) + 8), abs=1e-6)
+        assert c["raw_rmse_pct"] == pytest.approx(100 * math.sqrt(sum((y-x)**2 for x, y in zip(xs, ys)) / len(xs)), abs=0.0001)
+        assert 0 <= c["factor"] <= 1
+    for count, expected in ((7, "insufficient"), (8, "available")):
+        # 32-bar warmup plus count independent 20-session returns.
+        c = adaptive_trend(prices[:32 + count * 20])["calibration"]["4w"]
+        assert c["n"] == count
+        assert c["status"] == expected
+        if expected == "insufficient":
+            assert c["factor"] == TREND_FALLBACK_FACTOR
+            assert c["raw_rmse_pct"] is None
+            assert c["min_n"] == TREND_MIN_SAMPLES
+
+
+def test_calibration_rejects_bad_direction_without_flipping(monkeypatch):
+    # A consistently anti-predictive raw model must be shrunk to zero, not inverted.
+    import src.price_forecast as engine
+    monkeypatch.setattr(engine, "_damped_delta", lambda base, h: -h)
+    tr = adaptive_trend([100 + i for i in range(250)])
+    assert all(c["factor"] == 0 for c in tr["calibration"].values())
+    assert tr["session_deltas"] == [0] * 21
+
+
+def test_invalid_bars_are_not_collapsed_for_trend_calibration():
+    prices = [100 + i * 0.1 for i in range(100)]
+    prices[50] = math.nan
+    c = adaptive_trend(prices)["calibration"]["1d"]
+    # Any origin with the invalid bar in its 32-bar prefix/endpoint is skipped.
+    assert c["n"] == 35
 
 
 # ---------------------------------------------------------------------------
@@ -789,45 +858,63 @@ def test_aggregate_forecast_averages_empty_and_missing_slope():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Horizon-aware trend windows (short 1d/1w, long 2w/4w)
+# Stored adaptive curve, cone independence and legacy reads
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_horizon_aware_windows_use_matched_slope():
-    # An accelerating series: the recent (short) slope is steeper than the long one.
-    closes = [100.0] * 30 + [100 + i * 0.8 for i in range(1, 31)]
-    fc = compute_forecast_from_closes(
-        closes, trend_window=20, trend_window_long=40, vol_source="hv"
-    )
-    slope_short = linear_trend(closes, 20)["slope"]
-    slope_long = linear_trend(closes, 40)["slope"]
-    assert slope_short != pytest.approx(slope_long)  # the fixture must differentiate
-
-    h = fc["horizons"]
-    # Short horizons use the short-window slope; long horizons the long-window slope.
-    assert h["1d"]["trend_slope"] == pytest.approx(slope_short)
-    assert h["1w"]["trend_slope"] == pytest.approx(slope_short)
-    assert h["2w"]["trend_slope"] == pytest.approx(slope_long)
-    assert h["4w"]["trend_slope"] == pytest.approx(slope_long)
-    # trend_end must be consistent with the per-horizon slope.
-    assert h["4w"]["trend_end"] == pytest.approx(
-        round(fc["price_at_creation"] + slope_long * h["4w"]["end_session"], 4)
-    )
-    # Top-level (headline) trend is the short window.
-    assert fc["trend"]["slope"] == pytest.approx(slope_short)
+def test_stored_adaptive_path_drives_endpoints_deviations_and_averages():
+    closes = [100 + i * 0.2 for i in range(250)]
+    fc = compute_forecast_from_closes(closes, current_price=closes[-1] + 0.000049)
+    anchor = fc["price_at_creation"]
+    for name, spec in HORIZONS.items():
+        h = spec["end_session"]
+        band = fc["horizons"][name]
+        assert band["trend_end"] == round(project_trend(anchor, fc["trend"], h), 4)
+        assert band["trend_slope_kind"] == "horizon_average"
+        assert band["trend_slope"] == pytest.approx((band["trend_end"] - anchor) / h, abs=0.00006)
+    fc["snapshots"] = [
+        {"horizon": horizon_for_offset(i), "offset": i,
+         "price": project_trend(anchor, fc["trend"], i)}
+        for i in range(1, 21)
+    ]
+    assert all(s["mean_dev"] == 0 for s in summarize_prediction(fc).values())
+    av = aggregate_forecast_averages([fc])
+    for name in HORIZONS:
+        assert av[name]["mean"] == fc["horizons"][name]["trend_end"]
 
 
-def test_horizon_tier_map_covers_all_horizons():
-    assert set(HORIZON_TREND_TIER) == set(HORIZONS)
-    assert HORIZON_TREND_TIER == {"1d": "short", "1w": "short", "2w": "long", "4w": "long"}
+def test_adaptive_trend_cannot_change_existing_volatility_cone():
+    closes = [100 + i * 0.2 for i in range(250)]
+    for source in ("hv", "ewma", "iv"):
+        fc = compute_forecast_from_closes(closes, vol_source=source, iv=0.35,
+                                          vol_scale=1.2, confidence=0.5)
+        raw_vol = {"hv": historical_volatility(closes), "ewma": ewma_volatility(closes),
+                   "iv": 0.35}[source]
+        cone = compute_forecast(closes[-1], raw_vol, vol_scale=1.2, confidence=0.5)
+        for name in HORIZONS:
+            for key in ("center", "sigma", "z1", "z2", "low1", "high1", "low2", "high2"):
+                assert fc["horizons"][name][key] == cone["horizons"][name][key]
 
 
-def test_single_window_when_long_equals_short():
+def test_legacy_projection_reads_matched_slope_without_modifying_doc():
+    import copy
+    legacy = {"price_at_creation": 100, "trend": {"slope": 1, "r2": 0.5},
+              "horizons": {"1w": {"trend_slope": 0.5, "trend_end": 102.5}},
+              "snapshots": [{"horizon": "1w", "offset": 3, "price": 102}]}
+    original = copy.deepcopy(legacy)
+    assert summarize_prediction(legacy)["1w"]["mean_dev"] == 0.5
+    assert project_trend(100, legacy["trend"], 3) == 103
+    assert legacy == original
+    assert project_trend(100, {"model": "adaptive_damped_v1", "slope": 1}, 3) is None
+
+
+def test_equal_windows_still_use_one_damped_path():
     closes = [100 + i * 0.5 for i in range(60)]
     fc = compute_forecast_from_closes(
         closes, trend_window=20, trend_window_long=20, vol_source="hv"
     )
-    slopes = {fc["horizons"][h]["trend_slope"] for h in HORIZONS}
-    assert len(slopes) == 1  # every horizon shares the single window's slope
+    assert fc["trend"]["window"] == fc["trend"]["window_long"] == 20
+    assert fc["trend"]["short_slope"] == fc["trend"]["long_slope"]
+    assert fc["horizons"]["4w"]["trend_slope"] < fc["horizons"]["1d"]["trend_slope"]
 
 
 # ── Per-symbol volatility calibration ────────────────────────────────────────

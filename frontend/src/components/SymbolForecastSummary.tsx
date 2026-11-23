@@ -2,6 +2,7 @@ import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 import { symbolHref } from "@/lib/symbolEncoding";
 import { latestRow } from "@/lib/latestForecastRow";
+import { ADAPTIVE_TREND_DESCRIPTION, trendCalibrationLabel } from "@/lib/forecastTrend";
 import SymbolForecastPositions from "@/components/SymbolForecastPositions";
 import type { ForecastsResponse } from "@/types/forecasts";
 
@@ -64,18 +65,23 @@ export default async function SymbolForecastSummary({ symbol, snapshot }: { symb
             </strong>
           </span>
           {slope != null && (
-            <span className="cursor-help" title="Headline robust (Theil-Sen) trend in dollars per trading session: positive slopes up, negative down, shrunk toward zero by fit quality R². Used for the trend overlay, not the band center; longer horizons may use their own fit.">
+            <span className="cursor-help" title={row.trend?.model ? ADAPTIVE_TREND_DESCRIPTION : "Saved legacy robust trend in dollars per trading session, shrunk by historical fit R²; not predictive accuracy."}>
               Trend:{" "}
               <strong className="text-text">
-                {slope >= 0 ? "+" : ""}{slope.toFixed(2)} $/session
+                {slope >= 0 ? "+" : ""}{slope.toFixed(2)} {row.trend?.model ? "$ first session" : "$/session"}
               </strong>
               {r2 != null && (
                 <>
                   {" · "}
-                  <span className="cursor-help" title="Historical trend fit quality from 0 to 1: higher means the fitted line explains more of the past price variation. Used to shrink the trend slope, not a measure of future forecast accuracy.">
+                  <span className="cursor-help" title="Saved legacy historical fit, not a measure of future forecast accuracy.">
                     R² {r2.toFixed(2)}
                   </span>
                 </>
+              )}
+              {row.trend?.model && (
+                <span className="cursor-help" title={`Predictive calibration as of ${row.created_date}; counts are non-overlapping matured returns, not independent performance guarantees. ${trendCalibrationLabel(row.trend)}`}>
+                  {" · "}Regime: {row.trend.regime} · Trend calibration: {trendCalibrationLabel(row.trend)}
+                </span>
               )}
             </span>
           )}

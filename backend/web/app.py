@@ -6234,6 +6234,26 @@ def _forecast_history_anchor_movement(preds):
     return movement
 
 
+def _forecast_chat_project_trend_calibration(value):
+    if not isinstance(value, dict):
+        return {}
+    projected = {}
+    for name in _FORECAST_CHAT_HORIZONS:
+        source = value.get(name)
+        if not isinstance(source, dict):
+            continue
+        projected[name] = _forecast_chat_compact({
+            "status": _forecast_chat_enum(source.get("status"), frozenset({"available", "insufficient"})),
+            **{key: _forecast_chat_integer(source.get(key)) for key in (
+                "n", "min_n", "sample_stride", "latest_origin_offset", "latest_endpoint_offset",
+            )},
+            **{key: _forecast_chat_number(source.get(key)) for key in (
+                "factor", "raw_rmse_pct", "zero_drift_rmse_pct",
+            )},
+        })
+    return projected
+
+
 def _forecast_chat_row(row):
     trend = row.get("trend") if isinstance(row.get("trend"), dict) else {}
     reading = row.get("reading") if isinstance(row.get("reading"), dict) else {}
@@ -6252,12 +6272,19 @@ def _forecast_chat_row(row):
         ),
         "bias": _forecast_chat_number(row.get("bias")),
         "trend": _forecast_chat_compact({
+            "model": _forecast_chat_enum(trend.get("model"), frozenset({"adaptive_damped_v1"})),
+            "slope_kind": _forecast_chat_enum(trend.get("slope_kind"), frozenset({"first_session_change"})),
             "slope": _forecast_chat_number(trend.get("slope")),
             "r2": _forecast_chat_number(trend.get("r2")),
             "quality": _forecast_chat_enum(
                 trend.get("quality"), _FORECAST_CHAT_TREND_QUALITY_VALUES
             ),
             "window": _forecast_chat_integer(trend.get("window")),
+            "window_long": _forecast_chat_integer(trend.get("window_long")),
+            "regime": _forecast_chat_enum(trend.get("regime"), frozenset({"trending", "ranging", "reversal"})),
+            "efficiency": _forecast_chat_number(trend.get("efficiency")),
+            "decay_sessions": _forecast_chat_number(trend.get("decay_sessions")),
+            "calibration": _forecast_chat_project_trend_calibration(trend.get("calibration")),
         }),
         "reading": _forecast_chat_compact({
             "code": _forecast_chat_enum(
@@ -8719,8 +8746,8 @@ def _build_settings_config_context(
     _pf_cfg = config.get("price_forecast", {})
     pf_band_confidence = _pf_cfg.get("band_confidence", 0.50)
     pf_vol_source = _pf_cfg.get("vol_source", "iv_hv")
-    pf_trend_window = _pf_cfg.get("trend_window", 20)
-    pf_trend_window_long = _pf_cfg.get("trend_window_long", 40)
+    pf_trend_window = _pf_cfg.get("trend_window", 8)
+    pf_trend_window_long = _pf_cfg.get("trend_window_long", 32)
 
     return {
         "request": request,
@@ -9213,17 +9240,17 @@ def _apply_settings_config(request: Request, cosmos, form) -> List[str]:
 
     def _pf_trend():
         try:
-            v = int(form.get("pf_trend_window", 20))
+            v = int(form.get("pf_trend_window", 8))
         except (TypeError, ValueError):
-            return 20
-        return v if 5 <= v <= 120 else 20
+            return 8
+        return v if 5 <= v <= 120 else 8
 
     def _pf_trend_long():
         try:
-            v = int(form.get("pf_trend_window_long", 40))
+            v = int(form.get("pf_trend_window_long", 32))
         except (TypeError, ValueError):
-            return 40
-        return v if 5 <= v <= 120 else 40
+            return 32
+        return v if 5 <= v <= 120 else 32
 
     pf_band_confidence = _pf_conf()
     pf_vol_source = _pf_vol()

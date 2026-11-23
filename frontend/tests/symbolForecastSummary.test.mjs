@@ -199,7 +199,7 @@ test("summary metadata uses the actual latest forecast, with signed trend and de
     assert.match(text, /Vol source: iv/);
     assert.match(text, /Bias: 0\.24/);
     assert.ok(text.includes(`Trend: ${slope >= 0 ? "+" : ""}${slope.toFixed(2)} $/session · R² 0.13`));
-    assert.match(html, /title="Headline robust \(Theil-Sen\) trend in dollars per trading session:/);
+    assert.match(html, /title="Saved legacy robust trend in dollars per trading session/);
     assert.match(html, /flex flex-wrap.*text-xs/);
     assert.match(text, /💰 ex-div in window/);
     assert.doesNotMatch(text, /earnings in window|321\.98|Latest price bands|Historical window|Hover a horizon|Dashed line = anchor|Open price forecasts/);
@@ -360,14 +360,74 @@ test("summary metadata renders explanatory native tooltips without adding visibl
     assert.match(tooltips[1], /Annualized volatility actually used.*calibration scaling.*may come from IV, historical volatility or EWMA/);
     assert.match(tooltips[2], /iv = options-implied.*hv = historical.*ewma = exponentially weighted.*recent moves more weight/);
     assert.match(tooltips[3], /-1 to \+1.*positive is bullish, negative bearish.*absolute values.*stronger signal.*Not a probability or target return.*does not shift the band center/);
-    assert.match(tooltips[4], /dollars per trading session.*positive slopes up, negative down.*shrunk toward zero.*overlay, not the band center.*longer horizons/);
-    assert.match(tooltips[5], /fit quality from 0 to 1.*past price variation.*not a measure of future forecast accuracy/);
+    assert.match(tooltips[4], /Saved legacy robust trend.*dollars per trading session.*historical fit R².*not predictive accuracy/);
+    assert.match(tooltips[5], /Saved legacy historical fit.*not a measure of future forecast accuracy/);
     assert.match(tooltips[6], /known earnings date.*after creation.*30 calendar days.*not the 90-day history range/);
     assert.match(tooltips[7], /known ex-dividend date.*after creation.*30 calendar days.*not the 90-day history range/);
     const text = html.replace(/<[^>]*>/g, "");
     assert.match(text, new RegExp(`Vol source: ${source}`));
     assert.doesNotMatch(text, /Annualized|estimator|probability|fit quality|calendar days|live price/);
   }
+});
+
+test("adaptive summary reports first-session units, regime and as-of predictive samples without R²", async () => {
+  const html = await summaryMarkup([{
+    ...row, trend: {
+      model: "adaptive_damped_v1", slope: 0.12, slope_kind: "first_session_change",
+      regime: "reversal", calibration: {
+        "1d": { status: "available", n: 60, min_n: 8, factor: 0.8 },
+        "4w": { status: "insufficient", n: 3, min_n: 8, factor: 0.25 },
+      },
+    },
+  }]);
+  const text = html.replace(/<[^>]*>/g, "");
+  assert.match(text, /Trend: \+0\.12 \$ first session/);
+  assert.match(text, /Regime: reversal/);
+  assert.match(text, /1d: n=60, shrink ×0\.80/);
+  assert.match(text, /4w: insufficient n=3\/8, prior ×0\.25/);
+  assert.match(text, /1w: unavailable/);
+  assert.match(html, /as of 2026-11-08/);
+  assert.match(html, /not constant drift/);
+  assert.doesNotMatch(text, /R²|\$\/session|accuracy/);
+});
+
+test("session projector renders exact adaptive path and preserves legacy matched slopes", () => {
+  const { projectForecastTrend } = load("../src/lib/forecastTrend.ts");
+  const trend = { model: "adaptive_damped_v1", slope: 1, session_deltas: [0, 1, 1.5, 1.8] };
+  assert.equal(projectForecastTrend(100, trend, {}, 2), 101.5);
+  assert.equal(projectForecastTrend(100, trend, {}, 2.5), 101.65);
+  assert.equal(projectForecastTrend(100, trend, {}, 4), null); // no invented linear extension
+  assert.equal(projectForecastTrend(100, { slope: 0.5, r2: 0.9 }, {}, 5), 102.5);
+  const hs = { "1w": { trend_slope: -0.5, start_session: 2, end_session: 5 } };
+  assert.equal(projectForecastTrend(100, { slope: 1 }, hs, 3), 98.5);
+  assert.equal(projectForecastTrend(100, null, {}, 3), null);
+});
+
+test("history fan renders the authored nonlinear session path, endpoints and legacy docs without recentering cone", () => {
+  const { buildFanData } = load("../src/components/ForecastHistory.tsx", {
+    recharts: Object.fromEntries([...chartNames, "Scatter"].map((name) => [name, name])),
+  });
+  const session_deltas = Array.from({ length: 21 }, (_, i) => i <= 5 ? i * 0.2 : 1 + (i - 5) * 0.05);
+  const doc = {
+    price_at_creation: 100, hv: 0.2, confidence: 0.68, outer_confidence: 0.95,
+    trend: { model: "adaptive_damped_v1", slope: 0.2, session_deltas },
+    horizons: {
+      "1w": { start_session: 2, end_session: 5, trend_slope: 0.2, trend_end: 101 },
+      "4w": { start_session: 11, end_session: 20, trend_slope: 0.0875, trend_end: 101.75 },
+    },
+    snapshots: [{ offset: 12, price: 99, inside_1sigma: true, inside_2sigma: true }],
+    endpoints: { "4w": { price: 102 } },
+  };
+  const path = buildFanData(doc);
+  assert.equal(path[12].trend, 101.35); // not horizon-average slope × 12
+  assert.equal(path[20].trend, doc.horizons["4w"].trend_end);
+  assert.equal(path[12].snap, 99);
+  assert.equal(path[20].ep, 102);
+  const legacy = buildFanData({ ...doc, trend: { slope: 0.3, r2: 0.8 } });
+  assert.equal(legacy[12].trend, 101.05); // saved per-band slope preserved
+  assert.equal(legacy[1].trend, 100.3);
+  assert.deepEqual(path.map((p) => p.band1), legacy.map((p) => p.band1));
+  assert.ok(path.every((p) => p.center === 100));
 });
 
 test("summary shows event flags only for true booleans and omits unavailable R²", async () => {

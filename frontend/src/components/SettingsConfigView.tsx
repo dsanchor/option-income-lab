@@ -607,8 +607,8 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
               </select>
             </div>
             <div>
-              <label className={labelCls} title="Sessions used for the linear-regression trend overlay on the short horizons (1d, 1w).">
-                Trend window (short · 1d/1w) ⓘ
+              <label className={labelCls} title="Recent robust price component of the single adaptive trend, shared by every horizon (default 8).">
+                Trend recent window ⓘ
               </label>
               <input
                 type="number"
@@ -621,8 +621,8 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
               />
             </div>
             <div>
-              <label className={labelCls} title="Sessions used for the linear-regression trend overlay on the long horizons (2w, 4w).">
-                Trend window (long · 2w/4w) ⓘ
+              <label className={labelCls} title="Slow robust price component of the same adaptive trend (default 32); effective window is at least the recent window.">
+                Trend slow window ⓘ
               </label>
               <input
                 type="number"
@@ -636,8 +636,8 @@ export default function SettingsConfigView({ initial }: { initial: SettingsConfi
             </div>
           </div>
           <small className="mb-3 block text-[0.72rem] text-text-muted">
-            Note: IV is only available for new daily forecasts (not stored historically). Re-run the
-            backfill with <code>--force</code> to rebuild history under new settings (uses HV/EWMA).
+            Settings apply to new forecasts; saved outcomes remain unchanged. Backfills use
+            causal prefixes and HV/EWMA because historical IV is unavailable.
           </small>
           <RunTimes
             last={cfg.pf_last_run}

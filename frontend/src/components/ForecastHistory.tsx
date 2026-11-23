@@ -16,6 +16,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { HORIZONS, HORIZON_END_SESSION } from "@/types/forecasts";
+import { ADAPTIVE_TREND_DESCRIPTION, projectForecastTrend, trendCalibrationLabel } from "@/lib/forecastTrend";
 import type {
   ForecastRow,
   ForecastDetail,
@@ -123,7 +124,7 @@ function HorizonCell({
         <div className="text-text-muted">—</div>
       )}
       {h.trend_end != null && (
-        <div className="text-[0.72rem] text-accent-blue" title="Linear-trend projection at the horizon end session">
+        <div className="text-[0.72rem] text-accent-blue" title="Stored trend projection at the horizon end session">
           ↳ ${num(h.trend_end)}
           {h.mean_dev != null && (
             <span className="text-text-muted" title="Mean deviation of closes from the trend line">
@@ -168,30 +169,12 @@ type FanDatum = {
   ep: number | null;
 };
 
-function buildFanData(doc: ForecastDetail): FanDatum[] {
+export function buildFanData(doc: ForecastDetail): FanDatum[] {
   const price = doc.price_at_creation;
   const hv = doc.hv;
   if (price == null || hv == null) return [];
   const z1 = zFor(doc.confidence, 1.0);
   const z2 = zFor(doc.outer_confidence, 1.96);
-
-  const slopeForSession = (s: number): number | null => {
-    const hs = doc.horizons ?? {};
-    for (const name of HORIZONS) {
-      const b = hs[name];
-      if (
-        b?.trend_slope != null &&
-        b.start_session != null &&
-        b.end_session != null &&
-        s >= b.start_session &&
-        s <= b.end_session
-      ) {
-        return b.trend_slope;
-      }
-    }
-    if (hs["1d"]?.trend_slope != null) return hs["1d"].trend_slope;
-    return doc.trend?.slope ?? null;
-  };
 
   const snapByOffset = new Map<number, { price: number | null; i1: boolean | null; i2: boolean | null }>();
   for (const sn of doc.snapshots ?? []) {
@@ -206,14 +189,13 @@ function buildFanData(doc: ForecastDetail): FanDatum[] {
   const out: FanDatum[] = [];
   for (let s = 0; s <= 20; s++) {
     const sg = price * hv * Math.sqrt(s / TRADING_DAYS);
-    const sl = slopeForSession(s);
     const snap = snapByOffset.get(s);
     out.push({
       session: s,
       center: price,
       band1: [price - z1 * sg, price + z1 * sg],
       band2: [price - z2 * sg, price + z2 * sg],
-      trend: sl != null ? price + sl * s : null,
+      trend: projectForecastTrend(price, doc.trend, doc.horizons, s),
       snap: snap?.price ?? null,
       snapInside1: snap?.i1 ?? null,
       snapInside2: snap?.i2 ?? null,
@@ -429,13 +411,18 @@ function DetailModal({
                   Bias: <strong className="text-text">{num(doc.bias)}</strong>
                 </span>
                 {slope != null && (
-                  <span title="Robust (Theil-Sen) per-session drift, shrunk by fit quality R².">
+                  <span title={doc.trend?.model ? ADAPTIVE_TREND_DESCRIPTION : "Saved legacy robust per-session drift, shrunk by historical fit R²; not predictive accuracy."}>
                     Trend:{" "}
                     <strong className="text-text">
                       {slope >= 0 ? "+" : ""}
-                      {num(slope)} $/session
+                      {num(slope)} {doc.trend?.model ? "$ first session" : "$/session"}
                     </strong>
                     {r2 != null ? ` · R² ${r2.toFixed(2)}` : ""}
+                  </span>
+                )}
+                {doc.trend?.model && (
+                  <span title={`Predictive calibration as of ${doc.created_date}`}>
+                    Regime: {doc.trend.regime} · {trendCalibrationLabel(doc.trend)}
                   </span>
                 )}
                 {(doc.flags?.earnings_in_window as boolean) && <span>📅 earnings in window</span>}
@@ -444,7 +431,8 @@ function DetailModal({
               <FanChart doc={doc} />
               <p className="mt-2 text-[0.68rem] text-text-muted">
                 X = trading sessions since creation (0→20). Shaded bands = inner/outer volatility cone.
-                Cyan dashed = robust trend. Dots = daily closes (green inside ±1σ, amber ±2σ, red outside).
+                Cyan dashed = stored trend path (adaptive and damped for new forecasts; legacy fits preserved).
+                Dots = daily closes (green inside ±1σ, amber ±2σ, red outside).
                 ◆ = horizon endpoint. Dashed grey line = anchor price.
               </p>
             </>

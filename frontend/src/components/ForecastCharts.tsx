@@ -59,17 +59,17 @@ function OptionMarker({ cx = 0, cy = 0, group }: { cx?: number; cy?: number; gro
   return (
     <g tabIndex={0} role="img" aria-label={description} style={{ cursor: "help" }}>
       <title>{description}</title>
-      <circle cx={cx} cy={cy} r={8} fill={calls ? CALL_COLOR : PUT_COLOR} stroke="var(--bg-card)" strokeWidth={2} />
+      <circle cx={cx} cy={cy} r={4} fill={calls ? CALL_COLOR : PUT_COLOR} stroke="var(--bg-card)" strokeWidth={1} />
       {calls && puts && (
-        <path d={`M ${cx} ${cy - 7} A 7 7 0 0 1 ${cx} ${cy + 7} Z`} fill={PUT_COLOR} />
+        <path d={`M ${cx} ${cy - 3.5} A 3.5 3.5 0 0 1 ${cx} ${cy + 3.5} Z`} fill={PUT_COLOR} />
       )}
       {group.positions.length > 1 && (
-        <text x={cx} y={cy} dy="0.35em" textAnchor="middle" fill="var(--bg-card)" fontSize={9} fontWeight={700}>
+        <text x={cx} y={cy} dy="0.35em" textAnchor="middle" fill="var(--bg-card)" fontSize={4.5} fontWeight={700}>
           {group.positions.length}
         </text>
       )}
       {group.overflow && (
-        <text x={cx + 11} y={cy} dy="0.35em" fill={calls && !puts ? CALL_COLOR : PUT_COLOR} fontSize={14} fontWeight={700}>
+        <text x={cx + 7} y={cy} dy="0.35em" fill={calls && !puts ? CALL_COLOR : PUT_COLOR} fontSize={14} fontWeight={700}>
           {">"}
         </text>
       )}

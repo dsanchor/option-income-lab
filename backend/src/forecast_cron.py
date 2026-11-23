@@ -20,6 +20,7 @@ from typing import Optional
 
 from src import dgi_metrics
 from src.price_forecast import (
+    DEFAULT_TREND_WINDOW,
     DEFAULT_TREND_WINDOW_LONG,
     HV_WINDOW,
     LIFECYCLE_SESSIONS,
@@ -74,7 +75,7 @@ IV_TARGET_DTE = 30
 # Number of trailing trading sessions to reconstruct when a symbol is first added,
 # so the forecast table/chart have history from day one instead of accumulating it
 # one session at a time. ~45 sessions (~9 weeks / ~60 calendar days) — enough for
-# the long trend window (40 sessions) to have a full base and for the 4w horizon
+# the slow trend component to have a full base and for the 4w horizon
 # (20 sessions) to resolve endpoints on a meaningful number of predictions.
 DEFAULT_BACKFILL_SESSIONS = 45
 
@@ -83,7 +84,8 @@ _TECH = TechnicalsCalculator()
 
 def _load_pf_settings() -> dict:
     """Read price-forecast model settings from Config (safe defaults on error)."""
-    defaults = {"band_confidence": 0.50, "vol_source": "iv_hv", "trend_window": 20, "trend_window_long": 40}
+    defaults = {"band_confidence": 0.50, "vol_source": "iv_hv",
+                "trend_window": DEFAULT_TREND_WINDOW, "trend_window_long": DEFAULT_TREND_WINDOW_LONG}
     try:
         from src.config import Config
         cfg = Config()
@@ -187,7 +189,7 @@ async def run_forecast_cron(cosmos, yf_provider) -> dict:
 async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff, pf_settings=None) -> dict:
     """Process a single symbol. Returns per-stage counts."""
     if pf_settings is None:
-        pf_settings = {"band_confidence": 0.50, "vol_source": "iv_hv", "trend_window": 20, "trend_window_long": 40}
+        pf_settings = _load_pf_settings()
     out = {"created": 0, "validated": 0, "resolved": 0, "pruned": 0, "skipped": 0}
 
     history = await yf_provider.get_ohlcv_history(symbol, period="1y")
@@ -279,8 +281,8 @@ async def _process_symbol(cosmos, yf_provider, symbol, run_date, cutoff, pf_sett
         vol_source=vol_source,
         vol_scale=calibration["k"],
         iv=iv,
-        trend_window=pf_settings.get("trend_window", 20),
-        trend_window_long=pf_settings.get("trend_window_long", 40),
+        trend_window=pf_settings.get("trend_window", DEFAULT_TREND_WINDOW),
+        trend_window_long=pf_settings.get("trend_window_long", DEFAULT_TREND_WINDOW_LONG),
         momentum=momentum,
         momentum_technicals=momentum_tt,
     )
@@ -435,8 +437,8 @@ async def backfill_symbol_forecasts(cosmos, yf_provider, symbol,
     if pf_settings is None:
         pf_settings = _load_pf_settings()
     confidence = pf_settings.get("band_confidence", 0.50)
-    trend_window = max(5, min(120, int(pf_settings.get("trend_window", 20))))
-    trend_window_long = max(5, min(120, int(pf_settings.get("trend_window_long", 40))))
+    trend_window = max(5, min(120, int(pf_settings.get("trend_window", DEFAULT_TREND_WINDOW))))
+    trend_window_long = max(5, min(120, int(pf_settings.get("trend_window_long", DEFAULT_TREND_WINDOW_LONG))))
     vol_source = (pf_settings.get("vol_source") or "hv").lower()
     if vol_source not in ("hv", "ewma"):
         vol_source = "hv"  # IV unavailable historically

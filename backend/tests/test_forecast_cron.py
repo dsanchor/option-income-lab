@@ -148,6 +148,42 @@ def test_cron_handles_missing_provider_and_cosmos():
     assert asyncio.run(run_forecast_cron(object(), None))["status"] == "skipped"
 
 
+def test_live_backfill_and_future_perturbation_preserve_origin_trend():
+    from src.forecast_cron import _build_backfill_prediction, _process_symbol
+
+    history = _make_history(periods=260)
+    dates = [d.strftime("%Y-%m-%d") for d in history.index]
+    closes = history["Close"].tolist()
+    origin = 235
+    settings = {"band_confidence": 0.5, "vol_source": "hv",
+                "trend_window": 8, "trend_window_long": 32}
+    cosmos = _FakeCosmos([])
+    historical = _build_backfill_prediction(
+        cosmos, "TEST", history, dates, closes, origin,
+        confidence=0.5, vol_source="hv", trend_window=8, trend_window_long=32,
+    )
+    live = asyncio.run(_process_symbol(
+        cosmos, _FakeProvider(history.iloc[:origin + 1]), "TEST",
+        dates[origin], "2020-01-01", settings,
+    ))
+    assert live["created"] == 1
+    live_doc = cosmos.written[-1]
+    for field in ("trend", "horizons", "bias", "momentum", "reading", "hv"):
+        assert live_doc[field] == historical[field]
+    changed = history.copy()
+    changed.iloc[origin + 1:, changed.columns.get_loc("Close")] *= 10
+    replay = _build_backfill_prediction(
+        cosmos, "TEST", changed, dates, changed["Close"].tolist(), origin,
+        confidence=0.5, vol_source="hv", trend_window=8, trend_window_long=32,
+    )
+    assert replay["trend"] == historical["trend"]
+    assert replay["horizons"] == historical["horizons"]
+    # Outcomes differ, but no future close is used to fit or calibrate the origin.
+    assert replay["snapshots"] != historical["snapshots"]
+    assert all(c["latest_endpoint_offset"] is None or c["latest_endpoint_offset"] <= 0
+               for c in replay["trend"]["calibration"].values())
+
+
 class _FakeCosmosBackfill(_FakeCosmos):
     """Fake cosmos that also supports the per-doc lookup the backfill uses."""
 

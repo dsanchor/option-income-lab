@@ -17,6 +17,7 @@ history. See ``src/volatility.py`` and ``src/technicals_calculator.py``.
 
 import logging
 import math
+from itertools import pairwise
 from typing import Dict, List, Optional, Sequence
 
 from .volatility import TRADING_DAYS, ewma_volatility, historical_volatility
@@ -79,18 +80,14 @@ HORIZONS: Dict[str, Dict[str, int]] = {
 LIFECYCLE_SESSIONS = max(h["end_session"] for h in HORIZONS.values())
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Horizon-aware trend windows (trading sessions).
-# Short horizons (1d/1w) track the recent slope; longer horizons (2w/4w) use a
-# longer, smoother base. Chosen empirically via scripts/sweep_trend_window.py:
-# dir% and mean_dev% favour ~20 sessions for 1d/1w and ~40 for 2w/4w (longer
-# horizons benefit clearly from a longer regression base). Each horizon's band
-# carries its own ``trend_slope`` so validation/deviation use the matched slope.
+# Both windows contribute to ONE adaptive trend, at every horizon.
 # ──────────────────────────────────────────────────────────────────────────────
-DEFAULT_TREND_WINDOW = 20        # short horizons (1d, 1w)
-DEFAULT_TREND_WINDOW_LONG = 40   # long horizons (2w, 4w)
-HORIZON_TREND_TIER: Dict[str, str] = {
-    "1d": "short", "1w": "short", "2w": "long", "4w": "long",
-}
+DEFAULT_TREND_WINDOW = 8
+DEFAULT_TREND_WINDOW_LONG = 32
+TREND_MIN_SAMPLES = 8
+TREND_CALIBRATION_SAMPLES = 60
+TREND_PRIOR_SAMPLES = 8
+TREND_FALLBACK_FACTOR = 0.25
 
 # Indicator warm-up: MACD(26/9) + ADX(14) need ~35 bars before the first valid
 # technicals; ``TechnicalsCalculator.compute_all`` returns empty below 30 bars.
@@ -184,7 +181,7 @@ def compute_reading(
     """Combine directional bias (technicals) + trend slope into a trade reading.
 
     ``bias`` = oscillator/MA aggregate in [-1,+1] (momentum + overbought/oversold
-    state). ``trend_slope`` = linear-regression drift ($/session) — pure price
+    state). ``trend_slope`` = first-session projected price change — pure price
     direction. They measure different things and their (dis)agreement is the
     signal:
 
@@ -409,7 +406,6 @@ def _band_for_sessions(
     *,
     z1: float = 1.0,
     z2: float = 1.96,
-    trend_slope: float = 0.0,
 ) -> Dict[str, float]:
     """Return primary/secondary price bands for a horizon ending at ``sessions``.
 
@@ -417,8 +413,7 @@ def _band_for_sessions(
     volatility (decimal, e.g. 0.28). The half-widths are ``z1`` (primary, inner,
     configurable confidence) and ``z2`` (secondary, outer reference) times
     ``unit_sigma``. The band centre stays at ``price`` (honest random-walk centre);
-    ``trend_end`` is the projected linear-trend value at the horizon end session,
-    drawn as an overlay only — it never shifts the band.
+    the separate trend overlay never shifts the band.
     """
     sigma = price * vol * math.sqrt(sessions / TRADING_DAYS)
     return {
@@ -430,8 +425,6 @@ def _band_for_sessions(
         "high1": round(price + z1 * sigma, 4),
         "low2": round(price - z2 * sigma, 4),
         "high2": round(price + z2 * sigma, 4),
-        "trend_end": round(price + trend_slope * sessions, 4),
-        "trend_slope": round(trend_slope, 6),
     }
 
 
@@ -445,80 +438,165 @@ def _median(values: Sequence[float]) -> float:
     return (float(s[mid - 1]) + float(s[mid])) / 2.0
 
 
-def linear_trend(
+def _trend_base(prices: Sequence[float], short: int, long: int) -> dict | None:
+    """Causal price-only regime proxy; never reuses today's ADX at past origins.
+
+    Theil–Sen estimates on recent/slow windows are blended 65/35 (90/10 on
+    reversal). Path efficiency |net change| / total absolute change gates drift
+    and sets decay time (3..12 sessions). It is regime evidence, NOT accuracy.
+    Correlated technicals/momentum remain independent display signals.
+    """
+    tail = prices[-long:]
+    if len(tail) < long or any(not _is_finite(p) or p <= 0 for p in tail):
+        return None
+
+    def component(xs):
+        n = len(xs)
+        slope = _median([
+            (xs[j] - xs[i]) / (j - i)
+            for i in range(n) for j in range(i + 1, n)
+        ])
+        travel = sum(abs(b - a) for a, b in pairwise(xs))
+        efficiency = abs(xs[-1] - xs[0]) / travel if travel else 0.0
+        return slope, efficiency
+
+    fast, ef = component(tail[-short:])
+    slow, el = component(tail)
+    reversal = fast * slow < 0
+    weight = 0.9 if reversal else 0.65
+    efficiency = ef if reversal else 0.8 * ef + 0.2 * el
+    raw = weight * fast + (1 - weight) * slow
+    return {
+        "drift": raw * efficiency,
+        "short_slope": fast, "long_slope": slow,
+        "recent_weight": weight, "efficiency": efficiency,
+        "regime": "reversal" if reversal else ("trending" if efficiency >= 0.6 else "ranging"),
+        "decay_sessions": 3.0 + 9.0 * efficiency,
+    }
+
+
+def _damped_delta(base: dict, sessions: int) -> float:
+    tau = base["decay_sessions"]
+    return base["drift"] * tau * -math.expm1(-sessions / tau)
+
+
+def adaptive_trend(
     closes: Sequence[float],
-    window: int = 20,
-) -> Optional[dict]:
-    """Robust, confidence-gated linear trend over the last ``window`` closes.
+    window: int = DEFAULT_TREND_WINDOW,
+    window_long: int = DEFAULT_TREND_WINDOW_LONG,
+) -> dict | None:
+    """One adaptive, damped, predictively shrunk trend (price units).
 
-    Deterministic. Designed so the projected trend *stops pointing* when the data
-    doesn't actually trend (the common "it never hits" failure of naive OLS
-    extrapolation):
+    At each horizon h, replay at most 60 NON-OVERLAPPING h-session returns,
+    latest endpoint <= current origin. Each raw prediction uses only its own
+    prefix; prefix bases are cached locally, never fitted on the full series.
+    Regress realized fractional returns on raw damped predicted returns through
+    zero; clamp the magnitude coefficient to [0,1] and shrink by n/(n+8).
+    This cannot invert/amplify drift. Below 8 usable samples, an explicit 0.25
+    conservative prior applies, with unavailable predictive error metrics.
+    Samples with zero predicted drift carry no information and do not count.
 
-      1. **Theil–Sen slope** (median of pairwise slopes) instead of ordinary least
-         squares — resistant to single-day gaps/earnings spikes.
-      2. **R² quality gate**: the coefficient of determination of the robust fit,
-         i.e. how much of the price variance the straight line explains.
-      3. **Slope shrinkage**: the slope actually used for projection is shrunk
-         toward zero by R² (``slope = slope_raw * r2``). A strong linear trend
-         projects nearly in full; a noisy series flattens out. Sign is preserved,
-         so the directional reading stays consistent.
-
-    Returns ``{slope, slope_raw, r2, quality, resid_std, window}`` or ``None``.
-    ``slope`` is the shrunk per-session drift used everywhere downstream
-    (``trend_end``, chart overlay, directional reading). Never raises.
+    Store a 0/1/5/10/20-knot piecewise-linear session path: calibrated endpoints
+    can have different shrinkage, so this is not a constant-slope extrapolation.
+    Damping bounds the raw drift envelope; horizon-specific shrinkage can reshape
+    individual segments, rather than promising monotone projected changes.
+    ``slope`` means the first-session change; per-band slopes are horizon averages.
+    Reported errors evaluate RAW out-of-sample predictions, not fitted shrinkage
+    on its training set. They are descriptive, not a probability or performance
+    improvement claim. No volatility/cone calibration is touched.
     """
     if closes is None:
         return None
-    clean = [float(c) for c in closes if c is not None and _is_finite(c) and float(c) > 0]
-    if window and window > 0:
-        clean = clean[-window:]
-    n = len(clean)
-    if n < 3:
+    short = max(3, min(120, int(window)))
+    long = max(short, min(120, int(window_long)))
+    prices = [float(p) if _is_finite(p) else math.nan for p in closes]
+    n = len(prices)
+    cache = {}
+
+    def base_at(origin):
+        if origin not in cache:
+            prefix = prices[max(0, origin - long + 1):origin + 1]
+            cache[origin] = _trend_base(prefix, short, long)
+        return cache[origin]
+
+    base = base_at(n - 1)
+    if base is None:
         return None
-
-    xs = list(range(n))
-    # ── Theil–Sen robust slope: median of pairwise slopes (n small → O(n²) fine) ──
-    pair_slopes = [
-        (clean[j] - clean[i]) / (j - i)
-        for i in range(n)
-        for j in range(i + 1, n)
-    ]
-    if not pair_slopes:
-        return None
-    slope_raw = _median(pair_slopes)
-    intercept = _median([clean[i] - slope_raw * xs[i] for i in range(n)])
-
-    # ── R² of the robust fit + residual dispersion ──
-    mean_y = sum(clean) / n
-    ss_tot = sum((y - mean_y) ** 2 for y in clean)
-    residuals = [clean[i] - (intercept + slope_raw * xs[i]) for i in range(n)]
-    ss_res = sum(r * r for r in residuals)
-    if ss_tot <= 0:
-        r2 = 0.0
-    else:
-        r2 = 1.0 - (ss_res / ss_tot)
-    r2 = _clamp(r2, 0.0, 1.0)  # negative R² (fit worse than mean) → 0 = no trend
-    resid_std = math.sqrt(ss_res / (n - 2)) if n > 2 and ss_res > 0 else 0.0
-
-    # ── Shrink the projected slope by fit quality (confidence gate + damping) ──
-    slope_eff = slope_raw * r2
-
-    if r2 >= 0.5:
-        quality = "strong"
-    elif r2 >= 0.2:
-        quality = "moderate"
-    else:
-        quality = "weak"
-
+    calibration, knots = {}, [(0, 0.0)]
+    for name, bounds in HORIZONS.items():
+        h = bounds["end_session"]
+        samples = []
+        latest_origin = None
+        for origin in range(n - 1 - h, long - 2, -h):
+            if len(samples) >= TREND_CALIBRATION_SAMPLES:
+                break
+            past = base_at(origin)
+            # Invalid intervening bars must not be collapsed into shorter time.
+            future = prices[origin + 1:origin + h + 1]
+            if past is None or any(not _is_finite(p) or p <= 0 for p in future):
+                continue
+            x = _damped_delta(past, h) / prices[origin]
+            y = prices[origin + h] / prices[origin] - 1
+            if abs(x) <= 1e-10:
+                continue
+            samples.append((x, y))
+            if latest_origin is None:
+                latest_origin = origin
+        count = len(samples)
+        enough = count >= TREND_MIN_SAMPLES
+        factor = TREND_FALLBACK_FACTOR
+        if enough:
+            coefficient = sum(x * y for x, y in samples) / sum(x * x for x, _ in samples)
+            factor = _clamp(coefficient, 0.0, 1.0) * count / (count + TREND_PRIOR_SAMPLES)
+        calibration[name] = {
+            "status": "available" if enough else "insufficient",
+            "n": count, "min_n": TREND_MIN_SAMPLES,
+            "factor": round(factor, 6),
+            "raw_rmse_pct": (
+                round(100 * math.sqrt(sum((y - x) ** 2 for x, y in samples) / count), 4)
+                if enough else None
+            ),
+            "zero_drift_rmse_pct": (
+                round(100 * math.sqrt(sum(y * y for _, y in samples) / count), 4)
+                if enough else None
+            ),
+            "latest_origin_offset": latest_origin - (n - 1) if latest_origin is not None else None,
+            "latest_endpoint_offset": latest_origin + h - (n - 1) if latest_origin is not None else None,
+            "sample_stride": h,
+        }
+        knots.append((h, _damped_delta(base, h) * factor))
+    deltas = [0.0]
+    for (a, da), (b, db) in pairwise(knots):
+        deltas.extend(
+            round(da + (db - da) * (s - a) / (b - a), 6)
+            for s in range(a + 1, b + 1)
+        )
     return {
-        "slope": round(slope_eff, 6),
-        "slope_raw": round(slope_raw, 6),
-        "r2": round(r2, 4),
-        "quality": quality,
-        "resid_std": round(resid_std, 4),
-        "window": n,
+        "model": "adaptive_damped_v1", "projection": "piecewise_linear_sessions",
+        "slope": deltas[1], "slope_kind": "first_session_change",
+        "window": short, "window_long": long,
+        **{k: round(v, 6) if isinstance(v, float) else v for k, v in base.items()},
+        "session_deltas": deltas, "calibration": calibration,
     }
+
+
+def project_trend(anchor: float, trend: dict | None, offset: float,
+                  band: dict | None = None) -> float | None:
+    """Authoritative stored path; linear fallback is READ compatibility only."""
+    if not _is_finite(anchor) or not _is_finite(offset):
+        return None
+    trend = trend or {}
+    path = trend.get("session_deltas")
+    if isinstance(path, list) and 0 <= offset <= len(path) - 1:
+        lo, hi = math.floor(offset), math.ceil(offset)
+        if _is_finite(path[lo]) and _is_finite(path[hi]):
+            return float(anchor) + path[lo] + (path[hi] - path[lo]) * (offset - lo)
+    if trend.get("model") == "adaptive_damped_v1":
+        return None
+    slope = (band or {}).get("trend_slope")
+    if not _is_finite(slope):
+        slope = trend.get("slope")
+    return float(anchor) + float(slope) * offset if _is_finite(slope) else None
 
 
 def compute_forecast(
@@ -528,7 +606,6 @@ def compute_forecast(
     *,
     confidence: float = DEFAULT_CONFIDENCE,
     trend: Optional[dict] = None,
-    horizon_trends: Optional[Dict[str, dict]] = None,
     vol_source: str = "hv",
     vol_scale: float = 1.0,
     momentum: Optional[str] = None,
@@ -544,14 +621,8 @@ def compute_forecast(
             fallback, only used when ``momentum`` is not supplied).
         confidence: central confidence level for the PRIMARY band (default 0.68 =
             classic ±1σ). Drives ``z1``; the outer band uses ``OUTER_CONFIDENCE``.
-        trend: optional ``linear_trend`` dict — its ``slope`` projects the trend
-            overlay line (``trend_end`` per horizon) and drives the top-level
-            ``reading``. Never shifts the band centre. When ``horizon_trends`` is
-            given, this is the "headline" (short-window) trend.
-        horizon_trends: optional map ``{horizon_name: linear_trend dict}`` giving a
-            per-horizon slope (horizon-aware trend windows). When present, each
-            horizon's ``trend_end``/``trend_slope`` uses its own slope; horizons not
-            in the map fall back to ``trend``'s slope.
+        trend: optional ``adaptive_trend`` dict. Its stored session path supplies
+            every overlay endpoint and deviation. Never shifts the band centre.
         vol_source: label of where ``vol`` came from ("hv" | "ewma" | "iv").
         momentum: canonical momentum label (``dgi_metrics.classify_momentum``).
             When provided it is the single directional source of truth — it drives
@@ -582,20 +653,17 @@ def compute_forecast(
     z2 = z_for_confidence(outer_conf)
     slope = float(trend["slope"]) if isinstance(trend, dict) and _is_finite(trend.get("slope")) else 0.0
 
-    def _slope_for(name: str) -> float:
-        """Per-horizon slope: the matched horizon trend, else the headline slope."""
-        if isinstance(horizon_trends, dict):
-            ht = horizon_trends.get(name)
-            if isinstance(ht, dict) and _is_finite(ht.get("slope")):
-                return float(ht["slope"])
-        return slope
-
     horizons: Dict[str, dict] = {}
+    anchor = round(price, 4)
     for name, bounds in HORIZONS.items():
         band = _band_for_sessions(
             price, vol, bounds["end_session"], z1=z1, z2=z2,
-            trend_slope=_slope_for(name),
         )
+        endpoint = project_trend(anchor, trend, bounds["end_session"])
+        if endpoint is not None:
+            band["trend_end"] = round(endpoint, 4)
+            band["trend_slope"] = round((endpoint - anchor) / bounds["end_session"], 6)
+            band["trend_slope_kind"] = "horizon_average"
         band["start_session"] = bounds["start_session"]
         band["end_session"] = bounds["end_session"]
         horizons[name] = band
@@ -655,8 +723,8 @@ def compute_forecast_from_closes(
     ``current_price`` defaults to the last close. Returns ``None`` when there is
     not enough clean history to compute a volatility estimate.
 
-    ``trend_window`` sets the regression length for the short horizons (1d/1w) and
-    ``trend_window_long`` for the long horizons (2w/4w) — see ``HORIZON_TREND_TIER``.
+    ``trend_window`` and ``trend_window_long`` set the recent/slow robust
+    components of the single adaptive trend, shared by every horizon.
     """
     if not has_enough_history(closes):
         return None
@@ -678,20 +746,10 @@ def compute_forecast_from_closes(
         clean = [c for c in closes if c is not None and _is_finite(c)]
         current_price = clean[-1] if clean else None
 
-    # Horizon-aware trend: a short window for 1d/1w and a longer window for 2w/4w.
-    # The short window is the "headline" trend (chart line start, reading).
-    trend_short = linear_trend(closes, window=trend_window)
-    if trend_window_long and trend_window_long != trend_window:
-        trend_long = linear_trend(closes, window=trend_window_long)
-    else:
-        trend_long = trend_short
-    horizon_trends = {
-        name: (trend_long if tier == "long" else trend_short)
-        for name, tier in HORIZON_TREND_TIER.items()
-    }
+    trend = adaptive_trend(closes, window=trend_window, window_long=trend_window_long)
     return compute_forecast(
         current_price, vol, technicals,
-        confidence=confidence, trend=trend_short, horizon_trends=horizon_trends,
+        confidence=confidence, trend=trend,
         vol_source=used, vol_scale=vol_scale,
         momentum=momentum, momentum_technicals=momentum_technicals,
     )
@@ -782,7 +840,7 @@ def summarize_prediction(pred: dict) -> dict:
       - ``endpoint``: the resolved endpoint dict (or ``None`` if not yet reached).
       - ``center``/``sigma``/``low1``/``high1``/``low2``/``high2``: the predicted
         price band for that horizon (so callers can show the actual range).
-      - ``trend_end``: projected linear-trend value at the horizon end session.
+      - ``trend_end``: stored trend-path value at the horizon end session.
       - ``mean_dev`` / ``mean_dev_pct``: mean absolute deviation of the realized
         closes from the projected trend line within the horizon window (``None``
         with no snapshots or no trend).
@@ -814,14 +872,15 @@ def summarize_prediction(pred: dict) -> dict:
             pct1 = pct2 = None
 
         mean_dev = mean_dev_pct = None
-        if h_slope is not None and _is_finite(anchor) and n:
+        if (h_slope is not None or (trend or {}).get("session_deltas")) and _is_finite(anchor) and n:
             devs = []
             for s in in_h:
                 off = s.get("offset")
                 px = s.get("price")
                 if _is_finite(off) and _is_finite(px):
-                    trend_at = float(anchor) + h_slope * float(off)
-                    devs.append(abs(float(px) - trend_at))
+                    trend_at = project_trend(float(anchor), trend, float(off), band)
+                    if trend_at is not None:
+                        devs.append(abs(float(px) - trend_at))
             if devs:
                 mean_dev = round(sum(devs) / len(devs), 4)
                 if _is_finite(anchor) and float(anchor) > 0:
@@ -839,6 +898,10 @@ def summarize_prediction(pred: dict) -> dict:
             "low2": band.get("low2"),
             "high2": band.get("high2"),
             "trend_end": band.get("trend_end"),
+            "trend_slope": band.get("trend_slope"),
+            "trend_slope_kind": band.get("trend_slope_kind"),
+            "start_session": band.get("start_session"),
+            "end_session": band.get("end_session"),
             "mean_dev": mean_dev,
             "mean_dev_pct": mean_dev_pct,
         }
@@ -1035,11 +1098,11 @@ def aggregate_forecast_averages(
     *,
     trim: float = 0.20,
 ) -> dict:
-    """Project a smoothed-slope price per horizon, with a volatility range.
+    """Smooth horizon-average effective changes, with a price-centred range.
 
     Rather than averaging each prediction's ``trend_end`` (which blends
     projections anchored on different days and therefore aimed at different
-    target dates), this **averages the recent per-horizon trend slopes** and
+    target dates), this **averages recent per-horizon endpoint changes / sessions** and
     projects **once** from the latest anchor price to the horizon end::
 
         price = anchor + mean_slope * sessions
@@ -1055,9 +1118,8 @@ def aggregate_forecast_averages(
     half-width (``high1 - center`` ≈ ``z1 * sigma``), so it is horizon-scaled
     (narrow for 1d, wide for 4w) and reuses the same confidence the fan chart
     uses. It is centred on the **current price** (the anchor), not on the
-    projection: recentring on the trend projection was validated to reduce
-    coverage, because direction is ~coin-flip at these horizons so the realized
-    close stays scattered around today's price. Consequence: when the trend is
+    projection, keeping volatility calibration independent of direction.
+    Consequence: when the trend is
     strong and the horizon long, the projected price may sit near the edge of —
     or outside — this range.
 
@@ -1090,6 +1152,11 @@ def aggregate_forecast_averages(
 
     def _slope(p: dict, name: str) -> Optional[float]:
         band = _band(p, name)
+        if (p.get("trend") or {}).get("model") == "adaptive_damped_v1":
+            anchor = p.get("price_at_creation")
+            h = HORIZONS[name]["end_session"]
+            endpoint = project_trend(anchor, p.get("trend"), h, band)
+            return (endpoint - anchor) / h if endpoint is not None else None
         sl = band.get("trend_slope")
         if sl is None:
             top = p.get("trend")

@@ -50,7 +50,10 @@ def test_instructions_preserve_forecast_domain_boundaries():
     normalized = " ".join(FORECAST_REPORT_CHAT_INSTRUCTIONS.split())
     required = (
         "history_anchor_movement",
-        "R² measures regression fit/reliability",
+        "R² is historical fit only, never predictive accuracy",
+        "matured, non-overlapping walk-forward returns",
+        "NOT constant drift over 20 sessions",
+        "accuracy is unavailable",
         "Bias, trend direction, and the structured reading are separate signals",
         "Volatility describes uncertainty/range width, not up/down direction",
         "Calibration `k` adjusts band width",

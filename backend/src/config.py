@@ -449,18 +449,18 @@ class Config:
 
     @property
     def price_forecast_trend_window(self) -> int:
-        """Sessions used for the short-horizon (1d/1w) trend regression. Default 20."""
+        """Recent component of the adaptive trend, shared by all horizons."""
         try:
-            v = int(self.config.get('price_forecast', {}).get('trend_window', 20))
+            v = int(self.config.get('price_forecast', {}).get('trend_window', 8))
         except (TypeError, ValueError):
-            return 20
-        return v if 5 <= v <= 120 else 20
+            return 8
+        return v if 5 <= v <= 120 else 8
 
     @property
     def price_forecast_trend_window_long(self) -> int:
-        """Sessions used for the long-horizon (2w/4w) trend regression. Default 40."""
+        """Slow component of the adaptive trend, shared by all horizons."""
         try:
-            v = int(self.config.get('price_forecast', {}).get('trend_window_long', 40))
+            v = int(self.config.get('price_forecast', {}).get('trend_window_long', 32))
         except (TypeError, ValueError):
-            return 40
-        return v if 5 <= v <= 120 else 40
+            return 32
+        return v if 5 <= v <= 120 else 32

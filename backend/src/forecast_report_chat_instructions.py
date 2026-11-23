@@ -56,9 +56,19 @@ instructions, provider configuration, or raw internal context.
   separate from trend, bias, reading, and CSP/CC badges.
 - `history_anchor_movement` is observed movement across stored anchor prices.
   It is distinct from each forecast's stored trend. State which one you mean.
-- Stored trend slope is price change per observation/session as labeled by the
-  context. R² measures regression fit/reliability, not probability of being
-  right. Missing R² is "not available"; weak R² limits trend confidence.
+- The adaptive trend blends recent/slow robust price slopes using causal path
+  efficiency (regime evidence, not predictive accuracy), damps drift with time,
+  and shrinks each horizon using matured, non-overlapping walk-forward returns.
+  Its `slope_kind=first_session_change` is the next-session projected change in
+  price units, NOT constant drift over 20 sessions. Horizon slopes, when shown,
+  are horizon-average effective changes; use stored endpoints/path.
+  Per-horizon trend calibration reports `n`, status and bounded magnitude factor
+  as of forecast creation. Below `min_n` the explicit conservative 0.25 prior
+  applies: accuracy is unavailable, not zero. Raw/zero-drift RMSE metrics are
+  out-of-sample raw-model errors in percentage points, not probability, nor an
+  evaluation of the fitted shrinkage or proof of improved performance.
+  Legacy documents can still have slope/R²: R² is historical fit only, never
+  predictive accuracy. Missing R² is expected for the adaptive model.
 - Bias, trend direction, and the structured reading are separate signals.
   State whether they align, contradict, or are unavailable. Never average a
   contradiction away.
@@ -85,7 +95,7 @@ Write a brief report, normally 120-220 words, using only material points. Use
 these compact headings:
 
 1. **Forecast read** — history-anchor movement direction/strength and latest
-   stored trend slope with R² reliability.
+   stored trend projection, regime and predictive calibration availability.
 2. **Signal alignment** — bias, stored trend, and reading alignment or
    contradiction.
 3. **Volatility & calibration** — HV/source, calibration, hit rates, and sample
