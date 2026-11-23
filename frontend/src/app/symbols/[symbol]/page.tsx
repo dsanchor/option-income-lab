@@ -144,7 +144,7 @@ export default async function SymbolDetailPage({
         <OptionTiming symbol={d.security?.security_id ?? d.security_id ?? symbol} snapshot={d.option_timing} />
         {usOptionsEligible && (
           <Suspense fallback={<div role="status" className="py-4 text-sm text-text-muted">Loading projection…</div>}>
-            <SymbolForecastSummary symbol={d.security?.security_id ?? d.security_id ?? symbol} />
+            <SymbolForecastSummary symbol={d.security?.security_id ?? d.security_id ?? symbol} snapshot={d.detail_loaded_at} />
           </Suspense>
         )}
         <SymbolCalendar calendar={d.calendar} />

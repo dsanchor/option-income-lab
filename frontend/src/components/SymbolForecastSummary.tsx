@@ -2,10 +2,10 @@ import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 import { symbolHref } from "@/lib/symbolEncoding";
 import { latestRow } from "@/lib/latestForecastRow";
-import { ProjectionFanChart } from "@/components/ForecastCharts";
+import SymbolForecastPositions from "@/components/SymbolForecastPositions";
 import type { ForecastsResponse } from "@/types/forecasts";
 
-export default async function SymbolForecastSummary({ symbol }: { symbol: string }) {
+export default async function SymbolForecastSummary({ symbol, snapshot }: { symbol: string; snapshot?: string }) {
   let data: ForecastsResponse;
   try {
     data = await apiFetch<ForecastsResponse>(
@@ -91,7 +91,9 @@ export default async function SymbolForecastSummary({ symbol }: { symbol: string
           )}
         </div>
       )}
-      <ProjectionFanChart
+      <SymbolForecastPositions
+        symbol={symbol}
+        snapshot={snapshot}
         row={row}
         calibration={{ hitRate: data.hit_rate ?? {}, windowLabel: "90d" }}
       />

@@ -138,3 +138,12 @@
   imputed from opening dates. Overview advertises `trade_date` and consumes the
   same cash-flow series. Focused frontend contracts pass; broad parity has 15
   existing Symbols/paper-presentation failures and Ruff has no new violations.
+- **2026-11-23:** Symbol Detail projection now reuses the Options tab's canonical,
+  snapshot-scoped React Query data for every active sold CALL/PUT overlay.
+  Live calendar DTE uses the America/New_York date, plots at exact DTE/5 weeks,
+  and clamps only >20 DTE at 4w with `>`. Grouped native SVG hover tooltips retain
+  coincident positions, expiry/DTE, remaining contracts, premium and supplied
+  account names (never linked account IDs); mixed groups show both theme hues.
+  Reference dots extend the strike domain with edge padding; other forecast
+  consumers retain categorical axes. Validation: 112 focused forecast/detail
+  tests, frontend TypeScript, changed-file ESLint and diff hygiene passed.

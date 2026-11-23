@@ -14,7 +14,7 @@ function load(relativePath, mocks = {}, clientProxy) {
     return clientProxy(relativePath);
   }
   const { outputText } = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+    compilerOptions: { target: ts.ScriptTarget.ES2017, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   });
   const loaded = { exports: {} };
   new Function("require", "module", "exports", outputText)(
@@ -29,7 +29,7 @@ function load(relativePath, mocks = {}, clientProxy) {
 
 const chartNames = [
   "Area", "Bar", "BarChart", "CartesianGrid", "ComposedChart", "Legend", "Line",
-  "ReferenceLine", "ResponsiveContainer", "Tooltip", "XAxis", "YAxis",
+  "ReferenceDot", "ReferenceLine", "ResponsiveContainer", "Tooltip", "XAxis", "YAxis",
 ];
 const charts = load("../src/components/ForecastCharts.tsx", {
   recharts: Object.fromEntries(chartNames.map((name) => [name, name])),
@@ -136,20 +136,22 @@ test("summary requests fixed 90d, selects latest row and links the entire card t
       return { rows: [row, { ...row, created_date: "2026-10-01" }], hit_rate: { "1d": { resolved: 3 } } };
     } },
     "@/lib/symbolEncoding": encoding,
-    "@/components/ForecastCharts": { ...charts, ProjectionFanChart: "Fan" },
+    "@/components/SymbolForecastPositions": { default: "Fan" },
   }).default;
-  const tree = await card({ symbol: "XNYS:AAD" });
+  const tree = await card({ symbol: "XNYS:AAD", snapshot: "detail-revision" });
   assert.deepEqual(requests, ["/api/symbols/XNYS%3AAAD/forecasts?range=90d"]);
   assert.equal(tree.type, "a");
   assert.equal(tree.props.href, "/symbols/XNYS:AAD/forecasts?range=90d");
   assert.match(tree.props["aria-label"], /price forecasts, 90-day range/);
   const fan = find(tree, "Fan");
+  assert.equal(fan.props.symbol, "XNYS:AAD");
+  assert.equal(fan.props.snapshot, "detail-revision");
   assert.equal(fan.props.row.created_date, "2026-11-08");
   assert.deepEqual(fan.props.calibration, { windowLabel: "90d", hitRate: { "1d": { resolved: 3 } } });
   assert.match(tree.props.className, /focus-visible/);
   assert.equal(find(tree, "BarChart"), null);
   const page = readFileSync(new URL("../src/app/symbols/[symbol]/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /<DetailSection title="Summary">[\s\S]*<SymbolForecastSummary symbol=\{d\.security\?\.security_id \?\? d\.security_id \?\? symbol\} \/>[\s\S]*<\/DetailSection>/);
+  assert.match(page, /<DetailSection title="Summary">[\s\S]*<SymbolForecastSummary symbol=\{d\.security\?\.security_id \?\? d\.security_id \?\? symbol\} snapshot=\{d\.detail_loaded_at\} \/>[\s\S]*<\/DetailSection>/);
 });
 
 test("summary exposes HTTP/transport and response errors rather than hiding failures", async () => {
@@ -161,7 +163,7 @@ test("summary exposes HTTP/transport and response errors rather than hiding fail
       "next/link": { default: "a" },
       "@/lib/api": { apiFetch },
       "@/lib/symbolEncoding": encoding,
-      "@/components/ForecastCharts": charts,
+      "@/components/SymbolForecastPositions": { default: "Fan" },
     }).default;
     const tree = await card({ symbol: "AAD" });
     assert.equal(tree.props.role, "alert");
@@ -173,7 +175,7 @@ async function summaryMarkup(rows) {
   const card = load("../src/components/SymbolForecastSummary.tsx", {
     "next/link": { default: "a" },
     "@/lib/api": { apiFetch: async () => ({ rows, hit_rate: {} }) },
-    "@/components/ForecastCharts": { ProjectionFanChart: () => null },
+    "@/components/SymbolForecastPositions": { default: () => null },
   }).default;
   return renderToStaticMarkup(await card({ symbol: "AAD" }));
 }
@@ -202,6 +204,146 @@ test("summary metadata uses the actual latest forecast, with signed trend and de
     assert.match(text, /💰 ex-div in window/);
     assert.doesNotMatch(text, /earnings in window|321\.98|Latest price bands|Historical window|Hover a horizon|Dashed line = anchor|Open price forecasts/);
   }
+});
+
+const { forecastOptionPositions } = load("../src/lib/forecastOptionPositions.ts");
+const now = new Date("2026-11-02T15:00:00Z");
+const openCall = {
+  position_id: "call", type: "call", status: "active", strike: 120,
+  expiration: "2026-11-09", contracts: 2, display_premium: 3.25,
+  account_name: "Retirement", account_id: "private-account-id",
+  source: { dte: 999, account_id: "private-source-id" },
+};
+
+function findAll(element, type) {
+  if (!element || typeof element !== "object") return [];
+  return [
+    ...(element.type === type ? [element] : []),
+    ...[element.props?.children].flat(Infinity).flatMap((child) => findAll(child, type)),
+  ];
+}
+
+test("open calls and puts use exact live DTE / 5; only >20 DTE overflows, and all positions survive grouping", () => {
+  const positions = [
+    openCall,
+    { ...openCall, type: "put", strike: 80, expiration: "2026-11-07" },
+    { ...openCall, expiration: "2026-11-22" },
+    { ...openCall, expiration: "2026-11-23" },
+    { ...openCall, type: "put", expiration: "2026-12-02", account_name: "Brokerage" },
+    { ...openCall, position_id: "same-contract-other-account", account_name: "Joint" },
+    { ...openCall, status: "closed" },
+    { ...openCall, status: "rolled" },
+    { ...openCall, type: "stock" },
+    { ...openCall, contract_counts: { remaining: { status: "resolved", count: 0 } } },
+    { ...openCall, open_contracts: 0 },
+  ];
+  const { groups, unavailable } = forecastOptionPositions(positions, now);
+  assert.equal(unavailable, 0);
+  assert.equal(groups.flatMap((group) => group.positions).length, 6);
+  assert.deepEqual(groups.map((group) => [group.weeks, group.strike, group.positions.length]), [
+    [1.4, 120, 2], [1, 80, 1], [4, 120, 3],
+  ]);
+  assert.equal(groups[2].overflow, true);
+  assert.deepEqual(groups[2].positions.map((p) => [p.dte, p.expiration]), [
+    [20, "2026-11-22"], [21, "2026-11-23"], [30, "2026-12-02"],
+  ]);
+  assert.equal(forecastOptionPositions([{ ...openCall, expiration: "2026-11-22" }], now).groups[0].overflow, false);
+  assert.equal(forecastOptionPositions([{ ...openCall, expiration: "2026-11-02" }], now).groups[0].weeks, 0);
+});
+
+test("DTE follows New York date across UTC midnight and DST, not saved source DTE or browser timezone", () => {
+  const position = { ...openCall, expiration: "2026-11-22" };
+  assert.equal(forecastOptionPositions([position], new Date("2026-11-03T02:00:00Z")).groups[0].positions[0].dte, 20);
+  assert.equal(forecastOptionPositions([position], new Date("2026-11-03T05:00:00Z")).groups[0].positions[0].dte, 19);
+  const dst = { ...openCall, expiration: "2026-03-10" };
+  assert.equal(forecastOptionPositions([dst], new Date("2026-03-08T06:00:00Z")).groups[0].positions[0].dte, 2);
+  assert.equal(forecastOptionPositions([dst], new Date("2026-03-09T04:00:00Z")).groups[0].positions[0].dte, 1);
+});
+
+test("unplottable active options are explicit; quantity and premium never fabricate evidence", () => {
+  const { groups, unavailable } = forecastOptionPositions([
+    { ...openCall, strike: NaN },
+    { ...openCall, strike: 0 },
+    { ...openCall, expiration: "2026-02-30" },
+    { ...openCall, expiration: undefined },
+    { ...openCall, status: "closed", strike: NaN },
+    { ...openCall, contracts: undefined, display_premium: undefined, account_name: undefined },
+    { ...openCall, contracts: 10, open_contracts: -3, display_premium: 0 },
+    { ...openCall, contract_counts: { remaining: { status: "error", count: null } } },
+  ], now);
+  assert.equal(unavailable, 4);
+  assert.deepEqual(groups[0].positions.map((p) => p.contracts), [null, 3, null]);
+  assert.deepEqual(groups[0].positions.map((p) => p.premium), [null, 0, 3.25]);
+  assert.equal(groups[0].positions[0].accountName, null);
+});
+
+test("overlay extends strike domain, preserves fan data and provides mixed-color grouped hover details at the real coordinate", () => {
+  const { groups } = forecastOptionPositions([
+    { ...openCall, strike: 250, expiration: "2026-11-22" },
+    { ...openCall, strike: 250, expiration: "2026-11-23", account_name: "Joint" },
+    { ...openCall, type: "put", strike: 250, expiration: "2026-12-02", account_name: undefined, is_paper: true },
+    { ...openCall, type: "put", strike: 25, expiration: "2026-11-09" },
+  ], now);
+  const tree = charts.ProjectionFanChart({ row, positions: groups });
+  const x = find(tree, "XAxis").props;
+  assert.equal(x.type, "number");
+  assert.equal(x.dataKey, "weeks");
+  assert.deepEqual(x.domain, [0, 4]);
+  assert.deepEqual(find(tree, "ComposedChart").props.data.map((p) => p.weeks), [0, 0.2, 1]);
+  assert.deepEqual(find(tree, "ComposedChart").props.data.map((p) => p.band1), [[100, 100], [95, 105], [94, 106]]);
+  assert.ok(find(tree, "YAxis").props.padding.top >= 8);
+  assert.ok(x.padding.right >= 20);
+  const markers = findAll(tree, "ReferenceDot");
+  assert.deepEqual(markers.map((p) => [p.props.x, p.props.y, p.props.ifOverflow]), [
+    [4, 250, "extendDomain"], [1.4, 25, "extendDomain"],
+  ]);
+  const marker = markers[0].props.shape({ cx: 300, cy: 20 });
+  const html = renderToStaticMarkup(marker);
+  for (const detail of [
+    /Sold CALL/, /Sold PUT \(paper\)/, /Strike \$250\.00/,
+    /2026-11-22 · 20 DTE/, /2026-11-23 · 21 DTE/, /2026-12-02 · 30 DTE/,
+    /Contracts: 2/, /Premium: \$3\.25/, /Account: Retirement/, /Account: Joint/,
+    /var\(--accent-purple\)/, /var\(--accent-orange\)/,
+  ]) assert.match(html, detail);
+  assert.doesNotMatch(html, /private-account-id|private-source-id|999 DTE/);
+  assert.match(html, /<title>[\s\S]*Sold CALL[\s\S]*Sold PUT[\s\S]*<\/title>/);
+  assert.match(html, />3<\/text>/);
+  assert.match(html, />&gt;<\/text>/);
+  assert.match(renderToStaticMarkup(markers[1].props.shape({ cx: 80, cy: 200 })), /var\(--accent-orange\)/);
+  assert.doesNotMatch(renderToStaticMarkup(markers[1].props.shape({ cx: 80, cy: 200 })), /&gt;<\/text>/);
+  const boundary = forecastOptionPositions([{ ...openCall, expiration: "2026-11-22" }], now);
+  const boundaryTree = charts.ProjectionFanChart({ row, positions: boundary.groups });
+  assert.doesNotMatch(renderToStaticMarkup(find(boundaryTree, "ReferenceDot").props.shape({ cx: 300, cy: 20 })), /&gt;<\/text>|shown at limit/);
+  assert.equal(find(charts.ProjectionFanChart({ row }), "XAxis").props.type, "category");
+  assert.match(tooltip(tree, 1), />1D<\/div>/);
+});
+
+test("summary overlay shares the canonical Options query and leaves the fan usable during loading, errors, empty and refreshed data", () => {
+  let state = { isPending: true };
+  const options = [];
+  const component = load("../src/components/SymbolForecastPositions.tsx", {
+    "@tanstack/react-query": { queryOptions: (value) => value, useQuery: (value) => {
+      options.push(value);
+      return state;
+    } },
+    "@/components/ForecastCharts": { ProjectionFanChart: "Fan" },
+  }).default;
+  function render() {
+    return component({ symbol: "XNAS:MSFT", snapshot: "revision-2", row, calibration: { hitRate: {}, windowLabel: "90d" } });
+  }
+  const pending = render();
+  assert.match(renderToStaticMarkup(findAll(pending, "p")[0]), /Loading open options/);
+  assert.deepEqual(find(pending, "Fan").props.positions, []);
+  assert.deepEqual(options[0].queryKey, ["symbol-detail", "XNAS:MSFT", "options", "revision-2"]);
+  state = { error: new Error("offline"), isPending: false };
+  assert.equal(find(render(), "p").props.role, "alert");
+  state = { data: { positions: [] }, isPending: false };
+  assert.equal(find(render(), "p"), null);
+  assert.equal(find(render(), "Fan").props.row, row);
+  state = { data: { positions: [{ ...openCall, expiration: "2099-12-31" }] }, isPending: false };
+  assert.equal(find(render(), "Fan").props.positions[0].positions[0].type, "call");
+  state = { data: { positions: [{ ...openCall, expiration: undefined }] }, isPending: false };
+  assert.match(renderToStaticMarkup(find(render(), "p")), /1 open option\(s\) missing/);
 });
 
 test("summary metadata renders explanatory native tooltips without adding visible copy", async () => {

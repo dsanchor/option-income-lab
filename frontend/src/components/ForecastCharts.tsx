@@ -8,6 +8,7 @@ import {
   ComposedChart,
   Legend,
   Line,
+  ReferenceDot,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -17,6 +18,7 @@ import {
 import { HORIZONS } from "@/types/forecasts";
 import { latestRow } from "@/lib/latestForecastRow";
 import type { ForecastRow, Horizon, HitRateEntry } from "@/types/forecasts";
+import type { ForecastOptionGroup } from "@/lib/forecastOptionPositions";
 
 const CENTER_COLOR = "#5b61ff";
 const BAND1_COLOR = "#5b61ff";
@@ -24,6 +26,8 @@ const BAND2_COLOR = "#5b61ff";
 const HIT1_COLOR = "#00c493";
 const HIT2_COLOR = "#5b61ff";
 const DIR_COLOR = "#b981ff";
+const CALL_COLOR = "var(--accent-purple)";
+const PUT_COLOR = "var(--accent-orange)";
 
 const money = (v: number | null | undefined) =>
   typeof v === "number" && isFinite(v)
@@ -35,17 +39,51 @@ const pct = (v: number | null | undefined) =>
 
 type FanPoint = {
   label: string;
+  weeks: number;
   horizon?: Horizon;
   center: number | null;
   band1: [number, number] | null;
   band2: [number, number] | null;
 };
 
+function OptionMarker({ cx = 0, cy = 0, group }: { cx?: number; cy?: number; group: ForecastOptionGroup }) {
+  const calls = group.positions.some((p) => p.type === "call");
+  const puts = group.positions.some((p) => p.type === "put");
+  const description = group.positions.map((p) => [
+    `Sold ${p.type.toUpperCase()}${p.paper ? " (paper)" : ""} · Strike ${money(p.strike)}`,
+    `Expiry ${p.expiration} · ${p.dte} DTE${p.dte > 20 ? " · > 4W (shown at limit)" : ""}`,
+    `Contracts: ${p.contracts ?? "Unknown"}`,
+    p.premium != null ? `Premium: ${money(p.premium)}` : null,
+    p.accountName ? `Account: ${p.accountName}` : null,
+  ].filter(Boolean).join("\n")).join("\n\n");
+  return (
+    <g tabIndex={0} role="img" aria-label={description} style={{ cursor: "help" }}>
+      <title>{description}</title>
+      <circle cx={cx} cy={cy} r={8} fill={calls ? CALL_COLOR : PUT_COLOR} stroke="var(--bg-card)" strokeWidth={2} />
+      {calls && puts && (
+        <path d={`M ${cx} ${cy - 7} A 7 7 0 0 1 ${cx} ${cy + 7} Z`} fill={PUT_COLOR} />
+      )}
+      {group.positions.length > 1 && (
+        <text x={cx} y={cy} dy="0.35em" textAnchor="middle" fill="var(--bg-card)" fontSize={9} fontWeight={700}>
+          {group.positions.length}
+        </text>
+      )}
+      {group.overflow && (
+        <text x={cx + 11} y={cy} dy="0.35em" fill={calls && !puts ? CALL_COLOR : PUT_COLOR} fontSize={14} fontWeight={700}>
+          {">"}
+        </text>
+      )}
+    </g>
+  );
+}
+
 export function ProjectionFanChart({
   row,
   calibration,
+  positions,
 }: {
   row: ForecastRow | null;
+  positions?: ForecastOptionGroup[];
   calibration?: {
     hitRate: Partial<Record<Horizon, HitRateEntry>>;
     windowLabel: string;
@@ -63,7 +101,7 @@ export function ProjectionFanChart({
   }
 
   const data: FanPoint[] = [
-    { label: "now", center: anchor, band1: [anchor, anchor], band2: [anchor, anchor] },
+    { label: "now", weeks: 0, center: anchor, band1: [anchor, anchor], band2: [anchor, anchor] },
   ];
   for (const h of HORIZONS) {
     const hz = row.horizons?.[h];
@@ -72,7 +110,8 @@ export function ProjectionFanChart({
       hz.low1 != null && hz.high1 != null ? [hz.low1, hz.high1] : null;
     const band2: [number, number] | null =
       hz.low2 != null && hz.high2 != null ? [hz.low2, hz.high2] : null;
-    data.push({ label: h.toUpperCase(), horizon: h, center: hz.center, band1, band2 });
+    const weeks = { "1d": 0.2, "1w": 1, "2w": 2, "4w": 4 }[h];
+    data.push({ label: h.toUpperCase(), weeks, horizon: h, center: hz.center, band1, band2 });
   }
 
   if (data.length < 2) {
@@ -82,10 +121,15 @@ export function ProjectionFanChart({
   return (
     <div style={{ height: 280 }}>
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+        <ComposedChart data={data} margin={{ top: 8, right: positions ? 28 : 12, bottom: 4, left: 4 }}>
           <CartesianGrid stroke="rgba(148,163,184,0.08)" strokeDasharray="3 3" vertical={false} />
           <XAxis
-            dataKey="label"
+            dataKey={positions ? "weeks" : "label"}
+            type={positions ? "number" : "category"}
+            domain={positions ? [0, 4] : undefined}
+            ticks={positions ? [0, 0.2, 1, 2, 4] : undefined}
+            tickFormatter={positions ? (v) => Number(v) === 0 ? "now" : Number(v) === 0.2 ? "1D" : `${v}W` : undefined}
+            padding={positions ? { left: 10, right: 20 } : undefined}
             tick={{ fill: "#8d969e", fontSize: 10 }}
             tickLine={false}
             axisLine={{ stroke: "rgba(148,163,184,0.15)" }}
@@ -97,11 +141,12 @@ export function ProjectionFanChart({
             tickFormatter={(v) => money(Number(v))}
             width={62}
             domain={["auto", "auto"]}
+            padding={positions ? { top: 12, bottom: 12 } : undefined}
           />
           <ReferenceLine y={anchor} stroke="rgba(148,163,184,0.35)" strokeDasharray="4 4" />
           <Tooltip
             cursor={{ stroke: "rgba(148,163,184,0.25)" }}
-            content={({ active, payload, label }) => {
+            content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
               const p = payload[0].payload as FanPoint;
               const hr = p.horizon ? calibration?.hitRate[p.horizon] : undefined;
@@ -115,7 +160,7 @@ export function ProjectionFanChart({
                   : "Unavailable";
               return (
                 <div className="rounded-[10px] border border-border bg-bg-card px-3 py-2 text-xs shadow-lg">
-                  <div className="mb-1 font-medium text-text">{label}</div>
+                  <div className="mb-1 font-medium text-text">{p.label}</div>
                   <div className="flex items-center gap-2">
                     <span className="text-text-muted">Center</span>
                     <span className="ml-auto font-mono text-text">{money(p.center)}</span>
@@ -182,6 +227,15 @@ export function ProjectionFanChart({
             isAnimationActive={false}
             connectNulls
           />
+          {positions?.map((group) => (
+            <ReferenceDot
+              key={`${group.weeks}:${group.strike}`}
+              x={group.weeks}
+              y={group.strike}
+              ifOverflow="extendDomain"
+              shape={({ cx, cy }) => <OptionMarker cx={cx} cy={cy} group={group} />}
+            />
+          ))}
           <Legend wrapperStyle={{ fontSize: 11, color: "#8d969e" }} iconType="circle" iconSize={8} />
         </ComposedChart>
       </ResponsiveContainer>
