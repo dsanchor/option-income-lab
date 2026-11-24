@@ -9,6 +9,8 @@ Output is persisted as the ``supervisor_view`` field inside the activity
 document (CosmosDB).
 """
 
+from .sell_dividend_policy import get_sell_dividend_policy
+
 # ---------------------------------------------------------------------------
 # Output schema — importable by agent_runner.py for response parsing
 # ---------------------------------------------------------------------------
@@ -469,6 +471,8 @@ say so — that is the MOST VALUABLE outcome.
 ## AGENT CONTEXT
 
 {context}
+
+{get_sell_dividend_policy(agent_type)}
 
 ## RULES
 

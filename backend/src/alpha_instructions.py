@@ -13,6 +13,8 @@ Output is persisted as the ``alpha_view`` field inside the activity
 document (CosmosDB).
 """
 
+from .sell_dividend_policy import get_sell_dividend_policy
+
 # ---------------------------------------------------------------------------
 # Output schema — importable by agent_runner.py for response parsing
 # ---------------------------------------------------------------------------
@@ -555,6 +557,8 @@ action.
 ## AGENT CONTEXT
 
 {context}
+
+{get_sell_dividend_policy(agent_type)}
 
 ## ANALYSIS GUIDELINES
 

@@ -4,7 +4,9 @@ Expert-level guidance for selling call options on owned stock positions.
 Data is pre-fetched from Yahoo Finance via yfinance — the agent only analyzes.
 """
 
-TV_COVERED_CALL_INSTRUCTIONS = """
+from .sell_dividend_policy import SELL_EX_DIVIDEND_POLICY
+
+TV_COVERED_CALL_INSTRUCTIONS = SELL_EX_DIVIDEND_POLICY + """
 # ROLE: Covered Call Option Income Lab Agent
 
 You are an expert options trader specializing in covered call strategies. Your mission is to analyze market conditions and determine optimal timing for selling call options against existing stock positions to generate premium income while managing assignment risk.
@@ -237,6 +239,7 @@ The agent synthesizes all gathered data into a comprehensive analysis:
    - If gate returned `IDEAL` or `OPEN_NORMALLY`: no earnings constraint
    - NO known catalysts (FDA, product launch) within DTE
    - Ex-dividend date check:
+     - UNKNOWN upcoming date: informational only (see UPCOMING EX-DIVIDEND DATE policy); continue evaluating other gates
      - IDEAL: Ex-div AFTER expiration (no assignment risk)
      - ACCEPTABLE: Ex-div within DTE but strike >10% OTM (delta <0.20)
      - AVOID: Ex-div within DTE with strike <10% OTM (HIGH early assignment risk)
@@ -414,7 +417,7 @@ Load **risk-flags** for the canonical SELL/WAIT taxonomy and export only the fla
     "earnings_risk_flag": "earnings_approaching or null"
   },
   "rule_checks": {
-    "cc_ex_div_check": {"status": "pass|fail|warning|unknown", "detail": "brief"},
+    "cc_ex_div_check": {"status": "pass|fail|warning|unknown|informational", "detail": "brief"},
     "cc_catalyst_check": {"status": "pass|fail|warning|unknown", "detail": "brief"}
   }
 }
@@ -431,6 +434,7 @@ SUMMARY: TICKER | SELL/WAIT covered call | Strike $X exp YYYY-MM-DD | IV X% (Ran
 - `risk_rating`: integer 0-10, sum of 5 risk dimensions (see RISK RATING section). REQUIRED for every output
 - `risk_rating_breakdown`: object with keys `volatility`, `assignment`, `technical`, `calendar`, `sentiment` — each 0-2
 - `rule_checks` (REQUIRED): structured verdicts for qualitative rules that cannot be derived from other fields. Include `cc_ex_div_check` (ex-dividend date vs strike proximity conflict) and `cc_catalyst_check` (pending catalysts, e.g. FDA/product launch, within DTE). Each value is an object with `status` (one of `pass`, `fail`, `warning`, `unknown`) and a brief `detail` string. This block is consumed by the deterministic rule evaluator downstream — it does not change your narrative `reason`.
+- Exception for `cc_ex_div_check` ONLY: when the upcoming date is unavailable, use `{"status": "informational", "detail": "Upcoming ex-dividend date unavailable; not evidence that no future dividend exists."}` and include the informational note in `reason`. Other check status enums are unchanged.
 
 SELL activity:
 ```json

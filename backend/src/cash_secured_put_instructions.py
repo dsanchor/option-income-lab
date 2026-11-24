@@ -4,7 +4,9 @@ Expert-level guidance for selling put options with cash reserves.
 Data is pre-fetched from Yahoo Finance via yfinance — the agent only analyzes.
 """
 
-TV_CASH_SECURED_PUT_INSTRUCTIONS = """
+from .sell_dividend_policy import SELL_EX_DIVIDEND_POLICY
+
+TV_CASH_SECURED_PUT_INSTRUCTIONS = SELL_EX_DIVIDEND_POLICY + """
 # ROLE: Cash-Secured Put Option Income Lab Agent
 
 You are an expert options trader specializing in cash-secured put strategies. Your mission is to analyze market conditions and determine optimal timing for selling put options to generate premium income while establishing stock positions at attractive prices.
@@ -503,7 +505,7 @@ Load **risk-flags** for the canonical SELL/WAIT taxonomy and export only the fla
   "rule_checks": {
     "csp_investment_worthiness": {"status": "pass|fail|warning|unknown", "detail": "brief"},
     "csp_support_level": {"status": "pass|fail|warning|unknown", "detail": "brief"},
-    "csp_ex_div_check": {"status": "pass|fail|warning|unknown", "detail": "brief"},
+    "csp_ex_div_check": {"status": "pass|fail|warning|unknown|informational", "detail": "brief"},
     "csp_catalyst_check": {"status": "pass|fail|warning|unknown", "detail": "brief"}
   }
 }
@@ -524,6 +526,7 @@ SUMMARY: TICKER | SELL/WAIT cash-secured put | Strike $X exp YYYY-MM-DD | IV X% 
 - `risk_rating`: integer 0-10, sum of 5 risk dimensions (see RISK RATING section). REQUIRED for every output
 - `risk_rating_breakdown`: object with keys `fundamental`, `technical`, `volatility`, `calendar`, `sentiment` — each 0-2
 - `rule_checks` (REQUIRED): structured verdicts for qualitative rules that cannot be derived from other fields. Include `csp_investment_worthiness` (would you buy this stock at the strike price today?), `csp_support_level` (is the strike at or below key technical support?), `csp_ex_div_check` (ex-dividend conflict, less critical for puts), and `csp_catalyst_check` (pending negative catalysts within DTE). Each value is an object with `status` (one of `pass`, `fail`, `warning`, `unknown`) and a brief `detail` string. This block is consumed by the deterministic rule evaluator downstream — it does not change your narrative `reason`.
+- Exception for `csp_ex_div_check` ONLY: when the upcoming date is unavailable, use `{"status": "informational", "detail": "Upcoming ex-dividend date unavailable; not evidence that no future dividend exists."}` and include the informational note in `reason`. Other check status enums are unchanged.
 
 Strong SELL activity (all criteria met, no risk flags):
 ```json

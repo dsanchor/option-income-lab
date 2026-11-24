@@ -11,6 +11,8 @@ Focused tests for the exact-contract validation engine covering:
 - No order side effects
 """
 
+import json
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
@@ -284,15 +286,38 @@ class TestApprovedValidation:
     """Test successful validation with all reviews approving."""
 
     @pytest.mark.asyncio
-    async def test_approved_sell_all_reviews_pass(self, runner, mock_cosmos, mock_context_provider, valid_call_evidence):
-        """SELL with all reviews approving should result in approved validation."""
+    @pytest.mark.parametrize(
+        ("side", "evidence_fixture", "check_id"),
+        [
+            ("call", "valid_call_evidence", "cc_ex_div_check"),
+            ("put", "valid_put_evidence", "csp_ex_div_check"),
+        ],
+    )
+    @pytest.mark.parametrize("date_state", ["missing", "null", "unavailable", "past_only"])
+    async def test_approved_sell_all_reviews_pass(
+        self, runner, mock_cosmos, mock_context_provider, request,
+        side, evidence_fixture, check_id, date_state,
+    ):
+        """Unknown dividend dates do not override completed, approving reviews."""
+        evidence = request.getfixturevalue(evidence_fixture)
+        if date_state == "missing":
+            evidence.pop("ex_dividend_date")
+        elif date_state == "unavailable":
+            evidence["ex_dividend_date"] = "unavailable"
+        elif date_state == "past_only":
+            evidence["market_data_text"] += "\nHistorical ex-dividend: 2026-08-01; upcoming date unavailable."
+        primary_output = {
+            "activity": "SELL",
+            "timestamp": "2026-08-29T10:00:00Z",
+            "rule_checks": {check_id: {"status": "unknown", "detail": "No upcoming date supplied."}},
+        }
         with patch.object(runner, '_get_client'):
             mock_agent_instance = AsyncMock()
             mock_agent_instance.run = AsyncMock(return_value=MagicMock(
-                text='```json\n{"activity": "SELL", "timestamp": "2026-08-29T10:00:00Z"}\n```'
+                text=json.dumps(primary_output)
             ))
 
-            with patch('src.agent_runner.Agent', return_value=mock_agent_instance):
+            with patch('src.agent_runner.Agent', return_value=mock_agent_instance) as factory:
                 with patch.object(runner, '_run_supervisor_review', return_value={
                     "net_assessment": "ORIGINAL_HOLDS",  # Fixed: was "APPROVE"
                     "challenge_strength": "WEAK",
@@ -307,22 +332,29 @@ class TestApprovedValidation:
                         "trace_id": "alpha-999",
                     }):
                         with patch.object(runner, '_record_trace', return_value="trace-primary"):
-                            with patch('src.agent_runner.build_rule_evaluation', return_value={}):
-                                result = await runner.run_contract_validation(
-                                    symbol="AAPL",
-                                    side="call",
-                                    strike=155.0,
-                                    expiration="2026-10-16",
-                                    evidence_snapshot=valid_call_evidence,
-                                    cosmos=mock_cosmos,
-                                    context_provider=mock_context_provider,
-                                )
+                            result = await runner.run_contract_validation(
+                                symbol="AAPL",
+                                side=side,
+                                strike=evidence["contract_data"]["strike"],
+                                expiration="2026-10-16",
+                                evidence_snapshot=evidence,
+                                cosmos=mock_cosmos,
+                                context_provider=mock_context_provider,
+                            )
 
+        instructions = factory.call_args.kwargs["instructions"]
+        assert "Upcoming ex-dividend date unavailable" in instructions
+        assert "Do NOT force SELL when another gate fails" in instructions
         assert result["activity"] == "SELL"
         assert result["is_alert"] is True
         assert result["validation_status"] == "approved"
         assert result["supervisor_view"] is not None
         assert result["alpha_view"] is not None
+        rule = next(
+            rule for rule in result["rule_evaluation"]["rules"] if rule["rule_id"] == check_id
+        )
+        assert rule["status"] == "informational"
+        assert rule["blocking"] is False
 
 
 class TestRunIdAndTraceLineage:

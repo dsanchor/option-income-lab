@@ -9,8 +9,9 @@ Amendment A1.2 for the underlying contract):
    `csp_freefall_check`) must NOT default to `pass` when both a structured
    `rule_checks` verdict and the corresponding `risk_flags` marker are absent.
    Absence of a flag is not proof of absence of the underlying condition — the
-   correct status in that case is `unknown`, mirroring the `cc_ex_div_check` /
-   `csp_ex_div_check` handling. Explicit rule_checks (or a present risk_flag)
+   correct status in that case is `unknown`. Missing upcoming dividend dates
+   alone are informational for new sell agents, not a safety pass.
+   Explicit rule_checks (or a present risk_flag)
    must still drive an unambiguous pass/fail as before.
 
 2. `src/agent_runner.py` — rule_evaluation build failures must propagate to

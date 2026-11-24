@@ -45,6 +45,7 @@ When evaluating the current market state for this High Yield stock:
 ### Ex-Dividend Consideration — CRITICAL
 - High dividends (≥4%) create **significant early assignment risk**
 - **ALWAYS check ex-dividend date** before selling calls
+- If the upcoming date is unavailable (including past-only data), apply the base new-SELL policy: informational note only, not WAIT, a confidence/risk downgrade, or an `ex_dividend_risk` flag. Do not infer a future date; all known-date rules below still apply.
 - If ex-div within DTE AND strike <10% OTM (delta > 0.20): HIGH assignment risk
 - Preferred timing: sell calls AFTER ex-dividend date when possible
 - If selling before ex-div: widen strike to >10% OTM or ensure expiration is before ex-div date

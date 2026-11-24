@@ -42,6 +42,7 @@ When evaluating the current market state for this Aristocrat, consider:
 
 ### Ex-Dividend Consideration
 - Aristocrats pay regular dividends — ALWAYS check ex-dividend date
+- If the upcoming date is unavailable (including past-only data), apply the base new-SELL policy: informational note only, not WAIT, a confidence/risk downgrade, or an `ex_dividend_risk` flag. Do not infer a future date; all known-date rules below still apply.
 - If ex-div within DTE and strike <10% OTM → prefer expiration after ex-div or widen strike
 - Factor dividend yield into total return calculation: total = premium yield + dividend yield
 

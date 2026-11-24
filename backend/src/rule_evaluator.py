@@ -28,6 +28,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from src.options_math import executable_buyback_ask
+from src.sell_dividend_policy import UNAVAILABLE_EX_DIVIDEND_NOTE
 
 SCHEMA_VERSION = 1
 
@@ -280,6 +281,45 @@ def _llm_rule_from_checks_or_fallback(
     )
 
 
+def _sell_ex_dividend_rule(
+    rule_id: str, activity_data: dict, expected: str,
+) -> dict[str, Any]:
+    """Report missing sell-calendar evidence without implying a safety pass."""
+    has_risk_flag = "ex_dividend_risk" in _risk_flags(activity_data)
+    reference_date = _parse_date(activity_data.get("timestamp"))
+    dates = (
+        _parse_date(activity_data.get(field))
+        for field in ("ex_dividend_date", "next_ex_dividend_date")
+    )
+    has_date_evidence = any(
+        ex_date is not None and (reference_date is None or ex_date >= reference_date)
+        for ex_date in dates
+    )
+    unavailable = not has_risk_flag and not has_date_evidence
+    rule = _llm_rule_from_checks_or_fallback(
+        rule_id, "Ex-Dividend Check", "calendar", activity_data,
+        expected=expected,
+        fallback_status=(
+            STATUS_WARNING if has_risk_flag
+            else STATUS_INFORMATIONAL if unavailable else STATUS_UNKNOWN
+        ),
+        fallback_observed=(
+            "ex_dividend_risk flag present" if has_risk_flag
+            else UNAVAILABLE_EX_DIVIDEND_NOTE if unavailable
+            else "Ex-dividend date evidence present; no rule_checks verdict available"
+        ),
+        fallback_detail=UNAVAILABLE_EX_DIVIDEND_NOTE if unavailable else None,
+        blocking_when=(),
+    )
+    if unavailable and rule["status"] in {STATUS_UNKNOWN, STATUS_INFORMATIONAL}:
+        rule["status"] = STATUS_INFORMATIONAL
+        detail = rule["detail"]
+        if UNAVAILABLE_EX_DIVIDEND_NOTE not in (detail or ""):
+            rule["detail"] = f"{UNAVAILABLE_EX_DIVIDEND_NOTE} {detail}"
+        rule["observed"] = rule["detail"]
+    return rule
+
+
 # ---------------------------------------------------------------------------
 # Shared earnings-gate mapping (CC / CSP)
 # ---------------------------------------------------------------------------
@@ -514,17 +554,9 @@ def build_covered_call_rules(activity_data: Dict, category: Optional[str]) -> Li
         _iv_rank_rule("cc_iv_rank", "IV Rank", activity_data, thresholds, cat_key),
     ]
 
-    # cc_ex_div_check — llm, rule_checks -> risk_flags fallback
-    has_ex_div = "ex_dividend_risk" in risk_flags
-    rules.append(_llm_rule_from_checks_or_fallback(
-        "cc_ex_div_check", "Ex-Dividend Check", "calendar", activity_data,
+    rules.append(_sell_ex_dividend_rule(
+        "cc_ex_div_check", activity_data,
         expected="No ex-div conflict with strike proximity",
-        fallback_status=STATUS_WARNING if has_ex_div else STATUS_UNKNOWN,
-        fallback_observed=(
-            "ex_dividend_risk flag present" if has_ex_div
-            else "No ex_dividend_risk flag present and no rule_checks provided"
-        ),
-        blocking_when=(),
     ))
 
     # cc_catalyst_check — llm, hard fail when present (blocking); absent flag
@@ -611,16 +643,9 @@ def build_cash_secured_put_rules(activity_data: Dict, category: Optional[str]) -
 
     rules.append(_iv_rank_rule("csp_iv_rank", "IV Rank", activity_data, thresholds, cat_key))
 
-    has_ex_div = "ex_dividend_risk" in risk_flags
-    rules.append(_llm_rule_from_checks_or_fallback(
-        "csp_ex_div_check", "Ex-Dividend Check", "calendar", activity_data,
+    rules.append(_sell_ex_dividend_rule(
+        "csp_ex_div_check", activity_data,
         expected="No ex-div conflict (less critical for puts)",
-        fallback_status=STATUS_WARNING if has_ex_div else STATUS_UNKNOWN,
-        fallback_observed=(
-            "ex_dividend_risk flag present" if has_ex_div
-            else "No ex_dividend_risk flag present and no rule_checks provided"
-        ),
-        blocking_when=(),
     ))
 
     # csp_catalyst_check — llm, hard fail when present (blocking); absent flag

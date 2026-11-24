@@ -744,13 +744,15 @@ class TestRuleChecksPrecedence:
         assert ex_div["status"] in {"warning", "fail"}
         assert ex_div["source"] == "llm"
 
-    def test_rule_checks_unknown_on_no_signal(self):
-        """A1.9: neither rule_checks nor a matching risk_flag -> status unknown."""
+    def test_rule_checks_informational_on_no_dividend_signal(self):
+        """No dividend evidence is informational, not a fabricated safety pass."""
         activity = _base_covered_call_activity(risk_flags=[])
         activity.pop("rule_checks", None)
         evaluation = build_rule_evaluation("covered_call", activity)
         ex_div = _find_rule(evaluation, "cc_ex_div_check")
-        assert ex_div["status"] == "unknown"
+        assert ex_div["status"] == "informational"
+        assert ex_div["blocking"] is False
+        assert "Upcoming ex-dividend date unavailable" in ex_div["observed"]
 
     def test_rule_checks_precedence_over_heuristic_even_when_disagreeing(self):
         """Explicit rule_checks fail should win even if risk_flags looks clean."""
@@ -767,6 +769,89 @@ class TestRuleChecksPrecedence:
 # ---------------------------------------------------------------------------
 # WAIT / no-contract not_applicable semantics
 # ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("agent_type", "base_activity", "prefix"),
+    [
+        ("covered_call", _base_covered_call_activity, "cc"),
+        ("cash_secured_put", _base_csp_activity, "csp"),
+    ],
+)
+class TestSellDividendInformation:
+    def test_absent_date_alone_does_not_create_a_blocker(
+        self, agent_type, base_activity, prefix,
+    ):
+        activity = base_activity()
+        evaluation = build_rule_evaluation(agent_type, activity)
+        rule = _find_rule(evaluation, f"{prefix}_ex_div_check")
+        assert rule["status"] == "informational"
+        assert rule["blocking"] is False
+        assert evaluation["first_blocker"] is None
+        assert activity["activity"] == "SELL"
+        assert activity["risk_flags"] == []
+
+    @pytest.mark.parametrize("check_status", [None, "unknown", "informational"])
+    @pytest.mark.parametrize("date_value", [None, "", "unavailable", "2026-08-01"])
+    def test_unavailable_date_is_informational_and_preserves_other_blocker(
+        self, agent_type, base_activity, prefix, check_status, date_value,
+    ):
+        checks = {}
+        if check_status:
+            checks[f"{prefix}_ex_div_check"] = {
+                "status": check_status,
+                "detail": "Upcoming ex-dividend date unavailable.",
+            }
+        activity = base_activity(
+            timestamp="2026-08-29T10:00:00Z",
+            ex_dividend_date=date_value,
+            rule_checks=checks,
+            earnings_analysis={"earnings_gate_result": "BLOCKED"},
+        )
+        original = copy.deepcopy(activity)
+        evaluation = build_rule_evaluation(agent_type, activity)
+        ex_div = _find_rule(evaluation, f"{prefix}_ex_div_check")
+        assert ex_div["status"] == "informational"
+        assert ex_div["blocking"] is False
+        assert "Upcoming ex-dividend date unavailable" in ex_div["observed"]
+        assert evaluation["first_blocker"] == f"{prefix}_earnings_gate"
+        assert activity == original
+
+    @pytest.mark.parametrize("status", ["pass", "warning", "fail"])
+    def test_known_date_verdicts_remain_unchanged(
+        self, agent_type, base_activity, prefix, status,
+    ):
+        detail = "Known ex-date 2026-09-10; strike proximity assessed."
+        activity = base_activity(
+            timestamp="2026-08-29T10:00:00Z",
+            ex_dividend_date="2026-09-10",
+            risk_flags=["ex_dividend_risk"],
+            rule_checks={f"{prefix}_ex_div_check": {"status": status, "detail": detail}},
+        )
+        rule = _find_rule(build_rule_evaluation(agent_type, activity), f"{prefix}_ex_div_check")
+        assert rule["status"] == status
+        assert rule["observed"] == detail
+        assert rule["blocking"] is False
+
+    @pytest.mark.parametrize("check_status", [None, "unknown"])
+    @pytest.mark.parametrize("evidence", ["date", "flag"])
+    def test_date_or_risk_evidence_is_not_relabelled_unavailable(
+        self, agent_type, base_activity, prefix, check_status, evidence,
+    ):
+        checks = (
+            {f"{prefix}_ex_div_check": {"status": check_status, "detail": "Not assessed."}}
+            if check_status else {}
+        )
+        activity = base_activity(
+            timestamp="2026-08-29T10:00:00Z",
+            ex_dividend_date="2026-09-10" if evidence == "date" else None,
+            risk_flags=["ex_dividend_risk"] if evidence == "flag" else [],
+            rule_checks=checks,
+        )
+        rule = _find_rule(build_rule_evaluation(agent_type, activity), f"{prefix}_ex_div_check")
+        expected = "warning" if evidence == "flag" and not check_status else "unknown"
+        assert rule["status"] == expected
+        assert "Upcoming ex-dividend date unavailable" not in rule["observed"]
+
 
 class TestWaitNotApplicable:
     def test_wait_activity_marks_contract_specific_rules_not_applicable(self):
